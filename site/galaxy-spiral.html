@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galaxy spiral — вращение без прокрутки (референс)</title>
+<link rel="stylesheet" href="/shared/styles.css">
+<link rel="stylesheet" href="/shared/timeline-skin.css">
+<link rel="stylesheet" href="galaxy-spiral.css">
+<style>
+  /* Только для этой страницы-референса: панель настроек поверх спирали.
+     На карте галактики панели нет — там слой просто лежит в .galaxy-bg. */
+  body { margin: 0; background: #03060c; color: #cfe9e2; font: 13px/1.45 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .stage { position: fixed; inset: 0; overflow: hidden; background: #03060c; }
+  .panel {
+    position: fixed; z-index: 10; right: 12px; top: 12px; width: 268px;
+    max-height: calc(100vh - 24px); overflow: auto;
+    padding: 12px 13px 14px; border: 1px solid rgba(127, 255, 212, 0.18);
+    background: rgba(3, 17, 15, 0.86); backdrop-filter: blur(7px);
+  }
+  .panel h1 { margin: 0 0 9px; font-size: 11px; letter-spacing: .16em; color: #7fffd4; }
+  .panel .row { display: grid; grid-template-columns: 96px 1fr 46px; gap: 7px; align-items: center; margin: 5px 0; }
+  .panel label { color: #8fb3ac; font-size: 11px; }
+  .panel output { text-align: right; color: #d9fff5; font-size: 11px; }
+  .panel input[type=range] { width: 100%; accent-color: #1ac9bc; margin: 0; }
+  .panel .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+  .panel button {
+    font: 11px/1 ui-monospace, monospace; padding: 6px 8px; cursor: pointer;
+    color: #cfe9e2; background: rgba(127, 255, 212, 0.08);
+    border: 1px solid rgba(127, 255, 212, 0.2);
+  }
+  .panel button:hover { background: rgba(127, 255, 212, 0.18); }
+  .panel button[aria-pressed=true] { background: rgba(26, 201, 188, 0.3); border-color: #7fffd4; color: #eafff9; }
+  .note { margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(127, 255, 212, 0.14); color: #7c9c95; font-size: 11px; }
+  .note b { color: #b9f2e5; font-weight: 600; }
+  .hud { position: fixed; z-index: 10; left: 14px; bottom: 12px; font-size: 11px; color: #5f867e; }
+  .hud i { font-style: normal; color: #7fffd4; }
+</style>
+</head>
+<body>
+  <div class="stage" id="stage"></div>
+
+  <aside class="panel">
+    <h1>GALAXY SPIRAL · ПАРАМЕТРЫ</h1>
+    <div class="row"><label for="arms">arms (кратность)</label><input id="arms" type="range" min="1" max="5" step="1"><output id="armsV"></output></div>
+    <div class="row"><label for="pitch">pitch, °</label><input id="pitch" type="range" min="6" max="34" step="0.5"><output id="pitchV"></output></div>
+    <div class="row"><label for="ecc">ecc (эллиптичность)</label><input id="ecc" type="range" min="0" max="0.6" step="0.01"><output id="eccV"></output></div>
+    <div class="row"><label for="misalign">разброс орбит</label><input id="misalign" type="range" min="0" max="0.3" step="0.005"><output id="misalignV"></output></div>
+    <div class="row"><label for="lane">ширина ленты</label><input id="lane" type="range" min="0.3" max="2.4" step="0.05"><output id="laneV"></output></div>
+    <div class="row"><label for="flat">наклон диска</label><input id="flat" type="range" min="0.18" max="1" step="0.01"><output id="flatV"></output></div>
+    <div class="row"><label for="speed">скорость потока</label><input id="speed" type="range" min="0" max="0.4" step="0.005"><output id="speedV"></output></div>
+    <div class="row"><label for="shear">дифф. вращение</label><input id="shear" type="range" min="0" max="2" step="0.02"><output id="shearV"></output></div>
+    <div class="row"><label for="trail">шлейф</label><input id="trail" type="range" min="0" max="0.5" step="0.01"><output id="trailV"></output></div>
+    <div class="row"><label for="armGain">подсветка рукава</label><input id="armGain" type="range" min="0" max="1.6" step="0.02"><output id="armGainV"></output></div>
+    <div class="row"><label for="dustAmp">пыль</label><input id="dustAmp" type="range" min="0" max="1" step="0.02"><output id="dustAmpV"></output></div>
+    <div class="row"><label for="exposure">экспозиция</label><input id="exposure" type="range" min="0.12" max="1" step="0.01"><output id="exposureV"></output></div>
+    <div class="row"><label for="count">звёзды</label><input id="count" type="range" min="2000" max="40000" step="500"><output id="countV"></output></div>
+    <div class="row"><label for="patternSpeed">волна яркости</label><input id="patternSpeed" type="range" min="0" max="0.25" step="0.005"><output id="patternSpeedV"></output></div>
+    <div class="btns">
+      <button id="pause" type="button" aria-pressed="false">пауза</button>
+      <button id="dbg" type="button" aria-pressed="false">орбиты+узор</button>
+      <button id="pal" type="button" aria-pressed="false">teal (скин)</button>
+      <button id="seed" type="button">новый сид</button>
+    </div>
+    <p class="note">
+      <b>pattern speed = 0</b> — узор (рукава, пыль) стоит: ориентация орбит ψ(r) от
+      времени не зависит. Движутся только звёзды вдоль своих эллипсов, поэтому
+      «спин» виден, а прокрутки нет. Ползунок «волна яркости» (patternSpeed) сдвигает
+      только свечение вдоль рукава — плотность всё равно стоит.
+      <br><br>Режим «орбиты+узор» показывает доказательство: эллипсы и спираль
+      не двигаются, а точки внутри них текут.
+    </p>
+  </aside>
+
+  <div class="hud">fps <i id="fps">—</i> · звёзд <i id="cnt">—</i> · сдвиг узора <i id="shift">0.00°</i> · путь звезды <i id="flow">—</i></div>
+
+  <script src="galaxy-spiral.js"></script>
+  <script>
+  (function () {
+    var TUNABLE = ['arms','pitch','ecc','misalign','lane','flat','speed','shear','trail','armGain','dustAmp','exposure','count','patternSpeed'];
+    var h = GalaxySpiral.mount(document.getElementById('stage'), {});
+    if (!h) return;
+    var o = h.engine.opts;
+
+    TUNABLE.forEach(function (k) {
+      var input = document.getElementById(k), out = document.getElementById(k + 'V');
+      if (!input) return;
+      input.value = o[k];
+      out.textContent = fmt(o[k]);
+      input.addEventListener('input', function () {
+        var v = parseFloat(input.value);
+        o[k] = v;
+        out.textContent = fmt(v);
+        h.set(obj(k, v));
+      });
+    });
+    function obj(k, v) { var x = {}; x[k] = v; return x; }
+    function fmt(v) { return Math.abs(v) >= 100 ? String(Math.round(v)) : String(Math.round(v * 1000) / 1000); }
+
+    var paused = false;
+    document.getElementById('pause').addEventListener('click', function () {
+      paused = !paused;
+      this.setAttribute('aria-pressed', paused);
+      paused ? h.stop() : h.play();
+    });
+    document.getElementById('dbg').addEventListener('click', function () {
+      var on = this.getAttribute('aria-pressed') !== 'true';
+      this.setAttribute('aria-pressed', on);
+      h.debug(on);
+    });
+    document.getElementById('pal').addEventListener('click', function () {
+      var on = this.getAttribute('aria-pressed') !== 'true';
+      this.setAttribute('aria-pressed', on);
+      h.set({ palette: on ? 'teal' : 'classic' });
+    });
+    document.getElementById('seed').addEventListener('click', function () {
+      h.set({ seed: (Math.random() * 1e9) | 0 });
+    });
+
+    // HUD: считаем, что узор действительно стоит, а звёзды двигаются
+    var st = h.engine.state, fpsEl = document.getElementById('fps'),
+        cntEl = document.getElementById('cnt'), shiftEl = document.getElementById('shift'),
+        flowEl = document.getElementById('flow'), acc = 0, frames = 0, tPrev = performance.now();
+    var watchIdx = 0;
+    var flowDeg = 0;
+    (function tick() {
+      var now = performance.now();
+      acc += now - tPrev; frames++; tPrev = now;
+      if (acc > 500) {
+        fpsEl.textContent = (frames * 1000 / acc).toFixed(0);
+        cntEl.textContent = st.n;
+        frames = 0; acc = 0;
+        // скорость потока: сколько в секунду проходит ближайшая к центру звезда
+        var om = st.om.length ? st.om[0] * 57.2958 : 0;
+        flowEl.textContent = om.toFixed(1) + '°/с (r=' + (st.b.length ? st.b[0].toFixed(2) : 0) + ')';
+        // смещение узора: patternSpeed * t, в градусах
+        shiftEl.textContent = (o.patternSpeed * st.t * 57.2958).toFixed(2) + '°';
+      }
+      requestAnimationFrame(tick);
+    })();
+  })();
+  </script>
+</body>
+</html>
