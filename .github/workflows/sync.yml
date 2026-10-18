@@ -8,28 +8,29 @@ on:
     types: [upstream-updated]
 
 permissions:
-  contents: write   # <-- ИСПРАВЛЕНО: даём права на запись в репозиторий
+  contents: read
   issues: write
+
+# Prevent concurrent sync runs from racing to push the same data commit.
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # ИСПРАВЛЕНО: передаём токен прямо в checkout и используем v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          token: ${{ secrets.SYNC_BOT_TOKEN }}
-
-      - uses: actions/setup-python@v5
+          ref: main
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
-
       - name: Run sync
         id: sync
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 tools/sync.py
-
       - name: Notify Discord on failure
         if: failure()
         env:
@@ -39,16 +40,16 @@ jobs:
           curl -sS -X POST -H 'Content-Type: application/json' \
             -d "{\"content\":\"⚠️ Sync failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
             "$DISCORD_WEBHOOK" || true
-
       - name: Create issue on failure
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue create --title "Sync failed" --body "Автосинк упал. См. логи: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
-
       - name: Commit and push if changed
         if: success()
+        env:
+          TOKEN: ${{ secrets.ADMIN_PAT }}
         run: |
           git config user.name "sync-bot"
           git config user.email "sync-bot@users.noreply.github.com"
@@ -56,11 +57,17 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
+            if [ -z "${TOKEN:-}" ]; then
+              echo "::error::Repository secret ADMIN_PAT is required to push sync updates."
+              exit 1
+            fi
             SHA=$(python3 -c "import json; d=json.load(open('data/upstream/manifest.json')); print(list(d.get('sources',{}).values())[0].get('sha','')[:7])")
             git commit -m "sync: upstream @ ${SHA}"
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/TimelineProjectSC2/TimelineProjectSC2.github.io"
+            git fetch origin main
+            git rebase origin/main
             git push origin HEAD
           fi
-
       - name: Notify Discord on success (changes)
         if: success()
         env:

@@ -97,8 +97,9 @@ Pages кэширует файлы на 10 минут, без версий пос
 ## 4. Требует проверки после настройки
 
 1. **Доступ синка.** Добавить repository secret `ADMIN_PAT` с правом записи в репозиторий.
-   При следующем успешном sync commit отправляется через PAT, чтобы запустить `pages.yml`;
-   проверить завершение деплоя и затем закрыть Issues #66, #67 и #69 («Sync failed»).
+   Workflow всегда синхронизирует `main` (в том числе при ручном запуске с другой ветки),
+   сериализует запуски и перед push перебазирует commit на свежий `origin/main`. После
+   успешного sync проверить `pages.yml` и закрыть Issues #66, #67 и #69 («Sync failed»).
 2. **В листе `places` нет колонки `type`.** Код теперь не ломается и без неё, но по
    `docs/ADMIN_GUIDE.md` значения должны быть: `planet`, `moon`, `asteroid`, `station`,
    `platform`, `other`. Текущий заголовок: `name,ID,system_id,x,y,faction,description,source_url`.
