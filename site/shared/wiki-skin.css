@@ -139,10 +139,8 @@ html, body, .app-shell { background: #030303; }
 .stat-value { color: #efefef; font-size: 14px; }
 .stat-label { color: #928977; font-size: 7px; }
 .stat-item + .stat-item { border-left-color: #41320f; }
-.filter-header { color: #9b907b; font-size: 7px; }
 .filter-count { color: #dcad4f; }
 .filters { border-bottom-color: #3e2d0b; }
-.filter-label { color: #806629; }
 .filter-chip { border-color: #43320f; background: #080806; color: #b0aa9d; }
 .filter-chip:hover { color: #ffd06c; border-color: #a66f00; }
 .filter-chip.active { border-color: #c58400; background: #1d1506; color: #ffc451; }

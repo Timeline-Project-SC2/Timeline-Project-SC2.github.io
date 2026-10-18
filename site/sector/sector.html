@@ -8,12 +8,12 @@
   <title>Timeline Project — Map Atlas</title>
   <!-- логотип экрана загрузки: первым в стеке, чтобы загрузка не появлялась пустой -->
   <link rel="preload" as="image" href="/assets/timeline-project-logo.webp?v=0f419d0e" fetchpriority="high">
-  <link rel="stylesheet" href="/shared/styles.css?v=panel-1">
+  <link rel="stylesheet" href="/shared/styles.css?v=help-copy-1">
   <link rel="stylesheet" href="sector.css?v=coordinates-1">
   <link rel="stylesheet" href="/shared/wiki-skin.css?v=structure-1">
   <link rel="stylesheet" href="/shared/readability.css?v=structure-1">
-  <link rel="stylesheet" href="/shared/timeline-skin.css?v=structure-1">
-  <link rel="stylesheet" href="/shared/catalog-typography.css?v=structure-1">
+  <link rel="stylesheet" href="/shared/timeline-skin.css?v=layout-safe-2">
+  <link rel="stylesheet" href="/shared/catalog-typography.css?v=catalog-dropdown-2">
   <!-- минимальный скин вынесен в minimal.html: он скрывает каталог, вики-навигацию и «О данных» -->
 </head>
 <body>
@@ -27,7 +27,7 @@
         </button>
       <div class="search-wrap" id="searchWrap">
         <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.4 15.4 5 5"></path></svg>
-        <input id="searchInput" type="search" autocomplete="off" placeholder="Место или система…" aria-label="Поиск места или системы">
+        <input id="searchInput" type="search" autocomplete="off" placeholder="Место, система или 8 цифр…" aria-label="Поиск по названию или восьмизначным координатам">
         <kbd>/</kbd>
         <button class="search-clear" id="clearSearch" type="button" aria-label="Очистить поиск" hidden>×</button>
         <div class="suggestions" id="suggestions" role="listbox" hidden></div>
@@ -74,32 +74,37 @@
           <button class="panel-close icon-button" id="closePanel" type="button" aria-label="Скрыть каталог" title="Скрыть каталог"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"></path></svg></button>
         </div>
 
-        <nav class="catalog-sections" id="catalogSections" aria-label="Разделы каталога">
-          <button class="catalog-section active" id="catalogViewSystems" type="button" data-catalog-view="systems" aria-pressed="true">
-            <span class="catalog-section-code">SYS</span><span class="catalog-section-copy"><strong>Системы</strong><small>звёздные системы</small></span><b id="catalogCountSystems">—</b>
-          </button>
-          <button class="catalog-section" id="catalogViewPlanets" type="button" data-catalog-view="planet" aria-pressed="false">
-            <span class="catalog-section-code">PLN</span><span class="catalog-section-copy"><strong>Планеты</strong><small>планетарные объекты</small></span><b id="catalogCountPlanets">—</b>
-          </button>
-          <button class="catalog-section" id="catalogViewStations" type="button" data-catalog-view="station" aria-pressed="false">
-            <span class="catalog-section-code">STN</span><span class="catalog-section-copy"><strong>Станции</strong><small>орбитальные и исследовательские объекты</small></span><b id="catalogCountStations">—</b>
-          </button>
-          <button class="catalog-section" id="catalogViewPlatforms" type="button" data-catalog-view="platform" aria-pressed="false">
-            <span class="catalog-section-code">PLT</span><span class="catalog-section-copy"><strong>Платформы</strong><small>космические платформы и верфи</small></span><b id="catalogCountPlatforms">—</b>
-          </button>
-          <button class="catalog-section" id="catalogViewOther" type="button" data-catalog-view="other" aria-pressed="false">
-            <span class="catalog-section-code">ETC</span><span class="catalog-section-copy"><strong>Иные места</strong><small>луны, астероиды и особые объекты</small></span><b id="catalogCountOther">—</b>
-          </button>
-        </nav>
+        <details class="catalog-dropdown" id="catalogSectionDropdown">
+          <summary class="catalog-dropdown-summary"><span id="catalogSectionSummary">Системы</span><b id="catalogSectionSummaryCount">—</b></summary>
+          <nav class="catalog-sections" id="catalogSections" aria-label="Разделы каталога">
+            <button class="catalog-section active" id="catalogViewSystems" type="button" data-catalog-view="systems" aria-pressed="true"><span class="catalog-section-copy"><strong>Системы</strong></span><b id="catalogCountSystems">—</b>
+            </button>
+            <button class="catalog-section" id="catalogViewPlanets" type="button" data-catalog-view="planet" aria-pressed="false"><span class="catalog-section-copy"><strong>Планеты</strong></span><b id="catalogCountPlanets">—</b>
+            </button>
+            <button class="catalog-section" id="catalogViewStations" type="button" data-catalog-view="station" aria-pressed="false"><span class="catalog-section-copy"><strong>Станции</strong></span><b id="catalogCountStations">—</b>
+            </button>
+            <button class="catalog-section" id="catalogViewPlatforms" type="button" data-catalog-view="platform" aria-pressed="false"><span class="catalog-section-copy"><strong>Платформы</strong></span><b id="catalogCountPlatforms">—</b>
+            </button>
+            <button class="catalog-section" id="catalogViewOther" type="button" data-catalog-view="other" aria-pressed="false"><span class="catalog-section-copy"><strong>Иные места</strong></span><b id="catalogCountOther">—</b>
+            </button>
+          </nav>
+        </details>
 
-        <div class="filter-header"><span>ФИЛЬТРЫ КАТАЛОГА</span><span class="filter-count" id="filterResultCount"></span></div>
-        <div class="filters" id="filters" aria-label="Фильтр по фракции"></div>
+        <details class="filter-panel" id="filterPanel">
+          <summary class="filter-panel-summary"><span>ФИЛЬТРЫ КАТАЛОГА</span><span class="filter-indicator" id="filterIndicator">Все</span></summary>
+          <div class="filters" id="filters" aria-label="Фильтры по типу и фракции"></div>
+        </details>
 
-        <div class="list-caption">
-          <span id="listCaption">СИСТЕМЫ В АРХИВЕ</span>
-          <button class="sort-button" id="sortButton" type="button" title="Сортировать по названию">А—Я <span>↕</span></button>
-        </div>
-        <div class="catalog-list" id="catalogList" role="list"></div>
+        <details class="catalog-list-dropdown" id="catalogListDropdown" open>
+          <summary class="list-caption">
+            <span id="listCaption">СИСТЕМЫ В АРХИВЕ</span>
+            <span class="filter-count" id="filterResultCount"></span>
+          </summary>
+          <div class="list-dropdown-tools">
+            <button class="sort-button" id="sortButton" type="button" title="Сортировать по названию">А—Я <span>↕</span></button>
+          </div>
+          <div class="catalog-list" id="catalogList" role="list"></div>
+        </details>
         <div class="panel-foot">
           <span class="foot-mark">◈</span>
           <span>Наведи на узел карты<br>или выбери запись</span>
@@ -142,9 +147,9 @@
         </div>
         <div class="modal-body">
           <div class="note-block"><span class="note-number">01</span><div><h3>Что это за карта</h3><p>Это интерактивная авторская схема сектора Копрулу и ближайших территорий. Она объединяет подложку, системы, известные места и фракции в одном каталоге: можно искать объекты, просматривать их связи и переходить от общего обзора к карточке. Это самостоятельная визуальная модель для знакомства с регионом, а не копия официальной карты и не средство навигации.</p></div></div>
-          <div class="note-block"><span class="note-number">02</span><div><h3>Что есть в каталоге</h3><p>Отдельно показаны системы и места — планеты, луны, станции, платформы и другие объекты. В карточке собраны доступные сведения о названии, типе, фракции и связи места с системой. Связь указывается там, где она известна; если данных нет, карта не пытается угадать её по одному совпадению названий. Фильтр по фракциям помогает выделить связанные с ней записи.</p></div></div>
-          <div class="note-block"><span class="note-number">03</span><div><h3>Как читать схему</h3><p>Схема помогает увидеть общий контекст и взаимное расположение отмеченных объектов, но не задаёт точные астрономические координаты, расстояния или маршруты. Положение не следует использовать для оценки масштаба путешествия: это обзорная компоновка, а не навигационная карта. Объекты без установленного положения остаются доступны в каталоге, но не получают выдуманную точку на карте.</p></div></div>
-          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Найдите место или систему через строку поиска либо отберите записи по типу и фракции. Наведение на отмеченный узел подсвечивает его, щелчок открывает карточку, а кнопка с булавкой закрепляет её. Перетаскивайте карту мышью или пальцем; колесо и жест pinch меняют масштаб. Кнопки <kbd>+</kbd> и <kbd>−</kbd> приближают или отдаляют, <kbd>0</kbd> возвращает общий обзор, <kbd>/</kbd> переносит фокус в поиск. Каталог можно свернуть, чтобы освободить обзор карты.</p></div></div>
+          <div class="note-block"><span class="note-number">02</span><div><h3>Что есть в каталоге</h3><p>Отдельно показаны системы и места — планеты, луны, станции, платформы и другие объекты. В карточке собраны доступные сведения о названии, типе, фракции и связи места с системой. Связь указывается там, где она известна; если данных нет, карта не пытается угадать её по одному совпадению названий.</p></div></div>
+          <div class="note-block"><span class="note-number">03</span><div><h3>Как читать схему</h3><p>Схема помогает увидеть общий контекст и взаимное расположение отмеченных объектов, но не задаёт точные астрономические координаты, расстояния или маршруты. Объекты без установленного положения остаются доступны в каталоге, но не получают выдуманную точку на карте.</p></div></div>
+          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Найдите место или систему через строку поиска либо отберите записи по типу и фракции. Наведение на отмеченный узел подсвечивает его, щелчок открывает карточку, а кнопка с булавкой закрепляет её. Перетаскивайте карту мышью или пальцем; колесо и жест pinch меняют масштаб. Кнопки <kbd>+</kbd> и <kbd>−</kbd> приближают или отдаляют, <kbd>0</kbd> возвращает общий обзор, <kbd>/</kbd> переносит фокус в поиск. Каталог можно свернуть, чтобы освободить обзор карты. Кнопка с прицелом включает координаты наведения: целые X и Y появляются рядом с курсором. Shift+клик по самой карте копирует целые координаты X и Y через табуляцию — их можно вставить в две соседние ячейки таблицы.</p></div></div>
         </div>
         <div class="modal-foot"><span>КАСТОМНАЯ КАРТА</span><span>НЕОФИЦИАЛЬНЫЙ ПРОЕКТ</span></div>
       </section>
@@ -162,7 +167,7 @@
       });
     })();
   </script>
-  <script src="/shared/app.js?v=map-markers-1" defer></script>
+  <script src="/shared/app.js?v=system-hover-highlight-1" defer></script>
   <script src="/shared/cursor-fx.js?v=cursor-6" defer></script>
 </body>
 </html>

@@ -11,19 +11,18 @@
 .left-panel .stat-value { font-size: 18px; }
 .left-panel .stat-label { font-size: 10px; color: #82aaa6; }
 
-/* Taxonomy — one modest step above its former micro-label size. */
-.left-panel .catalog-section-code { font-size: 9px; }
+/* Taxonomy — the full category names get the available width. */
+.left-panel .catalog-dropdown-summary { font-size: 12px; }
 .left-panel .catalog-section-copy strong { font-size: 12px; }
-.left-panel .catalog-section-copy small { font-size: 9px; color: #8bbdb7; }
-.left-panel .catalog-section.active .catalog-section-copy small { color: #b0e0da; }
 .left-panel .catalog-section,
 .left-panel .catalog-section > b { color: #91c4bf; }
 .left-panel .catalog-section.active { color: #effffd; }
 .left-panel .catalog-section > b { color: #55e5d9; font-size: 10px; }
 
 /* Filters and list controls — consistently legible labels and chip text. */
-.left-panel .filter-header,
-.left-panel .filter-label { font-size: 10px; color: #82aaa6; }
+.left-panel .filter-panel-summary,
+.left-panel .filter-group > summary { font-size: 10px; color: #82aaa6; }
+.left-panel .filter-menu-current { font-size: 9px; }
 .left-panel .filter-chip { font-size: 11px; color: #b0cbc7; }
 .left-panel .list-caption { font-size: 10px; color: #9ac4bf; }
 .left-panel .sort-button { font-size: 10px; }
@@ -41,13 +40,12 @@
   .left-panel .eyebrow { font-size: 9px; }
   .left-panel .panel-head h1 { font-size: 18px; }
   .left-panel .stat-value { font-size: 16px; }
-  .left-panel .stat-label,
-  .left-panel .filter-header,
-  .left-panel .filter-label { font-size: 9px; }
+  .left-panel .stat-label { font-size: 9px; }
 
-  .left-panel .catalog-section-code { font-size: 8px; }
-  .left-panel .catalog-section-copy strong { font-size: 10px; }
-  .left-panel .catalog-section-copy small { font-size: 8px; color: #9ac8c3; }
+  .left-panel .catalog-dropdown-summary,
+  .left-panel .catalog-section-copy strong { font-size: 11px; }
+  .left-panel .filter-panel-summary,
+  .left-panel .filter-group > summary { font-size: 9px; }
   .left-panel .catalog-section > b { font-size: 9px; }
 
   .left-panel .filter-chip,
