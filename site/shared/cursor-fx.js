@@ -11,6 +11,9 @@
        Слои непрозрачные, как на образце пользователя: тёмная заливка с кромкой, а там, где
        слой лежит на заднем, — тёмный зазор и светлая линия. «Каскад» и «волна» по очереди
        заливают слои светлым градиентом.
+     • Перетаскивание («холд-драг»): крестовина задумки пользователя — четыре пары шевронов
+       остриями к центру. Точка клика — в центре креста. Включается сразу при нажатии на
+       пустом месте карты, до движения (CONFIG.hold). Геометрия — CONFIG.cross.
 
    ПОЧЕМУ СИСТЕМНЫЙ КУРСОР, А НЕ НАРИСОВАННЫЙ ЭЛЕМЕНТ
    Курсор рисует операционная система, поэтому он не отстаёт от мыши ни на кадр. Элемент
@@ -28,13 +31,15 @@
    2. Каждый кадр растеризуется в браузере (программный canvas) в PNG 32×32 и 64×64 для
       экранов 2×. Файлов-картинок нет, сборка не нужна. Сначала готовятся статичные кадры
       (курсор появляется сразу), анимация — следом, в фоне (≈0,4 с). Готовые PNG хранятся в
-      localStorage (≈0,6 МБ), и на следующих страницах кадры берутся оттуда за миллисекунды.
+      localStorage (≈0,8 МБ), и на следующих страницах кадры берутся оттуда за миллисекунды.
    3. В <head> добавляется <style id="cursor-fx"> со статичными кадрами состояний (!important):
         обычный        — всё, в том числе поля ввода и поиск (решение: стрелка, не I-образный);
         наведение      — ссылки, кнопки, [role=button], классы сайта из CONFIG.hover и системы
                          на карте атласа (#mapCanvas.marker-hover);
         недоступно     — CONFIG.disabled (ОЗД после отказа, :disabled): приглушённая стрелка;
-        перетаскивание — пока зажата карта (CONFIG.drag): стрелка без сот.
+        перетаскивание — крестовина: пока зажата кнопка на пустом месте карты (CONFIG.hold),
+                         а если нажали на кнопку, сектор или систему — когда мышь сдвинулась
+                         и карта поехала; плюс классы карт из CONFIG.drag.
       Какое состояние показать, решает браузер по элементу под мышью: координаты мыши модуль
       не отслеживает, поэтому задержки нет.
    4. Анимация: таймер ставит очередной кадр в style того элемента, что под мышью (с него
@@ -120,6 +125,30 @@
       hoverStart: 150,           // мс цикла, с которых начинается анимация при наведении
       still: 2700                // мс цикла — кадр для prefers-reduced-motion: задний слой
                                  // залит, передние тёмные, как на образце пользователя
+    },
+    // Крестовина перетаскивания по задумке пользователя (холст -50…50): базовый шеврон
+    // повёрнут на 0/90/180/270° — сверху, справа, снизу, слева, — в каждом направлении пара:
+    // внешний крупнее и дальше, внутренний меньше и ближе к центру. Точка клика — центр.
+    cross: {
+      scale: 0.34,               // px на единицу задумки: крест ≈ 27 px из 32, свечение влезает
+      center: 15.5,              // px — центр креста в картинке: середина пикселя, чтобы острия
+                                 // на осях были чёткими в 1×; точка клика — этот пиксель (15)
+      chevron: [[-12, -4], [12, -4], [0, 6]],   // плоский верх, остриё вниз — к центру
+      // [расстояние от центра, масштаб, слой]: как translate(0,-35) scale(1.2) и
+      // translate(0,-18) scale(0.8) в задумке
+      pairs: [[35, 1.2, 'outer'], [18, 0.8, 'inner']],
+      // px — [кромка внешнего шеврона, тёмная обводка внутреннего]; в картинке 1× кромка
+      // толще, а тонкая обводка рябит — её нет
+      lines: { fine: [0.7, 0.45], coarse: [1, 0] }
+    },
+    // «Холд»: зажали кнопку мыши на пустом месте карты (CONFIG.dragWatch) — курсор
+    // перетаскивания сразу, ещё до движения. Нажатие на кнопку, сектор, систему остаётся
+    // щелчком; если мышь при этом сдвинулась дальше slop, карта поехала — тоже перетаскивание.
+    hold: {
+      slop: 4,                   // px, как порог перетаскивания на карте галактики
+      // панели и кнопки внутри карт: нажатие на них карту не двигает (как isUi в galaxy.js)
+      skip: '.sector-panel, .map-controls, .sectors-sidebar, .sectors-curtain, .sectors-backdrop, ' +
+        '.map-hint, .odz-message'
     },
     hover: [
       'a[href]', 'button:not(:disabled)', '[role="button"]', 'select', 'summary', 'label[for]',
@@ -263,6 +292,9 @@
     return { kind: 'tri', fills: FILL_KEYS.map(function (keys) { return num(fillAt(keys, p), 2); }) };
   }
 
+  // крестовина перетаскивания — статичный кадр
+  function crossFrame() { return { kind: 'cross' }; }
+
   function svgOpen(px, origin, span) {
     var box = num(origin, 3) + ' ' + num(origin, 3) + ' ' + num(span, 3) + ' ' + num(span, 3);
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + px + '" height="' + px + '" viewBox="' + box + '">';
@@ -274,8 +306,8 @@
 
   // ореол: силуэт рисунка, размытый на sd и залитый цветом color, под самим рисунком —
   // края остаются чёткими, светится только вокруг
-  function haloFilter(id, sd, color, opacity) {
-    return '<filter id="' + id + '"' + FILTER_AREA + '>' +
+  function haloFilter(id, sd, color, opacity, area) {
+    return '<filter id="' + id + '"' + (area || FILTER_AREA) + '>' +
       '<feGaussianBlur in="SourceAlpha" stdDeviation="' + sd + '" result="a"/>' +
       '<feFlood flood-color="' + color + '" flood-opacity="' + opacity + '"/><feComposite in2="a" operator="in" result="g"/>' +
       '<feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
@@ -404,7 +436,44 @@
       '<defs>' + defs + '</defs><g filter="url(#t)">' + body + '</g></svg>';
   }
 
-  function frameSVG(f, px) { return f.kind === 'tri' ? triSVG(f, px) : arrowSVG(f, px); }
+  // Крестовина перетаскивания. Внешние шевроны — тёмные с яркой кромкой, как слои наведения;
+  // внутренние — залиты ярким градиентом стрелки. Вокруг креста — зелёный ореол 1 px (в задумке
+  // feGaussianBlur 2). Точки считаются сразу в координатах холста: поворот на 90° по часовой —
+  // (x, y) → (−y, x); <use> и transform не нужны.
+  function crossSVG(f, px) {
+    var X = CONFIG.cross, C = CONFIG.colors, s = X.scale, span = CONFIG.size / s, o = -X.center / s;
+    var w = px > CONFIG.size ? X.lines.fine : X.lines.coarse, rim = w[0] / s, wall = w[1] / s;
+    var area = ' filterUnits="userSpaceOnUse" x="' + num(o, 2) + '" y="' + num(o, 2) + '" width="' +
+      num(span, 2) + '" height="' + num(span, 2) + '"';
+    var defs =
+      // у остриёв, ближе к центру, заливки светлее
+      '<radialGradient id="d" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="40">' +
+      '<stop offset="0.65" stop-color="' + C.shade[0] + '"/><stop offset="1" stop-color="' + C.shade[1] + '"/></radialGradient>' +
+      '<radialGradient id="b" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="22">' +
+      '<stop offset="0.6" stop-color="' + C.rimLit + '"/><stop offset="1" stop-color="' + C.core + '"/></radialGradient>' +
+      haloFilter('k', num(1 / s, 2), C.core, 0.55, area);
+    var body = '';
+    X.pairs.forEach(function (pair) {
+      for (var k = 0; k < 4; k++) {
+        var pts = X.chevron.map(function (p) {
+          var x = p[0] * pair[1], y = p[1] * pair[1] - pair[0];
+          for (var r = 0; r < k; r++) { var t = x; x = -y; y = t; }
+          return num(x, 2) + ',' + num(y, 2);
+        }).join(' ');
+        body += pair[2] === 'outer'
+          ? '<polygon points="' + pts + '" fill="url(#d)" stroke="' + C.core + '" stroke-width="' + num(rim, 3) + '"/>'
+          : '<polygon points="' + pts + '" fill="url(#b)"' +
+            (wall ? ' stroke="' + C.gap + '" stroke-width="' + num(wall, 3) + '"' : '') + '/>';
+      }
+    });
+    return svgOpen(px, o, span) + '<defs>' + defs + '</defs><g filter="url(#k)">' + body + '</g></svg>';
+  }
+
+  function frameSVG(f, px) {
+    if (f.kind === 'tri') return triSVG(f, px);
+    if (f.kind === 'cross') return crossSVG(f, px);
+    return arrowSVG(f, px);
+  }
 
   // кадры цикла с шагом CONFIG.step; одинаковые подряд склеиваются в один длинный
   function sampleCycle(cycle, make) {
@@ -518,12 +587,13 @@
   var painted = '';           // какой кадр там стоит
   var hoverStartIndex = 0;
   var lastTarget = null;
+  var hold = null;          // нажатие на карте: { id, x, y, click — нажали на кнопку/систему, moved }
   var outside = false;
   var timer = 0;
 
   var still = {
     idle: { f: arrowFrame(0, { parts: false }) },
-    drag: { f: arrowFrame(0, { parts: false, glow: 1.6 }) },
+    drag: { f: crossFrame(), hot: [Math.floor(CONFIG.cross.center), Math.floor(CONFIG.cross.center)] },
     disabled: { f: arrowFrame(0, { parts: false, dim: true }) },
     hover: { f: triFrame(CONFIG.tri.still) }
   };
@@ -554,7 +624,8 @@
   }
 
   function cursorValue(frame, fallback) {
-    var at = ' ' + CONFIG.hotspot[0] + ' ' + CONFIG.hotspot[1];
+    var hot = frame.hot || CONFIG.hotspot;   // у крестовины точка клика — центр
+    var at = ' ' + hot[0] + ' ' + hot[1];
     var mode = rasterBroken || !frame.png1 ? 'svg-only' : variant;
     if (mode === 'set') return 'image-set(url("' + frame.png1 + '") 1x, url("' + frame.png2 + '") 2x)' + at + ', ' + fallback;
     if (mode === 'webkit') return '-webkit-image-set(url("' + frame.png1 + '") 1x, url("' + frame.png2 + '") 2x)' + at + ', ' + fallback;
@@ -669,16 +740,49 @@
     }
   }
 
+  // Своё нажатие главнее классов карт: атлас ставит #mapCanvas.dragging уже при нажатии на
+  // систему, а это щелчок. Классы карт — запасной путь, если нажатие прошло мимо модуля.
+  function isDragging() {
+    if (hold) return !hold.click || hold.moved;
+    return !!doc.querySelector(CONFIG.drag);
+  }
+
   function updateDrag() {
-    var dragging = !!doc.querySelector(CONFIG.drag);
+    var dragging = enabled && isDragging();
     if (dragging === root.classList.contains('cfx-drag')) return;
     root.classList.toggle('cfx-drag', dragging);
     classify();
   }
 
+  function finePointer(event) {
+    return !event.pointerType || event.pointerType === 'mouse' || event.pointerType === 'pen';
+  }
+
+  function onDown(event) {
+    if (!enabled || event.button !== 0 || !finePointer(event)) return;
+    var el = event.target && event.target.nodeType === 1 ? event.target : null;
+    if (!el || !el.closest(CONFIG.dragWatch) || el.closest(CONFIG.hold.skip)) return;
+    hold = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
+      click: !!el.closest(CONFIG.hover + ', ' + CONFIG.disabled) };
+    updateDrag();
+  }
+
+  function onUp(event) {
+    if (!hold || (event && event.pointerId != null && event.pointerId !== hold.id)) return;
+    hold = null;
+    updateDrag();
+  }
+
   function onMove(event) {
-    if (event.pointerType && event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+    if (!finePointer(event)) return;
     if (outside) { outside = false; schedule(); }
+    if (hold && !event.buttons) {
+      onUp();   // кнопку отпустили там, откуда pointerup не дошёл
+    } else if (hold && !hold.moved &&
+        Math.abs(event.clientX - hold.x) + Math.abs(event.clientY - hold.y) > CONFIG.hold.slop) {
+      hold.moved = true;
+      if (hold.click) updateDrag();
+    }
     classify(event.target);
   }
 
@@ -687,6 +791,13 @@
     // когда классы вроде marker-hover уже обновлены
     window.addEventListener('pointerover', onMove, { passive: true });
     window.addEventListener('pointermove', onMove, { passive: true });
+    // нажатие — в фазе перехвата: курсор перетаскивания появляется сразу, даже если страница
+    // остановит событие; отпускание — в любой форме, в том числе потеря окна
+    window.addEventListener('pointerdown', onDown, { capture: true, passive: true });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (type) {
+      window.addEventListener(type, onUp, { capture: true, passive: true });
+    });
+    window.addEventListener('blur', function () { onUp(); });
     doc.addEventListener('mouseout', function (event) {
       if (!event.relatedTarget) { outside = true; schedule(); }
     });
@@ -747,6 +858,7 @@
 
   function disable() {
     enabled = false;
+    hold = null;
     clearTimeout(timer);
     timer = 0;
     unpaint();
@@ -769,7 +881,7 @@
     info: function () {
       return {
         enabled: enabled, ready: ready, variant: variant, auto: autoVariant, rasterBroken: rasterBroken,
-        dpr: window.devicePixelRatio || 1, reducedMotion: media.reduced.matches, state: active,
+        dpr: window.devicePixelRatio || 1, reducedMotion: media.reduced.matches, state: active, hold: !!hold,
         frames: { default: anim.default.frames.length, hover: anim.hover.frames.length }, buildMs: buildMs, cached: cached
       };
     },
