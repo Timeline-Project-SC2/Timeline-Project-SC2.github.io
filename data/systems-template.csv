@@ -1,3 +1,3 @@
-id,name,type,x,y,faction,description,source_url
-korhal,Корхал,capital,1,1,Доминион,Столица Доминиона Терран,sample.com
-avernus,Авернус,none,2,2,Фантомы Габлиэля Тоша,Секретное место базирования Фантомов Габлиэля Тоша,sample.com
+id,name,type,faction,description,source_url
+korhal,Корхал,capital,Доминион,Столица Доминиона Терран,sample.com
+avernus,Авернус,none,Фантомы Габлиэля Тоша,Секретное место базирования Фантомов Габлиэля Тоша,sample.com

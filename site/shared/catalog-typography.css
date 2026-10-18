@@ -14,8 +14,8 @@
 /* Taxonomy — one modest step above its former micro-label size. */
 .left-panel .catalog-section-code { font-size: 9px; }
 .left-panel .catalog-section-copy strong { font-size: 12px; }
-.left-panel .catalog-section-copy small { font-size: 8px; color: #75aaa5; }
-.left-panel .catalog-section.active .catalog-section-copy small { color: #9acdc7; }
+.left-panel .catalog-section-copy small { font-size: 9px; color: #8bbdb7; }
+.left-panel .catalog-section.active .catalog-section-copy small { color: #b0e0da; }
 .left-panel .catalog-section,
 .left-panel .catalog-section > b { color: #91c4bf; }
 .left-panel .catalog-section.active { color: #effffd; }
@@ -24,15 +24,15 @@
 /* Filters and list controls — consistently legible labels and chip text. */
 .left-panel .filter-header,
 .left-panel .filter-label { font-size: 10px; color: #82aaa6; }
-.left-panel .filter-chip { font-size: 10px; }
-.left-panel .list-caption { font-size: 10px; color: #83b3ae; }
+.left-panel .filter-chip { font-size: 11px; color: #b0cbc7; }
+.left-panel .list-caption { font-size: 10px; color: #9ac4bf; }
 .left-panel .sort-button { font-size: 10px; }
 .left-panel .filter-count { font-size: 10px; }
 
 /* Catalogue rows — title, supporting metadata, counts, and footer. */
 .left-panel .row-glyph { font-size: 10px; }
 .left-panel .row-title { font-size: 13px; }
-.left-panel .row-meta { font-size: 10px; }
+.left-panel .row-meta { font-size: 11px; color: #a1bfbb; }
 .left-panel .row-count { font-size: 11px; }
 .left-panel .panel-foot { font-size: 10px; }
 
@@ -47,7 +47,7 @@
 
   .left-panel .catalog-section-code { font-size: 8px; }
   .left-panel .catalog-section-copy strong { font-size: 10px; }
-  .left-panel .catalog-section-copy small { font-size: 7px; }
+  .left-panel .catalog-section-copy small { font-size: 8px; color: #9ac8c3; }
   .left-panel .catalog-section > b { font-size: 9px; }
 
   .left-panel .filter-chip,
