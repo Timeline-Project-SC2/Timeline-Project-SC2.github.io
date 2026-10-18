@@ -1,8 +1,8 @@
 {
   "version": null,
-  "sha": "48de9e8853ace9d115b5a826a419a1247fd6d465f0e517f306c70c8548def167",
+  "sha": "5e63a729025bfbd618b9e1358f8e9b8fa4c9156fe6117556fd0829f19af4fd3c",
   "bounds": null,
-  "generatedAt": "2026-10-15T20:56:43.865856Z",
+  "generatedAt": "2026-10-18T04:17:23.307682Z",
   "sources": [
     "systems-sheet",
     "places-sheet"
@@ -14,5 +14,6 @@
     "tiles": "/assets/tiles.json",
     "version": "17b60184",
     "imageVersion": "0f419d0e"
-  }
+  },
+  "source": "places-sheet"
 }

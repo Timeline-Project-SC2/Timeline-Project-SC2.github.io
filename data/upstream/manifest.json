@@ -1,10 +1,12 @@
 {
   "sources": {
     "systems-sheet": {
-      "sha": "48de9e8853ace9d115b5a826a419a1247fd6d465f0e517f306c70c8548def167"
+      "sha": "83b9d152bc2d2bf9fd47ccaa94889c902505c7b735b785fde8a53f90588fa9bc",
+      "updatedAt": "2026-10-18T04:17:22.376436Z"
     },
     "places-sheet": {
-      "sha": "bcbff31cacfdc8e6a39d88a6cbc2eacb2bdca4f4768c93f2e4a1508b15306f04"
+      "sha": "5e63a729025bfbd618b9e1358f8e9b8fa4c9156fe6117556fd0829f19af4fd3c",
+      "updatedAt": "2026-10-18T04:17:23.307682Z"
     }
   }
 }
