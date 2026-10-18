@@ -1416,7 +1416,7 @@
       drag = {
         mode: 'pan',
         startX: point.x, startY: point.y,
-        tx: state.view.tx, ty: state.view.ty, moved: false
+        tx: state.view.tx, ty: state.view.ty, moved: false, shiftKey: event.shiftKey
       };
       canvas.classList.add('dragging');
     } else {
@@ -1493,6 +1493,11 @@
     if (!finished) return;
 
     if (finished.mode === 'pan' && !finished.moved) {
+      if (event.shiftKey || finished.shiftKey) {
+        event.preventDefault();
+        copyMapCoordinates(point);
+        return;
+      }
       var hit = hitTest(point.x, point.y);
       if (hit) {
         selectSystem(hit.id, { pin: true, center: false });
@@ -2206,6 +2211,44 @@
     if (top + height > state.viewport.h - 6) top = point.y - height - 14;
     readout.style.left = clamp(left, 6, Math.max(6, state.viewport.w - width - 6)) + 'px';
     readout.style.top = clamp(top, 6, Math.max(6, state.viewport.h - height - 6)) + 'px';
+  }
+
+  function copyCoordinatesToClipboard(value, displayValue) {
+    function showCopied() { toast('Скопировано в две ячейки: ' + displayValue); }
+
+    function fallbackCopy() {
+      var field = doc.createElement('textarea');
+      field.value = value;
+      field.setAttribute('readonly', '');
+      field.style.position = 'fixed';
+      field.style.opacity = '0';
+      doc.body.appendChild(field);
+      field.select();
+      var copied = false;
+      try { copied = doc.execCommand('copy'); } catch (err) { copied = false; }
+      field.remove();
+      if (copied) showCopied();
+      else toast('Не удалось скопировать координаты');
+    }
+
+    if (window.navigator.clipboard && window.navigator.clipboard.writeText) {
+      window.navigator.clipboard.writeText(value).then(showCopied).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
+  }
+
+  function copyMapCoordinates(point) {
+    var world = toWorld(point.x, point.y);
+    var size = mapSize();
+    if (world.x < 0 || world.y < 0 || world.x > size || world.y > size) {
+      toast('Shift+клик по самой карте');
+      return;
+    }
+    var x = Math.round(world.x);
+    var y = Math.round(world.y);
+    // Табуляция разделяет значения на две соседние ячейки при вставке в таблицу.
+    copyCoordinatesToClipboard(x + '\t' + y, x + ', ' + y);
   }
 
   function applyLabelsToggle() {

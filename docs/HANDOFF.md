@@ -20,7 +20,7 @@
 - Первый выбор: рамка строится по пересечению viewport и карты — её стороны следуют камере, а видимые края карты задают реальные границы; входящие линии формируют борд и сжимают его до `data-frame`.
 - Если текущий зум выше масштаба, нужного для области, камера сразу отъезжает до него и затем центрирует. Если он ниже — камера центрирует на текущем масштабе, ждёт 1 с и приближает; при равном масштабе только центрирует.
 - При смене области существующая рамка плавно перемещается; при панорамировании и зуме она остаётся привязана к карте.
-- Опциональный readout координат курсора расположен только на карте сектора: X/Y в системе `mapSize` (обычно 10 000), выключен по умолчанию, включается/отключается кнопкой в панели управления. На карте галактики таких элементов нет.
+- Опциональный readout координат курсора расположен только на карте сектора: X/Y в системе `mapSize` (обычно 10 000), выключен по умолчанию, включается/отключается кнопкой в панели управления. Shift+клик по карте копирует пару целых значений через табуляцию, чтобы вставить в два столбца таблицы. На карте галактики таких элементов нет.
 - Локально прошли `node --check` для JS, ESLint по `site/`, `py_compile` и `git diff --check`.
 
 ## 2. Как устроен репозиторий
@@ -164,14 +164,14 @@ Pages кэширует файлы на 10 минут, без версий пос
 | `site/shared/focus-fx.js` | анимация: в начале файла — этапы, подключение и договорённость о камере; `T` — длительности, `G` — геометрия. API: `select({stage, target, frame, mapFrame, onLock, onContract})`, `release(done)`, `start({stage, target, frame, camera, zooms, ending, preview, onLock, onZoom, onCenter, onDeny, onEnd})`, `active()`, `refresh()`, `stop()`. Слои (затемнение, холст, превью) ставит сам |
 | `site/shared/lag-fx.js` | «лаги» картинки: `LagFx.attach(img, {busy, …})` → `burst()`, `sweep()`, `pause()`, `resume()`, `destroy()`; настройки — `LagFx.defaults` |
 | `site/galaxy.js` | `CONFIG` (`focusZoom`, `focusZoomDelay`, `framePad`, `frameMinVisible`, `diveZooms: [12, 20]`), `camera` (get / set вида для модуля), `boxOf` / `frameData` / `frameOf`, `selectArea`, `hidePanel` / `closePanel` / `clearAreas`, `focusArea`, `runTransition` / `runZerusTransition` / `runOdzTransition`, сброс при возврате «Назад» (bfcache); `LagFx.attach` молчит на время перехода; `sharpenMap` — чёткость карты при приближении |
-| `site/shared/app.js` и `site/sector/sector.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. В minimal-скине элементы управления координатами отсутствуют, обработчики условные |
+| `site/shared/app.js` и `site/sector/sector.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. Shift+клик копирует X и Y через табуляцию для вставки в два столбца; в minimal-скине кнопки readout нет, обработчик копирования работает условно на секторной карте |
 | `site/sector/sector.css` | оформление секторного readout координат, подключается только на карте сектора |
 | `site/index.html` | у квадратов `data-frame="л в п н"` — блок области в % карты (с полем ≈ 0.9 %); когда картинки и надписи станут отдельными элементами сайта, рамку можно считать от них |
 | `site/galaxy.css` | цвета прицела CSS-переменными `--focus-core/-light/-shadow/-glow` и `--focus-dim` на `.galaxy-stage`, `.is-red-target`, `.is-odz-ping` |
 
 После правок поднимать `?v=` у изменённых файлов в `site/index.html`. Текущие значения:
 `galaxy.js` — `frame-9`, `galaxy.css` — `frame-5`, `shared/focus-fx.js` — `frame-10`,
-`shared/lag-fx.js` — `frame-1`. У `app.js` в `sector.html` и `minimal.html` — `coordinates-1`;
+`shared/lag-fx.js` — `frame-1`. У `app.js` в `sector.html` и `minimal.html` — `coordinates-2`;
 `sector.css` — `coordinates-1`.
 
 ## 7. Инфраструктурные грабли
