@@ -16,30 +16,42 @@
    Для вызовов без mapFrame остаётся режим select({ instant: true }) с коротким ping на месте.
    Снятие выбора — release(): контур выгружается обратно против часовой стрелки, импульсы уходят по каналам.
 
-   Переход — start(); продолжает с удержания, без повторного появления:
-     1. рамка сужается до квадрата цели, захват → onLock(0);
+   Переход — start(); продолжает с удержания, без повторного появления. Два вида.
+
+   «По контуру» (contour: true; переход в Копрулу) — вторая ступень того же
+   приближения, что при выборе, и выглядит точно так же:
+     1. рамка области сжимается до контура квадрата цели — как борд карты до области
+        при выборе (T.contract, те же каналы от краёв сцены и блики) → onLock(0);
+     2. камера везёт квадрат в центр, ждёт, приближает — длительности и плавность как
+        у выбора (timing); рамка всё время держится за контур квадрата и растёт с картой;
+     3. финал — 'reveal': во время приближения в квадрате, внутри рамки, проявляется
+        превью (preview), карта вокруг уходит в темноту → onEnd(). Без превью — 'fade'.
+
+   Обычный (Зерус, ОЗД):
+     1. рамка сужается до рамки захвата вокруг цели, захват → onLock(0);
      2. камера везёт цель в центр, рамка следует за картой;
-     3. после T.zoomDelay начинается приближение: углы рамки соединены с целью
-        диагональными лучами;
-     4. между уровнями — сброс, наведение и захват; лучи остаются привязаны к цели;
-     5. финал — 'reveal': во время последнего, самого крупного приближения в квадрате
-        цели проявляется превью (preview), всё вокруг уходит в темноту → onEnd().
-        Другие финалы: 'fade' — уход в темноту без превью; 'error' — срыв захвата;
-        'deny' — отказ (вспышки на цели) сразу после захвата, без приближения.
-   Если прицела на экране нет, переход начинается с появления.
+     3. после T.zoomDelay — приближение: рамка раскрывается до краёв сцены;
+     4. между уровнями — сброс, наведение и захват;
+     5. финал — 'fade' — уход в темноту; 'error' — срыв захвата; 'deny' — отказ
+        (вспышки на цели) сразу после захвата, без приближения; 'reveal' — превью в
+        квадрате цели во время последнего приближения.
+   Если прицела на экране нет, переход начинается с появления («по контуру» — с борда
+   карты, как первый выбор, если передан mapFrame).
 
    РАЗМЕРЫ
    Координаты mapFrame(), target() и frame() заданы в пикселях сцены, их выдаёт страница.
    Во время фокусирования, перехода и hold модуль перечитывает их; готовая рамка хранит
    положение и размер относительно карты и потому следует за её ручным/программным видом.
-   Во время программного зума размер рамки следует настройке lockScreen: при false
-   (переход Копрулу) она масштабируется вместе с камерой; при true остаётся экранного
-   размера. Толщина линий остаётся долей меньшей стороны сцены (G).
+   В обычном переходе размер рамки захвата при программном зуме следует настройке
+   lockScreen: при false она подстраивается под выросшую цель; при true остаётся
+   экранного размера. В переходе «по контуру» рамка — сам квадрат target(): внешний край
+   линии на контуре квадрата, рамка растёт вместе с картой. Толщина линий — доля меньшей
+   стороны сцены (G).
 
    ПОДКЛЮЧЕНИЕ
    1. Сцена — любой элемент с position: relative / absolute и overflow: hidden,
       внутри которого лежит карта. Модуль сам добавит в него: затемнение
-      (.focus-fx-dim, только на время перехода), холст прицела (.focus-fx-canvas)
+      (.focus-fx-dim, только на время обычного перехода), холст прицела (.focus-fx-canvas)
       и картинку превью (.focus-fx-preview, только в финале 'reveal'). Все три —
       с z-index из G.zIndex (3): над картой, но под интерфейсом сцены (панели,
       кнопки — делайте им z-index больше). Клики проходят насквозь.
@@ -67,9 +79,12 @@
         FocusFx.start({
           stage: stageEl, target: …, frame: …,
           camera: camera,
-          lockScreen: false,             // false — размер захвата следует за зумом; иначе фиксируется на старте перехода
-          zooms: [12, 20],               // уровни приближения по шагам (пусто — без приближения)
-          ending: 'reveal',              // 'reveal' | 'fade' | 'error' | 'deny'
+          contour: true,                 // переход «по контуру» — как вторая ступень выбора (см. выше)
+          mapFrame: function () { … },   // «по контуру» без выбора на экране: начать с борда карты
+          timing: { center: 520, pause: 1000, zoom: 650 }, // «по контуру»: мс, как у выбора на странице
+          lockScreen: false,             // обычный: false — размер захвата следует за зумом; иначе фиксируется на старте
+          zooms: [20],                   // уровни приближения по шагам (пусто — без приближения)
+          ending: 'reveal',              // 'reveal' | 'fade' | 'error' | 'deny' («по контуру» — 'reveal' или 'fade')
           preview: '/assets/…webp',      // для 'reveal'
           onLock: function (step) { … }, // захват на шаге step (0, 1, …)
           onZoom: function (step, ms, level) { … },  // начало приближения (без camera —
@@ -124,6 +139,8 @@
     centerPerPx: 0.45, // + столько мс на пиксель пути цели до центра сцены
     zoom: 600,        // раскрытие рамки и приближение камеры
     zoomDelay: 1000,  // пауза после фокусирования перед началом зума
+    focusCenter: 520, // переход «по контуру»: центрирование и приближение — как при выборе
+    focusZoom: 650,   // (на галактике их передаёт galaxy.js из своего CONFIG: opts.timing)
     reset: 160,       // сброс: маленькая рамка в центре
     reveal: 520,      // 'reveal': окно параллельного проявления превью в последнем приближении
     still: 260,       // 'reveal': пауза на готовом кадре перед onEnd
@@ -300,8 +317,10 @@
     global.requestAnimationFrame(function () { if (dimEl) dimEl.style.opacity = '1'; });
   }
 
-  // Превью для финала 'reveal': над холстом (темнота его не накрывает)
-  function previewOn(src, pal) {
+  // Превью для финала 'reveal': над холстом (темнота его не накрывает).
+  // framed — превью лежит внутри рамки прицела («по контуру»): своя обводка и свечение
+  // не нужны, обводка — сама рамка.
+  function previewOn(src, pal, framed) {
     if (previewEl || !stageEl || !src) return;
     previewEl = document.createElement('img');
     previewEl.className = 'focus-fx-preview';
@@ -318,8 +337,10 @@
     s.objectFit = 'cover';
     s.opacity = '0';
     s.boxSizing = 'border-box';
-    s.border = '1px solid ' + rgba(pal.light, 0.55);
-    s.boxShadow = '0 0 26px ' + rgba(pal.glow, 0.45);
+    if (!framed) {
+      s.border = '1px solid ' + rgba(pal.light, 0.55);
+      s.boxShadow = '0 0 26px ' + rgba(pal.glow, 0.45);
+    }
     s.transformOrigin = '0 0';
     stageEl.appendChild(previewEl);
   }
@@ -389,7 +410,27 @@
     return p;
   }
 
+  /* Переход «по контуру» — вторая ступень приближения, этапы и длительности как у выбора:
+     сжатие (как борд → область) → центрирование → пауза → приближение. Рамка не
+     раскрывается к краям, не сбрасывается и не захватывает цель заново: она садится на
+     контур квадрата и держится за него, пока камера центрирует и приближает. */
+  function planContour(o, fresh) {
+    var p = [];
+    if (fresh && o.mapFrame) p.push({ kind: 'outline', ms: reduceMotion ? 0 : T.mapOutline });
+    p.push({ kind: 'shrink', ms: reduceMotion ? 0 : T.contract });
+    p.push({ kind: 'lock', step: 0, ms: 0 });     // сел на контур → onLock
+    p.push({ kind: 'center' });
+    for (var i = 0; i < o.zooms.length; i++) {
+      p.push({ kind: 'pause', ms: o.timing.pause });
+      p.push({ kind: 'zoom', step: i, ms: o.timing.zoom, last: i === o.zooms.length - 1 });
+    }
+    // 'reveal': превью проявляется во время последнего приближения, затем короткая пауза
+    p.push(o.ending === 'reveal' ? { kind: 'still', ms: T.still } : { kind: 'fade', ms: T.fade });
+    return p;
+  }
+
   function planGo(o, fresh) {
+    if (o.contour) return planContour(o, fresh);
     var p = [];
     if (fresh) {
       p.push({ kind: 'appear', ms: T.appear });
@@ -431,19 +472,23 @@
   function center() { return { x: cw / 2, y: ch / 2 }; }
 
   /* ---------- камера (только на время перехода) ----------
-     Центрирование: сдвиг при том же масштабе. Приближение: масштаб растёт
-     геометрически, точка цели идёт по прямой к точке назначения — карта и
-     раскрывающаяся рамка движутся синхронно. */
-  function cameraPan(cam, tg, to) {
+     Центрирование: сдвиг при том же масштабе. Приближение: точка цели идёт по прямой
+     к точке назначения — карта и рамка движутся синхронно.
+     Обычный переход: easeInOutCubic, масштаб растёт геометрически.
+     «По контуру» (PAGE_CAMERA): как камера выбора на странице (galaxy.js → animateTo) —
+     easeOutCubic, масштаб линейно; точка в центре сцены остаётся на месте. */
+  var PAGE_CAMERA = { ease: easeOutCubic, linear: true };
+
+  function cameraPan(cam, tg, to, style) {
     var c0 = cam.get();
-    return { kind: 'pan', c0: c0, dx: to.x - tg.cx, dy: to.y - tg.cy };
+    return { kind: 'pan', c0: c0, dx: to.x - tg.cx, dy: to.y - tg.cy, style: style || null };
   }
 
-  function cameraZoom(cam, tg, level, to) {
+  function cameraZoom(cam, tg, level, to, style) {
     var c0 = cam.get();
     var s1 = Math.max(c0.s, level);
     return {
-      kind: 'zoom', c0: c0, s1: s1,
+      kind: 'zoom', c0: c0, s1: s1, style: style || null,
       p0: { x: tg.cx, y: tg.cy }, to: to,
       wx: (tg.cx - c0.tx) / c0.s, wy: (tg.cy - c0.ty) / c0.s   // точка цели в единицах мира · 1
     };
@@ -452,12 +497,12 @@
   function applyCamera(r, ph, u) {
     var k = ph.cam;
     if (!k || !r.o.camera) return;
-    var e = easeInOutCubic(clamp(u, 0, 1));
+    var e = (k.style ? k.style.ease : easeInOutCubic)(clamp(u, 0, 1));
     if (k.kind === 'pan') {
       r.o.camera.set({ s: k.c0.s, tx: k.c0.tx + k.dx * e, ty: k.c0.ty + k.dy * e });
       return;
     }
-    var s = k.c0.s * Math.pow(k.s1 / k.c0.s, e);
+    var s = k.style && k.style.linear ? k.c0.s + (k.s1 - k.c0.s) * e : k.c0.s * Math.pow(k.s1 / k.c0.s, e);
     var px = k.p0.x + (k.to.x - k.p0.x) * e;
     var py = k.p0.y + (k.to.y - k.p0.y) * e;
     r.o.camera.set({ s: s, tx: px - k.wx * s, ty: py - k.wy * s });
@@ -492,8 +537,10 @@
     ph.from = {
       x: r.pos.x, y: r.pos.y, w: r.box.w, h: r.box.h, ax: r.aim.x, ay: r.aim.y,
       alpha: r.alpha, reach: r.reach, frameProgress: r.frameProgress, rayBuild: r.rayBuild,
-      channelAlpha: r.channelAlpha, tetherProgress: r.tetherProgress, veil: r.veil, reveal: r.reveal
+      channelAlpha: r.channelAlpha, veil: r.veil, reveal: r.reveal
     };
+    var contour = r.mode === 'go' && r.o.contour;
+    var camStyle = contour ? PAGE_CAMERA : null;
     var cb = null;
     switch (ph.kind) {
       case 'track':
@@ -509,12 +556,14 @@
         break;
       case 'center':
         var away = Math.hypot(C.x - tg.cx, C.y - tg.cy);
-        ph.ms = reduceMotion || away < 1 ? 0 : clamp(T.centerMin + away * T.centerPerPx, T.centerMin, T.centerMax);
+        // «по контуру» — как центрирование при выборе: фиксированное время, если ехать есть куда
+        ph.ms = reduceMotion || away < 1 ? 0
+          : (contour ? r.o.timing.center : clamp(T.centerMin + away * T.centerPerPx, T.centerMin, T.centerMax));
         // смещение прицела от цели сходит на нет, пока камера везёт цель в центр
         ph.off = { x: r.pos.x - tg.cx, y: r.pos.y - tg.cy };
         ph.offA = { x: r.aim.x - tg.cx, y: r.aim.y - tg.cy };
         if (ph.ms > 0) {
-          if (r.o.camera) ph.cam = cameraPan(r.o.camera, tg, C);
+          if (r.o.camera) ph.cam = cameraPan(r.o.camera, tg, C, camStyle);
           else if (r.o.onCenter) cb = function () { r.o.onCenter(ph.ms); };
         }
         break;
@@ -530,9 +579,9 @@
         var level = r.o.zooms[Math.min(ph.step, r.o.zooms.length - 1)];
         var to = zoomDest(tg, mt, ph.last);
         if (ph.last && r.o.ending === 'reveal') {
-          previewOn(r.o.preview, currentPalette(global.performance.now()));
+          previewOn(r.o.preview, currentPalette(global.performance.now()), contour);
         }
-        if (r.o.camera) ph.cam = cameraZoom(r.o.camera, tg, level, to);
+        if (r.o.camera) ph.cam = cameraZoom(r.o.camera, tg, level, to, camStyle);
         if (r.o.onZoom) cb = function () { r.o.onZoom(ph.step, ph.ms, level, to); };
         break;
       case 'deny':
@@ -550,8 +599,65 @@
     return run === r;
   }
 
+  /* Переход «по контуру»: прицел выглядит как выбор в удержании — та же рамка, те же
+     каналы от краёв сцены к серединам сторон (rayBuild 1) и блики. Рамка — квадрат
+     target(): внешний край линии на его контуре; каждый кадр перечитывается, поэтому
+     рамка держится за квадрат при центрировании и растёт вместе с картой при приближении. */
+  function contourState(r, ph, u) {
+    var tg = r.o.target();
+    var f = ph.from;
+    var w = tg.r - tg.l, h = tg.b - tg.t;
+    var st = {
+      x: tg.cx, y: tg.cy, w: w, h: h, ax: tg.cx, ay: tg.cy,
+      frameProgress: 1, rayBuild: 1, channelAlpha: 1, reach: 0,
+      alpha: 1, vis: 1, fill: 0, hot: 0
+    };
+    var e;
+    switch (ph.kind) {
+      case 'shrink':
+        // Как сжатие борда до области при выборе: стороны рамки плавно идут от текущей
+        // рамки к сторонам квадрата и встают на них — симметрично, без перелёта и
+        // поджатия. Недорисованный контур (переход нажали посреди выбора) дорисовывается.
+        e = reduceMotion ? 1 : easeInOutCubic(u);
+        st.x = lerp(f.x, tg.cx, e);
+        st.y = lerp(f.y, tg.cy, e);
+        st.w = lerp(f.w, w, e);
+        st.h = lerp(f.h, h, e);
+        st.frameProgress = lerp(f.frameProgress == null ? 1 : f.frameProgress, 1, e);
+        st.rayBuild = f.rayBuild == null ? 1 : lerp(f.rayBuild, 1, e);
+        st.channelAlpha = lerp(f.channelAlpha == null ? 1 : f.channelAlpha, 1, e);
+        st.alpha = lerp(f.alpha == null ? 1 : f.alpha, 1, e);
+        st.hot = 0.35 * pulse(u, 0, 1);
+        break;
+
+      case 'zoom':
+        if (ph.last && r.o.ending === 'reveal') {
+          // превью и темнота вокруг — в последние T.reveal мс приближения
+          var revealStart = Math.max(0, 1 - T.reveal / Math.max(1, ph.ms));
+          var revealU = clamp((u - revealStart) / (1 - revealStart), 0, 1);
+          r.reveal = lerp(f.reveal, 1, easeOutCubic(revealU));
+          r.veil = lerp(f.veil, G.revealVeil, easeInOutSine(revealU));
+        } else if (ph.last && r.o.ending === 'fade') {
+          r.veil = Math.max(f.veil, 0.85 * smoothstep(0.45, 1, u));
+        }
+        break;
+
+      case 'fade':
+        st.alpha = f.alpha * (1 - u);
+        r.veil = lerp(f.veil, 1, easeInOutSine(u));
+        break;
+
+      // 'lock', 'center', 'pause', 'still' — рамка просто на контуре квадрата
+    }
+    st.veil = r.veil;
+    st.reveal = r.reveal;
+    return st;
+  }
+
   // Состояние прицела на этапе ph при прогрессе u (0..1)
   function stateAt(r, ph, u) {
+    // «по контуру» борд карты (если прицела не было) рисуется как при выборе, дальше — своё
+    if (r.mode === 'go' && r.o.contour && ph.kind !== 'outline') return contourState(r, ph, u);
     var mt = metrics();
     var tg = r.o.target();
     var f = ph.from;
@@ -561,7 +667,6 @@
       frameProgress: f.frameProgress == null ? 1 : f.frameProgress,
       rayBuild: f.rayBuild,
       channelAlpha: f.channelAlpha == null ? 1 : f.channelAlpha,
-      tetherProgress: f.tetherProgress || 0,
       reach: f.reach == null ? 1 : f.reach,
       alpha: 1, vis: 1, fill: 0, hot: 0
     };
@@ -813,15 +918,6 @@
         st.alpha = f.alpha * (1 - smoothstep(0.92, 1, u));
         break;
     }
-    // На переходе к превью лучи соединяют углы раскрывающейся рамки с углами цели.
-    // Рамка сужается к цели, затем раскрывается вместе с приближением — без второй,
-    // фоновой рамки и без осевых каналов, которые визуально рвали бы этот маршрут.
-    if (r.mode === 'go' && r.o.ending === 'reveal' && ['narrow', 'center', 'lock', 'pause', 'reset', 'track', 'zoom'].indexOf(ph.kind) >= 0) {
-      st.rayBuild = null;
-      st.reach = 0;
-      st.frameProgress = 1;
-      st.tetherProgress = 1;
-    }
     st.veil = r.veil;
     st.reveal = r.reveal;
     return st;
@@ -962,75 +1058,17 @@
         var flicker = reduceMotion ? 1 : 0.46 + 0.54 * (0.5 + 0.5 * Math.sin(now * 0.0025 * (0.7 + hash(seed + 17)) + hash(seed + 19) * Math.PI * 2));
         var pathAlpha = path.alpha == null ? 1 : path.alpha;
         var intensity = (0.28 + 0.72 * hash(seed + 23)) * flicker * fade * pathAlpha;
-        var diagonal = Math.abs(path.dx) > 0.001 && Math.abs(path.dy) > 0.001;
         var gradient;
-        if (diagonal) {
-          ctx.save();
-          ctx.translate(cx, cy);
-          ctx.rotate(Math.atan2(path.dy, path.dx));
-          gradient = ctx.createLinearGradient(-length / 2, 0, length / 2, 0);
-        } else if (path.v) gradient = ctx.createLinearGradient(0, cy - length / 2, 0, cy + length / 2);
+        if (path.v) gradient = ctx.createLinearGradient(0, cy - length / 2, 0, cy + length / 2);
         else gradient = ctx.createLinearGradient(cx - length / 2, 0, cx + length / 2, 0);
         gradient.addColorStop(0, rgba(pal.light, 0));
         gradient.addColorStop(0.5, rgba(pal.light, 0.88 * a * intensity));
         gradient.addColorStop(1, rgba(pal.light, 0));
         ctx.fillStyle = gradient;
-        if (diagonal) {
-          ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
-          ctx.restore();
-        } else if (path.v) ctx.fillRect(cx - thickness / 2, cy - length / 2, thickness, length);
+        if (path.v) ctx.fillRect(cx - thickness / 2, cy - length / 2, thickness, length);
         else ctx.fillRect(cx - length / 2, cy - thickness / 2, length, thickness);
       }
     }
-  }
-
-  function tetherPaths(r, st) {
-    if (!(st.tetherProgress > 0.001)) return [];
-    var target = r.o.target();
-    var l = st.x - st.w / 2, rgt = st.x + st.w / 2;
-    var t = st.y - st.h / 2, b = st.y + st.h / 2;
-    var starts = [
-      { x: l, y: t }, { x: rgt, y: t },
-      { x: rgt, y: b }, { x: l, y: b }
-    ];
-    var ends = [
-      { x: target.l, y: target.t }, { x: target.r, y: target.t },
-      { x: target.r, y: target.b }, { x: target.l, y: target.b }
-    ];
-    return starts.map(function (from, i) {
-      var dx = ends[i].x - from.x, dy = ends[i].y - from.y;
-      var len = Math.hypot(dx, dy);
-      return len > 0.01 ? {
-        ex: from.x, ey: from.y, dx: dx / len, dy: dy / len,
-        len: len, flow: 1, alpha: st.tetherProgress, v: false
-      } : null;
-    }).filter(Boolean);
-  }
-
-  function drawTethers(paths, sw, a, pal) {
-    if (!paths.length) return;
-    ctx.save();
-    ctx.lineCap = 'butt';
-    ctx.lineWidth = sw;
-    ctx.strokeStyle = rgba(pal.core, a);
-    ctx.shadowColor = rgba(pal.glow, 0.55 * a);
-    ctx.shadowBlur = sw * 1.1 * dpr;
-    paths.forEach(function (path) {
-      ctx.beginPath();
-      ctx.moveTo(path.ex, path.ey);
-      ctx.lineTo(path.ex + path.dx * path.len, path.ey + path.dy * path.len);
-      ctx.stroke();
-    });
-    ctx.shadowBlur = 0;
-    ctx.lineWidth = Math.max(1, sw * 0.18);
-    ctx.strokeStyle = rgba(pal.light, 0.28 * a);
-    paths.forEach(function (path) {
-      ctx.beginPath();
-      ctx.moveTo(path.ex, path.ey);
-      ctx.lineTo(path.ex + path.dx * path.len, path.ey + path.dy * path.len);
-      ctx.stroke();
-    });
-    ctx.restore();
   }
 
   function draw(r, st, now) {
@@ -1039,12 +1077,14 @@
     var sw = mt.sw;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cw, ch);
+    // «По контуру» темнеет только карта: рамка вокруг превью остаётся яркой (темнота под ней)
+    var contour = r.mode === 'go' && r.o.contour;
+    if (contour) drawVeil(st);
     var a = st.alpha * st.vis;
     if (a > 0.003) {
       var pal = currentPalette(now);
       var core = mix(pal.core, pal.light, clamp(st.hot, 0, 1) * 0.72);
       var sh = shapes(st, sw);
-      var tethers = tetherPaths(r, st);
       var all = sh.lines.concat(sh.box);
       var edge = Math.max(1, sw * 0.16);
 
@@ -1063,7 +1103,6 @@
       // 3. основной цвет
       ctx.fillStyle = rgba(core, a);
       fillRects(all, 0, 0);
-      drawTethers(tethers, sw, a, pal);
       // 4. светлая фаска по верхнему / левому краю; у рамки ярче, как в брифинге
       var hl = Math.max(1, sw * 0.2);
       for (var i = 0; i < all.length; i++) {
@@ -1075,7 +1114,7 @@
       }
       ctx.globalAlpha = 1;
       // 5. непрерывные импульсы идут по лучам и уже собранным сторонам рамки
-      drawGlints(sh.lines.concat(sh.tracks, tethers), sw, a, pal, now, st.flowDirection);
+      drawGlints(sh.lines.concat(sh.tracks), sw, a, pal, now, st.flowDirection);
       // 6. вспышка захвата внутри рамки (только у рамки размером с захват:
       //    большую область фокуса заливка залила бы целиком)
       if (st.fill > 0.003) {
@@ -1093,11 +1132,19 @@
       }
     }
     // уход в темноту — поверх прицела (превью лежит выше холста и не темнеет)
-    if (st.veil > 0.003) {
-      ctx.fillStyle = rgba(G.veil, st.veil);
-      ctx.fillRect(0, 0, cw, ch);
+    if (!contour) drawVeil(st);
+    if (previewEl) {
+      var tg = r.o.target();
+      // «по контуру» превью — внутри рамки: линия рамки лежит по контуру квадрата внутрь
+      // на толщину sw, превью её не закрывает
+      placePreview(contour ? { l: tg.l + sw, t: tg.t + sw, w: tg.r - tg.l - 2 * sw } : tg, st.reveal);
     }
-    if (previewEl) placePreview(r.o.target(), st.reveal);
+  }
+
+  function drawVeil(st) {
+    if (!(st.veil > 0.003)) return;
+    ctx.fillStyle = rgba(G.veil, st.veil);
+    ctx.fillRect(0, 0, cw, ch);
   }
 
   /* ---------- цикл ---------- */
@@ -1112,7 +1159,6 @@
     r.frameProgress = st.frameProgress;
     r.rayBuild = st.rayBuild;
     r.channelAlpha = st.channelAlpha;
-    r.tetherProgress = st.tetherProgress;
   }
 
   function loop(now) {
@@ -1164,7 +1210,6 @@
       frameProgress: from.frameProgress == null ? 1 : from.frameProgress,
       rayBuild: from.rayBuild,
       channelAlpha: from.channelAlpha,
-      tetherProgress: from.tetherProgress || 0,
       veil: 0,
       reveal: 0,
       fixed: null,
@@ -1189,7 +1234,7 @@
     return {
       pos: r.pos, box: r.box, aim: r.aim, alpha: r.alpha, reach: r.reach,
       frameProgress: r.frameProgress, rayBuild: r.rayBuild,
-      channelAlpha: r.channelAlpha, tetherProgress: r.tetherProgress
+      channelAlpha: r.channelAlpha
     };
   }
 
@@ -1256,17 +1301,29 @@
     var from = takeOver(opts.stage);
     var isNew = !from;
     if (isNew) from = fresh(opts.stage);
-    dimOn();
     var cam = opts.camera && typeof opts.camera.get === 'function' && typeof opts.camera.set === 'function' ? opts.camera : null;
     var zooms = Array.isArray(opts.zooms) ? opts.zooms.filter(function (z) { return z > 0; }) : [];
     var ending = ['reveal', 'fade', 'error', 'deny'].indexOf(opts.ending) >= 0 ? opts.ending : 'fade';
+    // «по контуру» — только с финалом-переходом ('reveal' / 'fade'); срыв и отказ — обычный
+    var contour = !!opts.contour && (ending === 'reveal' || ending === 'fade');
     if (reduceMotion) zooms = [];
     // превью проявляется в квадрате цели после приближения; без него — уход в темноту
     if (ending === 'reveal' && (!opts.preview || !zooms.length)) ending = 'fade';
+    // «по контуру» карта, как при выборе, не темнеет до самого финала
+    if (!contour) dimOn();
+    var tm = opts.timing || {};
+    function ms(v, fallback) { return typeof v === 'number' && v >= 0 ? v : fallback; }
     var o = {
       target: opts.target,
       frame: typeof opts.frame === 'function' ? opts.frame : null,
+      mapFrame: typeof opts.mapFrame === 'function' ? opts.mapFrame : null,
       camera: cam,
+      contour: contour,
+      timing: {
+        center: ms(tm.center, T.focusCenter),
+        pause: ms(tm.pause, T.zoomDelay),
+        zoom: ms(tm.zoom, T.focusZoom)
+      },
       lockScreen: typeof opts.lockScreen === 'boolean' ? opts.lockScreen : null,
       zooms: zooms,
       ending: ending,
