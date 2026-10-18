@@ -888,16 +888,29 @@
     var starSize = o.starSize || 3;
     var starZoom = o.starZoom == null ? 0.4 : o.starZoom;
     var eng = null, raf = 0, last = 0, lastDraw = 0, key = '', alive = true;
+    var patternSrc = '';
 
     function start() {
-      if (!alive || eng) return;
+      if (!alive) return;
+      var srcKey = o.image.currentSrc || o.image.src || '';
+      if (eng && srcKey === patternSrc) return;
       var pattern = null;
       try {
         pattern = patternFromImage(o.image, cx, cy, rad, o.patternSize, o.patternGamma);
       } catch (err) {
-        pattern = null;                 // рисунок не прочитать (чужой домен) — слоя не будет
+        pattern = null;                 // рисунок не прочитать (чужой домен)
       }
-      if (!pattern) { destroy(); return; }
+      if (!pattern) {
+        if (!eng) destroy();            // не теряем уже работающую анимацию при неудачной догрузке
+        return;
+      }
+      patternSrc = srcKey;
+      if (eng) {
+        // srcset может переключить разрешение карты при изменении размера/зума.
+        // Меняем только поле яркости: орбиты и текущие фазы звёзд продолжаются без сброса.
+        eng.opts.pattern = pattern;
+        return;
+      }
       var opts = {};
       var src = o.engine || {};
       for (var k in src) opts[k] = src[k];

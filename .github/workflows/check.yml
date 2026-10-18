@@ -66,5 +66,6 @@ jobs:
         run: |
           for f in site/*.js site/shared/*.js; do node --check "$f"; done
           node tests/travel-planner.test.js
+          node tests/galaxy-spiral-overlay.test.js
           npm install --no-save --no-package-lock --no-audit --no-fund eslint@10 globals@17
           npx eslint site
