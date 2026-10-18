@@ -217,7 +217,34 @@
     diveCenterMs: 520,    // центрирование квадрата
     diveZoomDelay: 1000,  // пауза перед приближением
     diveZoomMs: 650,      // приближение
-    diveZooms: [20]       // до какого зума: 2000 %
+    diveZooms: [20],      // до какого зума: 2000 %
+
+    /* Спираль поверх карты (/shared/galaxy-spiral.js): звёзды текут по орбитам вокруг
+       ядра, яркость каждой берётся из самой карты — на рукаве звезда разгорается, в
+       промежутке гаснет, над HUD её нет. Поэтому узор совпадает с рисунком и стоит, а
+       галактика «вращается». Слой — над картой, под «лагами», квадратами и прицелом. */
+    spiral: {
+      enabled: true,        // false — слоя нет
+      // геометрия рисунка (измерена по карте): центр и радиус диска, % стороны карты
+      cx: 49.5, cy: 50.9, r: 44,
+      // орбиты: два рукава, закрутка против часовой наружу (pitch < 0), фаза psi0 и бар
+      // подобраны разложением карты по логарифмическим спиралям; углы — в градусах
+      arms: 2, pitch: -14, psi0: -144.5,
+      bar: 0.62, barAngle: -48, barLength: 12, // бар: вытянутость, направление, полудлина (%)
+      ecc: 0.2,             // вытянутость орбит диска: больше — звёзды гуще у рукавов
+      speed: 0.14,          // скорость у ядра, рад/с (дальше от центра — медленнее);
+                            // «+» — по часовой, как у Млечного Пути на рисунке
+      count: 7000,          // звёзд на компьютере
+      countPhone: 3000,     // звёзд на телефоне (меньшая сторона окна < 700 px)
+      bulge: 0.12,          // доля звёзд в ядре и баре
+      diskK: 2,             // профиль диска: меньше — больше звёзд на внешних рукавах
+      exposure: 0.7,        // яркость звёзд
+      contrast: 1,          // контраст рукавов: больше — уже рукава, темнее промежутки
+      starSize: 2.8,        // размер звезды при 100 %, px (карта 1000 px; с зумом растёт как s^0.4)
+      trail: 0,             // шлейф: 0 — нет, 0.3 — длинный
+      opacity: 0.9,         // прозрачность слоя
+      fps: 30               // кадров в секунду в покое; пока карта двигается — каждый кадр
+    }
   };
 
   /* ---------- вид карты ----------
@@ -642,6 +669,41 @@
   if (document.readyState === 'complete') drawStarfield();
   else window.addEventListener('load', drawStarfield);
   document.addEventListener('DOMContentLoaded', drawStarfield);
+
+  /* ---------- спираль поверх карты (/shared/galaxy-spiral.js) ----------
+     Холст встаёт в слой карты сразу после картинки и перед слоем «лагов»: над
+     картой, но под «лагами», квадратами областей, прицелом и интерфейсом сцены.
+     Положение и размер холста модуль ставит в % слоя и каждый кадр берёт вид
+     отсюда, поэтому звёзды двигаются и масштабируются вместе с картой. Узор —
+     яркость самой карты (без зелёного HUD). При «уменьшении движения» слоя нет. */
+  (function () {
+    var sp = CONFIG.spiral;
+    if (!sp || !sp.enabled || !window.GalaxySpiral || !layer || !map) return;
+    var phone = Math.min(window.innerWidth, window.innerHeight) < 700;
+    GalaxySpiral.overlay({
+      layer: layer,
+      image: map,
+      before: layer.querySelector('.lag-fx'),
+      center: [sp.cx / 100, sp.cy / 100],
+      radius: sp.r / 100,
+      view: function () {
+        var sz = sceneSize();
+        return { s: view.s, tx: view.tx, ty: view.ty, base: base, w: sz.w, h: sz.h };
+      },
+      fps: sp.fps,
+      opacity: sp.opacity,
+      starSize: sp.starSize,
+      patternGamma: sp.contrast,
+      engine: {
+        palette: 'map', flat: 1, pa: 0, fadeIn: 0.9,
+        arms: sp.arms, pitch: sp.pitch, psi0: sp.psi0 * Math.PI / 180,
+        bar: sp.bar, barAngle: sp.barAngle * Math.PI / 180, bulgeR: sp.barLength / sp.r,
+        ecc: sp.ecc, speed: sp.speed, exposure: sp.exposure, trail: sp.trail, bulge: sp.bulge,
+        diskK: sp.diskK,
+        count: phone ? sp.countPhone : sp.count
+      }
+    });
+  })();
 
   /* ---------- превью 300×300 при ховере на хотспот ---------- */
   // Ставим слева от квадрата, если места нет — справа; всегда внутри сцены.

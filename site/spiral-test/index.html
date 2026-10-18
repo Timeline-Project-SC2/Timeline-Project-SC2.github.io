@@ -6,10 +6,11 @@
 <title>Galaxy spiral — вращение без прокрутки (референс)</title>
 <link rel="stylesheet" href="/shared/styles.css">
 <link rel="stylesheet" href="/shared/timeline-skin.css">
-<link rel="stylesheet" href="galaxy-spiral.css">
+<link rel="stylesheet" href="spiral-test.css?v=spiral-1">
 <style>
   /* Только для этой страницы-референса: панель настроек поверх спирали.
-     На карте галактики панели нет — там слой просто лежит в .galaxy-bg. */
+     На карте галактики своя обвязка — GalaxySpiral.overlay (galaxy.js, CONFIG.spiral):
+     только звёзды, узор из самой карты. */
   body { margin: 0; background: #03060c; color: #cfe9e2; font: 13px/1.45 ui-monospace, "SFMono-Regular", Menlo, monospace; }
   .stage { position: fixed; inset: 0; overflow: hidden; background: #03060c; }
   .panel {
@@ -74,7 +75,7 @@
 
   <div class="hud">fps <i id="fps">—</i> · звёзд <i id="cnt">—</i> · сдвиг узора <i id="shift">0.00°</i> · путь звезды <i id="flow">—</i></div>
 
-  <script src="galaxy-spiral.js"></script>
+  <script src="/shared/galaxy-spiral.js?v=spiral-1"></script>
   <script>
   (function () {
     var TUNABLE = ['arms','pitch','ecc','misalign','lane','flat','speed','shear','trail','armGain','dustAmp','exposure','count','patternSpeed'];
