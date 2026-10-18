@@ -94,7 +94,7 @@ docs/                     инструкции и заметки
 
 | Что | Где |
 |---|---|
-| Системы и места | в Google-таблице, не в CSV: [правила заполнения](docs/ADMIN_GUIDE.md) и [памятка по вкладкам и типам](docs/GOOGLE_SHEETS_EDITING.md) |
+| Системы и места | в Google-таблице, не в CSV: [единые правила заполнения](docs/ADMIN_GUIDE.md) |
 | Картинки: карты, логотип, превью | заменить файл в `assets/src/` — при деплое всё пересоберётся само |
 | Адреса страниц и картинок | `site/shared/links.js` |
 | Области на карте галактики | `site/index.html`, у квадрата: `data-cx`, `data-cy`, `data-size` — центр и размер, `data-frame` — рамка выделения; всё в процентах карты |
@@ -168,9 +168,7 @@ python3 tools/build_assets.py --check
 
 ## Документация
 
-- [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) — правила заполнения таблицы;
-- [docs/GOOGLE_SHEETS_EDITING.md](docs/GOOGLE_SHEETS_EDITING.md) — памятка по вкладкам,
-  колонкам и типам;
+- [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) — единые правила заполнения таблицы, вкладок, колонок, типов и координат;
 - [docs/stages/](docs/stages/) — исходный план проекта по этапам и модель данных;
 - [AGENTS.md](AGENTS.md) и [docs/HANDOFF.md](docs/HANDOFF.md) — заметки для ИИ-агентов,
   которые работают с репозиторием;
