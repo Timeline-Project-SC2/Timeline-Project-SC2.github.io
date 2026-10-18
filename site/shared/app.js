@@ -750,7 +750,26 @@
   }
 
   function search(query) {
-    var needle = normalize(query);
+    var rawQuery = String(query || '').trim();
+    var coordinateMatch = rawQuery.match(/^(\d{4})(\d{4})$/);
+    if (coordinateMatch) {
+      var coordinateX = Number(coordinateMatch[1]);
+      var coordinateY = Number(coordinateMatch[2]);
+      if (coordinateX <= mapSize() && coordinateY <= mapSize()) {
+        return [{
+          kind: 'coordinate',
+          kindLabel: 'Координаты',
+          glyph: '⌖',
+          id: 'coordinates:' + coordinateX + ',' + coordinateY,
+          title: 'X ' + coordinateMatch[1] + ' · Y ' + coordinateMatch[2],
+          subtitle: 'Перейти к этой точке на карте',
+          x: coordinateX,
+          y: coordinateY
+        }];
+      }
+    }
+
+    var needle = normalize(rawQuery);
     if (needle.length < 1) return [];
     var results = [];
     for (var i = 0; i < searchIndex.length; i++) {
@@ -1873,7 +1892,10 @@
 
   function openSuggestion(entry) {
     if (!entry) return;
-    if (entry.kind === 'system') selectSystem(entry.id);
+    if (entry.kind === 'coordinate') {
+      clearDetail();
+      centerOn(entry.x, entry.y, Math.max(state.view.scale, fitScale() * 2.6));
+    } else if (entry.kind === 'system') selectSystem(entry.id);
     else if (entry.kind === 'planet') selectPlanet(entry.id);
     else if (entry.kind === 'marker') {
       var label = findLabel(entry.id);
