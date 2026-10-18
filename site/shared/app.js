@@ -186,6 +186,7 @@
     sortByCount: false,
     labelsOn: readJSON(CONFIG.storage.labels, false) === true,
     hoverId: null,
+    hoverPoiId: null,
     activeSystemId: null,
     activePlanetId: null,
     pinned: false,
@@ -312,8 +313,13 @@
   }
 
   function mapPlaceRow(row) {
-    var x = row.x ? parseFloat(row.x) : NaN;
-    var y = row.y ? parseFloat(row.y) : NaN;
+    var xText = row.x == null ? '' : String(row.x).trim();
+    var yText = row.y == null ? '' : String(row.y).trim();
+    var x = xText ? Number(xText) : NaN;
+    var y = yText ? Number(yText) : NaN;
+    var coord = isFinite(x) && isFinite(y) ? [x, y] : null;
+    var systemId = String(row.system_id || '').trim();
+    var pointOfInterest = !systemId && !!coord;
     return {
       id: row.ID || row.id || row.name,
       name: row.name || '',
@@ -321,9 +327,11 @@
       // если в таблице нет колонки type, место считается просто местом (placeTypesOf
       // подставит 'planet'); 'other' присваиваем только когда он указан явно
       placeTypes: row.type ? [row.type] : [],
-      systemId: row.system_id || null,
-      system: row.system_id || null,
-      coord: (row.x && row.y && !isNaN(x) && !isNaN(y)) ? [x, y] : null,
+      systemId: systemId || null,
+      system: systemId || null,
+      coord: coord,
+      pointOfInterest: pointOfInterest,
+      mapCoord: pointOfInterest ? { x: x, y: y } : null,
       primaryFaction: row.faction || '',
       factions: row.faction ? [row.faction] : [],
       note: row.description || '',
@@ -332,14 +340,46 @@
     };
   }
 
+  function mergeStandalonePoiRows(places, rows) {
+    var result = places || [];
+    var byId = Object.create(null);
+    result.forEach(function (place) { byId[String(place.id)] = place; });
+
+    (rows || []).map(mapPlaceRow).forEach(function (sheetPlace) {
+      if (!sheetPlace.pointOfInterest) return;
+      var existing = byId[String(sheetPlace.id)];
+      if (!existing) {
+        result.push(sheetPlace);
+        byId[String(sheetPlace.id)] = sheetPlace;
+        return;
+      }
+      // A populated system_id always wins: only genuinely standalone rows become POIs.
+      if (existing.systemId) return;
+      existing.pointOfInterest = true;
+      existing.coord = sheetPlace.coord;
+      existing.mapCoord = sheetPlace.mapCoord;
+      if ((!existing.placeTypes || !existing.placeTypes.length) && sheetPlace.placeTypes.length) {
+        existing.placeTypes = sheetPlace.placeTypes;
+      }
+    });
+    return result;
+  }
+
   function loadDataset() {
     var inline = window.__MAP_DATA__;
     if (inline && inline.systems) {
-      return fetchCSV('/data/systems.csv').then(function (systemRows) {
+      return Promise.all([
+        fetchCSV('/data/systems.csv'),
+        fetchCSV('/data/places.csv')
+      ]).then(function (rows) {
+        var planets = inline.planets || [];
+        planets = planets.length
+          ? mergeStandalonePoiRows(planets, rows[1])
+          : rows[1].map(mapPlaceRow);
         return {
           meta: inline.meta || {},
-          systems: mergeSystemTypes(inline.systems || [], systemRows),
-          planets: inline.planets || [],
+          systems: mergeSystemTypes(inline.systems || [], rows[0]),
+          planets: planets,
           overrides: inline.overrides || { systems: {} },
           labels: inline.labels || [],
           tiles: null
@@ -372,6 +412,8 @@
         }
         if ((!planets || !planets.length) && parts[6] && parts[6].length) {
           planets = parts[6].map(mapPlaceRow);
+        } else {
+          planets = mergeStandalonePoiRows(planets || [], parts[6]);
         }
         systems = mergeSystemTypes(systems, parts[5]);
         return {
@@ -418,6 +460,12 @@
 
   function mapSize() {
     return (state.meta && state.meta.mapSize) || 10000;
+  }
+
+  function coordinateOnMap(point) {
+    var size = mapSize();
+    return !!point && isFinite(point.x) && isFinite(point.y) &&
+      point.x >= 0 && point.y >= 0 && point.x <= size && point.y <= size;
   }
 
   // миры системы: сначала явные planetIds, затем планеты со ссылкой systemId
@@ -998,6 +1046,9 @@
     visibleSystems().forEach(function (system) {
       markerPoints[Math.round(system.coord[0] / 8) + ':' + Math.round(system.coord[1] / 8)] = true;
     });
+    visiblePointsOfInterest().forEach(function (place) {
+      markerPoints[Math.round(place.mapCoord.x / 8) + ':' + Math.round(place.mapCoord.y / 8)] = true;
+    });
 
     var budget = CONFIG.layers.labelBudget;
     var drawn = 0;
@@ -1095,6 +1146,13 @@
       if (state.systems[i].coord && markerVisible(state.systems[i])) list.push(state.systems[i]);
     }
     return list;
+  }
+
+  function visiblePointsOfInterest() {
+    return state.planets.filter(function (place) {
+      if (!place.pointOfInterest || place.systemId || !coordinateOnMap(place.mapCoord)) return false;
+      return state.mapFaction === 'all' || factionsOf(place).indexOf(state.mapFaction) > -1;
+    });
   }
 
   function markerMetrics(scale) {
@@ -1305,6 +1363,55 @@
     ctx.restore();
   }
 
+  function drawPointsOfInterest() {
+    var scale = state.view.scale;
+    var list = visiblePointsOfInterest();
+    ctx.save();
+    ctx.textBaseline = 'middle';
+
+    list.forEach(function (place) {
+      var point = toScreen(place.mapCoord.x, place.mapCoord.y);
+      if (point.x < -36 || point.y < -36 || point.x > state.viewport.w + 36 ||
+          point.y > state.viewport.h + 36) return;
+
+      var hovered = state.hoverPoiId === place.id;
+      var active = state.activePlanetId === place.id;
+      var radius = clamp(9 * scale, 4, 9) + (hovered || active ? clamp(3 * scale, 1, 3) : 0);
+      var color = hovered || active ? theme.text : theme.accent2;
+
+      ctx.save();
+      if (hovered || active) {
+        ctx.shadowColor = 'rgba(128,169,218,.72)';
+        ctx.shadowBlur = clamp(24 * scale, 9, 26);
+      }
+      ctx.beginPath();
+      ctx.moveTo(point.x, point.y - radius);
+      ctx.lineTo(point.x + radius, point.y);
+      ctx.lineTo(point.x, point.y + radius);
+      ctx.lineTo(point.x - radius, point.y);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(128,169,218,.24)';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = clamp(2.4 * scale, 1.1, 2.5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      if (state.labelsOn || scale >= 0.34 || hovered || active) {
+        var fontSize = clamp(25 * scale, 8, 18);
+        ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
+        ctx.textAlign = 'left';
+        ctx.lineWidth = clamp(fontSize * 0.24, 2.5, 5);
+        ctx.strokeStyle = 'rgba(2,5,10,.84)';
+        ctx.fillStyle = color;
+        ctx.strokeText(place.name, point.x + radius + 8, point.y - radius - 5);
+        ctx.fillText(place.name, point.x + radius + 8, point.y - radius - 5);
+      }
+    });
+
+    ctx.restore();
+  }
+
   function drawPlanetFocus() {
     var planet = state.activePlanetId ? state.planetsById[state.activePlanetId] : null;
     if (!planet || !planet.mapCoord) return;
@@ -1366,6 +1473,7 @@
 
     drawMapLabels();
     drawMarkers();
+    drawPointsOfInterest();
     drawPlanetFocus();
 
     updateZoomReadout();
@@ -1381,6 +1489,24 @@
   function localPoint(event) {
     var rect = canvas.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  function hitTestPointOfInterest(screenX, screenY) {
+    var list = visiblePointsOfInterest();
+    var best = null;
+    var bestDistance = Infinity;
+    var radius = clamp(16 * state.view.scale, 10, 18);
+    for (var i = 0; i < list.length; i++) {
+      var point = toScreen(list[i].mapCoord.x, list[i].mapCoord.y);
+      var dx = point.x - screenX;
+      var dy = point.y - screenY;
+      var distance = dx * dx + dy * dy;
+      if (distance <= radius * radius && distance < bestDistance) {
+        best = list[i];
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   function hitTest(screenX, screenY) {
@@ -1448,15 +1574,19 @@
       return;
     }
 
-    // наведение: карточка системы и курсор-указатель
-    var hovered = hitTest(point.x, point.y);
+    // Наведение показывает карточку системы либо самостоятельной точки интереса.
+    var hoveredPoi = hitTestPointOfInterest(point.x, point.y);
+    var hovered = hoveredPoi ? null : hitTest(point.x, point.y);
+    var poiId = hoveredPoi ? hoveredPoi.id : null;
     var hoverId = hovered ? hovered.id : null;
-    if (hoverId !== state.hoverId) {
+    var hoverChanged = poiId !== state.hoverPoiId || hoverId !== state.hoverId;
+    if (hoverChanged) {
+      state.hoverPoiId = poiId;
       state.hoverId = hoverId;
-      canvas.classList.toggle('marker-hover', !!hoverId);
+      canvas.classList.toggle('marker-hover', !!(poiId || hoverId));
       if (!state.pinned) {
         state.activeSystemId = hoverId;
-        state.activePlanetId = null;
+        state.activePlanetId = poiId;
         renderDetail();
       }
       requestRender();
@@ -1498,8 +1628,11 @@
         copyMapCoordinates(point);
         return;
       }
-      var hit = hitTest(point.x, point.y);
-      if (hit) {
+      var placeHit = hitTestPointOfInterest(point.x, point.y);
+      var hit = placeHit ? null : hitTest(point.x, point.y);
+      if (placeHit) {
+        selectPlanet(placeHit.id, { pin: true, center: false });
+      } else if (hit) {
         selectSystem(hit.id, { pin: true, center: false });
       } else if (state.pinned) {
         clearDetail();
@@ -1545,10 +1678,14 @@
     if (state.tab !== 'planets' || state.catalogView !== targetView) setCatalogView(targetView);
     state.activePlanetId = id;
     state.pinned = true;
-    if (planet.systemId) state.activeSystemId = planet.systemId;
+    state.activeSystemId = planet.systemId && state.systemsById[planet.systemId]
+      ? planet.systemId : null;
     if (options.center !== false) {
-      if (planet.mapCoord) centerOn(planet.mapCoord.x, planet.mapCoord.y, Math.max(state.view.scale, fitScale() * 3.4));
-      else if (planet.systemId) {
+      if (planet.pointOfInterest && coordinateOnMap(planet.mapCoord)) {
+        centerOn(planet.mapCoord.x, planet.mapCoord.y, Math.max(state.view.scale, fitScale() * 3.4));
+      } else if (!planet.pointOfInterest && planet.mapCoord) {
+        centerOn(planet.mapCoord.x, planet.mapCoord.y, Math.max(state.view.scale, fitScale() * 3.4));
+      } else if (planet.systemId) {
         var system = state.systemsById[planet.systemId];
         if (system && system.coord) centerOn(system.coord[0], system.coord[1], Math.max(state.view.scale, fitScale() * 2.6));
       }
@@ -1564,6 +1701,7 @@
     state.activeSystemId = null;
     state.activePlanetId = null;
     state.hoverId = null;
+    state.hoverPoiId = null;
     renderDetail();
     renderCatalog();
     updateHash();
@@ -2098,7 +2236,10 @@
     if (planet.sourceLine) {
       html += '<div class="detail-note"><strong>Источник.</strong> ' + escapeHtml(planet.sourceLine) + '</div>';
     }
-    if (planet.mapCoord) {
+    if (planet.pointOfInterest && planet.mapCoord) {
+      html += '<div class="detail-note"><strong>Точка интереса.</strong> Координаты на карте: X ' +
+        planet.mapCoord.x + ', Y ' + planet.mapCoord.y + '.</div>';
+    } else if (planet.mapCoord) {
       html += '<div class="detail-note">На карте подпись «' + escapeHtml(planet.mapLabel || planet.name) + '» в точке ' +
         planet.mapCoord.x + ', ' + planet.mapCoord.y + '. Точка относится к подписи, а не к орбите.</div>';
     }
@@ -2371,11 +2512,15 @@
     canvas.addEventListener('pointerleave', function () {
       coordinatePointer = null;
       updateCoordinateReadout();
-      if (!drag && !state.pinned && state.hoverId) {
+      if (!drag && (state.hoverId || state.hoverPoiId)) {
         state.hoverId = null;
+        state.hoverPoiId = null;
         canvas.classList.remove('marker-hover');
-        state.activeSystemId = null;
-        renderDetail();
+        if (!state.pinned) {
+          state.activeSystemId = null;
+          state.activePlanetId = null;
+          renderDetail();
+        }
         requestRender();
       }
     });
@@ -2398,7 +2543,7 @@
     el.labelsToggle.addEventListener('click', function () {
       state.labelsOn = !state.labelsOn;
       applyLabelsToggle();
-      toast(state.labelsOn ? 'Подписи систем включены' : 'Подписи систем скрыты');
+      toast(state.labelsOn ? 'Подписи карты включены' : 'Подписи карты скрыты');
     });
     if (el.coordinateToggle) el.coordinateToggle.addEventListener('click', function () {
       coordinateReadoutEnabled = !coordinateReadoutEnabled;
@@ -2546,8 +2691,9 @@
     el.mapFactionFilter.addEventListener('change', function () {
       state.mapFaction = el.mapFactionFilter.value;
       requestRender();
-      var shown = visibleSystems().length;
-      toast('На карте систем: ' + shown + ' из ' + state.systems.length);
+      var shownSystems = visibleSystems().length;
+      var shownPois = visiblePointsOfInterest().length;
+      toast('На карте: ' + shownSystems + ' систем · ' + shownPois + ' точек интереса');
     });
 
     // Старые демонстрационные разделы Wiki удалены: каталог теперь сам является навигацией.
@@ -2596,13 +2742,18 @@
     state.systems.forEach(function (system) {
       systemFactions(system).forEach(function (faction) { factions[faction] = (factions[faction] || 0) + 1; });
     });
+    var poiCount = 0;
+    visiblePointsOfInterest().forEach(function (place) {
+      poiCount++;
+      factionsOf(place).forEach(function (faction) { factions[faction] = (factions[faction] || 0) + 1; });
+    });
     var options = Object.keys(factions).sort(function (a, b) {
       if (factions[b] !== factions[a]) return factions[b] - factions[a];
       return a.localeCompare(b, 'ru');
     }).map(function (faction) {
       return '<option value="' + escapeHtml(faction) + '">' + escapeHtml(faction) + ' · ' + factions[faction] + '</option>';
     }).join('');
-    el.mapFactionFilter.innerHTML = '<option value="all">Все фракции · ' + state.systems.length + '</option>' + options;
+    el.mapFactionFilter.innerHTML = '<option value="all">Все фракции · ' + (state.systems.length + poiCount) + '</option>' + options;
 
   }
 

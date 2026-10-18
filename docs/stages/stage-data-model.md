@@ -36,22 +36,22 @@ data/sectors.csv, data/objects.csv, data/system-overrides.csv  (рабочие)
 | name | string | название |
 | type | enum | planet / moon / asteroid / station / platform / other |
 | system_id | string (FK→System, nullable) | система-владелец |
-| x, y | number (nullable) | собственные координаты; если пусто — берётся из системы |
+| x, y | number (nullable) | При пустом `system_id` пара координат в пределах карты создаёт самостоятельную точку интереса. При заполненном `system_id` координаты места не создают отдельный маркер; карта использует позицию системы. |
 | description | string | описание |
 | faction | string | фракция |
 | source_url | string | ссылка |
 
-### «Уникальные» места (станции, пояса астероидов)
-- type ∈ {station, asteroid_belt, platform, ...}, system_id задан.
-- В каталоге попадают в раздел **«Иные места» (ETC)**, но в досье системы показываются как её члены.
-- Координаты могут наследоваться от системы (x/y пустые).
+### Места без привязки к системе
+- Место с `system_id` и координатами относится к системе; отдельный маркер места не создаётся.
+- Если `system_id` пуст, а `x` и `y` заданы в пределах карты, место отображается отдельной точкой интереса (например, станция в открытом космосе).
+- Без `system_id` и без координат запись остаётся только в каталоге; она не появится на карте.
 
 ## Категории каталога (UI)
 - SYS — системы (System)
 - PLN — планеты (type=planet)
 - STN — станции (type=station)
 - PLT — платформы (type=platform)
-- ETC — иные (moon, asteroid, asteroid_belt, other)
+- ETC — иные (moon, asteroid, other)
 
 ## Публикация Google Sheet
 Таблица должна быть опубликована: File → Share → Publish to web → CSV. Иначе sync получит 403/HTML.

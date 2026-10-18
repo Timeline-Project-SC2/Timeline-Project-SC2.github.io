@@ -28,8 +28,8 @@
         <div class="suggestions" id="suggestions" role="listbox" hidden></div>
       </div>
       <div class="map-faction-filter">
-        <label class="sr-only" for="mapFactionFilter">Фильтр системы по фракции</label>
-        <select id="mapFactionFilter" aria-label="Фильтр систем по фракции">
+        <label class="sr-only" for="mapFactionFilter">Фильтр карты по фракции</label>
+        <select id="mapFactionFilter" aria-label="Фильтр карты по фракции">
           <option value="all">Все фракции</option>
         </select>
       </div>
@@ -125,7 +125,7 @@
         <button class="map-control" id="zoomOut" type="button" title="Отдалить (−)" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"></path></svg></button>
         <div class="control-divider"></div>
         <button class="map-control" id="resetMap" type="button" title="Показать всю карту (0)" aria-label="Показать всю карту"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path><path d="M9 4a8 8 0 0 1 10 5M15 20a8 8 0 0 1-10-5"></path></svg></button>
-        <button class="map-control label-toggle" id="labelsToggle" type="button" title="Показать подписи систем" aria-label="Переключить подписи систем" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h11M4 19h16"></path><path d="M18 10v4"></path></svg></button>
+        <button class="map-control label-toggle" id="labelsToggle" type="button" title="Показать подписи карты" aria-label="Переключить подписи карты" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h11M4 19h16"></path><path d="M18 10v4"></path></svg></button>
       </div>
 
       <div class="map-hint"><span class="mouse-icon"><i></i></span><span>ПЕРЕТАСКИВАЙ · КОЛЁСО МЫШИ — МАСШТАБ · SHIFT+КЛИК — КОПИЯ X/Y</span></div>
@@ -142,12 +142,12 @@
           <div class="note-block"><span class="note-number">01</span><div><h3>Источники</h3><p>Подложка загружается из публичного файла Google Drive. Главный каталог — строгий канонический реестр StarCraft Wiki; исходные 316 строк сохранены отдельно для аудита.</p></div></div>
           <div class="note-block"><span class="note-number">02</span><div><h3>Системы и точность</h3><p>PDF перечисляет миры, но почти нигде не указывает их звёздные системы. Поэтому подтверждённые связи отделены от группировок по повторяющимся обозначениям. <b>Положение узлов на карте схематическое:</b> координат систем в исходниках нет, а точки на подложке не подписаны.</p><div class="source-links"><a href="https://starcraft.fandom.com/wiki/Category:Star_Systems" target="_blank" rel="noreferrer">Список известных систем ↗</a><a href="https://starcraft.fandom.com/wiki/Sara_system" target="_blank" rel="noreferrer">Sara system ↗</a><a href="https://starcraft.fandom.com/wiki/Tarsonis_system" target="_blank" rel="noreferrer">Tarsonis system ↗</a><a href="https://starcraft.fandom.com/wiki/Korhal" target="_blank" rel="noreferrer">Korhal system ↗</a></div></div></div>
           <div class="note-block"><span class="note-number">03</span><div><h3>Плавный зум без тяжёлой подложки</h3><p>Карта разбита на WebP-тайлы 512 × 512 в четырёх уровнях детализации (1 250 → 10 000 px). Canvas загружает только видимую область, использует грубый слой как подложку и хранит ограниченный LRU-кэш. Перетаскивание и масштабирование не пересоздают изображение целиком.</p></div></div>
-          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Колесо мыши или жест pinch — приблизить; зажми и перетаскивай — переместить; <kbd>+</kbd>/<kbd>−</kbd> — масштаб; <kbd>0</kbd> — вернуть обзор; <kbd>/</kbd> — фокус поиска. Наведи на узел, чтобы увидеть места системы, нажми — закрепить карточку.</p></div></div>
+          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Колесо мыши или жест pinch — приблизить; зажми и перетаскивай — переместить; <kbd>+</kbd>/<kbd>−</kbd> — масштаб; <kbd>0</kbd> — вернуть обзор; <kbd>/</kbd> — фокус поиска. Наведи на узел, чтобы увидеть места системы, нажми — закрепить карточку. Место с координатами и пустым system_id становится отдельной точкой интереса на карте.</p></div></div>
         </div>
         <div class="modal-foot"><span>DATASET REV.</span><span>NO ASTROMETRIC COORDINATES IN SOURCE</span></div>
       </section>
     </div>
   </div>
-  <script src="/shared/app.js?v=coordinates-2" defer></script>
+  <script src="/shared/app.js?v=poi-1" defer></script>
 </body>
 </html>
