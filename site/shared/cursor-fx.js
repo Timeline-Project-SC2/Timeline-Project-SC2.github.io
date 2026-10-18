@@ -11,9 +11,11 @@
        Слои непрозрачные, как на образце пользователя: тёмная заливка с кромкой, а там, где
        слой лежит на заднем, — тёмный зазор и светлая линия. «Каскад» и «волна» по очереди
        заливают слои светлым градиентом.
-     • Перетаскивание («холд-драг»): крестовина задумки пользователя — четыре пары шевронов
-       остриями к центру. Точка клика — в центре креста. Включается сразу при нажатии на
-       пустом месте карты, до движения (CONFIG.hold). Геометрия — CONFIG.cross.
+     • Перетаскивание («холд-драг»): крестовина задумки пользователя — четыре пары контурных
+       шевронов остриями к центру. Заливка бежит «снаружи → внутрь» (каскад и волна, цикл 2 с),
+       крест смещается в сторону движения мыши («физика», до 6 px) и возвращается в центр, когда
+       мышь стоит. Точка клика — центр креста. Включается сразу при нажатии на пустом месте
+       карты, до движения (CONFIG.hold). Геометрия, заливка, физика — CONFIG.cross.
 
    ПОЧЕМУ СИСТЕМНЫЙ КУРСОР, А НЕ НАРИСОВАННЫЙ ЭЛЕМЕНТ
    Курсор рисует операционная система, поэтому он не отстаёт от мыши ни на кадр. Элемент
@@ -26,8 +28,9 @@
 
    КАК УСТРОЕНО
    1. Кадры строятся из геометрии задумки (SVG, единицы задумки → px через CONFIG.*.scale):
-      стрелка — кадр каждые 50 мс цикла 2,25 с, треугольники — цикла 3 с. Одинаковые подряд
-      кадры склеиваются, поэтому пауза между пролётами сот — один кадр.
+      стрелка — кадр каждые 50 мс цикла 2,25 с, треугольники — цикла 3 с, крестовина — 2 с.
+      Одинаковые подряд кадры склеиваются, поэтому пауза между пролётами сот — один кадр.
+      Смещение крестовины — не отдельные кадры, а сдвиг точки клика в значении cursor.
    2. Каждый кадр растеризуется в браузере (программный canvas) в PNG 32×32 и 64×64 для
       экранов 2×. Файлов-картинок нет, сборка не нужна. Сначала готовятся статичные кадры
       (курсор появляется сразу), анимация — следом, в фоне (≈0,4 с). Готовые PNG хранятся в
@@ -130,16 +133,32 @@
     // повёрнут на 0/90/180/270° — сверху, справа, снизу, слева, — в каждом направлении пара:
     // внешний крупнее и дальше, внутренний меньше и ближе к центру. Точка клика — центр.
     cross: {
+      cycle: 2000,               // мс — «снаружи → внутрь»: каскад и волна на двух слоях
       scale: 0.34,               // px на единицу задумки: крест ≈ 27 px из 32, свечение влезает
+      unit: 0.8,                 // px на единицу в самой задумке: холст 100 единиц на 80 px
       center: 15.5,              // px — центр креста в картинке: середина пикселя, чтобы острия
                                  // на осях были чёткими в 1×; точка клика — этот пиксель (15)
       chevron: [[-12, -4], [12, -4], [0, 6]],   // плоский верх, остриё вниз — к центру
       // [расстояние от центра, масштаб, слой]: как translate(0,-35) scale(1.2) и
       // translate(0,-18) scale(0.8) в задумке
       pairs: [[35, 1.2, 'outer'], [18, 0.8, 'inner']],
-      // px — [кромка внешнего шеврона, тёмная обводка внутреннего]; в картинке 1× кромка
-      // толще, а тонкая обводка рябит — её нет
-      lines: { fine: [0.7, 0.45], coarse: [1, 0] }
+      // Заливка слоя #00ff66 по времени цикла — [доля цикла, непрозрачность], как @keyframes
+      // pulseOuter и pulseInner задумки (linear: между точками заливка меняется плавно).
+      // Вне заливки шевроны — только зелёный контур.
+      fills: {
+        outer: [[0, 0], [0.1, 1], [0.4, 1], [0.5, 0], [0.6, 1], [0.7, 0], [1, 0]],
+        inner: [[0, 0], [0.1, 0], [0.2, 1], [0.4, 1], [0.5, 0], [0.6, 0], [0.7, 1], [0.8, 0], [1, 0]]
+      },
+      still: 600,                // мс цикла — кадр для prefers-reduced-motion: оба слоя залиты
+      // px — контур [внешнего, внутреннего]. В задумке 1 единица × масштаб слоя (1,2 и 0,8),
+      // но на 32 px это тоньше пикселя и пропадает
+      lines: { fine: [0.7, 0.55], coarse: [1, 0.7] },
+      glow: 0.8,                 // px — свечение (в задумке feGaussianBlur 2 на 80 px)
+      // «Физика» (dragWrapper задумки): крест смещается в сторону движения. Скорость — сдвиг мыши
+      // за кадр 60 Гц, сглаженный lerp 0,2; предел 15 px задумки. Курсор меньше задумки в
+      // scale / unit раз (0,425), смещение тоже: до 6 px. Мышь остановилась — скорость гаснет,
+      // как при нулевом сдвиге, и крест возвращается в центр.
+      drift: { lerp: 0.2, max: 15 }
     },
     // «Холд»: зажали кнопку мыши на пустом месте карты (CONFIG.dragWatch) — курсор
     // перетаскивания сразу, ещё до движения. Нажатие на кнопку, сектор, систему остаётся
@@ -292,8 +311,11 @@
     return { kind: 'tri', fills: FILL_KEYS.map(function (keys) { return num(fillAt(keys, p), 2); }) };
   }
 
-  // крестовина перетаскивания — статичный кадр
-  function crossFrame() { return { kind: 'cross' }; }
+  // кадр крестовины: заливка [внешних, внутренних] шевронов по времени цикла
+  function crossFrame(t) {
+    var X = CONFIG.cross, p = t / X.cycle;
+    return { kind: 'cross', fills: [num(fillAt(X.fills.outer, p), 2), num(fillAt(X.fills.inner, p), 2)] };
+  }
 
   function svgOpen(px, origin, span) {
     var box = num(origin, 3) + ' ' + num(origin, 3) + ' ' + num(span, 3) + ' ' + num(span, 3);
@@ -436,37 +458,29 @@
       '<defs>' + defs + '</defs><g filter="url(#t)">' + body + '</g></svg>';
   }
 
-  // Крестовина перетаскивания. Внешние шевроны — тёмные с яркой кромкой, как слои наведения;
-  // внутренние — залиты ярким градиентом стрелки. Вокруг креста — зелёный ореол 1 px (в задумке
-  // feGaussianBlur 2). Точки считаются сразу в координатах холста: поворот на 90° по часовой —
-  // (x, y) → (−y, x); <use> и transform не нужны.
+  // Крестовина перетаскивания, как в задумке: шевроны — контур #00ff66, заливка того же цвета
+  // с непрозрачностью по циклу (f.fills), вокруг — свечение. Точки считаются сразу в
+  // координатах холста: поворот на 90° по часовой — (x, y) → (−y, x); <use> и transform не нужны.
   function crossSVG(f, px) {
     var X = CONFIG.cross, C = CONFIG.colors, s = X.scale, span = CONFIG.size / s, o = -X.center / s;
-    var w = px > CONFIG.size ? X.lines.fine : X.lines.coarse, rim = w[0] / s, wall = w[1] / s;
+    var w = px > CONFIG.size ? X.lines.fine : X.lines.coarse;
     var area = ' filterUnits="userSpaceOnUse" x="' + num(o, 2) + '" y="' + num(o, 2) + '" width="' +
       num(span, 2) + '" height="' + num(span, 2) + '"';
-    var defs =
-      // у остриёв, ближе к центру, заливки светлее
-      '<radialGradient id="d" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="40">' +
-      '<stop offset="0.65" stop-color="' + C.shade[0] + '"/><stop offset="1" stop-color="' + C.shade[1] + '"/></radialGradient>' +
-      '<radialGradient id="b" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="22">' +
-      '<stop offset="0.6" stop-color="' + C.rimLit + '"/><stop offset="1" stop-color="' + C.core + '"/></radialGradient>' +
-      haloFilter('k', num(1 / s, 2), C.core, 0.55, area);
     var body = '';
-    X.pairs.forEach(function (pair) {
+    X.pairs.forEach(function (pair, i) {
+      var fill = +f.fills[i] > 0 ? C.core + '" fill-opacity="' + f.fills[i] : 'none';
       for (var k = 0; k < 4; k++) {
         var pts = X.chevron.map(function (p) {
           var x = p[0] * pair[1], y = p[1] * pair[1] - pair[0];
           for (var r = 0; r < k; r++) { var t = x; x = -y; y = t; }
           return num(x, 2) + ',' + num(y, 2);
         }).join(' ');
-        body += pair[2] === 'outer'
-          ? '<polygon points="' + pts + '" fill="url(#d)" stroke="' + C.core + '" stroke-width="' + num(rim, 3) + '"/>'
-          : '<polygon points="' + pts + '" fill="url(#b)"' +
-            (wall ? ' stroke="' + C.gap + '" stroke-width="' + num(wall, 3) + '"' : '') + '/>';
+        body += '<polygon points="' + pts + '" fill="' + fill + '" stroke="' + C.core + '" stroke-width="' +
+          num(w[i] / s, 3) + '"/>';
       }
     });
-    return svgOpen(px, o, span) + '<defs>' + defs + '</defs><g filter="url(#k)">' + body + '</g></svg>';
+    return svgOpen(px, o, span) + '<defs>' + haloFilter('k', num(X.glow / s, 2), C.core, 0.75, area) +
+      '</defs><g filter="url(#k)">' + body + '</g></svg>';
   }
 
   function frameSVG(f, px) {
@@ -583,7 +597,8 @@
   var started = 0, buildMs = 0, cached = false;
   var rules = null;
   var active = 'default';
-  var styled = null;          // элемент, у которого в style стоит кадр анимации
+  var styled = [];            // элементы, у которых в style стоит кадр анимации
+  var captureEl = null;       // элемент с захватом указателя — карта, пока её тянут
   var painted = '';           // какой кадр там стоит
   var hoverStartIndex = 0;
   var lastTarget = null;
@@ -591,17 +606,21 @@
   var outside = false;
   var timer = 0;
 
+  var CROSS_HOT = [Math.floor(CONFIG.cross.center), Math.floor(CONFIG.cross.center)];   // центр креста
   var still = {
     idle: { f: arrowFrame(0, { parts: false }) },
-    drag: { f: crossFrame(), hot: [Math.floor(CONFIG.cross.center), Math.floor(CONFIG.cross.center)] },
+    drag: { f: crossFrame(CONFIG.cross.still), hot: CROSS_HOT },
     disabled: { f: arrowFrame(0, { parts: false, dim: true }) },
     hover: { f: triFrame(CONFIG.tri.still) }
   };
   var anim = {
     default: { fallback: 'default', index: 0,
       frames: sampleCycle(CONFIG.arrow.cycle, function (t) { return arrowFrame(t, { parts: true }); }) },
-    hover: { fallback: 'pointer', index: 0, frames: sampleCycle(CONFIG.tri.cycle, triFrame) }
+    hover: { fallback: 'pointer', index: 0, frames: sampleCycle(CONFIG.tri.cycle, triFrame) },
+    // крестовина: цикл начинается заново при каждом нажатии, как CSS-анимация задумки
+    drag: { fallback: 'grabbing', index: 0, frames: sampleCycle(CONFIG.cross.cycle, crossFrame) }
   };
+  anim.drag.frames.forEach(function (frame) { frame.hot = CROSS_HOT; });
 
   function detectVariant() {
     // Firefox чётко рисует SVG-курсоры на любом масштабе экрана; image-set в cursor
@@ -623,8 +642,9 @@
     return value === 'off' || VARIANTS.indexOf(value) >= 0 ? value : null;
   }
 
-  function cursorValue(frame, fallback) {
-    var hot = frame.hot || CONFIG.hotspot;   // у крестовины точка клика — центр
+  // hot — точка клика; у крестовины это центр, сдвинутый «физикой» (см. drift)
+  function cursorValue(frame, fallback, hot) {
+    hot = hot || frame.hot || CONFIG.hotspot;
     var at = ' ' + hot[0] + ' ' + hot[1];
     var mode = rasterBroken || !frame.png1 ? 'svg-only' : variant;
     if (mode === 'set') return 'image-set(url("' + frame.png1 + '") 1x, url("' + frame.png2 + '") 2x)' + at + ', ' + fallback;
@@ -672,29 +692,97 @@
     setRule('default', valueOf(still.idle, 'default'));
     setRule('hover', valueOf(moving ? anim.hover.frames[hoverStartIndex] : still.hover, 'pointer'));
     setRule('disabled', valueOf(still.disabled, 'default'));
-    setRule('drag', valueOf(still.drag, 'grabbing'));
+    setRule('drag', valueOf(moving ? anim.drag.frames[0] : still.drag, 'grabbing'));
     painted = '';
   }
 
-  // Кадр анимации ставится в style одного элемента — того, что под мышью: курсор браузер
-  // берёт с него. Менять общее правило нельзя — каждый кадр пересчитывал бы стили всей
-  // страницы (на каталоге в 3000 строк это 70 % ядра, проверено).
+  // Кадр анимации ставится в style того элемента, что под мышью: курсор браузер берёт с него.
+  // Пока карту тянут с захватом указателя, кадр ставится ещё и карте: при захвате браузеры
+  // берут курсор кто с элемента под мышью, кто с захватившего. Менять общее правило нельзя —
+  // каждый кадр пересчитывал бы стили всей страницы (на каталоге в 3000 строк это 70 % ядра,
+  // проверено).
+  function paintTargets() {
+    var list = [];
+    [lastTarget, active === 'drag' ? captureEl : null].forEach(function (el) {
+      if (el && el.nodeType === 1 && el.style && el.childElementCount <= CONFIG.maxChildren &&
+        list.indexOf(el) < 0) list.push(el);
+    });
+    return list;
+  }
+
   function paint(a) {
-    var el = lastTarget && lastTarget.nodeType === 1 && lastTarget.style &&
-      lastTarget.childElementCount <= CONFIG.maxChildren ? lastTarget : null;
-    if (styled && styled !== el) unpaint();
-    if (!el) return;
-    var value = valueOf(a.frames[a.index], a.fallback);
-    if (styled === el && painted === value) return;
-    el.style.setProperty('cursor', value, 'important');
-    styled = el;
+    var els = paintTargets(), frame = a.frames[a.index];
+    var value = a === anim.drag && (drift.ox || drift.oy)
+      ? cursorValue(frame, a.fallback, [frame.hot[0] - drift.ox, frame.hot[1] - drift.oy])
+      : valueOf(frame, a.fallback);
+    styled.forEach(function (el) { if (els.indexOf(el) < 0) el.style.removeProperty('cursor'); });
+    els.forEach(function (el) {
+      if (value !== painted || styled.indexOf(el) < 0) el.style.setProperty('cursor', value, 'important');
+    });
+    styled = els;
     painted = value;
   }
 
   function unpaint() {
-    if (styled) styled.style.removeProperty('cursor');
-    styled = null;
+    styled.forEach(function (el) { el.style.removeProperty('cursor'); });
+    styled = [];
     painted = '';
+  }
+
+  // «Физика» крестовины (dragWrapper задумки): крест смещается в сторону движения. Скорость —
+  // сдвиг мыши за кадр 60 Гц (на 144 Гц события приходят чаще, сдвиг пересчитывается),
+  // сглаженный lerp. Картинка курсора не двигается — сдвигается точка клика внутри неё, поэтому
+  // крест не обрезается краем картинки, а мышь не отстаёт ни на кадр.
+  var drift = { x: 0, y: 0, t: 0, vx: 0, vy: 0, ox: 0, oy: 0, timer: 0 };
+
+  function now() { return window.performance ? performance.now() : Date.now(); }
+
+  function driftReset() {
+    clearTimeout(drift.timer);
+    drift.timer = 0;
+    drift.vx = drift.vy = drift.ox = drift.oy = 0;
+  }
+
+  // смещение в px из скорости: предел задумки (15 px на 80 px) в масштабе нашего креста;
+  // true — смещение изменилось
+  function driftOffset() {
+    var X = CONFIG.cross, k = X.scale / X.unit, max = X.drift.max * k;
+    function off(v) { return Math.round(Math.max(-max, Math.min(max, v * k))); }
+    var ox = off(drift.vx), oy = off(drift.vy);
+    if (ox === drift.ox && oy === drift.oy) return false;
+    drift.ox = ox;
+    drift.oy = oy;
+    return true;
+  }
+
+  // каждое движение мыши; во время перетаскивания обновляет скорость. true — надо перерисовать
+  function track(event) {
+    var t = now(), changed = false;
+    if (active === 'drag' && animating()) {
+      var frames = Math.max(0.25, Math.min(3, (t - drift.t) / 16.67));   // кадров 60 Гц с прошлого события
+      var a = 1 - Math.pow(1 - CONFIG.cross.drift.lerp, frames);
+      drift.vx += ((event.clientX - drift.x) / frames - drift.vx) * a;
+      drift.vy += ((event.clientY - drift.y) / frames - drift.vy) * a;
+      changed = driftOffset();
+      clearTimeout(drift.timer);
+      drift.timer = setTimeout(driftSettle, CONFIG.step + 10);
+    }
+    drift.x = event.clientX;
+    drift.y = event.clientY;
+    drift.t = t;
+    return changed;
+  }
+
+  // мышь стоит: скорость гаснет так, будто 60 раз в секунду приходит нулевой сдвиг, —
+  // крест возвращается в центр
+  function driftSettle() {
+    drift.timer = 0;
+    var keep = Math.pow(1 - CONFIG.cross.drift.lerp, CONFIG.step / 16.67);
+    drift.vx *= keep;
+    drift.vy *= keep;
+    if (driftOffset() && active === 'drag' && animating()) paint(anim.drag);
+    if (drift.ox || drift.oy) drift.timer = setTimeout(driftSettle, CONFIG.step);
+    else drift.vx = drift.vy = 0;
   }
 
   function schedule() {
@@ -724,7 +812,8 @@
     return 0;
   }
 
-  function classify(target) {
+  // repaint — кадр тот же, но изменилось смещение крестовины
+  function classify(target, repaint) {
     if (target) lastTarget = target;
     var el = lastTarget && lastTarget.nodeType === 1 ? lastTarget : null;
     var state = 'default';
@@ -733,9 +822,11 @@
     else if (el && el.closest(CONFIG.hover)) state = 'hover';
     if (state !== active) {
       if (state === 'hover') anim.hover.index = hoverStartIndex;
+      // крестовина: при каждом нажатии цикл с начала, крест в центре
+      if (state === 'drag' || active === 'drag') { anim.drag.index = 0; driftReset(); }
       active = state;
       schedule();
-    } else if (el !== styled && anim[active] && animating()) {
+    } else if ((repaint || styled.indexOf(el) < 0) && anim[active] && animating()) {
       paint(anim[active]);   // мышь перешла на другой элемент — кадр переезжает за ней
     }
   }
@@ -783,7 +874,13 @@
       hold.moved = true;
       if (hold.click) updateDrag();
     }
-    classify(event.target);
+    var target = event.target, moved = false;
+    if (event.type === 'pointermove') {
+      moved = track(event);
+      // при захвате указателя событие приходит карте, а не элементу под мышью — его находим сами
+      if (captureEl && active === 'drag') target = doc.elementFromPoint(event.clientX, event.clientY) || target;
+    }
+    classify(target, moved);
   }
 
   function bindEvents() {
@@ -798,6 +895,14 @@
       window.addEventListener(type, onUp, { capture: true, passive: true });
     });
     window.addEventListener('blur', function () { onUp(); });
+    // кто держит захват указателя: пока карту тянут, кадр ставится и ей (см. paint)
+    window.addEventListener('gotpointercapture', function (event) {
+      captureEl = event.target;
+      if (active === 'drag' && animating()) paint(anim.drag);
+    }, true);
+    window.addEventListener('lostpointercapture', function (event) {
+      if (captureEl === event.target) captureEl = null;
+    }, true);
     doc.addEventListener('mouseout', function (event) {
       if (!event.relatedTarget) { outside = true; schedule(); }
     });
@@ -826,7 +931,7 @@
     if (built) return built;
     started = window.performance ? performance.now() : Date.now();
     var statics = [still.idle, still.drag, still.disabled, still.hover];
-    var all = statics.concat(anim.default.frames, anim.hover.frames);
+    var all = statics.concat(anim.default.frames, anim.hover.frames, anim.drag.frames);
     all.forEach(function (frame) {
       frame.svg1 = frameSVG(frame.f, CONFIG.size);
       frame.svg = svgUrl(frame.svg1);
@@ -859,6 +964,8 @@
   function disable() {
     enabled = false;
     hold = null;
+    captureEl = null;
+    driftReset();
     clearTimeout(timer);
     timer = 0;
     unpaint();
@@ -882,12 +989,13 @@
       return {
         enabled: enabled, ready: ready, variant: variant, auto: autoVariant, rasterBroken: rasterBroken,
         dpr: window.devicePixelRatio || 1, reducedMotion: media.reduced.matches, state: active, hold: !!hold,
-        frames: { default: anim.default.frames.length, hover: anim.hover.frames.length }, buildMs: buildMs, cached: cached
+        frames: { default: anim.default.frames.length, hover: anim.hover.frames.length, drag: anim.drag.frames.length },
+        drift: [drift.ox, drift.oy], buildMs: buildMs, cached: cached
       };
     },
     frames: function () {
-      function list(frames) { return frames.map(function (fr) { return { ms: fr.ms, png: fr.png2 || fr.svg, svg: fr.svg }; }); }
-      return { default: list(anim.default.frames), hover: list(anim.hover.frames),
+      function list(frames) { return frames.map(function (fr) { return { t: fr.t, ms: fr.ms, png: fr.png2 || fr.svg, svg: fr.svg }; }); }
+      return { default: list(anim.default.frames), hover: list(anim.hover.frames), drag: list(anim.drag.frames),
         still: { drag: list([still.drag])[0], disabled: list([still.disabled])[0] } };
     },
     setVariant: setVariant,

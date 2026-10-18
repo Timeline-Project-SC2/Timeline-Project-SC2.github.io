@@ -74,7 +74,7 @@
     ol { margin: 0; padding-left: 20px; }
     li { margin: 0 0 6px; }
   </style>
-  <script src="/shared/cursor-fx.js?v=cursor-3" defer></script>
+  <script src="/shared/cursor-fx.js?v=cursor-4" defer></script>
 </head>
 <body>
 <main>
@@ -123,7 +123,8 @@
     <div class="zone zone--drag galaxy-stage" id="dragZone">
       <h3>3. Перетаскивание</h3>
       <p>Зажмите кнопку мыши в этой зоне — сразу, ещё до движения, курсор становится крестовиной:
-        четыре пары шевронов остриями к центру. Точка клика — центр креста.</p>
+        четыре пары шевронов остриями к центру, заливка бежит снаружи внутрь (цикл 2 с). Ведите мышь —
+        крест смещается в сторону движения и возвращается в центр, когда мышь стоит.</p>
       <p class="note">Отпустите кнопку где угодно, даже за окном. На картах так же: нажатие на пустое место —
         крестовина; нажатие на сектор, кнопку или систему — щелчок, крестовина только если потянули.</p>
     </div>
@@ -245,7 +246,7 @@
       ];
       if (!i) return out.concat([['Модуль', document.readyState === 'complete' ? 'не загрузился' : 'загружается…']]);
       out.push(['Вариант', (i.enabled ? VARIANT_NAMES[i.variant] : 'выключен') + ' · авто для этого браузера: ' + VARIANT_NAMES[i.auto]]);
-      out.push(['Кадры', i.ready ? 'стрелка ' + i.frames.default + ', треугольники ' + i.frames.hover + ' · подготовка ' + i.buildMs + ' мс' + (i.cached ? ' (из кэша)' : '') : 'готовятся…']);
+      out.push(['Кадры', i.ready ? 'стрелка ' + i.frames.default + ', треугольники ' + i.frames.hover + (i.frames.drag ? ', крестовина ' + i.frames.drag : '') + ' · подготовка ' + i.buildMs + ' мс' + (i.cached ? ' (из кэша)' : '') : 'готовятся…']);
       out.push(['Под мышью', STATE_NAMES[i.state] || i.state]);
       if (i.reducedMotion) out.push(['Анимация', 'выключена: в системе включено «уменьшение движения»']);
       if (i.rasterBroken) out.push(['Растеризация', 'не удалась — работает только SVG']);
@@ -387,7 +388,8 @@
 
       var strips = document.getElementById('strips');
       strips.innerHTML = '';
-      [['Стрелка, цикл 2,25 с', frames.default], ['Треугольники, цикл 3 с', frames.hover]].forEach(function (group) {
+      [['Стрелка, цикл 2,25 с', frames.default], ['Треугольники, цикл 3 с', frames.hover],
+        ['Крестовина, цикл 2 с', frames.drag || []]].forEach(function (group) {
         var title = document.createElement('h3');
         title.textContent = group[0] + ' — ' + group[1].length + ' кадров';
         var strip = document.createElement('div');
