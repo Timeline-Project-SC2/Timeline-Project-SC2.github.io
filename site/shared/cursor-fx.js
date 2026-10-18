@@ -12,10 +12,12 @@
        слой лежит на заднем, — тёмный зазор и светлая линия. «Каскад» и «волна» по очереди
        заливают слои светлым градиентом.
      • Перетаскивание («холд-драг»): крестовина задумки пользователя — четыре пары контурных
-       шевронов остриями к центру. Заливка бежит «снаружи → внутрь» (каскад и волна, цикл 2 с),
-       крест смещается в сторону движения мыши («физика», до 6 px) и возвращается в центр, когда
-       мышь стоит. Точка клика — центр креста. Включается сразу при нажатии на пустом месте
-       карты, до движения (CONFIG.hold). Геометрия, заливка, физика — CONFIG.cross.
+       шевронов остриями к центру. После нажатия крест проявляется за 0,2 с, заливка бежит
+       «снаружи → внутрь» (каскад и волна, цикл 2 с), крест смещается в сторону движения мыши
+       («физика», до 6 px) и возвращается в центр, когда мышь стоит. Точка клика — центр креста.
+       Включается сразу при нажатии левой кнопкой или колесом на пустом месте карты, до
+       движения (CONFIG.hold); правая кнопка карту не тащит, крестовины нет. Геометрия,
+       появление, заливка, физика — CONFIG.cross.
 
    ПОЧЕМУ СИСТЕМНЫЙ КУРСОР, А НЕ НАРИСОВАННЫЙ ЭЛЕМЕНТ
    Курсор рисует операционная система, поэтому он не отстаёт от мыши ни на кадр. Элемент
@@ -30,6 +32,7 @@
    1. Кадры строятся из геометрии задумки (SVG, единицы задумки → px через CONFIG.*.scale):
       стрелка — кадр каждые 50 мс цикла 2,25 с, треугольники — цикла 3 с, крестовина — 2 с.
       Одинаковые подряд кадры склеиваются, поэтому пауза между пролётами сот — один кадр.
+      У крестовины ещё кадры появления: после нажатия они идут один раз, затем цикл.
       Смещение крестовины — не отдельные кадры, а сдвиг точки клика в значении cursor.
    2. Каждый кадр растеризуется в браузере (программный canvas) в PNG 32×32 и 64×64 для
       экранов 2×. Файлов-картинок нет, сборка не нужна. Сначала готовятся статичные кадры
@@ -40,9 +43,9 @@
         наведение      — ссылки, кнопки, [role=button], классы сайта из CONFIG.hover и системы
                          на карте атласа (#mapCanvas.marker-hover);
         недоступно     — CONFIG.disabled (ОЗД после отказа, :disabled): приглушённая стрелка;
-        перетаскивание — крестовина: пока зажата кнопка на пустом месте карты (CONFIG.hold),
-                         а если нажали на кнопку, сектор или систему — когда мышь сдвинулась
-                         и карта поехала; плюс классы карт из CONFIG.drag.
+        перетаскивание — крестовина: пока зажата левая кнопка или колесо на пустом месте карты
+                         (CONFIG.hold), а если нажали на кнопку, сектор или систему — когда
+                         мышь сдвинулась и карта поехала; плюс классы карт из CONFIG.drag.
       Какое состояние показать, решает браузер по элементу под мышью: координаты мыши модуль
       не отслеживает, поэтому задержки нет.
    4. Анимация: таймер ставит очередной кадр в style того элемента, что под мышью (с него
@@ -138,6 +141,10 @@
       unit: 0.8,                 // px на единицу в самой задумке: холст 100 единиц на 80 px
       center: 15.5,              // px — центр креста в картинке: середина пикселя, чтобы острия
                                  // на осях были чёткими в 1×; точка клика — этот пиксель (15)
+      // мс — появление после нажатия: непрозрачность креста 0 → 1 с плавностью ease, как
+      // transition: opacity 0.2s ease у .cursor-drag задумки. Исчезает крест сразу: курсор —
+      // одна картинка, стрелка с гаснущим крестом в 32 px не помещаются.
+      fade: 200,
       chevron: [[-12, -4], [12, -4], [0, 6]],   // плоский верх, остриё вниз — к центру
       // [расстояние от центра, масштаб, слой]: как translate(0,-35) scale(1.2) и
       // translate(0,-18) scale(0.8) в задумке
@@ -160,9 +167,11 @@
       // как при нулевом сдвиге, и крест возвращается в центр.
       drift: { lerp: 0.2, max: 15 }
     },
-    // «Холд»: зажали кнопку мыши на пустом месте карты (CONFIG.dragWatch) — курсор
+    // «Холд»: зажали левую кнопку или колесо на пустом месте карты (CONFIG.dragWatch) — курсор
     // перетаскивания сразу, ещё до движения. Нажатие на кнопку, сектор, систему остаётся
     // щелчком; если мышь при этом сдвинулась дальше slop, карта поехала — тоже перетаскивание.
+    // Правая и боковые кнопки крестовину не включают, и карты на них не двигаются (galaxy.js,
+    // app.js): правая — контекстное меню, как в задумке.
     hold: {
       slop: 4,                   // px, как порог перетаскивания на карте галактики
       // панели и кнопки внутри карт: нажатие на них карту не двигает (как isUi в galaxy.js)
@@ -217,6 +226,7 @@
   }
   var easeOut = bezier(0.25, 1, 0.5, 1);     // соты (как у частиц задумки)
   var easeInOut = bezier(0.42, 0, 0.58, 1);  // блик грани
+  var ease = bezier(0.25, 0.1, 0.25, 1);     // ease в CSS — появление крестовины
 
   // соты: [доля цикла, место на маршруте (0 — остриё, 1 — конец крыла, 2 — выемка), масштаб,
   // поворот°, непрозрачность]. До 58 % цикла сота скрыта в острие; у конца крыла и у выемки
@@ -311,10 +321,13 @@
     return { kind: 'tri', fills: FILL_KEYS.map(function (keys) { return num(fillAt(keys, p), 2); }) };
   }
 
-  // кадр крестовины: заливка [внешних, внутренних] шевронов по времени цикла
-  function crossFrame(t) {
+  // кадр крестовины: заливка [внешних, внутренних] шевронов по времени цикла;
+  // alpha — непрозрачность всего креста при появлении (нет — 1)
+  function crossFrame(t, alpha) {
     var X = CONFIG.cross, p = t / X.cycle;
-    return { kind: 'cross', fills: [num(fillAt(X.fills.outer, p), 2), num(fillAt(X.fills.inner, p), 2)] };
+    var f = { kind: 'cross', fills: [num(fillAt(X.fills.outer, p), 2), num(fillAt(X.fills.inner, p), 2)] };
+    if (alpha < 1) f.a = num(alpha, 2);
+    return f;
   }
 
   function svgOpen(px, origin, span) {
@@ -479,8 +492,9 @@
           num(w[i] / s, 3) + '"/>';
       }
     });
+    // при появлении прозрачен весь крест вместе со свечением, как .cursor-drag в задумке
     return svgOpen(px, o, span) + '<defs>' + haloFilter('k', num(X.glow / s, 2), C.core, 0.75, area) +
-      '</defs><g filter="url(#k)">' + body + '</g></svg>';
+      '</defs><g filter="url(#k)"' + (f.a ? ' opacity="' + f.a + '"' : '') + '>' + body + '</g></svg>';
   }
 
   function frameSVG(f, px) {
@@ -617,10 +631,29 @@
     default: { fallback: 'default', index: 0,
       frames: sampleCycle(CONFIG.arrow.cycle, function (t) { return arrowFrame(t, { parts: true }); }) },
     hover: { fallback: 'pointer', index: 0, frames: sampleCycle(CONFIG.tri.cycle, triFrame) },
-    // крестовина: цикл начинается заново при каждом нажатии, как CSS-анимация задумки
-    drag: { fallback: 'grabbing', index: 0, frames: sampleCycle(CONFIG.cross.cycle, crossFrame) }
+    // крестовина: при каждом нажатии появление (intro), затем цикл с начала, как CSS-анимация
+    // задумки; introAt — номер кадра появления, -1 — идёт цикл
+    drag: { fallback: 'grabbing', index: 0, frames: sampleCycle(CONFIG.cross.cycle, crossFrame),
+      intro: crossIntro(), introAt: -1 }
   };
   anim.drag.frames.forEach(function (frame) { frame.hot = CROSS_HOT; });
+
+  // Появление крестовины: первые кадры цикла с нарастающей непрозрачностью (CONFIG.cross.fade).
+  // Непрозрачность берётся с середины кадра: кадр держится 50 мс, и первый не выходит пустым.
+  // Почти непрозрачные кадры не нужны — их не отличить от обычных, дальше идёт цикл.
+  function crossIntro() {
+    var out = [], fade = CONFIG.cross.fade;
+    for (var t = 0; t < fade; t += CONFIG.step) {
+      var alpha = ease(Math.min(1, (t + CONFIG.step / 2) / fade));
+      if (alpha >= 0.97) break;
+      var f = crossFrame(t, alpha);
+      out.push({ key: JSON.stringify(f), f: f, t: t, ms: CONFIG.step, hot: CROSS_HOT });
+    }
+    return out;
+  }
+
+  // кадр, который показывает анимация сейчас: у крестовины после нажатия — кадр появления
+  function current(a) { return a.introAt >= 0 ? a.intro[a.introAt] : a.frames[a.index]; }
 
   function detectVariant() {
     // Firefox чётко рисует SVG-курсоры на любом масштабе экрана; image-set в cursor
@@ -711,7 +744,7 @@
   }
 
   function paint(a) {
-    var els = paintTargets(), frame = a.frames[a.index];
+    var els = paintTargets(), frame = current(a);
     var value = a === anim.drag && (drift.ox || drift.oy)
       ? cursorValue(frame, a.fallback, [frame.hot[0] - drift.ox, frame.hot[1] - drift.oy])
       : valueOf(frame, a.fallback);
@@ -793,16 +826,21 @@
     if (!a || !enabled || !ready || media.reduced.matches) { unpaint(); return; }
     if (!animating()) return;   // пауза: последний кадр остаётся на месте
     paint(a);
-    timer = setTimeout(tick, a.frames[a.index].ms);
+    timer = setTimeout(tick, current(a).ms);
   }
 
   function tick() {
     timer = 0;
     var a = anim[active];
     if (!a || !animating()) return;
-    a.index = (a.index + 1) % a.frames.length;
+    if (a.introAt >= 0) {
+      // появление закончилось — цикл с того же места
+      if (++a.introAt >= a.intro.length) { a.introAt = -1; a.index = seek(a, a.intro.length * CONFIG.step); }
+    } else {
+      a.index = (a.index + 1) % a.frames.length;
+    }
     paint(a);
-    timer = setTimeout(tick, a.frames[a.index].ms);
+    timer = setTimeout(tick, current(a).ms);
   }
 
   function seek(a, t) {
@@ -822,8 +860,12 @@
     else if (el && el.closest(CONFIG.hover)) state = 'hover';
     if (state !== active) {
       if (state === 'hover') anim.hover.index = hoverStartIndex;
-      // крестовина: при каждом нажатии цикл с начала, крест в центре
-      if (state === 'drag' || active === 'drag') { anim.drag.index = 0; driftReset(); }
+      // крестовина: при каждом нажатии появление и цикл с начала, крест в центре
+      if (state === 'drag' || active === 'drag') {
+        anim.drag.index = 0;
+        anim.drag.introAt = anim.drag.intro.length ? 0 : -1;
+        driftReset();
+      }
       active = state;
       schedule();
     } else if ((repaint || styled.indexOf(el) < 0) && anim[active] && animating()) {
@@ -850,7 +892,8 @@
   }
 
   function onDown(event) {
-    if (!enabled || event.button !== 0 || !finePointer(event)) return;
+    // левая кнопка и колесо — ими карты тащат; правая и боковые — нет (см. CONFIG.hold)
+    if (!enabled || event.button > 1 || !finePointer(event)) return;
     var el = event.target && event.target.nodeType === 1 ? event.target : null;
     if (!el || !el.closest(CONFIG.dragWatch) || el.closest(CONFIG.hold.skip)) return;
     hold = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
@@ -931,7 +974,7 @@
     if (built) return built;
     started = window.performance ? performance.now() : Date.now();
     var statics = [still.idle, still.drag, still.disabled, still.hover];
-    var all = statics.concat(anim.default.frames, anim.hover.frames, anim.drag.frames);
+    var all = statics.concat(anim.default.frames, anim.hover.frames, anim.drag.frames, anim.drag.intro);
     all.forEach(function (frame) {
       frame.svg1 = frameSVG(frame.f, CONFIG.size);
       frame.svg = svgUrl(frame.svg1);
@@ -989,14 +1032,15 @@
       return {
         enabled: enabled, ready: ready, variant: variant, auto: autoVariant, rasterBroken: rasterBroken,
         dpr: window.devicePixelRatio || 1, reducedMotion: media.reduced.matches, state: active, hold: !!hold,
-        frames: { default: anim.default.frames.length, hover: anim.hover.frames.length, drag: anim.drag.frames.length },
+        frames: { default: anim.default.frames.length, hover: anim.hover.frames.length, drag: anim.drag.frames.length,
+          dragIntro: anim.drag.intro.length },
         drift: [drift.ox, drift.oy], buildMs: buildMs, cached: cached
       };
     },
     frames: function () {
       function list(frames) { return frames.map(function (fr) { return { t: fr.t, ms: fr.ms, png: fr.png2 || fr.svg, svg: fr.svg }; }); }
       return { default: list(anim.default.frames), hover: list(anim.hover.frames), drag: list(anim.drag.frames),
-        still: { drag: list([still.drag])[0], disabled: list([still.disabled])[0] } };
+        dragIntro: list(anim.drag.intro), still: { drag: list([still.drag])[0], disabled: list([still.disabled])[0] } };
     },
     setVariant: setVariant,
     enable: enable,

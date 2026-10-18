@@ -74,7 +74,7 @@
     ol { margin: 0; padding-left: 20px; }
     li { margin: 0 0 6px; }
   </style>
-  <script src="/shared/cursor-fx.js?v=cursor-4" defer></script>
+  <script src="/shared/cursor-fx.js?v=cursor-5" defer></script>
 </head>
 <body>
 <main>
@@ -122,11 +122,13 @@
     </div>
     <div class="zone zone--drag galaxy-stage" id="dragZone">
       <h3>3. Перетаскивание</h3>
-      <p>Зажмите кнопку мыши в этой зоне — сразу, ещё до движения, курсор становится крестовиной:
-        четыре пары шевронов остриями к центру, заливка бежит снаружи внутрь (цикл 2 с). Ведите мышь —
-        крест смещается в сторону движения и возвращается в центр, когда мышь стоит.</p>
+      <p>Зажмите левую кнопку или колесо в этой зоне — сразу, ещё до движения, курсор становится
+        крестовиной: четыре пары шевронов остриями к центру проявляются за 0,2 с, заливка бежит снаружи
+        внутрь (цикл 2 с). Ведите мышь — крест смещается в сторону движения и возвращается в центр,
+        когда мышь стоит. Правая кнопка крестовину не включает.</p>
       <p class="note">Отпустите кнопку где угодно, даже за окном. На картах так же: нажатие на пустое место —
-        крестовина; нажатие на сектор, кнопку или систему — щелчок, крестовина только если потянули.</p>
+        крестовина; нажатие на сектор, кнопку или систему — щелчок, крестовина только если потянули.
+        Правой кнопкой карты не тащатся.</p>
     </div>
     <div class="zone">
       <h3>4. Недоступно</h3>
@@ -195,7 +197,8 @@
       <li>Края окна: у краёв курсор не должен превращаться в обычную стрелку.</li>
       <li>Карты: крестовина сразу при нажатии на пустое место и без мигания при перетаскивании; щелчок
         по сектору или системе — без крестовины; наведение на системы атласа и квадраты секторов.</li>
-      <li>Крестовина: читается ли на вашем экране и попадает ли центр креста в точку, куда смотрит мышь.</li>
+      <li>Крестовина: читается ли на вашем экране и попадает ли центр креста в точку, куда смотрит мышь;
+        плавно ли проявляется при нажатии; включается ли колесом и не включается ли правой кнопкой.</li>
     </ol>
   </section>
 </main>
@@ -246,7 +249,7 @@
       ];
       if (!i) return out.concat([['Модуль', document.readyState === 'complete' ? 'не загрузился' : 'загружается…']]);
       out.push(['Вариант', (i.enabled ? VARIANT_NAMES[i.variant] : 'выключен') + ' · авто для этого браузера: ' + VARIANT_NAMES[i.auto]]);
-      out.push(['Кадры', i.ready ? 'стрелка ' + i.frames.default + ', треугольники ' + i.frames.hover + (i.frames.drag ? ', крестовина ' + i.frames.drag : '') + ' · подготовка ' + i.buildMs + ' мс' + (i.cached ? ' (из кэша)' : '') : 'готовятся…']);
+      out.push(['Кадры', i.ready ? 'стрелка ' + i.frames.default + ', треугольники ' + i.frames.hover + (i.frames.drag ? ', крестовина ' + i.frames.drag + (i.frames.dragIntro ? ' + ' + i.frames.dragIntro + ' появления' : '') : '') + ' · подготовка ' + i.buildMs + ' мс' + (i.cached ? ' (из кэша)' : '') : 'готовятся…']);
       out.push(['Под мышью', STATE_NAMES[i.state] || i.state]);
       if (i.reducedMotion) out.push(['Анимация', 'выключена: в системе включено «уменьшение движения»']);
       if (i.rasterBroken) out.push(['Растеризация', 'не удалась — работает только SVG']);
@@ -302,10 +305,11 @@
       location.reload();
     });
 
-    // перетаскивание: класс is-dragging у .galaxy-stage, как на карте галактики
+    // перетаскивание: класс is-dragging у .galaxy-stage, как на карте галактики;
+    // левая кнопка и колесо, правая — нет (как на картах)
     var dragZone = document.getElementById('dragZone');
     dragZone.addEventListener('pointerdown', function (event) {
-      if (event.button !== 0) return;
+      if (event.button > 1) return;
       dragZone.setPointerCapture(event.pointerId);
       dragZone.classList.add('is-dragging');
     });
@@ -389,9 +393,12 @@
       var strips = document.getElementById('strips');
       strips.innerHTML = '';
       [['Стрелка, цикл 2,25 с', frames.default], ['Треугольники, цикл 3 с', frames.hover],
+        ['Крестовина: появление после нажатия, 0,2 с', frames.dragIntro || []],
         ['Крестовина, цикл 2 с', frames.drag || []]].forEach(function (group) {
         var title = document.createElement('h3');
-        title.textContent = group[0] + ' — ' + group[1].length + ' кадров';
+        var n = group[1].length, n10 = n % 10, n100 = n % 100;
+        title.textContent = group[0] + ' — ' + n + (n10 === 1 && n100 !== 11 ? ' кадр'
+          : n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14) ? ' кадра' : ' кадров');
         var strip = document.createElement('div');
         strip.className = 'strip';
         group[1].forEach(function (frame) { strip.appendChild(figure(frame.png, frame.ms + ' мс', 64)); });
