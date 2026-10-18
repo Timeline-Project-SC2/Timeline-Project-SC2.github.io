@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="minimal-skin.css?v=structure-1">
   <link rel="stylesheet" href="/shared/timeline-skin.css?v=layout-safe-2">
   <link rel="stylesheet" href="/shared/catalog-typography.css?v=catalog-dropdown-2">
+  <link rel="stylesheet" href="/shared/travel-planner.css?v=travel-ui-1">
 </head>
 <body class="minimal-mode">
   <script src="/shared/timeline-loader.js"></script>
@@ -54,6 +55,13 @@
       <canvas id="mapCanvas" role="img" aria-label="Интерактивная карта сектора Копрулу. Перетаскивайте карту, используйте колесо мыши для масштабирования."></canvas>
       <div class="map-vignette" aria-hidden="true"></div>
       <div class="map-grid-overlay" aria-hidden="true"></div>
+
+      <div class="travel-tape travel-tape-top" id="travelTapeTop" hidden aria-hidden="true">
+        <div class="travel-tape-track"><span>! РЕЖИМ РАСЧЁТОВ !</span><span>! РЕЖИМ РАСЧЁТОВ !</span><span>! РЕЖИМ РАСЧЁТОВ !</span><span>! РЕЖИМ РАСЧЁТОВ !</span></div>
+      </div>
+      <div class="travel-tape travel-tape-bottom" id="travelTapeBottom" hidden aria-hidden="true">
+        <div class="travel-tape-track"><span>! РЕЖИМ РАСЧЁТОВ !</span><span>! РЕЖИМ РАСЧЁТОВ !</span><span>! РЕЖИМ РАСЧЁТОВ !</span><span>! РЕЖИМ РАСЧЁТОВ !</span></div>
+      </div>
 
       <div class="coordinates-label" aria-hidden="true"><span>TIMELINE NAVIGATION GRID</span><span>SECTOR</span></div>
       <section class="map-page-intro" aria-label="Текущий раздел">
@@ -121,6 +129,40 @@
       </aside>
 
 
+      <aside class="travel-panel panel" id="travelPanel" aria-label="Калькулятор путешествий" hidden>
+        <div class="travel-panel-head">
+          <div><div class="eyebrow"><span class="eyebrow-line"></span> НАВИГАЦИОННЫЙ РАСЧЁТ</div><h2>Маршрут</h2></div>
+          <div class="travel-head-actions">
+            <span class="travel-count" id="travelCount">0 / 50</span>
+            <button class="icon-button" id="travelClose" type="button" aria-label="Выйти из режима расчётов" title="Выйти">×</button>
+          </div>
+        </div>
+        <div class="travel-panel-scroll">
+          <label class="travel-field" for="travelSpeed">
+            <span>Скорость, св. л./сутки (24 ч)</span>
+            <input id="travelSpeed" type="text" inputmode="decimal" autocomplete="off" value="100" aria-describedby="travelSpeedError">
+          </label>
+          <div class="travel-error" id="travelSpeedError" role="alert" hidden>Введите положительное конечное число.</div>
+          <p class="travel-calibration-note">Расстояние по XY карты, без Z: 1 единица координат = 1 св. л. Это условный масштаб проекта, не независимая астрономическая калибровка.</p>
+          <label class="travel-field" for="travelDeparture">
+            <span>Время старта <small>(необязательно, местное время)</small></span>
+            <input id="travelDeparture" type="datetime-local" step="1">
+          </label>
+          <label class="travel-check"><input id="travelReturn" type="checkbox"><span>Вернуться к началу тем же путём</span></label>
+          <label class="travel-check"><input id="travelAnimate" type="checkbox"><span>Включить анимацию потока</span></label>
+          <div class="travel-motion-note" id="travelMotionNote" hidden></div>
+          <div class="travel-route-heading"><strong>Точки маршрута</strong><span id="travelRouteHint">Кликните систему на карте</span></div>
+          <ol class="travel-stops" id="travelStops" aria-label="Точки маршрута в порядке путешествия"></ol>
+          <div class="travel-empty" id="travelEmpty">Обычный клик по системе добавляет её в маршрут. Нажмите оранжевый ключ, чтобы ставить произвольные точки: Shift+ЛКМ по пустому месту, ЛКМ без Shift — выход из режима.</div>
+          <div class="travel-summary" id="travelSummary" aria-live="polite"></div>
+          <pre class="travel-log-preview" id="travelLogPreview" hidden></pre>
+        </div>
+        <div class="travel-actions">
+          <button class="travel-copy" id="travelCopy" type="button" disabled>Скопировать лог</button>
+          <button class="travel-clear" id="travelClear" type="button">Очистить маршрут</button>
+        </div>
+      </aside>
+
       <div class="map-controls" aria-label="Управление картой">
         <button class="map-control" id="zoomIn" type="button" title="Приблизить (+)" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></button>
         <div class="zoom-readout"><span id="zoomPercent">100%</span><span class="zoom-tick"></span></div>
@@ -128,6 +170,8 @@
         <div class="control-divider"></div>
         <button class="map-control" id="resetMap" type="button" title="Показать всю карту (0)" aria-label="Показать всю карту"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path><path d="M9 4a8 8 0 0 1 10 5M15 20a8 8 0 0 1-10-5"></path></svg></button>
         <button class="map-control label-toggle" id="labelsToggle" type="button" title="Показать подписи карты" aria-label="Переключить подписи карты" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h11M4 19h16"></path><path d="M18 10v4"></path></svg></button>
+        <button class="map-control travel-mode-button" id="travelModeToggle" type="button" title="Режим расчётов путешествия" aria-label="Включить режим расчётов" aria-pressed="false"><span aria-hidden="true">↝</span></button>
+        <button class="map-control travel-free-point-button" id="travelFreePointToggle" type="button" title="Режим произвольных точек" aria-label="Включить постановку произвольных точек" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7.5a6 6 0 0 1-7.7 5.7L7.2 19.4a2.1 2.1 0 0 1-3-3l6.2-6.1A6 6 0 0 1 18 3.1l-3.2 3.2.9 3.1 3.1.9z"/></svg></button>
       </div>
 
       <div class="map-hint"><span class="mouse-icon"><i></i></span><span>ПЕРЕТАСКИВАЙ · КОЛЁСО МЫШИ — МАСШТАБ · SHIFT+КЛИК — КОПИЯ X/Y</span></div>
@@ -150,7 +194,8 @@
       </section>
     </div>
   </div>
-  <script src="/shared/app.js?v=system-hover-highlight-1" defer></script>
+  <script src="/shared/travel-planner.js?v=travel-core-1" defer></script>
+  <script src="/shared/app.js?v=travel-calculator-1" defer></script>
   <script src="/shared/cursor-fx.js?v=cursor-6" defer></script>
 </body>
 </html>

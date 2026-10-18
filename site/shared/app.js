@@ -17,7 +17,8 @@
 
   var CONFIG = {
     storage: {
-      labels: 'map.atlas.labels.v1'
+      labels: 'map.atlas.labels.v1',
+      travel: 'map.atlas.travel.v1'
     },
     data: {
       dir: '/data/',
@@ -190,7 +191,21 @@
     rasterMode: 'none',
     view: { scale: 1, tx: 0, ty: 0 },
     viewport: { w: 1, h: 1 },
-    dpr: 1
+    dpr: 1,
+    travel: {
+      enabled: false,
+      freePointMode: false,
+      ids: [],
+      customPoints: {},
+      nextFreePointId: 1,
+      speedText: '100',
+      returnEnabled: false,
+      departureLocal: '',
+      animationPreference: null,
+      calculation: null,
+      infoId: null,
+      catalogWasOpen: false
+    }
   };
 
   var theme = {
@@ -211,6 +226,13 @@
   var toastsTimer = null;
   var coordinateReadoutEnabled = false;
   var coordinatePointer = null;
+  var travelCore = window.TravelPlanner || null;
+  var travelSpeedTimer = null;
+  var pendingTravelTapTimers = [];
+  var travelMotionQuery = null;
+  var travelSmallQuery = null;
+  var travelReducedMotion = false;
+  var travelSmallScreen = false;
 
   /* ------------------------------------------------------------------ загрузка данных */
 
@@ -848,6 +870,7 @@
   }
 
   function zoomAt(screenX, screenY, factor) {
+    if (state.travel.enabled) cancelPendingTravelTap();
     var before = toWorld(screenX, screenY);
     var next = clamp(state.view.scale * factor, minScale(), maxScale());
     if (next === state.view.scale) return;
@@ -1284,6 +1307,78 @@
     });
   }
 
+  function drawTravelRoute(now) {
+    if (!state.travel.enabled || !state.travel.calculation || !state.travel.calculation.legs.length) return;
+    var calculation = state.travel.calculation;
+    var legs = calculation.legs;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = 'rgba(46,245,230,.68)';
+    ctx.shadowColor = 'rgba(46,245,230,.46)';
+    ctx.shadowBlur = 9;
+
+    legs.forEach(function (leg, index) {
+      var from = toScreen(leg.from.coord[0], leg.from.coord[1]);
+      var to = toScreen(leg.to.coord[0], leg.to.coord[1]);
+      ctx.setLineDash(index >= calculation.forwardLegs.length ? [7, 6] : []);
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      var angle = Math.atan2(to.y - from.y, to.x - from.x);
+      var arrowX = from.x + (to.x - from.x) * 0.66;
+      var arrowY = from.y + (to.y - from.y) * 0.66;
+      var arrowSize = 7;
+      ctx.beginPath();
+      ctx.moveTo(arrowX, arrowY);
+      ctx.lineTo(arrowX - arrowSize * Math.cos(angle - Math.PI / 6), arrowY - arrowSize * Math.sin(angle - Math.PI / 6));
+      ctx.moveTo(arrowX, arrowY);
+      ctx.lineTo(arrowX - arrowSize * Math.cos(angle + Math.PI / 6), arrowY - arrowSize * Math.sin(angle + Math.PI / 6));
+      ctx.stroke();
+    });
+
+    var stops = travelStops();
+    stops.forEach(function (stop, index) {
+      var point = toScreen(stop.coord[0], stop.coord[1]);
+      ctx.setLineDash([]);
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 11, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(1,10,9,.94)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = theme.accent;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = theme.text;
+      ctx.font = '10px ' + theme.mono;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(index + 1), point.x, point.y);
+    });
+
+    if (isTravelAnimationActive()) {
+      var segment = Math.floor(now / 950) % legs.length;
+      var progress = (now % 950) / 950;
+      var current = legs[segment];
+      var start = toScreen(current.from.coord[0], current.from.coord[1]);
+      var end = toScreen(current.to.coord[0], current.to.coord[1]);
+      var px = start.x + (end.x - start.x) * progress;
+      var py = start.y + (end.y - start.y) * progress;
+      ctx.shadowColor = theme.accent;
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = '#bafff9';
+      ctx.beginPath();
+      ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function markerMetrics(scale) {
     var lod = CONFIG.markerLod;
     var radius = clamp(lod.worldRadius * scale, lod.minRadius, lod.maxRadius);
@@ -1299,6 +1394,458 @@
       reviewDot: clamp(8 * scale, 3, 9),
       hitRadius: Math.max(CONFIG.hitRadius, radius + clamp(12 * scale, 5, 14))
     };
+  }
+
+  function travelSystemKey(system) {
+    if (!system) return '';
+    if (system.isFreePoint) return 'free:' + String(system.id);
+    if (system.id != null && String(system.id).trim()) return 'id:' + String(system.id);
+    return 'name:' + normalize(system.name || '');
+  }
+
+  function travelEntityForId(id) {
+    return state.travel.customPoints[id] || state.systemsById[id] || null;
+  }
+
+  function pruneTravelCustomPoints() {
+    Object.keys(state.travel.customPoints).forEach(function (id) {
+      if (state.travel.ids.indexOf(id) === -1) delete state.travel.customPoints[id];
+    });
+  }
+
+  function travelCoordinates(system) {
+    if (!system || system.coordSource !== 'map' || !Array.isArray(system.coord) || system.coord.length < 2) return null;
+    var x = explicitMapNumber(system.coord[0]);
+    var y = explicitMapNumber(system.coord[1]);
+    var point = x !== null && y !== null ? { x: x, y: y } : null;
+    return coordinateOnMap(point) ? [x, y] : null;
+  }
+
+  function travelStopForSystem(system) {
+    var coord = travelCoordinates(system);
+    if (!coord) return null;
+    return { id: String(system.id), name: system.name, coord: coord, system: system };
+  }
+
+  function travelStops() {
+    return state.travel.ids.map(function (id) {
+      return travelStopForSystem(travelEntityForId(id));
+    }).filter(Boolean);
+  }
+
+  function isValidTravelSequence(ids) {
+    if (ids.length > 50) return false;
+    for (var i = 1; i < ids.length; i++) {
+      var previous = travelEntityForId(ids[i - 1]);
+      var current = travelEntityForId(ids[i]);
+      if (previous && current && travelSystemKey(previous) === travelSystemKey(current)) return false;
+    }
+    return true;
+  }
+
+  function travelAnimationRequested() {
+    if (state.travel.animationPreference !== null) return state.travel.animationPreference;
+    return false;
+  }
+
+  function isTravelAnimationActive() {
+    return !!(state.travel && state.travel.enabled && travelCore && !travelReducedMotion &&
+      travelAnimationRequested() && state.travel.calculation && state.travel.calculation.legs.length);
+  }
+
+  function persistTravelState() {
+    var stored = {
+      version: 1,
+      enabled: state.travel.enabled,
+      ids: state.travel.ids.slice(0, 50),
+      customPoints: state.travel.customPoints,
+      nextFreePointId: state.travel.nextFreePointId,
+      speed: state.travel.speedText,
+      returnEnabled: state.travel.returnEnabled,
+      departureLocal: state.travel.departureLocal,
+      animationPreference: state.travel.animationPreference
+    };
+    try { window.localStorage.setItem(CONFIG.storage.travel, JSON.stringify(stored)); } catch (err) { /* private browsing / quota */ }
+  }
+
+  function restoreTravelState() {
+    var stored = readJSON(CONFIG.storage.travel, null);
+    if (!stored || stored.version !== 1 || !Array.isArray(stored.ids)) return;
+    var ids = [];
+    var storedPoints = stored.customPoints && typeof stored.customPoints === 'object' ? stored.customPoints : {};
+    state.travel.customPoints = {};
+    stored.ids.forEach(function (id) {
+      var key = String(id);
+      var entity = null;
+      if (key.indexOf('__travel_free_point__:') === 0) {
+        var savedPoint = storedPoints[key];
+        var savedCoordinates = savedPoint && travelCoordinates({
+          id: key, name: 'Произвольная точка', coord: savedPoint.coord, coordSource: 'map'
+        });
+        if (savedCoordinates) {
+          entity = {
+            id: key, name: 'Произвольная точка', coord: savedCoordinates,
+            coordSource: 'map', isFreePoint: true
+          };
+          state.travel.customPoints[key] = entity;
+        }
+      } else {
+        entity = state.systemsById[key];
+      }
+      if (!entity || !travelCoordinates(entity) || ids.length >= 50) return;
+      var previous = ids.length ? travelEntityForId(ids[ids.length - 1]) : null;
+      if (previous && travelSystemKey(previous) === travelSystemKey(entity)) return;
+      ids.push(key);
+    });
+    state.travel.ids = ids;
+    pruneTravelCustomPoints();
+    var storedNextId = Number(stored.nextFreePointId);
+    state.travel.nextFreePointId = isFinite(storedNextId) && storedNextId > 0 ? Math.floor(storedNextId) : 1;
+    state.travel.enabled = stored.enabled === true;
+    state.travel.speedText = stored.speed == null ? '100' : String(stored.speed);
+    state.travel.returnEnabled = stored.returnEnabled === true;
+    state.travel.departureLocal = typeof stored.departureLocal === 'string' ? stored.departureLocal : '';
+    state.travel.animationPreference = typeof stored.animationPreference === 'boolean'
+      ? stored.animationPreference : null;
+  }
+
+  function loadTravelPreferences() {
+    travelMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    travelSmallQuery = window.matchMedia ? window.matchMedia('(max-width: 599px), (pointer: coarse)') : null;
+    travelReducedMotion = !!(travelMotionQuery && travelMotionQuery.matches);
+    travelSmallScreen = !!(travelSmallQuery && travelSmallQuery.matches);
+  }
+
+  function syncTravelModeUi() {
+    if (!el.travelPanel) return;
+    el.travelPanel.hidden = !state.travel.enabled;
+    el.travelTapeTop.hidden = !state.travel.enabled;
+    el.travelTapeBottom.hidden = !state.travel.enabled || window.matchMedia('(max-width: 599px)').matches;
+    el.travelModeToggle.setAttribute('aria-pressed', String(state.travel.enabled));
+    el.travelModeToggle.setAttribute('aria-label', state.travel.enabled
+      ? 'Выйти из режима расчётов' : 'Включить режим расчётов');
+    el.travelModeToggle.title = state.travel.enabled ? 'Выйти из режима расчётов' : 'Режим расчётов путешествия';
+    el.travelFreePointToggle.setAttribute('aria-pressed', String(state.travel.freePointMode));
+    el.travelFreePointToggle.setAttribute('aria-label', state.travel.freePointMode
+      ? 'Выйти из режима произвольных точек' : 'Включить постановку произвольных точек');
+    el.travelFreePointToggle.title = state.travel.freePointMode
+      ? 'Выйти из режима произвольных точек' : 'Произвольная точка: Shift+ЛКМ по пустому месту';
+    el.mapStage.classList.toggle('travel-mode', state.travel.enabled);
+    el.mapStage.classList.toggle('free-point-mode', state.travel.freePointMode);
+    updateTravelCounter();
+    syncTravelAnimationUi();
+  }
+
+  function syncTravelAnimationUi() {
+    if (!el.travelAnimate) return;
+    el.travelAnimate.checked = travelAnimationRequested() && !travelReducedMotion;
+    el.travelAnimate.disabled = travelReducedMotion;
+    el.mapStage.classList.toggle('travel-animated', travelAnimationRequested() && !travelReducedMotion);
+    el.travelAnimate.setAttribute('aria-describedby', 'travelMotionNote');
+    var note = el.travelMotionNote;
+    if (note) {
+      note.hidden = !travelReducedMotion;
+      note.textContent = travelReducedMotion
+        ? 'Отключена настройкой уменьшения движения в системе.'
+        : 'Анимация включается вручную.';
+    }
+  }
+
+  function updateTravelCounter() {
+    if (el.travelCount) el.travelCount.textContent = state.travel.ids.length + ' / 50';
+    if (el.travelStops) el.travelStops.setAttribute('aria-label', 'Точки маршрута: ' + state.travel.ids.length + ' из 50');
+    if (el.travelRouteHint) el.travelRouteHint.textContent = state.travel.ids.length >= 50
+      ? 'Достигнут лимит'
+      : (state.travel.freePointMode ? 'Shift+ЛКМ — точка · ЛКМ — выход' : 'Кликните систему на карте');
+  }
+
+  function renderTravelStops() {
+    if (!el.travelStops) return;
+    var touchLayout = travelSmallScreen;
+    var html = '';
+    state.travel.ids.forEach(function (id, index) {
+      var system = travelEntityForId(id);
+      var stop = travelStopForSystem(system);
+      if (!stop) return;
+      var isInfoOpen = state.travel.infoId === id;
+      var infoSubject = system.isFreePoint ? 'произвольной точке' : 'системе ' + stop.name;
+      var coordText = 'X ' + travelCore.formatExactNumber(stop.coord[0]) + ' · Y ' + travelCore.formatExactNumber(stop.coord[1]);
+      html += '<li class="travel-stop' + (system.isFreePoint ? ' travel-stop-free' : '') + '" data-index="' + index + '" draggable="' + String(!touchLayout) + '">' +
+        '<div class="travel-stop-main"><span class="travel-stop-order">' + (index + 1) + '</span>' +
+        '<span class="travel-stop-copy"><strong>' + escapeHtml(stop.name) + '</strong><small>' + escapeHtml(coordText) + '</small></span>' +
+        '<div class="travel-stop-actions">' +
+          '<button type="button" data-travel-action="info" data-index="' + index + '" aria-expanded="' + String(isInfoOpen) + '" aria-label="Информация о ' + escapeHtml(infoSubject) + '" title="Название и координаты">i</button>' +
+          '<button class="travel-touch-order" type="button" data-travel-action="up" data-index="' + index + '" aria-label="Переместить ' + escapeHtml(stop.name) + ' выше"' + (index === 0 ? ' disabled' : '') + '>↑</button>' +
+          '<button class="travel-touch-order" type="button" data-travel-action="down" data-index="' + index + '" aria-label="Переместить ' + escapeHtml(stop.name) + ' ниже"' + (index === state.travel.ids.length - 1 ? ' disabled' : '') + '>↓</button>' +
+          '<button type="button" data-travel-action="remove" data-index="' + index + '" aria-label="Убрать ' + escapeHtml(stop.name) + ' из маршрута" title="Убрать">×</button>' +
+        '</div></div>' +
+        (isInfoOpen ? '<div class="travel-stop-info"><strong>' + escapeHtml(stop.name) + '</strong><span>Координаты карты: (' + escapeHtml(travelCore.formatExactNumber(stop.coord[0])) + ', ' + escapeHtml(travelCore.formatExactNumber(stop.coord[1])) + ')</span></div>' : '') +
+        '</li>';
+    });
+    el.travelStops.innerHTML = html;
+    el.travelEmpty.hidden = state.travel.ids.length > 0;
+    updateTravelCounter();
+  }
+
+  function refreshTravelCalculation() {
+    var speed = travelCore ? travelCore.parseSpeed(state.travel.speedText) : null;
+    if (!speed) {
+      state.travel.calculation = null;
+      if (el.travelSpeed) el.travelSpeed.setAttribute('aria-invalid', 'true');
+      if (el.travelSpeedError) el.travelSpeedError.hidden = false;
+      updateTravelResults();
+      return;
+    }
+    if (el.travelSpeed) el.travelSpeed.setAttribute('aria-invalid', 'false');
+    if (el.travelSpeedError) el.travelSpeedError.hidden = true;
+    state.travel.calculation = travelCore.calculate(travelStops(), speed, state.travel.returnEnabled);
+    updateTravelResults();
+    requestRender();
+  }
+
+  function updateTravelResults() {
+    if (!el.travelSummary) return;
+    var stops = travelStops();
+    var speed = travelCore ? travelCore.parseSpeed(state.travel.speedText) : null;
+    var canCopy = stops.length >= 2 && !!speed && !!state.travel.calculation;
+    el.travelCopy.disabled = !canCopy;
+    el.travelCount.textContent = state.travel.ids.length + ' / 50';
+    if (!speed) {
+      el.travelSummary.textContent = 'Укажите скорость больше нуля.';
+      el.travelLogPreview.hidden = true;
+      return;
+    }
+    if (stops.length < 2) {
+      el.travelSummary.textContent = 'Добавьте минимум две точки, чтобы рассчитать перелёт.';
+      el.travelLogPreview.hidden = true;
+      return;
+    }
+    if (!state.travel.calculation) {
+      el.travelSummary.textContent = 'Пересчёт маршрута…';
+      el.travelLogPreview.hidden = true;
+      return;
+    }
+    var calculation = state.travel.calculation;
+    var lines = [
+      'Маршрут: ' + travelCore.formatNumber(calculation.outboundDistance) + ' св.л. · ' +
+        travelCore.formatNumber(calculation.outboundHours) + ' ч',
+      'С возвратом: ' + travelCore.formatNumber(calculation.roundTripDistance) + ' св.л. · ' +
+        travelCore.formatNumber(calculation.roundTripHours) + ' ч'
+    ];
+    if (state.travel.departureLocal) {
+      var start = new Date(state.travel.departureLocal);
+      if (isFinite(start.getTime())) {
+        var arrival = new Date(start.getTime() + calculation.totalHours * 3600000);
+        lines.push('Прибытие: ' + travelCore.formatTimestamp(arrival));
+      }
+    }
+    el.travelSummary.textContent = lines.join('\n');
+    el.travelLogPreview.textContent = travelCore.buildLog(
+      stops, calculation, speed, state.travel.returnEnabled, state.travel.departureLocal
+    );
+    el.travelLogPreview.hidden = false;
+  }
+
+  function initializeTravelPlanner() {
+    loadTravelPreferences();
+    restoreTravelState();
+    el.travelSpeed.value = state.travel.speedText;
+    el.travelDeparture.value = state.travel.departureLocal;
+    el.travelReturn.checked = state.travel.returnEnabled;
+    renderTravelStops();
+    refreshTravelCalculation();
+    syncTravelModeUi();
+  }
+
+  function addTravelSystem(system) {
+    var stop = travelStopForSystem(system);
+    if (!stop) {
+      toast('У системы нет подтверждённой пары координат X/Y');
+      return false;
+    }
+    if (state.travel.ids.length >= 50) {
+      toast('Лимит маршрута — 50 точек');
+      return false;
+    }
+    var previous = state.travel.ids.length
+      ? travelEntityForId(state.travel.ids[state.travel.ids.length - 1]) : null;
+    if (previous && travelSystemKey(previous) === travelSystemKey(system)) {
+      toast('Нельзя добавить ту же систему подряд');
+      return false;
+    }
+    state.travel.ids.push(String(system.id));
+    state.travel.infoId = null;
+    state.activeSystemId = system.id;
+    persistTravelState();
+    renderTravelStops();
+    refreshTravelCalculation();
+    toast('Добавлена система: ' + system.name);
+    return true;
+  }
+
+  function addFreeTravelPoint(point) {
+    if (!coordinateOnMap(point)) {
+      toast('Точка должна находиться в границах карты');
+      return false;
+    }
+    if (state.travel.ids.length >= 50) {
+      toast('Лимит маршрута — 50 точек');
+      return false;
+    }
+    var id;
+    do {
+      id = '__travel_free_point__:' + state.travel.nextFreePointId++;
+    } while (state.travel.customPoints[id] || state.systemsById[id]);
+    state.travel.customPoints[id] = {
+      id: id,
+      name: 'Произвольная точка',
+      coord: [point.x, point.y],
+      coordSource: 'map',
+      isFreePoint: true
+    };
+    state.travel.ids.push(id);
+    state.travel.infoId = null;
+    persistTravelState();
+    renderTravelStops();
+    refreshTravelCalculation();
+    toast('Добавлена произвольная точка');
+    return true;
+  }
+
+  function reorderTravelStop(fromIndex, toIndex) {
+    var ids = state.travel.ids.slice();
+    if (fromIndex < 0 || fromIndex >= ids.length || toIndex < 0 || toIndex >= ids.length || fromIndex === toIndex) return;
+    var moved = ids.splice(fromIndex, 1)[0];
+    ids.splice(toIndex, 0, moved);
+    if (!isValidTravelSequence(ids)) {
+      toast('Перестановка создала бы одинаковые соседние системы');
+      return;
+    }
+    state.travel.ids = ids;
+    persistTravelState();
+    renderTravelStops();
+    refreshTravelCalculation();
+  }
+
+  function removeTravelStop(index) {
+    var ids = state.travel.ids.slice();
+    if (index < 0 || index >= ids.length) return;
+    ids.splice(index, 1);
+    if (!isValidTravelSequence(ids)) {
+      toast('Нельзя оставить одинаковые соседние системы');
+      return;
+    }
+    state.travel.ids = ids;
+    state.travel.infoId = null;
+    pruneTravelCustomPoints();
+    persistTravelState();
+    renderTravelStops();
+    refreshTravelCalculation();
+  }
+
+  function clearTravelRoute() {
+    cancelPendingTravelTap();
+    state.travel.ids = [];
+    state.travel.customPoints = {};
+    state.travel.nextFreePointId = 1;
+    state.travel.speedText = '100';
+    state.travel.returnEnabled = false;
+    state.travel.departureLocal = '';
+    state.travel.animationPreference = null;
+    state.travel.infoId = null;
+    if (travelSpeedTimer) window.clearTimeout(travelSpeedTimer);
+    try { window.localStorage.removeItem(CONFIG.storage.travel); } catch (err) { /* private browsing */ }
+    el.travelSpeed.value = '100';
+    el.travelDeparture.value = '';
+    el.travelReturn.checked = false;
+    renderTravelStops();
+    refreshTravelCalculation();
+    syncTravelAnimationUi();
+    toast('Маршрут очищен');
+  }
+
+  function setTravelMode(enabled) {
+    enabled = !!enabled;
+    if (state.travel.enabled === enabled) return;
+    cancelPendingTravelTap();
+    if (enabled) {
+      state.travel.catalogWasOpen = travelSmallScreen && skin.panelOpen;
+      if (state.travel.catalogWasOpen) setPanelOpen(false);
+      state.pinned = false;
+      state.activeSystemId = null;
+      state.activePlanetId = null;
+      state.hoverId = null;
+      renderDetail();
+    }
+    state.travel.enabled = enabled;
+    if (!enabled) state.travel.freePointMode = false;
+    persistTravelState();
+    syncTravelModeUi();
+    layoutMapControls();
+    if (!enabled && state.travel.catalogWasOpen) {
+      state.travel.catalogWasOpen = false;
+      setPanelOpen(true);
+    }
+    requestRender();
+  }
+
+  function setFreePointMode(enabled) {
+    enabled = !!enabled;
+    if (enabled && !state.travel.enabled) setTravelMode(true);
+    if (state.travel.freePointMode === enabled) return;
+    state.travel.freePointMode = enabled;
+    syncTravelModeUi();
+    persistTravelState();
+    toast(enabled
+      ? 'Shift+ЛКМ по пустому месту — добавить произвольную точку; ЛКМ — выйти из режима'
+      : 'Режим произвольных точек выключен');
+  }
+
+  function scheduleTravelSystemAdd(system, pointerType) {
+    scheduleTravelTap(function () { addTravelSystem(system); }, pointerType);
+  }
+
+  function scheduleFreeTravelPoint(point, pointerType) {
+    scheduleTravelTap(function () { addFreeTravelPoint(point); }, pointerType);
+  }
+
+  function scheduleTravelTap(action, pointerType) {
+    // Touch tap ждёт 180 мс; мышиный клик — 250 мс, чтобы dblclick-zoom успел отменить выбор.
+    var pending = { action: action, timer: null };
+    var delay = pointerType === 'mouse' ? 250 : 180;
+    pendingTravelTapTimers.push(pending);
+    function commitTap() {
+      if (!state.travel.enabled) {
+        removePendingTravelTap(pending);
+        return;
+      }
+      if (pointerList.length) {
+        pending.timer = window.setTimeout(commitTap, 40);
+        return;
+      }
+      removePendingTravelTap(pending);
+      pending.action();
+    }
+    pending.timer = window.setTimeout(commitTap, delay);
+  }
+
+  function removePendingTravelTap(pending) {
+    var index = pendingTravelTapTimers.indexOf(pending);
+    if (index > -1) pendingTravelTapTimers.splice(index, 1);
+  }
+
+  function cancelPendingTravelTap() {
+    pendingTravelTapTimers.forEach(function (pending) { window.clearTimeout(pending.timer); });
+    pendingTravelTapTimers = [];
+  }
+
+  function copyTravelLog() {
+    var stops = travelStops();
+    var speed = travelCore ? travelCore.parseSpeed(state.travel.speedText) : null;
+    if (stops.length < 2 || !speed || !state.travel.calculation) return;
+    var log = travelCore.buildLog(stops, state.travel.calculation, speed,
+      state.travel.returnEnabled, state.travel.departureLocal);
+    copyTextToClipboard(log, 'Лог маршрута скопирован', 'Не удалось скопировать лог маршрута');
   }
 
   function drawMarkers() {
@@ -1501,8 +2048,9 @@
 
   function render(now) {
     renderQueued = false;
-    var running = stepAnimation(now || performance.now());
-    if (running) requestRender();
+    var frameTime = now || performance.now();
+    var running = stepAnimation(frameTime);
+    if (running || isTravelAnimationActive()) requestRender();
 
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
     ctx.clearRect(0, 0, state.viewport.w, state.viewport.h);
@@ -1518,6 +2066,7 @@
     }
 
     drawMapLabels();
+    drawTravelRoute(frameTime);
     drawMarkers();
     drawPointsOfInterest();
     drawPlanetFocus();
@@ -1596,6 +2145,7 @@
       };
       canvas.classList.add('dragging');
     } else {
+      cancelPendingTravelTap();
       drag = null;
       animation = null;
     }
@@ -1611,6 +2161,10 @@
       var dx = point.x - drag.startX;
       var dy = point.y - drag.startY;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+      if (state.travel.enabled) {
+        if (dx * dx + dy * dy <= 64) return;
+        cancelPendingTravelTap();
+      }
       state.view.tx = drag.tx + dx;
       state.view.ty = drag.ty + dy;
       animation = null;
@@ -1637,7 +2191,7 @@
       if (!state.pinned) {
         state.activeSystemId = hoverId;
         state.activePlanetId = poiId;
-        renderDetail();
+        if (!state.travel.enabled) renderDetail();
       }
       requestRender();
     }
@@ -1670,29 +2224,62 @@
 
     var finished = drag;
     drag = null;
+    if (event.type === 'pointercancel') { cancelPendingTravelTap(); return; }
     if (!finished) return;
 
-    // Щелчок (выбор, сброс выбора, Shift — копирование координат) — только левой кнопкой,
-    // как click на карте галактики. Колесо карту только тащит.
-    if (finished.mode === 'pan' && !finished.moved && finished.button === 0) {
-      if (event.shiftKey || finished.shiftKey) {
+    // Один поток pointer-событий обслуживает оба режима. Shift сохраняет копирование X/Y.
+    if (finished.mode === 'pan' && finished.button === 0) {
+      var tapDistance = Math.hypot(point.x - finished.startX, point.y - finished.startY);
+      var shiftPressed = event.shiftKey || finished.shiftKey;
+      if (state.travel.enabled && state.travel.freePointMode) {
+        if (shiftPressed && tapDistance <= 3) {
+          event.preventDefault();
+          var occupiedBySystem = !!hitTest(point.x, point.y);
+          var occupiedByPlace = !!hitTestPointOfInterest(point.x, point.y);
+          if (occupiedBySystem || occupiedByPlace) {
+            toast('Произвольную точку можно поставить только в пустом месте карты');
+            return;
+          }
+          var freePointWorld = toWorld(point.x, point.y);
+          if (!coordinateOnMap(freePointWorld)) {
+            toast('Точка должна находиться в границах карты');
+            return;
+          }
+          scheduleFreeTravelPoint(freePointWorld, event.pointerType);
+          return;
+        }
+        if (!shiftPressed && tapDistance <= 8) setFreePointMode(false);
+        return;
+      }
+      if (shiftPressed && tapDistance <= 3) {
         event.preventDefault();
         copyMapCoordinates(point);
         return;
       }
-      var placeHit = hitTestPointOfInterest(point.x, point.y);
-      var hit = placeHit ? null : hitTest(point.x, point.y);
-      if (placeHit) {
-        selectPlanet(placeHit.id, { pin: true, center: false });
-      } else if (hit) {
-        selectSystem(hit.id, { pin: true, center: false });
-      } else if (state.pinned) {
-        clearDetail();
+      if (state.travel.enabled) {
+        // Движение карты начинает работать немедленно; выбор отменяется при pan > 8 px.
+        if (tapDistance <= 8 && !shiftPressed) {
+          var routeSystem = hitTest(point.x, point.y);
+          if (routeSystem) scheduleTravelSystemAdd(routeSystem, event.pointerType);
+        }
+        return;
+      }
+      if (!finished.moved) {
+        var placeHit = hitTestPointOfInterest(point.x, point.y);
+        var hit = placeHit ? null : hitTest(point.x, point.y);
+        if (placeHit) {
+          selectPlanet(placeHit.id, { pin: true, center: false });
+        } else if (hit) {
+          selectSystem(hit.id, { pin: true, center: false });
+        } else if (state.pinned) {
+          clearDetail();
+        }
       }
     }
   }
 
   function onWheel(event) {
+    cancelPendingTravelTap();
     event.preventDefault();
     animation = null;
     var point = localPoint(event);
@@ -1701,6 +2288,7 @@
   }
 
   function onDoubleClick(event) {
+    cancelPendingTravelTap();
     var point = localPoint(event);
     zoomAt(point.x, point.y, 1.8);
   }
@@ -1711,6 +2299,10 @@
     options = options || {};
     var system = state.systemsById[id];
     if (!system) return;
+    if (state.travel.enabled && !options.forceDetail) {
+      addTravelSystem(system);
+      return;
+    }
     if (state.tab !== 'systems' || state.catalogView !== 'systems') setCatalogView('systems');
     state.activeSystemId = id;
     state.activePlanetId = null;
@@ -2485,8 +3077,8 @@
     readout.style.top = clamp(top, 6, Math.max(6, state.viewport.h - height - 6)) + 'px';
   }
 
-  function copyCoordinatesToClipboard(value, displayValue) {
-    function showCopied() { toast('Скопировано в две ячейки: ' + displayValue); }
+  function copyTextToClipboard(value, successMessage, failureMessage) {
+    function showCopied() { toast(successMessage); }
 
     function fallbackCopy() {
       var field = doc.createElement('textarea');
@@ -2494,13 +3086,14 @@
       field.setAttribute('readonly', '');
       field.style.position = 'fixed';
       field.style.opacity = '0';
+      field.style.pointerEvents = 'none';
       doc.body.appendChild(field);
       field.select();
       var copied = false;
       try { copied = doc.execCommand('copy'); } catch (err) { copied = false; }
       field.remove();
       if (copied) showCopied();
-      else toast('Не удалось скопировать координаты');
+      else toast(failureMessage);
     }
 
     if (window.navigator.clipboard && window.navigator.clipboard.writeText) {
@@ -2508,6 +3101,11 @@
     } else {
       fallbackCopy();
     }
+  }
+
+  function copyCoordinatesToClipboard(value, displayValue) {
+    copyTextToClipboard(value, 'Скопировано в две ячейки: ' + displayValue,
+      'Не удалось скопировать координаты');
   }
 
   function copyMapCoordinates(point) {
@@ -2580,7 +3178,9 @@
     var node = qs('.map-controls');
     if (!node) return;
     var offset = 0;
-    if (!el.detailPanel.hidden) {
+    var narrowTravelLayout = window.matchMedia && window.matchMedia('(max-width: 599px)').matches;
+    if (state.travel.enabled && !narrowTravelLayout) offset = 382;
+    if (!state.travel.enabled && !el.detailPanel.hidden) {
       var stage = el.mapStage.getBoundingClientRect();
       var panel = el.detailPanel.getBoundingClientRect();
       if (stage.right - panel.left < stage.width * 0.9) {
@@ -2630,7 +3230,11 @@
       'catalogListDropdown', 'listCaption', 'sortButton', 'catalogList', 'detailPanel',
       'detailType', 'detailContent', 'detailFooter', 'pinButton', 'closeDetail',
       'helpButton', 'closeHelp', 'helpModal', 'zoomIn', 'zoomOut', 'resetMap', 'zoomPercent', 'labelsToggle',
-      'coordinateToggle', 'mapCoordinateReadout', 'toast'].forEach(function (id) {
+      'coordinateToggle', 'mapCoordinateReadout', 'toast', 'travelPanel', 'travelModeToggle', 'travelFreePointToggle',
+      'travelTapeTop', 'travelTapeBottom', 'travelClose', 'travelCount', 'travelSpeed',
+      'travelSpeedError', 'travelDeparture', 'travelReturn', 'travelAnimate', 'travelMotionNote',
+      'travelStops', 'travelRouteHint', 'travelEmpty', 'travelSummary', 'travelLogPreview',
+      'travelCopy', 'travelClear'].forEach(function (id) {
         el[id] = doc.getElementById(id);
       });
     el.legacyControls = qs('.legacy-controls');
@@ -2654,7 +3258,7 @@
         if (!state.pinned) {
           state.activeSystemId = null;
           state.activePlanetId = null;
-          renderDetail();
+          if (!state.travel.enabled) renderDetail();
         }
         requestRender();
       }
@@ -2671,6 +3275,7 @@
       zoomAt(state.viewport.w / 2, state.viewport.h / 2, 1 / 1.45);
     });
     el.resetMap.addEventListener('click', function () {
+      cancelPendingTravelTap();
       animation = null;
       fitView();
       requestRender();
@@ -2688,6 +3293,106 @@
       el.coordinateToggle.title = label;
       updateCoordinateReadout();
     });
+
+    el.travelModeToggle.addEventListener('click', function () { setTravelMode(!state.travel.enabled); });
+    el.travelFreePointToggle.addEventListener('click', function () {
+      setFreePointMode(!state.travel.freePointMode);
+    });
+    el.travelClose.addEventListener('click', function () { setTravelMode(false); });
+    el.travelClear.addEventListener('click', clearTravelRoute);
+    el.travelCopy.addEventListener('click', copyTravelLog);
+    el.travelSpeed.addEventListener('input', function () {
+      state.travel.speedText = el.travelSpeed.value;
+      state.travel.calculation = null;
+      var valid = !!travelCore.parseSpeed(state.travel.speedText);
+      el.travelSpeed.setAttribute('aria-invalid', String(!valid));
+      el.travelSpeedError.hidden = valid;
+      updateTravelResults();
+      if (travelSpeedTimer) window.clearTimeout(travelSpeedTimer);
+      travelSpeedTimer = window.setTimeout(function () {
+        travelSpeedTimer = null;
+        refreshTravelCalculation();
+        persistTravelState();
+      }, 350);
+    });
+    el.travelReturn.addEventListener('change', function () {
+      state.travel.returnEnabled = el.travelReturn.checked;
+      persistTravelState();
+      refreshTravelCalculation();
+    });
+    el.travelDeparture.addEventListener('change', function () {
+      state.travel.departureLocal = el.travelDeparture.value;
+      persistTravelState();
+      refreshTravelCalculation();
+    });
+    el.travelAnimate.addEventListener('change', function () {
+      if (travelReducedMotion) return;
+      state.travel.animationPreference = el.travelAnimate.checked;
+      persistTravelState();
+      syncTravelAnimationUi();
+      requestRender();
+    });
+    el.travelStops.addEventListener('click', function (event) {
+      var button = event.target.closest('[data-travel-action]');
+      if (!button) return;
+      var index = Number(button.getAttribute('data-index'));
+      var action = button.getAttribute('data-travel-action');
+      if (action === 'remove') removeTravelStop(index);
+      else if (action === 'up') reorderTravelStop(index, index - 1);
+      else if (action === 'down') reorderTravelStop(index, index + 1);
+      else if (action === 'info') {
+        var id = state.travel.ids[index];
+        state.travel.infoId = state.travel.infoId === id ? null : id;
+        if (state.travel.infoId) state.activeSystemId = id;
+        renderTravelStops();
+        requestRender();
+      }
+    });
+    el.travelStops.addEventListener('dragstart', function (event) {
+      if (travelSmallScreen) { event.preventDefault(); return; }
+      var row = event.target.closest('.travel-stop');
+      if (!row) return;
+      row.classList.add('is-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', row.getAttribute('data-index'));
+    });
+    el.travelStops.addEventListener('dragend', function (event) {
+      var row = event.target.closest('.travel-stop');
+      if (row) row.classList.remove('is-dragging');
+    });
+    el.travelStops.addEventListener('dragover', function (event) {
+      if (travelSmallScreen) return;
+      var row = event.target.closest('.travel-stop');
+      if (row) event.preventDefault();
+    });
+    el.travelStops.addEventListener('drop', function (event) {
+      if (travelSmallScreen) return;
+      var row = event.target.closest('.travel-stop');
+      if (!row) return;
+      event.preventDefault();
+      reorderTravelStop(Number(event.dataTransfer.getData('text/plain')), Number(row.getAttribute('data-index')));
+    });
+
+    function updateTravelMotionPreference(event) {
+      travelReducedMotion = !!event.matches;
+      syncTravelAnimationUi();
+      requestRender();
+    }
+    if (travelMotionQuery) {
+      if (travelMotionQuery.addEventListener) travelMotionQuery.addEventListener('change', updateTravelMotionPreference);
+      else if (travelMotionQuery.addListener) travelMotionQuery.addListener(updateTravelMotionPreference);
+    }
+    if (travelSmallQuery) {
+      var updateTravelSmallScreen = function (event) {
+        travelSmallScreen = !!event.matches;
+        renderTravelStops();
+        syncTravelModeUi();
+        layoutMapControls();
+        requestRender();
+      };
+      if (travelSmallQuery.addEventListener) travelSmallQuery.addEventListener('change', updateTravelSmallScreen);
+      else if (travelSmallQuery.addListener) travelSmallQuery.addListener(updateTravelSmallScreen);
+    }
 
     // панель каталога
     el.closePanel.addEventListener('click', togglePanel);
@@ -2846,7 +3551,7 @@
       if (event.key === '/' || event.key === '?') { event.preventDefault(); el.searchInput.focus(); return; }
       if (event.key === '+' || event.key === '=') { zoomAt(state.viewport.w / 2, state.viewport.h / 2, 1.35); return; }
       if (event.key === '-' || event.key === '_') { zoomAt(state.viewport.w / 2, state.viewport.h / 2, 1 / 1.35); return; }
-      if (event.key === '0') { fitView(); requestRender(); return; }
+      if (event.key === '0') { cancelPendingTravelTap(); fitView(); requestRender(); return; }
       if (event.key === 'l' || event.key === 'д') {
         state.labelsOn = !state.labelsOn;
         applyLabelsToggle();
@@ -2917,6 +3622,7 @@
 
       buildModel();
       configureTiles(data.tiles, state.meta);
+      initializeTravelPlanner();
       resize();
       fitView();
       initUI();
