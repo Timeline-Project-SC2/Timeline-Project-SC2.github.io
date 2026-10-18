@@ -272,15 +272,19 @@
   }
 
   function mapSystemRow(row) {
+    var x = explicitMapNumber(row.x);
+    var y = explicitMapNumber(row.y);
+    var coord = x !== null && y !== null ? [x, y] : null;
     return {
       id: row.system_id || row.id || row.name,
       name: row.name || '',
       nameEn: row.name || '',
       // Systems use a dedicated classification tag; blank values mean no highlight.
       systemType: String(row.type || 'none').trim().toLowerCase(),
-      // CSV estimates are not map positions. A marker needs an explicit map override.
-      coord: null,
-      coordSource: null,
+      // A marker is allowed only when both explicit map coordinates are present.
+      coord: coord,
+      coordSource: coord ? 'map' : null,
+      fromSheet: !!coord,
       primaryFaction: row.faction || '',
       factions: row.faction ? [row.faction] : [],
       note: row.description || '',
@@ -292,20 +296,32 @@
 
   function mergeSystemTypes(systems, rows) {
     if (!systems || !systems.length || !rows || !rows.length) return systems;
-    var typesByKey = {};
+    var dataByKey = {};
     rows.forEach(function (row) {
-      var type = String(row.type || 'none').trim().toLowerCase();
+      var x = explicitMapNumber(row.x);
+      var y = explicitMapNumber(row.y);
+      var data = {
+        systemType: String(row.type || 'none').trim().toLowerCase(),
+        coord: x !== null && y !== null ? [x, y] : null
+      };
       [row.system_id || row.id, row.name].forEach(function (key) {
         var normalized = normalize(key);
-        if (normalized) typesByKey[normalized] = type;
+        if (normalized) dataByKey[normalized] = data;
       });
     });
     return systems.map(function (system) {
       var keys = [system.id, system.system_id, system.name];
       for (var i = 0; i < keys.length; i++) {
         var normalized = normalize(keys[i]);
-        if (normalized && Object.prototype.hasOwnProperty.call(typesByKey, normalized)) {
-          return Object.assign({}, system, { systemType: typesByKey[normalized] });
+        if (normalized && Object.prototype.hasOwnProperty.call(dataByKey, normalized)) {
+          var sheetData = dataByKey[normalized];
+          var update = { systemType: sheetData.systemType };
+          if (sheetData.coord) {
+            update.coord = sheetData.coord;
+            update.coordSource = 'map';
+            update.fromSheet = true;
+          }
+          return Object.assign({}, system, update);
         }
       }
       return system;
@@ -432,10 +448,15 @@
     var resolved = Object.assign({}, system);
     resolved.name = system.name;
     resolved.note = system.note;
-    // Do not turn fallback/estimated coordinates into visible system markers.
-    // Only explicit map overrides place a system on the map.
-    resolved.coord = null;
-    resolved.coordSource = null;
+    // Keep only a complete, in-bounds coordinate pair explicitly supplied by the map CSV.
+    // Unmarked fallback coordinates from JSON are deliberately discarded.
+    var sourceX = system.coordSource === 'map' && system.coord
+      ? explicitMapNumber(system.coord[0]) : null;
+    var sourceY = system.coordSource === 'map' && system.coord
+      ? explicitMapNumber(system.coord[1]) : null;
+    var sourcePoint = sourceX !== null && sourceY !== null ? { x: sourceX, y: sourceY } : null;
+    resolved.coord = coordinateOnMap(sourcePoint) ? [sourceX, sourceY] : null;
+    resolved.coordSource = resolved.coord ? 'map' : null;
     resolved.override = override;
 
     if (override) {
