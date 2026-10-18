@@ -17,6 +17,7 @@ export default [
       globals: {
         ...globals.browser,
         // общие объекты между файлами сайта
+        CursorFx: 'readonly',     // shared/cursor-fx.js → страница /cursor-test/
         FocusFx: 'readonly',      // shared/focus-fx.js → galaxy.js
         LagFx: 'readonly',        // shared/lag-fx.js → galaxy.js
         SITE_LINKS: 'readonly'    // shared/links.js → остальные

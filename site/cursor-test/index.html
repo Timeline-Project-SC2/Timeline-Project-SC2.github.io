@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Проверка курсора — Timeline Project SC2</title>
+  <!-- Страница проверки системного курсора (shared/cursor-fx.js). Посетителям не видна:
+       на неё нет ссылок с сайта. Адрес: /cursor-test/ -->
+  <style>
+    :root {
+      --bg: #030807;
+      --panel: #07120f;
+      --line: rgba(46, 245, 230, 0.22);
+      --accent: #24eadb;
+      --text: #c9fff4;
+      --muted: #7fa9a1;
+      --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
+    h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 0.02em; }
+    h2 { margin: 0 0 12px; font-size: 17px; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    p { margin: 0 0 10px; }
+    a { color: var(--accent); }
+    .lead { color: var(--muted); max-width: 760px; }
+    .panel { margin-top: 22px; padding: 18px 20px; border: 1px solid var(--line); background: var(--panel); }
+    .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 0 0 14px; font: 13px/1.6 var(--mono); }
+    .facts dt { color: var(--muted); }
+    .facts dd { margin: 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    button, .button {
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      background: #0b1f1b;
+      color: var(--text);
+      font: 13px var(--mono);
+      text-decoration: none;
+    }
+    button:hover, .button:hover { border-color: var(--accent); }
+    button[aria-pressed="true"] { border-color: var(--accent); background: #0f3a33; color: #fff; }
+    button[data-unsupported] { opacity: 0.55; }
+    button:disabled { opacity: 0.45; }
+    .note { color: var(--muted); font-size: 13px; }
+    .zones { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 22px; }
+    .zone { min-height: 170px; padding: 16px; border: 1px solid var(--line); background: #050d0b; }
+    .zone .note { margin-top: 10px; }
+    .zone input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); background: #020605; color: var(--text); font: inherit; }
+    .zone--drag { background: repeating-linear-gradient(45deg, #050d0b 0 14px, #071512 14px 28px); user-select: none; }
+    .zone--drag.is-dragging { outline: 1px solid var(--accent); }
+    .zone--light { background: linear-gradient(135deg, #f4f7f6, #cfd8d6); color: #10201c; }
+    .zone--light .note { color: #3e5550; }
+    .zone--space { background: radial-gradient(circle at 30% 40%, #3b6bd6 0, transparent 38%), radial-gradient(circle at 75% 60%, #d6443b 0, transparent 34%), radial-gradient(circle at 55% 20%, #f2e7a1 0, transparent 22%), #0a0d1c; }
+    .role-button { display: inline-block; padding: 7px 12px; border: 1px dashed var(--line); font: 13px var(--mono); }
+    .aim { position: relative; height: 150px; margin-top: 8px; border: 1px dashed var(--line); background: #020605; overflow: hidden; }
+    .aim i { position: absolute; width: 11px; height: 11px; margin: -5px 0 0 -5px; border: 1px solid #ff5a5a; border-radius: 50%; pointer-events: none; }
+    .aim i::after { content: ""; position: absolute; left: 4px; top: 4px; width: 1px; height: 1px; background: #fff; }
+    .aim b { position: absolute; width: 7px; height: 7px; margin: -3px 0 0 -3px; border: 1px solid #ffd84a; pointer-events: none; }
+    .preview { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-end; }
+    .preview figure { margin: 0; text-align: center; }
+    .preview figcaption { margin-top: 6px; color: var(--muted); font: 12px var(--mono); }
+    .preview img { display: block; width: 128px; height: 128px; background: #0a0f0e; border: 1px solid var(--line); }
+    .preview .light img { background: #e6eeec; }
+    .strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 14px; }
+    .strip figure { margin: 0; text-align: center; font: 10px var(--mono); color: var(--muted); }
+    .strip img { display: block; width: 64px; height: 64px; background: #0a0f0e; }
+    ol { margin: 0; padding-left: 20px; }
+    li { margin: 0 0 6px; }
+  </style>
+  <script src="/shared/cursor-fx.js?v=cursor-1" defer></script>
+</head>
+<body>
+<main>
+  <h1>Проверка курсора</h1>
+  <p class="lead">Курсор сайта рисует операционная система — он не отстаёт от мыши. Анимацию делают кадры, которые
+    страница сама подменяет 20 раз в секунду. Ниже — все состояния, точность клика и крупное превью того, как курсор
+    должен выглядеть.</p>
+
+  <section class="panel">
+    <h2>Что сейчас работает</h2>
+    <dl class="facts" id="facts"><dt>Модуль</dt><dd>загружается…</dd></dl>
+    <div class="row" role="group" aria-label="Вариант вывода курсора" id="variants">
+      <button type="button" data-variant="auto">Авто</button>
+      <button type="button" data-variant="set">image-set (PNG 1×/2×)</button>
+      <button type="button" data-variant="webkit">-webkit-image-set</button>
+      <button type="button" data-variant="svg">SVG</button>
+      <button type="button" data-variant="png">PNG 1×</button>
+      <button type="button" data-variant="off">Выключить</button>
+    </div>
+    <p class="note">Выбранный вариант запоминается для всего сайта в этом браузере (как <code>?cursor=…</code> в адресе).
+      «Авто» — то, что увидят посетители. Бледные кнопки — вариант браузер не понимает.</p>
+    <div class="row">
+      <button type="button" id="copyReport">Скопировать отчёт</button>
+      <button type="button" id="redraw">Нарисовать кадры заново</button>
+      <span class="note" id="copyState"></span>
+    </div>
+  </section>
+
+  <div class="zones">
+    <div class="zone">
+      <h3>1. Обычная зона</h3>
+      <p>Зелёная стрелка. Раз в 2,25 с по верхней грани пробегают четыре синие частицы и вспыхивает бирюзовый блик.</p>
+      <p class="note">Проверьте и с неподвижной мышью: анимация должна идти.</p>
+    </div>
+    <div class="zone">
+      <h3>2. Наведение</h3>
+      <div class="row">
+        <button type="button">Кнопка</button>
+        <a href="#aim">Ссылка</a>
+        <span class="role-button" role="button" tabindex="0">role="button"</span>
+      </div>
+      <p class="note">Четыре треугольника: заливка бежит каскадом от малого к большому, затем волна. Цикл 3 с,
+        при наведении начинается сразу.</p>
+    </div>
+    <div class="zone zone--drag galaxy-stage" id="dragZone">
+      <h3>3. Перетаскивание</h3>
+      <p>Зажмите кнопку мыши в этой зоне и ведите — стрелка без частиц, как при перетаскивании карты.</p>
+      <p class="note">Отпустите кнопку где угодно, даже за окном.</p>
+    </div>
+    <div class="zone">
+      <h3>4. Недоступно</h3>
+      <div class="row">
+        <button type="button" class="is-odz-locked">ОЗД после отказа</button>
+        <button type="button" disabled>disabled</button>
+      </div>
+      <p class="note">Приглушённая стрелка без анимации.</p>
+    </div>
+    <div class="zone">
+      <h3>5. Поиск</h3>
+      <input type="search" placeholder="Поиск систем…" aria-label="Пробное поле поиска">
+      <p class="note">Над полем — та же стрелка, а не I-образный курсор (так решено). Каретка в поле остаётся.</p>
+    </div>
+    <div class="zone zone--light">
+      <h3>6. Светлый фон</h3>
+      <p>Стрелка должна читаться: тёмная середина и зелёный контур.</p>
+      <div class="row"><button type="button">Кнопка на светлом</button></div>
+    </div>
+    <div class="zone zone--space">
+      <h3>7. Пёстрый фон</h3>
+      <p>Как над картой: яркие пятна и тёмный космос.</p>
+    </div>
+    <div class="zone" id="aim">
+      <h3>8. Точка клика</h3>
+      <p class="note">Наведите самый кончик стрелки на белую точку в красном кружке и щёлкните. Жёлтый квадрат — куда
+        попал клик.</p>
+      <div class="aim" id="aimArea"></div>
+      <p class="note" id="aimResult">Промах: —</p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Как курсор должен выглядеть</h2>
+    <p class="note">Крупное превью (×4) из тех же кадров, что получает система. Если настоящий курсор отличается —
+      мыльный, без анимации, другого размера — напишите, какой вариант выше выглядит лучше всего.</p>
+    <div class="preview" id="preview"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Все кадры</h2>
+    <p class="note">Под кадром — сколько миллисекунд он держится. Одинаковые кадры подряд склеены в один.</p>
+    <div id="strips"><p class="note">Кадры готовятся…</p></div>
+  </section>
+
+  <section class="panel">
+    <h2>Страницы сайта</h2>
+    <div class="row">
+      <a class="button" href="/index.html">Карта галактики</a>
+      <a class="button" href="/sector/sector.html">Атлас сектора</a>
+      <a class="button" href="/minimal/minimal.html">Минимальная версия</a>
+    </div>
+    <p class="note">На карте галактики: квадраты секторов и список — наведение, перетаскивание карты — стрелка без
+      частиц, ОЗД после отказа — приглушённая. В атласе: системы на карте, фильтры, строки каталога — наведение.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Что прислать после проверки</h2>
+    <ol>
+      <li>Отчёт кнопкой «Скопировать отчёт» вверху: браузер, система, масштаб экрана, вариант.</li>
+      <li>Анимация: бегут ли частицы раз в 2,25 с, в том числе при неподвижной мыши; работает ли каскад на кнопках.</li>
+      <li>Чёткость: не мыльная ли стрелка по сравнению с превью. Если мыльная — какой вариант чётче.</li>
+      <li>Размер: не вдвое ли больше превью (известная ошибка Safari с 2×) и не слишком ли мелкий.</li>
+      <li>Точка клика: совпадает ли промах с кончиком стрелки (±1 px — норма).</li>
+      <li>Края окна: у краёв курсор не должен превращаться в обычную стрелку.</li>
+      <li>Карты: перетаскивание без мигания, наведение на системы атласа и квадраты секторов.</li>
+    </ol>
+  </section>
+</main>
+
+<script>
+  (function () {
+    'use strict';
+    var facts = document.getElementById('facts');
+    var variants = document.getElementById('variants');
+    var STATE_NAMES = { default: 'обычный', hover: 'наведение', disabled: 'недоступно', drag: 'перетаскивание' };
+    var VARIANT_NAMES = { set: 'image-set', webkit: '-webkit-image-set', svg: 'SVG', png: 'PNG 1×', off: 'выключен' };
+    var SUPPORT = {
+      set: CSS.supports('cursor', 'image-set(url("data:,") 1x) 1 1, auto'),
+      webkit: CSS.supports('cursor', '-webkit-image-set(url("data:,") 1x) 1 1, auto'),
+      svg: true, png: true, auto: true, off: true
+    };
+
+    function browserName() {
+      var ua = navigator.userAgent, m;
+      if ((m = /Edg\/(\d+)/.exec(ua))) return 'Edge ' + m[1];
+      if ((m = /OPR\/(\d+)/.exec(ua))) return 'Opera ' + m[1];
+      if ((m = /YaBrowser\/(\d+)/.exec(ua))) return 'Яндекс Браузер ' + m[1];
+      if ((m = /Firefox\/(\d+)/.exec(ua))) return 'Firefox ' + m[1];
+      if ((m = /Chrome\/(\d+)/.exec(ua))) return 'Chrome ' + m[1];
+      if ((m = /Version\/([\d.]+).*Safari/.exec(ua))) return 'Safari ' + m[1];
+      return ua;
+    }
+    function osName() {
+      var ua = navigator.userAgent;
+      if (/Windows NT 10/.test(ua)) return 'Windows 10/11';
+      if (/Windows/.test(ua)) return 'Windows';
+      if (/iPhone|iPad/.test(ua)) return 'iOS';
+      if (/Mac OS X/.test(ua)) return 'macOS';
+      if (/Android/.test(ua)) return 'Android';
+      if (/Linux/.test(ua)) return 'Linux';
+      return '?';
+    }
+    function info() { return window.CursorFx ? window.CursorFx.info() : null; }
+
+    function lines() {
+      var i = info();
+      var dpr = window.devicePixelRatio || 1;
+      var out = [
+        ['Браузер', browserName()],
+        ['Система', osName()],
+        ['Масштаб экрана', Math.round(dpr * 100) + ' % (devicePixelRatio ' + (+dpr.toFixed(3)) + ')'],
+        ['Указатель', matchMedia('(any-pointer: fine)').matches ? 'мышь или перо' : 'только касание — курсор не нужен']
+      ];
+      if (!i) return out.concat([['Модуль', document.readyState === 'complete' ? 'не загрузился' : 'загружается…']]);
+      out.push(['Вариант', (i.enabled ? VARIANT_NAMES[i.variant] : 'выключен') + ' · авто для этого браузера: ' + VARIANT_NAMES[i.auto]]);
+      out.push(['Кадры', i.ready ? 'стрелка ' + i.frames.default + ', треугольники ' + i.frames.hover + ' · подготовка ' + i.buildMs + ' мс' + (i.cached ? ' (из кэша)' : '') : 'готовятся…']);
+      out.push(['Под мышью', STATE_NAMES[i.state] || i.state]);
+      if (i.reducedMotion) out.push(['Анимация', 'выключена: в системе включено «уменьшение движения»']);
+      if (i.rasterBroken) out.push(['Растеризация', 'не удалась — работает только SVG']);
+      return out;
+    }
+
+    function renderFacts() {
+      facts.innerHTML = '';
+      lines().forEach(function (pair) {
+        var dt = document.createElement('dt');
+        var dd = document.createElement('dd');
+        dt.textContent = pair[0];
+        dd.textContent = pair[1];
+        facts.appendChild(dt);
+        facts.appendChild(dd);
+      });
+      var i = info();
+      var current = 'off';
+      if (i && i.enabled) {
+        var stored = null;
+        try { stored = localStorage.getItem('cursorFx.variant'); } catch (err) { stored = null; }
+        current = stored && stored !== 'off' ? i.variant : 'auto';
+      }
+      Array.prototype.forEach.call(variants.querySelectorAll('button'), function (button) {
+        var v = button.getAttribute('data-variant');
+        button.setAttribute('aria-pressed', String(v === current));
+        if (!SUPPORT[v]) button.setAttribute('data-unsupported', '');
+      });
+    }
+
+    variants.addEventListener('click', function (event) {
+      var button = event.target.closest('button');
+      if (!button || !window.CursorFx) return;
+      window.CursorFx.setVariant(button.getAttribute('data-variant'));
+      renderFacts();
+    });
+
+    document.getElementById('copyReport').addEventListener('click', function () {
+      var text = lines().map(function (pair) { return pair[0] + ': ' + pair[1]; }).join('\n') +
+        '\nОкно: ' + innerWidth + '×' + innerHeight + '\nUA: ' + navigator.userAgent;
+      var state = document.getElementById('copyState');
+      function done() { state.textContent = 'Скопировано — вставьте в сообщение.'; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { window.prompt('Скопируйте отчёт:', text); });
+      } else {
+        window.prompt('Скопируйте отчёт:', text);
+      }
+    });
+
+    // кадры хранятся в localStorage; сброс — чтобы проверить первую загрузку
+    document.getElementById('redraw').addEventListener('click', function () {
+      try { localStorage.removeItem('cursorFx.frames'); } catch (err) { /* нет хранилища */ }
+      location.reload();
+    });
+
+    // перетаскивание: класс is-dragging у .galaxy-stage, как на карте галактики
+    var dragZone = document.getElementById('dragZone');
+    dragZone.addEventListener('pointerdown', function (event) {
+      if (event.button !== 0) return;
+      dragZone.setPointerCapture(event.pointerId);
+      dragZone.classList.add('is-dragging');
+    });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (type) {
+      dragZone.addEventListener(type, function () { dragZone.classList.remove('is-dragging'); });
+    });
+
+    // точность клика
+    var aim = document.getElementById('aimArea');
+    var aimResult = document.getElementById('aimResult');
+    var targets = [];
+    function placeTargets() {
+      aim.querySelectorAll('i').forEach(function (node) { node.remove(); });
+      targets = [];
+      var w = aim.clientWidth, h = aim.clientHeight;
+      [[0.15, 0.3], [0.4, 0.7], [0.62, 0.35], [0.85, 0.65]].forEach(function (p) {
+        var x = Math.round(w * p[0]) + 0.5, y = Math.round(h * p[1]) + 0.5;
+        var node = document.createElement('i');
+        node.style.left = x + 'px';
+        node.style.top = y + 'px';
+        aim.appendChild(node);
+        targets.push([x, y]);
+      });
+    }
+    aim.addEventListener('mousedown', function (event) {
+      var box = aim.getBoundingClientRect();
+      var x = event.clientX - box.left, y = event.clientY - box.top;
+      var best = null;
+      targets.forEach(function (t) {
+        var d = Math.hypot(x - t[0], y - t[1]);
+        if (!best || d < best.d) best = { d: d, dx: x - t[0], dy: y - t[1] };
+      });
+      var mark = aim.querySelector('b') || aim.appendChild(document.createElement('b'));
+      mark.style.left = x + 'px';
+      mark.style.top = y + 'px';
+      function fmt(v) { v = Math.round(v * 10) / 10; return (v > 0 ? '+' : '') + String(v).replace('.', ','); }
+      aimResult.textContent = best && best.d < 30 ?
+        'Промах до ближайшей точки: по X ' + fmt(best.dx) + ' px, по Y ' + fmt(best.dy) + ' px' :
+        'Щёлкните ближе к точке';
+    });
+    placeTargets();
+    addEventListener('resize', placeTargets);
+
+    // превью и кадры
+    function figure(src, caption, size, extraClass) {
+      var fig = document.createElement('figure');
+      if (extraClass) fig.className = extraClass;
+      var img = document.createElement('img');
+      img.alt = '';
+      img.src = src;
+      if (size) { img.width = size; img.height = size; }
+      fig.appendChild(img);
+      var cap = document.createElement('figcaption');
+      cap.textContent = caption;
+      fig.appendChild(cap);
+      return fig;
+    }
+    function play(img, frames) {
+      var i = 0;
+      (function next() {
+        img.src = frames[i].png;
+        setTimeout(function () { i = (i + 1) % frames.length; next(); }, frames[i].ms);
+      })();
+    }
+    function renderFrames() {
+      var frames = window.CursorFx.frames();
+      var preview = document.getElementById('preview');
+      preview.innerHTML = '';
+      var arrow = figure(frames.default[0].png, 'обычный', 128);
+      var tri = figure(frames.hover[0].png, 'наведение', 128);
+      var arrowLight = figure(frames.default[0].png, 'на светлом', 128, 'light');
+      preview.appendChild(arrow);
+      preview.appendChild(tri);
+      preview.appendChild(arrowLight);
+      preview.appendChild(figure(frames.still.drag.png, 'перетаскивание', 128));
+      preview.appendChild(figure(frames.still.disabled.png, 'недоступно', 128));
+      play(arrow.querySelector('img'), frames.default);
+      play(tri.querySelector('img'), frames.hover);
+      play(arrowLight.querySelector('img'), frames.default);
+
+      var strips = document.getElementById('strips');
+      strips.innerHTML = '';
+      [['Стрелка, цикл 2,25 с', frames.default], ['Треугольники, цикл 3 с', frames.hover]].forEach(function (group) {
+        var title = document.createElement('h3');
+        title.textContent = group[0] + ' — ' + group[1].length + ' кадров';
+        var strip = document.createElement('div');
+        strip.className = 'strip';
+        group[1].forEach(function (frame) { strip.appendChild(figure(frame.png, frame.ms + ' мс', 64)); });
+        strips.appendChild(title);
+        strips.appendChild(strip);
+      });
+    }
+
+    var framesShown = false;
+    function poll() {
+      renderFacts();
+      var i = info();
+      if (i && i.ready && !framesShown) { framesShown = true; renderFrames(); }
+    }
+    addEventListener('pointerover', function () { setTimeout(renderFacts, 0); }, { passive: true });
+    setInterval(poll, 700);
+    poll();
+  })();
+</script>
+</body>
+</html>

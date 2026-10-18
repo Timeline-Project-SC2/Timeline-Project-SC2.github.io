@@ -46,7 +46,7 @@ jobs:
           du -sh .publish/* | sort -h
           # страницы и то, на что они ссылаются, на месте
           for f in index.html sector/sector.html minimal/minimal.html galaxy.js shared/app.js \
-                   shared/focus-fx.js shared/lag-fx.js \
+                   shared/focus-fx.js shared/lag-fx.js shared/cursor-fx.js cursor-test/index.html \
                    assets/tiles.json assets/galaxy-map-3000.webp data/systems.csv data/places.csv; do
             test -s ".publish/$f" || { echo "нет файла: $f"; exit 1; }
           done

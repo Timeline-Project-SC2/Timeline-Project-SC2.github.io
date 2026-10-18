@@ -2344,12 +2344,14 @@
     readout.textContent = 'X ' + formatNumber(Math.round(world.x)) + ' · Y ' + formatNumber(Math.round(world.y));
     readout.hidden = false;
     readout.setAttribute('aria-hidden', 'false');
-    var left = point.x + 14;
-    var top = point.y + 14;
+    // Справа от курсора: картинка курсора сайта (shared/cursor-fx.js) занимает до 32 px
+    // вправо-вниз от острия, подсказка в точке +14/+14 оказалась бы под стрелкой.
+    var left = point.x + 34;
+    var top = point.y + 8;
     var width = readout.offsetWidth;
     var height = readout.offsetHeight;
-    if (left + width > state.viewport.w - 6) left = point.x - width - 14;
-    if (top + height > state.viewport.h - 6) top = point.y - height - 14;
+    if (left + width > state.viewport.w - 6) left = point.x - width - 10;
+    if (top + height > state.viewport.h - 6) top = point.y - height - 10;
     readout.style.left = clamp(left, 6, Math.max(6, state.viewport.w - width - 6)) + 'px';
     readout.style.top = clamp(top, 6, Math.max(6, state.viewport.h - height - 6)) + 'px';
   }
