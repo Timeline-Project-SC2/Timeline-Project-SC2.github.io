@@ -9,6 +9,7 @@
   <!-- логотип экрана загрузки: первым в стеке, чтобы загрузка не появлялась пустой -->
   <link rel="preload" as="image" href="/assets/timeline-project-logo.webp?v=0f419d0e" fetchpriority="high">
   <link rel="stylesheet" href="/shared/styles.css?v=structure-1">
+  <link rel="stylesheet" href="sector.css?v=coordinates-1">
   <link rel="stylesheet" href="/shared/wiki-skin.css?v=structure-1">
   <link rel="stylesheet" href="/shared/readability.css?v=structure-1">
   <link rel="stylesheet" href="/shared/timeline-skin.css?v=structure-1">
@@ -126,8 +127,11 @@
         <div class="control-divider"></div>
         <button class="map-control" id="resetMap" type="button" title="Показать всю карту (0)" aria-label="Показать всю карту"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path><path d="M9 4a8 8 0 0 1 10 5M15 20a8 8 0 0 1-10-5"></path></svg></button>
         <button class="map-control label-toggle" id="labelsToggle" type="button" title="Показать подписи систем" aria-label="Переключить подписи систем" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h11M4 19h16"></path><path d="M18 10v4"></path></svg></button>
+        <div class="control-divider"></div>
+        <button class="map-control coordinate-toggle" id="coordinateToggle" type="button" title="Включить координаты наведения" aria-label="Включить координаты наведения" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path></svg></button>
       </div>
 
+      <div class="map-coordinate-readout" id="mapCoordinateReadout" aria-hidden="true" hidden></div>
       <div class="map-hint"><span class="mouse-icon"><i></i></span><span>ПЕРЕТАСКИВАЙ · КОЛЁСО МЫШИ — МАСШТАБ</span></div>
       <div class="toast" id="toast" aria-live="polite"></div>
     </main>
@@ -160,6 +164,6 @@
       });
     })();
   </script>
-  <script src="/shared/app.js?v=types-1" defer></script>
+  <script src="/shared/app.js?v=coordinates-1" defer></script>
 </body>
 </html>

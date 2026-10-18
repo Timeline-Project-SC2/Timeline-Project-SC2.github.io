@@ -1,0 +1,22 @@
+/* Координаты курсора на секторной карте: слой не перехватывает наведение. */
+.map-coordinate-readout {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 1px solid rgba(46, 245, 230, 0.32);
+  background: rgba(1, 8, 7, 0.92);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  color: #c9fff4;
+  font: 10px var(--mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.map-coordinate-readout[hidden] { display: none; }
+.coordinate-toggle svg { width: 13px; height: 13px; }

@@ -211,6 +211,8 @@
   var ctx = null;
   var renderQueued = false;
   var toastsTimer = null;
+  var coordinateReadoutEnabled = false;
+  var coordinatePointer = null;
 
   /* ------------------------------------------------------------------ загрузка данных */
 
@@ -1367,6 +1369,7 @@
     drawPlanetFocus();
 
     updateZoomReadout();
+    updateCoordinateReadout();
   }
 
   /* ------------------------------------------------------------------ события карты */
@@ -1425,6 +1428,8 @@
   function onPointerMove(event) {
     if (pointers[event.pointerId]) pointers[event.pointerId] = localPoint(event);
     var point = localPoint(event);
+    coordinatePointer = coordinateReadoutEnabled && event.pointerType !== 'touch' ? point : null;
+    updateCoordinateReadout();
 
     if (drag && drag.mode === 'pan' && pointerList.length === 1) {
       var dx = point.x - drag.startX;
@@ -2173,6 +2178,36 @@
     el.zoomPercent.textContent = Math.round(factor * 100) + '%';
   }
 
+  function updateCoordinateReadout() {
+    if (!el.mapCoordinateReadout) return;
+    var readout = el.mapCoordinateReadout;
+    var point = coordinatePointer;
+    if (!coordinateReadoutEnabled || !point || point.x < 0 || point.y < 0 ||
+        point.x > state.viewport.w || point.y > state.viewport.h) {
+      readout.hidden = true;
+      readout.setAttribute('aria-hidden', 'true');
+      return;
+    }
+    var world = toWorld(point.x, point.y);
+    var size = mapSize();
+    if (world.x < 0 || world.y < 0 || world.x > size || world.y > size) {
+      readout.hidden = true;
+      readout.setAttribute('aria-hidden', 'true');
+      return;
+    }
+    readout.textContent = 'X ' + formatNumber(Math.round(world.x)) + ' · Y ' + formatNumber(Math.round(world.y));
+    readout.hidden = false;
+    readout.setAttribute('aria-hidden', 'false');
+    var left = point.x + 14;
+    var top = point.y + 14;
+    var width = readout.offsetWidth;
+    var height = readout.offsetHeight;
+    if (left + width > state.viewport.w - 6) left = point.x - width - 14;
+    if (top + height > state.viewport.h - 6) top = point.y - height - 14;
+    readout.style.left = clamp(left, 6, Math.max(6, state.viewport.w - width - 6)) + 'px';
+    readout.style.top = clamp(top, 6, Math.max(6, state.viewport.h - height - 6)) + 'px';
+  }
+
   function applyLabelsToggle() {
     el.labelsToggle.setAttribute('aria-pressed', String(state.labelsOn));
     writeJSON(CONFIG.storage.labels, state.labelsOn);
@@ -2276,7 +2311,7 @@
       'listCaption', 'sortButton', 'catalogList', 'detailPanel',
       'detailType', 'detailContent', 'detailFooter', 'pinButton', 'closeDetail',
       'helpButton', 'closeHelp', 'helpModal', 'zoomIn', 'zoomOut', 'resetMap', 'zoomPercent', 'labelsToggle',
-      'toast'].forEach(function (id) {
+      'coordinateToggle', 'mapCoordinateReadout', 'toast'].forEach(function (id) {
         el[id] = doc.getElementById(id);
       });
     el.legacyControls = qs('.legacy-controls');
@@ -2291,6 +2326,8 @@
     canvas.addEventListener('pointerup', onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
     canvas.addEventListener('pointerleave', function () {
+      coordinatePointer = null;
+      updateCoordinateReadout();
       if (!drag && !state.pinned && state.hoverId) {
         state.hoverId = null;
         canvas.classList.remove('marker-hover');
@@ -2319,6 +2356,14 @@
       state.labelsOn = !state.labelsOn;
       applyLabelsToggle();
       toast(state.labelsOn ? 'Подписи систем включены' : 'Подписи систем скрыты');
+    });
+    if (el.coordinateToggle) el.coordinateToggle.addEventListener('click', function () {
+      coordinateReadoutEnabled = !coordinateReadoutEnabled;
+      el.coordinateToggle.setAttribute('aria-pressed', String(coordinateReadoutEnabled));
+      var label = coordinateReadoutEnabled ? 'Отключить координаты наведения' : 'Включить координаты наведения';
+      el.coordinateToggle.setAttribute('aria-label', label);
+      el.coordinateToggle.title = label;
+      updateCoordinateReadout();
     });
 
     // панель каталога
