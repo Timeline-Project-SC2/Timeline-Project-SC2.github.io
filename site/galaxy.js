@@ -415,6 +415,9 @@
   }
 
   stage.addEventListener('pointerdown', function (e) {
+    // Карту тащат левой кнопкой и колесом. Правая — контекстное меню, боковые — «назад» и
+    // «вперёд» браузера: карту не двигают, и курсор перетаскивания на них не включается.
+    if (e.button > 1) return;
     suppressClick = false;
     if (busy || isUi(e.target)) return;
     var p = scenePoint(e);

@@ -1533,6 +1533,9 @@
   }
 
   function onPointerDown(event) {
+    // Карту тащат левой кнопкой и колесом. Правая (контекстное меню на холсте отключено) и
+    // боковые карту не двигают и систему не выбирают; курсор перетаскивания на них не включается.
+    if (event.button > 1) return;
     canvas.setPointerCapture(event.pointerId);
     var point = localPoint(event);
     pointers[event.pointerId] = point;
