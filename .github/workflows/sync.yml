@@ -49,7 +49,7 @@ jobs:
       - name: Commit and push if changed
         if: success()
         env:
-          TOKEN: ${{ secrets.ADMIN_PAT }}
+          TOKEN: ${{ secrets.SYNC_BOT_TOKEN }}
         run: |
           git config user.name "sync-bot"
           git config user.email "sync-bot@users.noreply.github.com"
@@ -58,7 +58,7 @@ jobs:
             echo "no changes"
           else
             if [ -z "${TOKEN:-}" ]; then
-              echo "::error::Repository secret ADMIN_PAT is required to push sync updates."
+              echo "::error::Repository secret SYNC_BOT_TOKEN is required to push sync updates."
               exit 1
             fi
             SHA=$(python3 -c "import json; d=json.load(open('data/upstream/manifest.json')); print(list(d.get('sources',{}).values())[0].get('sha','')[:7])")
