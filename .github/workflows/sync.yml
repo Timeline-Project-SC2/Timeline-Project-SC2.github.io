@@ -8,7 +8,7 @@ on:
     types: [upstream-updated]
 
 permissions:
-  contents: write
+  contents: read
   issues: write
 
 jobs:
@@ -41,6 +41,8 @@ jobs:
           gh issue create --title "Sync failed" --body "Автосинк упал. См. логи: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
       - name: Commit and push if changed
         if: success()
+        env:
+          TOKEN: ${{ secrets.ADMIN_PAT }}
         run: |
           git config user.name "sync-bot"
           git config user.email "sync-bot@users.noreply.github.com"
@@ -48,9 +50,14 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
+            if [ -z "${TOKEN:-}" ]; then
+              echo "::error::Repository secret ADMIN_PAT is required to push sync updates."
+              exit 1
+            fi
             SHA=$(python3 -c "import json; d=json.load(open('data/upstream/manifest.json')); print(list(d.get('sources',{}).values())[0].get('sha','')[:7])")
             git commit -m "sync: upstream @ ${SHA}"
-            git push
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/TimelineProjectSC2/TimelineProjectSC2.github.io"
+            git push origin HEAD
           fi
       - name: Notify Discord on success (changes)
         if: success()
