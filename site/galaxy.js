@@ -16,8 +16,6 @@
   var zoomOutBtn = document.getElementById('zoomOut');
   var resetBtn = document.getElementById('resetMap');
   var zoomPercent = document.getElementById('zoomPercent');
-  var coordinateToggle = document.getElementById('coordinateToggle');
-  var coordinateReadout = document.getElementById('mapCoordinateReadout');
   var preview = document.getElementById('sectorPreview');
 
   /* ---------- возврат со страницы сектора ----------
@@ -219,8 +217,6 @@
   var view = { s: 1, tx: 0, ty: 0 };
   var anim = null;
   var focusTimer = null;
-  var coordinateReadoutEnabled = false;
-  var lastMapPointer = null;
   var busy = false;
 
   function sceneSize() { return { w: stage.clientWidth, h: stage.clientHeight }; }
@@ -329,7 +325,6 @@
     layer.style.transform = 'translate(' + Math.round(view.tx) + 'px,' + Math.round(view.ty) + 'px)';
     layer.style.setProperty('--s', String(view.s));
     zoomPercent.textContent = Math.round(view.s * 100) + '%';
-    if (coordinateReadoutEnabled && lastMapPointer) renderMapCoordinates(lastMapPointer);
     sharpenMap(side);
     positionPreview();
     if (window.FocusFx) FocusFx.refresh();
@@ -408,7 +403,6 @@
     cancelAnim();
     var p = scenePoint(e);
     zoomAt(p.x, p.y, Math.exp(-e.deltaY * CONFIG.wheelStep));
-    updateMapCoordinates(e);
   }, { passive: false });
 
   var pointers = {};
@@ -419,59 +413,6 @@
   function isUi(target) {
     return !!(target.closest && target.closest('.sector-panel, .map-controls, .sectors-sidebar, .sectors-curtain, .sectors-backdrop, .map-hint'));
   }
-
-  var MAP_SOURCE_SIZE = 3000; // координаты относятся к исходнику карты 3000 × 3000 px
-  function hideMapCoordinates() {
-    if (coordinateReadout) coordinateReadout.hidden = true;
-  }
-
-  function renderMapCoordinates(p) {
-    if (!coordinateReadoutEnabled || !p || !coordinateReadout) { hideMapCoordinates(); return; }
-    var side = view.s * base;
-    if (!(side > 0)) { hideMapCoordinates(); return; }
-    var mapX = (p.x - view.tx) / side * MAP_SOURCE_SIZE;
-    var mapY = (p.y - view.ty) / side * MAP_SOURCE_SIZE;
-    if (mapX < 0 || mapY < 0 || mapX > MAP_SOURCE_SIZE || mapY > MAP_SOURCE_SIZE) {
-      hideMapCoordinates();
-      return;
-    }
-
-    coordinateReadout.textContent = 'X ' + Math.round(mapX) + ' · Y ' + Math.round(mapY) + ' px';
-    coordinateReadout.hidden = false;
-    var left = p.x + 14, top = p.y + 14;
-    var width = coordinateReadout.offsetWidth, height = coordinateReadout.offsetHeight;
-    if (left + width > stage.clientWidth - 6) left = p.x - width - 14;
-    if (top + height > stage.clientHeight - 6) top = p.y - height - 14;
-    coordinateReadout.style.left = clamp(left, 6, Math.max(6, stage.clientWidth - width - 6)) + 'px';
-    coordinateReadout.style.top = clamp(top, 6, Math.max(6, stage.clientHeight - height - 6)) + 'px';
-  }
-
-  function updateMapCoordinates(e) {
-    if (!coordinateReadoutEnabled || e.pointerType === 'touch' || isUi(e.target)) {
-      lastMapPointer = null;
-      hideMapCoordinates();
-      return;
-    }
-    lastMapPointer = scenePoint(e);
-    renderMapCoordinates(lastMapPointer);
-  }
-
-  if (coordinateToggle) coordinateToggle.addEventListener('click', function () {
-    coordinateReadoutEnabled = !coordinateReadoutEnabled;
-    coordinateToggle.setAttribute('aria-pressed', String(coordinateReadoutEnabled));
-    var label = coordinateReadoutEnabled ? 'Отключить координаты наведения' : 'Включить координаты наведения';
-    coordinateToggle.setAttribute('aria-label', label);
-    coordinateToggle.title = label;
-    if (!coordinateReadoutEnabled) {
-      lastMapPointer = null;
-      hideMapCoordinates();
-    }
-  });
-
-  stage.addEventListener('pointerleave', function () {
-    lastMapPointer = null;
-    hideMapCoordinates();
-  });
 
   stage.addEventListener('pointerdown', function (e) {
     suppressClick = false;
@@ -489,7 +430,6 @@
   });
 
   stage.addEventListener('pointermove', function (e) {
-    updateMapCoordinates(e);
     if (!pointers[e.pointerId]) return;
     var p = scenePoint(e);
     pointers[e.pointerId] = p;
@@ -499,7 +439,6 @@
       var d = Math.hypot(a.x - b.x, a.y - b.y);
       if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
       pinchDist = d;
-      updateMapCoordinates(e);
       return;
     }
     if (drag && drag.id === e.pointerId) {
@@ -514,7 +453,6 @@
         view.ty = drag.ty + dy;
         clampView();
         applyView();
-        updateMapCoordinates(e);
       }
     }
   });
