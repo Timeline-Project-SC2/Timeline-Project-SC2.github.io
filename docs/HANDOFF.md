@@ -1,9 +1,9 @@
 # Конспект для следующего агента
 
-Дата: 18 октября 2026. Обновлено в ветке `arena/ceadf432-timelineprojectsc2-github-io`
-(PR #108: переход в Копрулу — вторая ступень того же приближения, что при выборе, без диагональных лучей).
-PR #106 (атлас), #103 (карта сектора), #105 (инструкции к таблице) и #107 (явные координаты
-систем) слиты в `main`. Основные актуальные
+Дата: 18 октября 2026. Обновлено в ветке `arena/f8158b22-timelineprojectsc2-github-io`
+(PR #109: тайминг первого клика на галактике вынесен в отдельные переменные `CONFIG`).
+PR #108 (переход в Копрулу), #106 (атлас), #103 (карта сектора), #105 (инструкции к таблице)
+и #107 (явные координаты систем) слиты в `main`. Основные актуальные
 правила эффектов и ограничения пользователя — в [`AGENTS.md`](../AGENTS.md). Этот файл служит
 вводной для агента; после завершения задачи обновляйте статус и проверки.
 
@@ -11,8 +11,9 @@ PR #106 (атлас), #103 (карта сектора), #105 (инструкци
 
 | | |
 |---|---|
-| Последняя работа | [PR #108](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/108): переход в Копрулу на галактике — рамка по контуру квадрата, одно приближение до 2000 % как у выбора, ≈2,9 с вместо ≈4,4 с; пользователь проверяет на сайте |
-| До этого | [PR #106](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/106): карточка-предпросмотр в атласе (`is-preview`), щелчок только левой, колесом крестовина сразу и над сектором или системой |
+| Последняя работа | [PR #109](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/109): тайминг первого клика на галактике: приближение после центрирования — отдельная `CONFIG.focusZoomMs`, у перехода свои `dive*`; пользователь подбирает тайминг сам |
+| До этого | [PR #108](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/108): переход в Копрулу на галактике — рамка по контуру квадрата, одно приближение до 2000 % как у выбора, ≈2,9 с вместо ≈4,4 с; пользователь: «Найс! Отличная работа» |
+| Ещё раньше | [PR #106](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/106): карточка-предпросмотр в атласе (`is-preview`), щелчок только левой, колесом крестовина сразу и над сектором или системой |
 | PR сектора | [PR #103](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/103) слит в `main`; публикация Pages прошла успешно |
 | Инструкции к таблице | [PR #105](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/105) слит в `main` |
 | История курсора | [PR #99](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/99) и [#104](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/104) слиты в `main` 18.10; пользователь проверяет курсор на сайте и пишет замечания |
@@ -20,6 +21,14 @@ PR #106 (атлас), #103 (карта сектора), #105 (инструкци
 
 Что изменено (подробно — в `CHANGELOG.md`, правила — в `AGENTS.md`, разделы «Прицел» и «Курсор»):
 
+- Тайминг первого клика (18.10, ветка `arena/f8158b22-timelineprojectsc2-github-io`, PR #109). Пользователь:
+  «вычлени для меня переменную с временем приближения после центрирования при первом нажатии,
+  я поправлю тайминг». Раньше `focusZoomMs` задавал сразу три движения: приближение после
+  центрирования, отъезд при зуме выше цели и приближение перехода. Теперь в `CONFIG` в
+  `galaxy.js` у каждого своя переменная: `focusZoomMs` — только приближение после
+  центрирования на первом клике; `focusZoomOutMs` — отъезд; у перехода — `diveCenterMs`,
+  `diveZoomDelay`, `diveZoomMs`. Значения прежние (520 / 1000 / 650), поведение не изменилось.
+  `animateTo` при длительности 0 сразу ставит конечный вид, без деления на ноль.
 - Переход в Копрулу (18.10, ветка `arena/ceadf432-timelineprojectsc2-github-io`, PR #108). Пользователь:
   «чтобы было точь в точь как сейчас базовое приближение»; убрать «несуразные линии в центр»
   (диагональные лучи от углов рамки к квадрату — были только референсом движения на картинке);
@@ -225,9 +234,10 @@ Pages кэширует файлы на 10 минут, без версий пос
   приближения, что при первом клике, и выглядит так же (`FocusFx.start({ contour: true, … })`):
   рамка области за `T.contract` сжимается по контуру квадрата — как борд до области при выборе,
   с теми же каналами от краёв сцены и бликами; внешний край линии ложится на контур квадрата.
-  Затем камера центрирует квадрат (`CONFIG.focusMs`), ждёт `focusZoomDelay` и одним шагом
-  приближает до 2000 % (`diveZooms: [20]`, `focusZoomMs`; `easeOutCubic`, масштаб линейно —
-  как `animateTo` у выбора). Рамка всё время держится за квадрат и растёт вместе с картой. В
+  Затем камера центрирует квадрат (`CONFIG.diveCenterMs`), ждёт `diveZoomDelay` и одним шагом
+  приближает до 2000 % (`diveZooms: [20]`, `diveZoomMs`; `easeOutCubic`, масштаб линейно —
+  как `animateTo` у выбора). Длительности перехода свои, от первого клика не зависят; сейчас
+  такие же (520 / 1000 / 650). Рамка всё время держится за квадрат и растёт вместе с картой. В
   последние `T.reveal` мс приближения внутри рамки проявляется превью, карта вокруг темнеет;
   после `T.still` — страница сектора. Всего ≈2,9 с (раньше было ≈4,4 с: 1200 % и 2000 %).
   Диагональных лучей к цели и раскрытия рамки к краям здесь больше нет.
@@ -243,14 +253,14 @@ Pages кэширует файлы на 10 минут, без версий пос
 |---|---|
 | `site/shared/focus-fx.js` | анимация: в начале файла — этапы, подключение и договорённость о камере; `T` — длительности, `G` — геометрия. API: `select({stage, target, frame, mapFrame, onLock, onContract})`, `release(done)`, `start({stage, target, frame, camera, contour, mapFrame, timing, zooms, ending, preview, onLock, onZoom, onCenter, onDeny, onEnd})`, `active()`, `refresh()`, `stop()`. Слои (затемнение, холст, превью) ставит сам |
 | `site/shared/lag-fx.js` | «лаги» картинки: `LagFx.attach(img, {busy, …})` → `burst()`, `sweep()`, `pause()`, `resume()`, `destroy()`; настройки — `LagFx.defaults` |
-| `site/galaxy.js` | `CONFIG` (`focusMs`, `focusZoom`, `focusZoomMs`, `focusZoomDelay`, `framePad`, `frameMinVisible`, `diveZooms: [20]`), `camera` (get / set вида для модуля), `boxOf` / `frameData` / `frameOf`, `selectArea`, `hidePanel` / `closePanel` / `clearAreas`, `focusArea`, `runTransition` / `runZerusTransition` / `runOdzTransition`, сброс при возврате «Назад» (bfcache); `LagFx.attach` молчит на время перехода; `sharpenMap` — чёткость карты при приближении |
+| `site/galaxy.js` | `CONFIG`: тайминг первого клика (`focusMs`, `focusZoomDelay`, `focusZoomMs` — приближение после центрирования, `focusZoomOutMs`), `focusZoom`, `framePad`, `frameMinVisible`, переход (`diveCenterMs`, `diveZoomDelay`, `diveZoomMs`, `diveZooms: [20]`), `camera` (get / set вида для модуля), `boxOf` / `frameData` / `frameOf`, `selectArea`, `hidePanel` / `closePanel` / `clearAreas`, `focusArea`, `runTransition` / `runZerusTransition` / `runOdzTransition`, сброс при возврате «Назад» (bfcache); `LagFx.attach` молчит на время перехода; `sharpenMap` — чёткость карты при приближении |
 | `site/shared/app.js` и `site/sector/sector.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. Shift+клик копирует X и Y через табуляцию для вставки в два столбца; в minimal-скине кнопки readout нет, обработчик копирования работает условно на секторной карте |
 | `site/sector/sector.css` | оформление секторного readout координат, подключается только на карте сектора |
 | `site/index.html` | у квадратов `data-frame="л в п н"` — блок области в % карты (с полем ≈ 0.9 %); когда картинки и надписи станут отдельными элементами сайта, рамку можно считать от них |
 | `site/galaxy.css` | цвета прицела CSS-переменными `--focus-core/-light/-shadow/-glow` и `--focus-dim` на `.galaxy-stage`, `.is-red-target`, `.is-odz-ping` |
 
 После правок поднимать `?v=` у изменённых файлов в подключающих их страницах. Текущие значения:
-`galaxy.js` — `dive-2`, `galaxy.css` — `frame-5`, `shared/focus-fx.js` — `frame-11`,
+`galaxy.js` — `timing-1`, `galaxy.css` — `frame-5`, `shared/focus-fx.js` — `frame-11`,
 `shared/lag-fx.js` — `frame-1`, `shared/styles.css` — `panel-1`. У `app.js` в `sector.html` и
 `minimal.html` сейчас `map-markers-1`; `sector.css` — `coordinates-1`; `shared/cursor-fx.js` —
 `cursor-6` во всех четырёх страницах (`index.html`, `sector.html`, `minimal.html`,
