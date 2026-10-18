@@ -272,15 +272,15 @@
   }
 
   function mapSystemRow(row) {
-    var x = parseFloat(row.x); var y = parseFloat(row.y);
     return {
       id: row.system_id || row.id || row.name,
       name: row.name || '',
       nameEn: row.name || '',
       // Systems use a dedicated classification tag; blank values mean no highlight.
       systemType: String(row.type || 'none').trim().toLowerCase(),
-      coord: [isNaN(x) ? 0 : x, isNaN(y) ? 0 : y],
-      coordSource: 'conditional',
+      // CSV estimates are not map positions. A marker needs an explicit map override.
+      coord: null,
+      coordSource: null,
       primaryFaction: row.faction || '',
       factions: row.faction ? [row.faction] : [],
       note: row.description || '',
@@ -432,16 +432,30 @@
     var resolved = Object.assign({}, system);
     resolved.name = system.name;
     resolved.note = system.note;
-    resolved.coord = system.coord ? [system.coord[0], system.coord[1]] : null;
-    resolved.coordSource = 'conditional';
+    // Do not turn fallback/estimated coordinates into visible system markers.
+    // Only explicit map overrides place a system on the map.
+    resolved.coord = null;
+    resolved.coordSource = null;
     resolved.override = override;
 
     if (override) {
-      if (override.x != null && override.y != null) {
-        resolved.coord = [override.x, override.y];
-        resolved.coordSource = 'map';
-      } else if (override.x_norm != null && override.y_norm != null) {
-        resolved.coord = [Math.round(override.x_norm * mapSize()), Math.round(override.y_norm * mapSize())];
+      var point = null;
+      var x = explicitMapNumber(override.x);
+      var y = explicitMapNumber(override.y);
+      if (x !== null && y !== null) {
+        point = { x: x, y: y };
+      } else {
+        var xNorm = explicitMapNumber(override.x_norm);
+        var yNorm = explicitMapNumber(override.y_norm);
+        if (xNorm !== null && yNorm !== null) {
+          point = {
+            x: Math.round(xNorm * mapSize()),
+            y: Math.round(yNorm * mapSize())
+          };
+        }
+      }
+      if (coordinateOnMap(point)) {
+        resolved.coord = [point.x, point.y];
         resolved.coordSource = 'map';
       }
       if (override.name) resolved.name = override.name;
@@ -460,6 +474,12 @@
 
   function mapSize() {
     return (state.meta && state.meta.mapSize) || 10000;
+  }
+
+  function explicitMapNumber(value) {
+    if (value == null || (typeof value === 'string' && !value.trim())) return null;
+    var number = Number(value);
+    return isFinite(number) ? number : null;
   }
 
   function coordinateOnMap(point) {
@@ -580,8 +600,7 @@
         glyph: 'S',
         id: system.id,
         title: system.name,
-        subtitle: (system.coordSource === 'map' ? 'координаты с карты' : 'координата условная') +
-          ' · ' + system.worlds.length + ' ' + plural(system.worlds.length, ['мир', 'мира', 'миров']),
+        subtitle: system.worlds.length + ' ' + plural(system.worlds.length, ['мир', 'мира', 'миров']),
         key: searchKey(system.name),
         extra: normalize((system.primaryFaction || '') + ' ' + (system.note || ''))
       });
@@ -1849,19 +1868,7 @@
     renderCatalog();
   }
 
-  function renderStats() {
-    var meta = state.meta || {};
-    var verified = state.systems.filter(function (system) { return system.coordSource === 'map'; }).length;
-    var items = [
-      { value: meta.placeCount || meta.planetCount || state.planets.length, label: 'Мест' },
-      { value: meta.systemCount || state.systems.length, label: 'Систем' },
-      { value: verified, label: 'С карты' }
-    ];
-    el.catalogStats.innerHTML = items.map(function (item) {
-      return '<div class="stat-item"><div class="stat-value">' + formatNumber(item.value) +
-        '</div><div class="stat-label">' + escapeHtml(item.label) + '</div></div>';
-    }).join('');
-
+  function renderSectionCounts() {
     var sectionCounts = {
       catalogCountSystems: state.systems.length,
       catalogCountPlanets: state.planets.filter(function (place) { return matchesCatalogView(place, 'planet'); }).length,
@@ -1922,12 +1929,9 @@
 
     state.activeFactions = state.activeFactions.filter(function (faction) { return counter[faction]; });
     state.activeTypes = state.activeTypes.filter(function (type) { return typeCounter[type]; });
-    var total = state.tab === 'systems'
-      ? state.systems.length
-      : state.planets.filter(function (place) { return matchesCatalogView(place); }).length;
     var html = '<span class="filter-label">ТИП</span>' +
       '<button class="filter-chip' + (!state.activeTypes.length ? ' active' : '') +
-      '" type="button" data-type="">Все типы <span>' + formatNumber(total) + '</span></button>';
+      '" type="button" data-type="">Все типы</button>';
     ['planet', 'moon', 'asteroid', 'station', 'platform', 'other'].forEach(function (type) {
       if (!typeCounter[type]) return;
       var active = state.activeTypes.indexOf(type) > -1;
@@ -1937,7 +1941,7 @@
     });
     html += '<span class="filter-label">ФРАКЦИЯ</span>' +
       '<button class="filter-chip' + (!state.activeFactions.length ? ' active' : '') +
-      '" type="button" data-faction="">Все фракции <span>' + formatNumber(total) + '</span></button>';
+      '" type="button" data-faction="">Все фракции</button>';
     factions.forEach(function (faction) {
       if (counter[faction] < 1) return;
       var active = state.activeFactions.indexOf(faction) > -1;
@@ -2000,7 +2004,7 @@
 
   function renderCatalog() {
     if (catalogHidden()) return;
-    renderStats();
+    renderSectionCounts();
     var isSystems = state.tab === 'systems';
     var items = isSystems ? visibleSystemsForList() : visiblePlanetsForList();
 
@@ -2010,10 +2014,8 @@
       platform: 'ПЛАТФОРМЫ',
       other: 'ИНЫЕ МЕСТА'
     };
-    var sectionTitle = isSystems ? 'СИСТЕМЫ В АРХИВЕ' : (sectionTitles[state.catalogView] || 'КАНОНИЧЕСКИЕ МЕСТА');
-    el.listCaption.innerHTML = (state.query
-      ? 'РЕЗУЛЬТАТЫ · ' + formatNumber(items.length)
-      : sectionTitle + ' · ' + formatNumber(items.length));
+    var sectionTitle = isSystems ? 'СИСТЕМЫ' : (sectionTitles[state.catalogView] || 'МЕСТА');
+    el.listCaption.textContent = state.query ? 'РЕЗУЛЬТАТЫ' : sectionTitle;
     el.filterResultCount.textContent = formatNumber(items.length) + ' ' + plural(items.length, ['запись', 'записи', 'записей']);
     el.sortButton.innerHTML = (state.sortByCount ? 'МЕСТА ↕' : 'А—Я <span>↕</span>');
 
@@ -2029,17 +2031,12 @@
     items.slice(0, 600).forEach(function (item) {
       if (isSystems) {
         var selected = item.id === activeSystem && !activePlanet;
-        var statusClass = item.coordSource === 'map' ? 'pdf-linked' : 'inferred';
         var glyph = item.name.replace(/^Система\s+/, '').slice(0, 2).toUpperCase();
         html += '<button class="catalog-row' + (selected ? ' selected' : '') + '" type="button" role="listitem" data-system="' + escapeHtml(item.id) + '">' +
           '<span class="row-glyph">' + escapeHtml(glyph) + '</span>' +
           '<span class="row-copy">' +
           '<span class="row-title">' + escapeHtml(item.name) + '</span>' +
-          '<span class="row-meta">' +
-          '<span class="row-status ' + statusClass + '"></span>' +
-          '<span class="row-meta-text">' + escapeHtml(item.coordSource === 'map' ? 'подпись карты' : 'условная точка') +
-          ' · ' + escapeHtml(item.primaryFaction || 'фракция не указана') + '</span>' +
-          '</span>' +
+          '<span class="row-meta"><span class="row-meta-text">' + escapeHtml(item.primaryFaction || 'фракция не указана') + '</span></span>' +
           '</span>' +
           '<span class="row-count">' + item.worlds.length + '</span>' +
           '</button>';
@@ -2066,14 +2063,10 @@
 
   /* ------------------------------------------------------------------ досье справа */
 
-  function confidenceLabel(system) {
-    if (!system.coord) return system.canonical ? 'каноническая · без координаты' : 'координата не задана';
-    if (system.fromSheet) return 'из опубликованной таблицы';
-    if (system.coordSource === 'map') {
-      var known = { high: 'высокая', medium: 'средняя', low: 'низкая' };
-      return 'снято с карты' + (system.mapConfidence ? ' · ' + (known[system.mapConfidence] || system.mapConfidence) : '');
-    }
-    return 'условная координата';
+  function systemPositionLabel(system) {
+    return system && system.coord && system.coordSource === 'map'
+      ? 'Положение отмечено на схеме'
+      : 'Положение на схеме не указано';
   }
 
   function badge(text, extraClass) {
@@ -2101,12 +2094,10 @@
   }
 
   function renderSystemDetail(system) {
-    el.detailType.textContent = 'SYSTEM DOSSIER';
+    el.detailType.textContent = 'СИСТЕМА';
     var worlds = system.worlds || [];
-    var dotClass = system.coordSource === 'map' ? 'pdf-linked' : 'inferred';
 
     var html = '';
-    html += '<div class="detail-kicker"><span class="confidence-dot ' + dotClass + '"></span>' + escapeHtml(confidenceLabel(system)) + '</div>';
     html += '<h3 class="detail-title">' + escapeHtml(system.name.replace(/^Система\s+/, '')) + '</h3>';
     html += '<p class="detail-subtitle">' + escapeHtml(
       (system.primaryFaction || 'фракция не указана') + ' · ' + worlds.length + ' ' + plural(worlds.length, ['мир', 'мира', 'миров'])
@@ -2115,7 +2106,7 @@
     html += '<div class="detail-badges">';
     html += badge(system.canonical ? 'каноническая система · WorldBox' :
       (system.confidence === 'pdf-linked' ? 'связь старого каталога' :
-        (system.confidence === 'lore' ? 'по вики-лору' : 'картографическая группировка')),
+        (system.confidence === 'lore' ? 'по вики-лору' : 'система')),
       system.canonical ? 'pdf-linked' : '');
     var systemType = String(system.systemType || 'none').trim().toLowerCase();
     if (systemType !== 'none') {
@@ -2149,21 +2140,11 @@
       html += '<div class="detail-empty-worlds">Отдельные места в каталоге не перечислены: система известна только по названию.</div>';
     }
 
-    html += '<div class="detail-section-title"><span>КООРДИНАТЫ</span><span>0…' + formatNumber(mapSize()) + '</span></div>';
-    html += '<div class="world-list">';
-    if (system.coord) {
-      html += '<div class="world-card">' +
-        '<div class="world-card-top"><span class="world-name">X ' + system.coord[0] + ' · Y ' + system.coord[1] + '</span>' +
-        '<span class="world-kind">' + escapeHtml(confidenceLabel(system)) + '</span></div>' +
-        '<div class="world-meta">' +
-        (system.mapLabel ? '<span class="world-chip">подпись: ' + escapeHtml(system.mapLabel) + '</span>' : '') +
-        (system.override && system.override.delta ? '<span class="world-chip">сдвиг ' + system.override.delta + ' px</span>' : '') +
-        (system.conditionalCoord ? '<span class="world-chip">было ' + system.conditionalCoord[0] + ', ' + system.conditionalCoord[1] + '</span>' : '') +
-        '</div></div>';
-    } else {
-      html += '<div class="detail-empty-worlds">Координата не задана.</div>';
+    if (system.coord && system.coordSource === 'map') {
+      html += '<div class="detail-section-title"><span>ПОЛОЖЕНИЕ НА СХЕМЕ</span></div>' +
+        '<div class="detail-note">Система отмечена на карте.' +
+        (system.mapLabel ? ' Подпись: ' + escapeHtml(system.mapLabel) + '.' : '') + '</div>';
     }
-    html += '</div>';
 
     html += '<div class="detail-note"><strong>Внимание.</strong> ' + escapeHtml(system.note || 'Описание отсутствует.') + '</div>';
     if (system.mapNote) {
@@ -2188,7 +2169,7 @@
   }
 
   function renderPlanetDetail(planet, system) {
-    el.detailType.textContent = 'PLACE DOSSIER';
+    el.detailType.textContent = 'МЕСТО';
     var terrain = planet.terrain || [];
     var factions = factionsOf(planet);
 
@@ -2216,10 +2197,7 @@
     if (system) {
       html += '<div class="world-card" data-system="' + escapeHtml(system.id) + '">' +
         '<div class="world-card-top"><span class="world-name">' + escapeHtml(system.name) + '</span>' +
-        '<span class="world-kind">' + escapeHtml(confidenceLabel(system)) + '</span></div>' +
-        '<div class="world-meta">' + (system.coord
-          ? '<span class="world-chip">X ' + system.coord[0] + ' · Y ' + system.coord[1] + '</span>'
-          : '<span class="world-chip">координата не задана</span>') + '</div></div>';
+        '<span class="world-kind">' + escapeHtml(systemPositionLabel(system)) + '</span></div></div>';
     } else {
       html += '<div class="detail-empty-worlds">Система в источниках не указана: место числится отдельно от ' + state.systems.length + ' систем каталога.</div>';
     }
@@ -2493,7 +2471,7 @@
 
   function cacheElements() {
     ['searchInput', 'clearSearch', 'suggestions', 'searchWrap', 'mapFactionFilter', 'mapStage', 'mapCanvas',
-      'leftPanel', 'closePanel', 'toggleSidePanel', 'catalogStats', 'filters', 'filterResultCount',
+      'leftPanel', 'closePanel', 'toggleSidePanel', 'filters', 'filterResultCount',
       'listCaption', 'sortButton', 'catalogList', 'detailPanel',
       'detailType', 'detailContent', 'detailFooter', 'pinButton', 'closeDetail',
       'helpButton', 'closeHelp', 'helpModal', 'zoomIn', 'zoomOut', 'resetMap', 'zoomPercent', 'labelsToggle',

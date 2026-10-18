@@ -59,7 +59,7 @@
       <section class="map-page-intro" aria-label="Текущий раздел">
         <div class="breadcrumb"><span>Лор</span><i>›</i><span>Вводная часть</span><i>›</i><b>Карта сектора</b></div>
         <h2>Карта сектора</h2>
-        <p>Timeline Project · канонический реестр Копрулу</p>
+        <p>Авторская схема систем и мест Копрулу</p>
       </section>
 
       <aside class="left-panel panel" id="leftPanel" aria-label="Каталог систем и мест">
@@ -73,10 +73,10 @@
 
         <nav class="catalog-sections" id="catalogSections" aria-label="Разделы каталога">
           <button class="catalog-section active" id="catalogViewSystems" type="button" data-catalog-view="systems" aria-pressed="true">
-            <span class="catalog-section-code">SYS</span><span class="catalog-section-copy"><strong>Системы</strong><small>звёздные и картографические группы</small></span><b id="catalogCountSystems">—</b>
+            <span class="catalog-section-code">SYS</span><span class="catalog-section-copy"><strong>Системы</strong><small>звёздные системы</small></span><b id="catalogCountSystems">—</b>
           </button>
           <button class="catalog-section" id="catalogViewPlanets" type="button" data-catalog-view="planet" aria-pressed="false">
-            <span class="catalog-section-code">PLN</span><span class="catalog-section-copy"><strong>Планеты</strong><small>канонические планетарные миры</small></span><b id="catalogCountPlanets">—</b>
+            <span class="catalog-section-code">PLN</span><span class="catalog-section-copy"><strong>Планеты</strong><small>планетарные объекты</small></span><b id="catalogCountPlanets">—</b>
           </button>
           <button class="catalog-section" id="catalogViewStations" type="button" data-catalog-view="station" aria-pressed="false">
             <span class="catalog-section-code">STN</span><span class="catalog-section-copy"><strong>Станции</strong><small>орбитальные и исследовательские объекты</small></span><b id="catalogCountStations">—</b>
@@ -88,8 +88,6 @@
             <span class="catalog-section-code">ETC</span><span class="catalog-section-copy"><strong>Иные места</strong><small>луны, астероиды и особые объекты</small></span><b id="catalogCountOther">—</b>
           </button>
         </nav>
-
-        <div class="catalog-stats" id="catalogStats"></div>
 
         <div class="filter-header"><span>ФИЛЬТРЫ КАТАЛОГА</span><span class="filter-count" id="filterResultCount"></span></div>
         <div class="filters" id="filters" aria-label="Фильтр по фракции"></div>
@@ -107,7 +105,7 @@
 
       <aside class="detail-panel panel" id="detailPanel" aria-label="Подробности системы или места" hidden>
         <div class="detail-topline">
-          <div class="eyebrow"><span class="eyebrow-line"></span><span id="detailType">SYSTEM DOSSIER</span></div>
+          <div class="eyebrow"><span class="eyebrow-line"></span><span id="detailType">СИСТЕМА</span></div>
           <div class="detail-actions">
             <button class="icon-button pin-button" id="pinButton" type="button" aria-label="Закрепить карточку" title="Закрепить карточку"><svg viewBox="0 0 24 24"><path d="m8 4 8 8m-8-8 4-2 6 6-2 4m-8-8 1 7-5 5m6 0 5 5"></path></svg></button>
             <button class="icon-button" id="closeDetail" type="button" aria-label="Закрыть карточку" title="Закрыть"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"></path></svg></button>
@@ -117,7 +115,6 @@
         <div class="detail-footer" id="detailFooter"></div>
       </aside>
 
-      <div class="map-notice" id="mapNotice"><span class="notice-icon">⌖</span><span><b>Точки систем условны.</b> Источники не содержат координат.</span><button id="noticeInfo" type="button" aria-label="Подробнее о данных">?</button></div>
 
       <div class="map-controls" aria-label="Управление картой">
         <button class="map-control" id="zoomIn" type="button" title="Приблизить (+)" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></button>
@@ -139,12 +136,12 @@
           <button class="icon-button" id="closeHelp" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"></path></svg></button>
         </div>
         <div class="modal-body">
-          <div class="note-block"><span class="note-number">01</span><div><h3>Источники</h3><p>Подложка загружается из публичного файла Google Drive. Главный каталог — строгий канонический реестр StarCraft Wiki; исходные 316 строк сохранены отдельно для аудита.</p></div></div>
-          <div class="note-block"><span class="note-number">02</span><div><h3>Системы и точность</h3><p>PDF перечисляет миры, но почти нигде не указывает их звёздные системы. Поэтому подтверждённые связи отделены от группировок по повторяющимся обозначениям. <b>Положение узлов на карте схематическое:</b> координат систем в исходниках нет, а точки на подложке не подписаны.</p><div class="source-links"><a href="https://starcraft.fandom.com/wiki/Category:Star_Systems" target="_blank" rel="noreferrer">Список известных систем ↗</a><a href="https://starcraft.fandom.com/wiki/Sara_system" target="_blank" rel="noreferrer">Sara system ↗</a><a href="https://starcraft.fandom.com/wiki/Tarsonis_system" target="_blank" rel="noreferrer">Tarsonis system ↗</a><a href="https://starcraft.fandom.com/wiki/Korhal" target="_blank" rel="noreferrer">Korhal system ↗</a></div></div></div>
-          <div class="note-block"><span class="note-number">03</span><div><h3>Плавный зум без тяжёлой подложки</h3><p>Карта разбита на WebP-тайлы 512 × 512 в четырёх уровнях детализации (1 250 → 10 000 px). Canvas загружает только видимую область, использует грубый слой как подложку и хранит ограниченный LRU-кэш. Перетаскивание и масштабирование не пересоздают изображение целиком.</p></div></div>
-          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Колесо мыши или жест pinch — приблизить; зажми и перетаскивай — переместить; <kbd>+</kbd>/<kbd>−</kbd> — масштаб; <kbd>0</kbd> — вернуть обзор; <kbd>/</kbd> — фокус поиска. Наведи на узел, чтобы увидеть места системы, нажми — закрепить карточку. Место с координатами и пустым system_id становится отдельной точкой интереса на карте.</p></div></div>
+          <div class="note-block"><span class="note-number">01</span><div><h3>Что это за карта</h3><p>Это интерактивная авторская схема сектора Копрулу и ближайших территорий. Она объединяет подложку, системы, известные места и фракции в одном каталоге: можно искать объекты, просматривать их связи и переходить от общего обзора к карточке. Это самостоятельная визуальная модель для знакомства с регионом, а не копия официальной карты и не средство навигации.</p></div></div>
+          <div class="note-block"><span class="note-number">02</span><div><h3>Что есть в каталоге</h3><p>Отдельно показаны системы и места — планеты, луны, станции, платформы и другие объекты. В карточке собраны доступные сведения о названии, типе, фракции и связи места с системой. Связь указывается там, где она известна; если данных нет, карта не пытается угадать её по одному совпадению названий. Фильтр по фракциям помогает выделить связанные с ней записи.</p></div></div>
+          <div class="note-block"><span class="note-number">03</span><div><h3>Как читать схему</h3><p>Схема помогает увидеть общий контекст и взаимное расположение отмеченных объектов, но не задаёт точные астрономические координаты, расстояния или маршруты. Положение не следует использовать для оценки масштаба путешествия: это обзорная компоновка, а не навигационная карта. Объекты без установленного положения остаются доступны в каталоге, но не получают выдуманную точку на карте.</p></div></div>
+          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Найдите место или систему через строку поиска либо отберите записи по типу и фракции. Наведение на отмеченный узел подсвечивает его, щелчок открывает карточку, а кнопка с булавкой закрепляет её. Перетаскивайте карту мышью или пальцем; колесо и жест pinch меняют масштаб. Кнопки <kbd>+</kbd> и <kbd>−</kbd> приближают или отдаляют, <kbd>0</kbd> возвращает общий обзор, <kbd>/</kbd> переносит фокус в поиск. Каталог можно свернуть, чтобы освободить обзор карты.</p></div></div>
         </div>
-        <div class="modal-foot"><span>DATASET REV.</span><span>NO ASTROMETRIC COORDINATES IN SOURCE</span></div>
+        <div class="modal-foot"><span>ОБЗОРНАЯ СХЕМА</span><span>КАТАЛОГ СЕКТОРА КОПРУЛУ</span></div>
       </section>
     </div>
   </div>
