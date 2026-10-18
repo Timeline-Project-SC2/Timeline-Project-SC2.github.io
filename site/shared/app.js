@@ -1564,7 +1564,8 @@
       drag = {
         mode: 'pan',
         startX: point.x, startY: point.y,
-        tx: state.view.tx, ty: state.view.ty, moved: false, shiftKey: event.shiftKey
+        tx: state.view.tx, ty: state.view.ty, moved: false, shiftKey: event.shiftKey,
+        button: event.button
       };
       canvas.classList.add('dragging');
     } else {
@@ -1644,7 +1645,9 @@
     drag = null;
     if (!finished) return;
 
-    if (finished.mode === 'pan' && !finished.moved) {
+    // Щелчок (выбор, сброс выбора, Shift — копирование координат) — только левой кнопкой,
+    // как click на карте галактики. Колесо карту только тащит.
+    if (finished.mode === 'pan' && !finished.moved && finished.button === 0) {
       if (event.shiftKey || finished.shiftKey) {
         event.preventDefault();
         copyMapCoordinates(point);
@@ -2093,7 +2096,20 @@
 
     el.detailPanel.hidden = false;
     el.pinButton.classList.toggle('active', state.pinned);
+    syncDetailPreview();
     layoutMapControls();
+  }
+
+  // Карточка, которую показывает наведение (не закреплена и показывает систему или место под
+  // мышью), — предпросмотр, и мышь она не ловит. Иначе система под панелью мигала бы: панель
+  // появляется поверх системы, холст получает pointerleave, наведение снимается, панель
+  // прячется — и так на каждом движении мыши, а щелчок по системе доставался бы панели.
+  // Сквозь предпросмотр система остаётся под мышью, щелчок по ней закрепляет карточку.
+  // Выбранное в каталоге, поиске или по адресу — не предпросмотр: с карточкой работают мышью.
+  function syncDetailPreview() {
+    var hovered = !!(state.hoverId || state.hoverPoiId);
+    el.detailPanel.classList.toggle('is-preview', !state.pinned && hovered &&
+      state.activeSystemId === state.hoverId && state.activePlanetId === state.hoverPoiId);
   }
 
   function renderSystemDetail(system) {
@@ -2629,6 +2645,7 @@
     el.pinButton.addEventListener('click', function () {
       state.pinned = !state.pinned;
       el.pinButton.classList.toggle('active', state.pinned);
+      syncDetailPreview();
       toast(state.pinned ? 'Карточка закреплена' : 'Карточка закрывается при уходе курсора');
       if (!state.pinned) clearDetail();
     });
