@@ -196,18 +196,28 @@
     animateMs: 340,
     fitInset: 1,
     panMargin: 0.26,     // небольшой запас для кадрирования data-frame у края карты
-    focusAnchorX: 0.4, // первый клик (телефон): где по горизонтали ставится квадрат в видимой области (0 — у левого края, 0.5 — по центру, 1 — у правого)
-    focusMs: 520,
-    focusZoom: 4.1,       // первый клик: зум до 410% (диапазон 400–420%)
-    focusZoomMs: 650,
+
+    /* Первый клик по области — тайминг, мс. После того как рамка сжалась до области:
+       центрирование → пауза → приближение. Каждое значение влияет только на свой отрезок. */
+    focusMs: 520,         // центрирование области
     focusZoomDelay: 1000, // пауза после центрирования перед приближением
+    focusZoomMs: 650,     // ← приближение после центрирования (только первый клик)
+    focusZoomOutMs: 650,  // отъезд, если зум уже выше целевого: сразу, до центрирования и паузы
+
+    focusAnchorX: 0.4, // первый клик (телефон): где по горизонтали ставится квадрат в видимой области (0 — у левого края, 0.5 — по центру, 1 — у правого)
+    focusZoom: 4.1,       // первый клик: зум до 410% (диапазон 400–420%)
     framePad: 0.06,       // первый клик: рамка выделения (data-frame) — по центру видимой области, с полями
                           // по 6 %; если на focusZoom она не помещается — зум меньше…
     frameMinVisible: 0.5, // видимая область уже половины сцены (телефон, панель на всю ширину) —
                           // рамку не вписываем, квадрат ставим по focusAnchorX
-    diveZooms: [20]       // переход в Копрулу (второй клик) — вторая ступень того же приближения:
-                          // рамка садится на контур квадрата, центрирование focusMs, пауза
-                          // focusZoomDelay, одно приближение до 2000 % за focusZoomMs
+
+    /* Второй клик по Копрулу (переход) — тайминг, мс: рамка садится на контур квадрата →
+       центрирование → пауза → приближение до diveZooms. Свои значения, от первого клика не
+       зависят; сейчас такие же, как у него. */
+    diveCenterMs: 520,    // центрирование квадрата
+    diveZoomDelay: 1000,  // пауза перед приближением
+    diveZoomMs: 650,      // приближение
+    diveZooms: [20]       // до какого зума: 2000 %
   };
 
   /* ---------- вид карты ----------
@@ -373,7 +383,8 @@
     anim = token;
     function step(now) {
       if (anim !== token) return;               // отменено пользователем
-      var k = easeOutCubic(clamp((now - t0) / ms, 0, 1));
+      // ms ≤ 0 (тайминг в CONFIG выставили в 0) — сразу конечный вид, без деления на ноль
+      var k = ms > 0 ? easeOutCubic(clamp((now - t0) / ms, 0, 1)) : 1;
       view.s = from.s + (to.s - from.s) * k;
       view.tx = from.tx + (to.tx - from.tx) * k;
       view.ty = from.ty + (to.ty - from.ty) * k;
@@ -819,12 +830,12 @@
   /* ---------- переход: прицел в духе брифингов StarCraft II ----------
      Вся анимация — в /shared/focus-fx.js. Копрулу — вторая ступень приближения выбора,
      точь-в-точь как первая: рамка области сжимается по контуру квадрата, квадрат едет в
-     центр, пауза, приближение до 2000 % (длительности и плавность — из CONFIG, как у
-     focusArea); рамка держится за квадрат, в конце в ней проявляется превью, вокруг —
-     темнота. Зерус и ОЗД — свой сценарий: рамка захвата, срыв или отказ. Камеру модуль
-     ведёт сам через camera (get / set вида). Здесь — логика: что делать при захвате и
-     чем всё кончается. Переход начинается с того зума и положения карты, какие есть в
-     момент клика.                                                                  */
+     центр, пауза, приближение до 2000 % (длительности — CONFIG.dive*, сейчас как у первого
+     клика; плавность как у focusArea); рамка держится за квадрат, в конце в ней
+     проявляется превью, вокруг — темнота. Зерус и ОЗД — свой сценарий: рамка захвата,
+     срыв или отказ. Камеру модуль ведёт сам через camera (get / set вида). Здесь —
+     логика: что делать при захвате и чем всё кончается. Переход начинается с того зума
+     и положения карты, какие есть в момент клика.                                  */
   var viewBeforeTransition = null;   // вид до перехода — вернуть, если пришли «Назад»
 
   // Камера для FocusFx: точка карты p (px при s = 1) видна на экране в t + p · s.
@@ -887,7 +898,7 @@
       mapFrame: mapFrame, // если выбора на экране нет — сначала борд карты, как при первом клике
       camera: camera,
       contour: true,      // рамка по контуру квадрата, растёт вместе с картой
-      timing: { center: CONFIG.focusMs, pause: CONFIG.focusZoomDelay, zoom: CONFIG.focusZoomMs },
+      timing: { center: CONFIG.diveCenterMs, pause: CONFIG.diveZoomDelay, zoom: CONFIG.diveZoomMs },
       zooms: CONFIG.diveZooms,
       ending: 'reveal',
       preview: el.getAttribute('data-macket') || (iconImg && iconImg.getAttribute('src')) || '',
@@ -979,8 +990,9 @@
 
   // Первый клик по области (Копрулу, Зерус, ОЗД): целевой масштаб — focusZoom,
   // ограниченный размером data-frame и полями framePad. Если текущий масштаб выше
-  // целевого, после сжатия сразу отъезжаем до него; если ниже — центрируем,
-  // выдерживаем focusZoomDelay и приближаем, а при равном масштабе только центрируем.
+  // целевого, после сжатия сразу отъезжаем до него (focusZoomOutMs) и центрируем (focusMs);
+  // если ниже — центрируем (focusMs), выдерживаем focusZoomDelay и приближаем
+  // (focusZoomMs), а при равном масштабе только центрируем.
   function focusArea(el) {
     // Сначала отменяем прежний фокус/отложенный зум, затем центрируем область
     // на текущем масштабе; отдельный зум начинается после паузы в 1 секунду.
@@ -989,7 +1001,7 @@
     var visibleW = sz.w - (panel && !panel.hidden ? panel.offsetWidth : 0);
     var f = frameData(el);
     var want = CONFIG.focusZoom;
-    var nx, ny, ns, zoomMs = 0;
+    var nx, ny, ns, needZoom = false;   // needZoom — масштаб надо менять
     var centerMapX, centerMapY, anchorX;
     if (f && visibleW >= sz.w * CONFIG.frameMinVisible) {
       var fw = (f.r - f.l) / 100 * base, fh = (f.b - f.t) / 100 * base;   // рамка при s = 1
@@ -1036,7 +1048,7 @@
         nx = visibleW / 2 - (f.l + f.r) / 200 * fside;
         ny = sz.h / 2 - (f.t + f.b) / 200 * fside;
       }
-      zoomMs = Math.abs(ns - view.s) > 0.001 ? CONFIG.focusZoomMs : 0;
+      needZoom = Math.abs(ns - view.s) > 0.001;
     } else {
       // На узком экране или без data-frame держим выбранный квадрат на focusAnchorX,
       // но всё равно приводим и слишком малый, и слишком большой масштаб к focusZoom.
@@ -1049,7 +1061,7 @@
       centerMapX = cx;
       centerMapY = cy;
       anchorX = visibleW * CONFIG.focusAnchorX;
-      zoomMs = Math.abs(ns - view.s) > 0.001 ? CONFIG.focusZoomMs : 0;
+      needZoom = Math.abs(ns - view.s) > 0.001;
     }
 
     var centerView;
@@ -1079,7 +1091,7 @@
 
     // При масштабе выше целевого не ждём: сразу отъезжаем, удерживая область под
     // тем же экранным центром, затем спокойно центрируем её на новом масштабе.
-    if (zoomMs > 0 && view.s > ns + 0.001 && centerMapX != null && centerMapY != null) {
+    if (needZoom && view.s > ns + 0.001 && centerMapX != null && centerMapY != null) {
       var oldSide = view.s * base;
       var focusScreenX = view.tx + centerMapX * oldSide;
       var focusScreenY = view.ty + centerMapY * oldSide;
@@ -1088,18 +1100,18 @@
         tx: focusScreenX - centerMapX * ns * base,
         ty: focusScreenY - centerMapY * ns * base
       });
-      animateTo(ns, outView.tx, outView.ty, zoomMs, finishImmediateZoomOut);
+      animateTo(ns, outView.tx, outView.ty, CONFIG.focusZoomOutMs, finishImmediateZoomOut);
       return;
     }
 
     function startZoom() {
       focusTimer = null;
       if (panelArea !== el || !el.classList.contains('is-selected')) return;
-      if (zoomMs > 0) animateTo(ns, nx, ny, zoomMs);
+      if (needZoom) animateTo(ns, nx, ny, CONFIG.focusZoomMs);   // приближение после центрирования
     }
 
     function afterCenter() {
-      if (zoomMs > 0) focusTimer = window.setTimeout(startZoom, CONFIG.focusZoomDelay);
+      if (needZoom) focusTimer = window.setTimeout(startZoom, CONFIG.focusZoomDelay);
     }
 
     var panMs = Math.hypot(centerView.tx - view.tx, centerView.ty - view.ty) > 1 ? CONFIG.focusMs : 0;
