@@ -313,8 +313,6 @@ body { text-shadow: 0 0 12px rgba(37, 234, 219, .03); }
 .filters { border-color: rgba(45,238,224,.16); }
 .stat-value { color: #dffffb; text-shadow: 0 0 10px rgba(42,226,213,.12); }
 .stat-label,
-.filter-header,
-.filter-label,
 .list-caption { color: #568b87; }
 .stat-item + .stat-item { border-left-color: rgba(45,238,224,.16); }
 .filter-count { color: #45e5d8; }
@@ -367,6 +365,12 @@ body { text-shadow: 0 0 12px rgba(37, 234, 219, .03); }
 .world-pop { color: #5f8d89; }
 .detail-note { border-left-color: #2ef5e6; background: rgba(46,245,230,.05); color: #7ca8a4; }
 .detail-note strong { color: #bffbf6; }
+.detail-position-row { border-color: rgba(45,238,224,.18); background: rgba(46,245,230,.025); }
+.detail-coordinate strong { color: #bffbf6; }
+.detail-coordinate span { color: #e1f7f4; }
+.detail-center-button { border-color: rgba(46,245,230,.27); background: rgba(2,18,16,.72); color: #8ce2dc; }
+.detail-center-button:hover { border-color: rgba(46,245,230,.62); background: rgba(22,114,107,.18); }
+.detail-position-note { color: #5f8d89; }
 .detail-footer { color: #547f7c; }
 .detail-footer button,
 .source-links a {
@@ -400,7 +404,8 @@ body { text-shadow: 0 0 12px rgba(37, 234, 219, .03); }
 .note-block h3 { color: #dcf8f5; }
 .note-block p { color: #9abdb9; }
 .note-block p b { color: #acd8d4; }
-.modal-foot { color: #426e6a; }
+.modal-foot { color: #75b6b0; font-size: 10px; font-weight: 650; letter-spacing: .10em; }
+.modal-foot span { border-color: rgba(45,238,224,.30); background: rgba(46,245,230,.06); color: #b2e1dc; }
 
 * { scrollbar-color: #147f78 transparent; }
 .minimal-mode .topbar { height: 58px; }
@@ -746,7 +751,7 @@ select:focus-visible { outline-color: #2ef5e6; }
   width: 100%;
   min-height: 50px;
   display: grid;
-  grid-template-columns: 35px minmax(0,1fr) auto;
+  grid-template-columns: minmax(0,1fr) auto;
   align-items: center;
   gap: 9px;
   padding: 7px 10px 7px 8px;
@@ -784,21 +789,6 @@ select:focus-visible { outline-color: #2ef5e6; }
   background: #2ef5e6;
   box-shadow: 0 0 9px rgba(46,245,230,.55);
 }
-.catalog-section-code {
-  width: 33px;
-  height: 27px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(46,245,230,.22);
-  color: #43d9cf;
-  font: 7px/1 var(--mono);
-  letter-spacing: .08em;
-}
-.catalog-section.active .catalog-section-code {
-  border-color: rgba(46,245,230,.56);
-  color: #bafff9;
-  background: rgba(46,245,230,.075);
-}
 .catalog-section-copy { min-width: 0; display: grid; gap: 3px; }
 .catalog-section-copy strong {
   overflow: hidden;
@@ -810,15 +800,6 @@ select:focus-visible { outline-color: #2ef5e6; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.catalog-section-copy small {
-  overflow: hidden;
-  color: #4f7774;
-  font: 6px/1.2 var(--mono);
-  letter-spacing: .025em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.catalog-section.active .catalog-section-copy small { color: #70a9a4; }
 .catalog-section > b {
   min-width: 22px;
   color: #3bcfc4;
@@ -839,13 +820,11 @@ select:focus-visible { outline-color: #2ef5e6; }
   .catalog-section {
     flex: 0 0 154px;
     min-height: 43px;
-    grid-template-columns: 29px minmax(0,1fr) auto;
+    grid-template-columns: minmax(0,1fr) auto;
     gap: 6px;
     padding: 5px 7px 5px 6px;
   }
-  .catalog-section-code { width: 27px; height: 24px; font-size: 6px; }
   .catalog-section-copy strong { font-size: 8px; }
-  .catalog-section-copy small { display: none; }
 }
 
 /* Бургер каталога на странице сектора — слева в шапке (перенесён из правого блока) */
@@ -956,7 +935,6 @@ select:focus-visible { outline-color: #2ef5e6; }
 
   /* Keep more of the catalogue reachable, with comfortable touch targets. */
   .catalog-section { flex-basis: 174px; min-height: 48px; }
-  .catalog-section-copy small { display: block; }
   .panel-head { padding: 12px 15px 10px; }
   .catalog-stats { padding: 9px 14px; }
   .filter-chip { min-height: 30px; padding-inline: 10px; }
@@ -969,4 +947,91 @@ select:focus-visible { outline-color: #2ef5e6; }
 
   .map-controls { bottom: calc(min(88dvh, 760px) + 20px + env(safe-area-inset-bottom)); }
   .map-hint { bottom: calc(min(88dvh, 760px) + 22px + env(safe-area-inset-bottom)); }
+}
+
+/* On wide screens, keep the dossier high and use the full vertical canvas. */
+@media (min-width: 761px) {
+  .detail-panel { top: 14px; z-index: 25; }
+}
+
+/* Compact, accessible disclosures for the catalog controls. */
+.catalog-dropdown,
+.filter-panel { border-bottom-color: rgba(45,238,224,.16); }
+.catalog-dropdown-summary,
+.filter-panel-summary { color: #8fbdb9; }
+.catalog-dropdown-summary b,
+.filter-indicator { color: #43d9cf; }
+.catalog-sections {
+  display: grid;
+  max-height: min(31vh, 215px);
+  overflow-y: auto;
+  gap: 2px;
+  padding: 4px 8px 8px;
+  border-bottom: 0;
+  background: rgba(0,8,7,.28);
+}
+.catalog-section { min-height: 42px; }
+.catalog-section-copy strong { font-size: 12px; }
+.filter-group { border-color: rgba(45,238,224,.18); background: rgba(1,11,10,.5); }
+.filter-group > summary { color: #78aaa6; }
+.filter-menu-current { color: #c1e5e1; }
+.filter-options { border-top-color: rgba(45,238,224,.14); }
+.catalog-list-dropdown { border-top: 1px solid rgba(45,238,224,.12); }
+.catalog-list-dropdown > summary { color: #80aaa6; }
+.list-dropdown-tools { border-bottom: 1px solid rgba(45,238,224,.09); }
+
+@media (max-width: 700px) {
+  .catalog-sections {
+    display: grid;
+    max-height: min(25vh, 180px);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .catalog-section {
+    flex: initial;
+    min-height: 40px;
+    grid-template-columns: minmax(0,1fr) auto;
+  }
+  .catalog-section-copy strong { font-size: 11px; }
+  .filter-panel .filters { overflow: visible; padding-inline: 8px; }
+}
+
+/* Collision-safe overlay labels: wrap text and reflow against the actual map area. */
+.map-stage {
+  container: map-stage / inline-size;
+}
+.map-stage > :is(.map-page-intro, .map-notice, .coordinates-label, .map-hint) {
+  box-sizing: border-box;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.map-page-intro,
+.map-notice,
+.map-hint { max-width: calc(100% - 24px); }
+
+/* Keep the high dossier clear of the top-bar title. */
+@media (min-width: 761px) {
+  .detail-panel { top: 36px; }
+}
+
+/* When the map itself is narrow (including beside an open catalog), reserve one text lane. */
+@container map-stage (max-width: 1100px) {
+  .coordinates-label { display: none; }
+  .map-page-intro {
+    left: 12px;
+    width: calc(100% - 24px);
+    max-width: none;
+  }
+  .map-stage:has(.detail-panel:not([hidden])) .map-page-intro {
+    width: min(440px, calc(100% - 360px));
+  }
+  .map-hint {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+    transform: none;
+    justify-content: center;
+    text-align: center;
+    white-space: normal;
+  }
 }

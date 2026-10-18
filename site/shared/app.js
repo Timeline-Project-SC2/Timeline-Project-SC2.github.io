@@ -271,24 +271,46 @@
       .catch(function () { return []; });
   }
 
+  // Google Sheets uses blank cells for omitted values. Accept legacy "none" as blank,
+  // but apply defaults according to each field instead of showing the token as data.
+  function sheetValue(value) {
+    var text = value == null ? '' : String(value).trim();
+    return text.toLowerCase() === 'none' ? '' : text;
+  }
+
+  function sheetCell(row, key) {
+    return sheetValue(row && row[key]);
+  }
+
+  function normalizedSystemType(value) {
+    var type = sheetValue(value).toLowerCase();
+    if (!type || type === 'standard' || type === 'system') return 'standard';
+    if (type === 'unknown' || type === 'unknow') return 'unknown';
+    return type;
+  }
+
+  function normalizedPlaceType(value) {
+    return (sheetValue(value).toLowerCase() || 'planet');
+  }
+
   function mapSystemRow(row) {
-    var x = explicitMapNumber(row.x);
-    var y = explicitMapNumber(row.y);
+    var x = explicitMapNumber(sheetCell(row, 'x'));
+    var y = explicitMapNumber(sheetCell(row, 'y'));
     var coord = x !== null && y !== null ? [x, y] : null;
+    var name = sheetCell(row, 'name');
+    var faction = sheetCell(row, 'faction');
     return {
-      id: row.system_id || row.id || row.name,
-      name: row.name || '',
-      nameEn: row.name || '',
-      // Systems use a dedicated classification tag; blank values mean no highlight.
-      systemType: String(row.type || 'none').trim().toLowerCase(),
-      // A marker is allowed only when both explicit map coordinates are present.
+      id: sheetCell(row, 'system_id') || sheetCell(row, 'id') || name,
+      name: name,
+      nameEn: name,
+      systemType: normalizedSystemType(row.type),
       coord: coord,
       coordSource: coord ? 'map' : null,
       fromSheet: !!coord,
-      primaryFaction: row.faction || '',
-      factions: row.faction ? [row.faction] : [],
-      note: row.description || '',
-      sourceUrl: row.source_url || '',
+      primaryFaction: faction,
+      factions: faction ? [faction] : [],
+      note: sheetCell(row, 'description'),
+      sourceUrl: sheetCell(row, 'source_url'),
       worlds: [],
       planetIds: []
     };
@@ -298,13 +320,17 @@
     if (!systems || !systems.length || !rows || !rows.length) return systems;
     var dataByKey = {};
     rows.forEach(function (row) {
-      var x = explicitMapNumber(row.x);
-      var y = explicitMapNumber(row.y);
+      var x = explicitMapNumber(sheetCell(row, 'x'));
+      var y = explicitMapNumber(sheetCell(row, 'y'));
+      var faction = sheetCell(row, 'faction');
       var data = {
-        systemType: String(row.type || 'none').trim().toLowerCase(),
-        coord: x !== null && y !== null ? [x, y] : null
+        systemType: normalizedSystemType(row.type),
+        coord: x !== null && y !== null ? [x, y] : null,
+        primaryFaction: faction,
+        note: sheetCell(row, 'description'),
+        sourceUrl: sheetCell(row, 'source_url')
       };
-      [row.system_id || row.id, row.name].forEach(function (key) {
+      [sheetCell(row, 'system_id') || sheetCell(row, 'id'), sheetCell(row, 'name')].forEach(function (key) {
         var normalized = normalize(key);
         if (normalized) dataByKey[normalized] = data;
       });
@@ -321,6 +347,12 @@
             update.coordSource = 'map';
             update.fromSheet = true;
           }
+          if (sheetData.primaryFaction) {
+            update.primaryFaction = sheetData.primaryFaction;
+            update.factions = [sheetData.primaryFaction];
+          }
+          if (sheetData.note) update.note = sheetData.note;
+          if (sheetData.sourceUrl) update.sourceUrl = sheetData.sourceUrl;
           return Object.assign({}, system, update);
         }
       }
@@ -329,29 +361,27 @@
   }
 
   function mapPlaceRow(row) {
-    var xText = row.x == null ? '' : String(row.x).trim();
-    var yText = row.y == null ? '' : String(row.y).trim();
-    var x = xText ? Number(xText) : NaN;
-    var y = yText ? Number(yText) : NaN;
-    var coord = isFinite(x) && isFinite(y) ? [x, y] : null;
-    var systemId = String(row.system_id || '').trim();
+    var x = explicitMapNumber(sheetCell(row, 'x'));
+    var y = explicitMapNumber(sheetCell(row, 'y'));
+    var coord = x !== null && y !== null ? [x, y] : null;
+    var systemId = sheetCell(row, 'system_id');
     var pointOfInterest = !systemId && !!coord;
+    var name = sheetCell(row, 'name');
+    var faction = sheetCell(row, 'faction');
     return {
-      id: row.ID || row.id || row.name,
-      name: row.name || '',
-      nameEn: row.name || '',
-      // если в таблице нет колонки type, место считается просто местом (placeTypesOf
-      // подставит 'planet'); 'other' присваиваем только когда он указан явно
-      placeTypes: row.type ? [row.type] : [],
+      id: sheetCell(row, 'ID') || sheetCell(row, 'id') || name,
+      name: name,
+      nameEn: name,
+      placeTypes: [normalizedPlaceType(row.type)],
       systemId: systemId || null,
       system: systemId || null,
       coord: coord,
       pointOfInterest: pointOfInterest,
       mapCoord: pointOfInterest ? { x: x, y: y } : null,
-      primaryFaction: row.faction || '',
-      factions: row.faction ? [row.faction] : [],
-      note: row.description || '',
-      sourceUrl: row.source_url || '',
+      primaryFaction: faction,
+      factions: faction ? [faction] : [],
+      note: sheetCell(row, 'description'),
+      sourceUrl: sheetCell(row, 'source_url'),
       wikiCategories: []
     };
   }
@@ -362,21 +392,34 @@
     result.forEach(function (place) { byId[String(place.id)] = place; });
 
     (rows || []).map(mapPlaceRow).forEach(function (sheetPlace) {
-      if (!sheetPlace.pointOfInterest) return;
       var existing = byId[String(sheetPlace.id)];
       if (!existing) {
-        result.push(sheetPlace);
-        byId[String(sheetPlace.id)] = sheetPlace;
+        if (sheetPlace.pointOfInterest) {
+          result.push(sheetPlace);
+          byId[String(sheetPlace.id)] = sheetPlace;
+        }
         return;
       }
-      // A populated system_id always wins: only genuinely standalone rows become POIs.
-      if (existing.systemId) return;
-      existing.pointOfInterest = true;
-      existing.coord = sheetPlace.coord;
-      existing.mapCoord = sheetPlace.mapCoord;
+      // The sheet relationship is authoritative: a blank system_id is standalone,
+      // and only a complete explicit coordinate pair turns it into a POI.
+      existing.systemId = sheetPlace.systemId;
+      existing.system = sheetPlace.systemId;
+      existing.pointOfInterest = sheetPlace.pointOfInterest;
+      if (sheetPlace.pointOfInterest) {
+        existing.coord = sheetPlace.coord;
+        existing.mapCoord = sheetPlace.mapCoord;
+      } else if (!sheetPlace.systemId) {
+        existing.mapCoord = null;
+      }
       if ((!existing.placeTypes || !existing.placeTypes.length) && sheetPlace.placeTypes.length) {
         existing.placeTypes = sheetPlace.placeTypes;
       }
+      if (sheetPlace.primaryFaction) {
+        existing.primaryFaction = sheetPlace.primaryFaction;
+        existing.factions = [sheetPlace.primaryFaction];
+      }
+      if (sheetPlace.note) existing.note = sheetPlace.note;
+      if (sheetPlace.sourceUrl) existing.sourceUrl = sheetPlace.sourceUrl;
     });
     return result;
   }
@@ -442,7 +485,36 @@
 
   /* ------------------------------------------------------------------ модель */
 
+  function stringList(value) {
+    var values = Array.isArray(value) ? value : (value == null || value === '' ? [] : [value]);
+    return values.map(sheetValue).filter(Boolean);
+  }
+
+  function normalizeSystemRecord(system) {
+    var normalized = Object.assign({}, system);
+    normalized.systemType = normalizedSystemType(system.systemType);
+    normalized.primaryFaction = sheetValue(system.primaryFaction);
+    normalized.factions = stringList(system.factions);
+    normalized.note = sheetValue(system.note);
+    normalized.sourceUrl = sheetValue(system.sourceUrl);
+    return normalized;
+  }
+
+  function normalizePlaceRecord(place) {
+    var normalized = Object.assign({}, place);
+    var placeTypes = Array.isArray(place.placeTypes) ? place.placeTypes :
+      (place.placeTypes == null || place.placeTypes === '' ? [] : [place.placeTypes]);
+    normalized.placeTypes = placeTypes.map(normalizedPlaceType);
+    normalized.systemId = sheetValue(place.systemId) || null;
+    normalized.primaryFaction = sheetValue(place.primaryFaction);
+    normalized.factions = stringList(place.factions);
+    normalized.note = sheetValue(place.note);
+    normalized.sourceUrl = sheetValue(place.sourceUrl);
+    return normalized;
+  }
+
   function applyOverrides(system) {
+    system = normalizeSystemRecord(system);
     var override = (state.overrides && state.overrides.systems && state.overrides.systems[system.id]) || null;
 
     var resolved = Object.assign({}, system);
@@ -523,6 +595,7 @@
   }
 
   function buildModel() {
+    state.planets = (state.planets || []).map(normalizePlaceRecord);
     state.systems = (state.systemsRaw || []).map(function (system) {
       return attachWorlds(applyOverrides(system));
     });
@@ -579,7 +652,7 @@
   }
 
   function factionsOf(planet) {
-    return (planet.factions && planet.factions.length) ? planet.factions : ['Не указано'];
+    return (planet.factions && planet.factions.length) ? planet.factions : ['Фракции нет'];
   }
 
   function buildFacets() {
@@ -588,7 +661,7 @@
       var list = system.worlds.length
         ? system.worlds.reduce(function (acc, planet) { return acc.concat(factionsOf(planet)); }, [])
         : (system.factions || []);
-      (list.length ? list : ['Не указано']).forEach(function (faction) {
+      (list.length ? list : ['Фракции нет']).forEach(function (faction) {
         counter[faction] = (counter[faction] || 0) + 1;
       });
     });
@@ -1860,15 +1933,26 @@
 
   function updateCatalogSectionState() {
     var active = state.catalogView || '';
+    var selectedButton = null;
     doc.querySelectorAll('[data-catalog-view]').forEach(function (button) {
       var selected = button.getAttribute('data-catalog-view') === active;
       button.classList.toggle('active', selected);
       button.setAttribute('aria-pressed', String(selected));
+      if (selected) selectedButton = button;
     });
+    if (el.catalogSectionSummary) {
+      var label = selectedButton && qs('.catalog-section-copy strong', selectedButton);
+      el.catalogSectionSummary.textContent = label ? label.textContent : 'Места';
+    }
+    if (el.catalogSectionSummaryCount) {
+      var count = selectedButton && qs('b', selectedButton);
+      el.catalogSectionSummaryCount.textContent = count ? count.textContent : '';
+    }
   }
 
   function setCatalogView(view) {
     state.catalogView = view;
+    if (el.catalogSectionDropdown) el.catalogSectionDropdown.open = false;
     state.query = '';
     if (el.searchInput) el.searchInput.value = '';
     if (el.suggestions) el.suggestions.hidden = true;
@@ -1907,13 +1991,14 @@
       var node = doc.getElementById(id);
       if (node) node.textContent = formatNumber(sectionCounts[id]);
     });
+    updateCatalogSectionState();
   }
 
   function currentFactionPool() {
     var counter = {};
     if (state.tab === 'systems') {
       state.systems.forEach(function (system) {
-        (system.worlds.length ? systemFactions(system) : (system.factions || ['Не указано'])).forEach(function (faction) {
+        (system.worlds.length ? systemFactions(system) : (system.factions || ['Фракции нет'])).forEach(function (faction) {
           counter[faction] = (counter[faction] || 0) + 1;
         });
       });
@@ -1954,9 +2039,24 @@
     });
     state.listFactions = factions;
 
+    var typeMenu = qs('[data-filter-menu="type"]', el.filters);
+    var factionMenu = qs('[data-filter-menu="faction"]', el.filters);
+    var typeWasOpen = !!(typeMenu && typeMenu.open);
+    var factionWasOpen = !!(factionMenu && factionMenu.open);
     state.activeFactions = state.activeFactions.filter(function (faction) { return counter[faction]; });
     state.activeTypes = state.activeTypes.filter(function (type) { return typeCounter[type]; });
-    var html = '<span class="filter-label">ТИП</span>' +
+
+    var typeNames = state.activeTypes.map(function (type) {
+      return (PLACE_TYPES[type] || { plural: type }).plural;
+    });
+    var factionNames = state.activeFactions.slice();
+    var typeSummary = typeNames.length ? typeNames.join(', ') : 'Все типы';
+    var factionSummary = factionNames.length
+      ? (factionNames.length < 3 ? factionNames.join(', ') : factionNames.length + ' выбрано')
+      : 'Все фракции';
+    var html = '<details class="filter-group" data-filter-menu="type"' + (typeWasOpen ? ' open' : '') + '>' +
+      '<summary><span>ТИП</span><span class="filter-menu-current">' + escapeHtml(typeSummary) + '</span></summary>' +
+      '<div class="filter-options">' +
       '<button class="filter-chip' + (!state.activeTypes.length ? ' active' : '') +
       '" type="button" data-type="">Все типы</button>';
     ['planet', 'moon', 'asteroid', 'station', 'platform', 'other'].forEach(function (type) {
@@ -1966,7 +2066,10 @@
       html += '<button class="filter-chip' + (active ? ' active' : '') + '" type="button" data-type="' + type + '">' +
         escapeHtml(config.plural) + ' <span>' + typeCounter[type] + '</span></button>';
     });
-    html += '<span class="filter-label">ФРАКЦИЯ</span>' +
+    html += '</div></details>' +
+      '<details class="filter-group" data-filter-menu="faction"' + (factionWasOpen ? ' open' : '') + '>' +
+      '<summary><span>ФРАКЦИЯ</span><span class="filter-menu-current">' + escapeHtml(factionSummary) + '</span></summary>' +
+      '<div class="filter-options">' +
       '<button class="filter-chip' + (!state.activeFactions.length ? ' active' : '') +
       '" type="button" data-faction="">Все фракции</button>';
     factions.forEach(function (faction) {
@@ -1975,7 +2078,13 @@
       html += '<button class="filter-chip' + (active ? ' active' : '') + '" type="button" data-faction="' +
         escapeHtml(faction) + '">' + escapeHtml(faction) + ' <span>' + counter[faction] + '</span></button>';
     });
+    html += '</div></details>';
     el.filters.innerHTML = html;
+
+    if (el.filterIndicator) {
+      var activeCount = state.activeTypes.length + state.activeFactions.length;
+      el.filterIndicator.textContent = activeCount ? activeCount + ' выбрано' : 'Все';
+    }
   }
 
   function matchesFaction(list, factionsOfEntity) {
@@ -2063,7 +2172,7 @@
           '<span class="row-glyph">' + escapeHtml(glyph) + '</span>' +
           '<span class="row-copy">' +
           '<span class="row-title">' + escapeHtml(item.name) + '</span>' +
-          '<span class="row-meta"><span class="row-meta-text">' + escapeHtml(item.primaryFaction || 'фракция не указана') + '</span></span>' +
+          '<span class="row-meta"><span class="row-meta-text">' + escapeHtml(item.primaryFaction || 'Фракции нет') + '</span></span>' +
           '</span>' +
           '<span class="row-count">' + item.worlds.length + '</span>' +
           '</button>';
@@ -2140,22 +2249,28 @@
     var html = '';
     html += '<h3 class="detail-title">' + escapeHtml(system.name.replace(/^Система\s+/, '')) + '</h3>';
     html += '<p class="detail-subtitle">' + escapeHtml(
-      (system.primaryFaction || 'фракция не указана') + ' · ' + worlds.length + ' ' + plural(worlds.length, ['мир', 'мира', 'миров'])
+      (system.primaryFaction || 'Фракции нет') + ' · ' + worlds.length + ' ' + plural(worlds.length, ['мир', 'мира', 'миров'])
     ) + '</p>';
 
     html += '<div class="detail-badges">';
-    html += badge(system.canonical ? 'каноническая система · WorldBox' :
+    var provenanceBadge = system.canonical ? 'каноническая система · WorldBox' :
       (system.confidence === 'pdf-linked' ? 'связь старого каталога' :
-        (system.confidence === 'lore' ? 'по вики-лору' : 'система')),
-      system.canonical ? 'pdf-linked' : '');
-    var systemType = String(system.systemType || 'none').trim().toLowerCase();
-    if (systemType !== 'none') {
-      var systemTypeLabels = { capital: 'Столица', unknown: 'Неизвестный тип', unknow: 'Неизвестный тип' };
+        (system.confidence === 'lore' ? 'по вики-лору' : 'система'));
+    html += badge(provenanceBadge, system.canonical ? 'pdf-linked' : '');
+    var systemType = normalizedSystemType(system.systemType);
+    var systemTypeLabels = {
+      standard: 'Система', capital: 'Столица', unknown: 'Неизвестный тип', unknow: 'Неизвестный тип'
+    };
+    // The normal provenance badge already says "система"; avoid repeating it.
+    if (systemType !== 'standard' || provenanceBadge !== 'система') {
       html += badge(systemTypeLabels[systemType] || systemType, systemType === 'capital' ? 'custom' : '');
     }
     if (system.mapVerified) html += badge('сверено с картой');
     if (system.needsReview) html += badge('требует проверки · Кегар', 'custom');
     html += '</div>';
+
+    html += '<div class="detail-note detail-description"><strong>Описание:</strong> ' +
+      escapeHtml(system.note || 'отсутствует.') + '</div>';
 
     html += '<div class="detail-section-title"><span>МЕСТА СИСТЕМЫ</span><span>' + worlds.length + '</span></div>';
     if (worlds.length) {
@@ -2182,17 +2297,26 @@
 
     if (system.coord && system.coordSource === 'map') {
       html += '<div class="detail-section-title"><span>ПОЛОЖЕНИЕ НА СХЕМЕ</span></div>' +
-        '<div class="detail-note">Система отмечена на карте.' +
-        (system.mapLabel ? ' Подпись: ' + escapeHtml(system.mapLabel) + '.' : '') + '</div>';
+        '<div class="detail-position-row">' +
+          '<div class="detail-coordinate-pair">' +
+            '<div class="detail-coordinate"><strong>Координата X:</strong><span>' + escapeHtml(formatCoordinate(system.coord[0])) + '</span></div>' +
+            '<div class="detail-coordinate"><strong>Координата Y:</strong><span>' + escapeHtml(formatCoordinate(system.coord[1])) + '</span></div>' +
+          '</div>' +
+          '<button class="detail-center-button" type="button" data-action="center">Центрировать</button>' +
+        '</div>' +
+        '<div class="detail-position-note">Система отмечена на карте.' +
+          (system.mapLabel ? ' Подпись: ' + escapeHtml(system.mapLabel) + '.' : '') + '</div>';
     }
 
-    html += '<div class="detail-note"><strong>Внимание.</strong> ' + escapeHtml(system.note || 'Описание отсутствует.') + '</div>';
     if (system.mapNote) {
       html += '<div class="detail-note">' + escapeHtml(system.mapNote) + '</div>';
     }
-    if (system.refs && system.refs.length) {
+    var systemSources = (system.refs || []).slice();
+    var sheetSystemSource = safeSourceUrl(system.sourceUrl);
+    if (sheetSystemSource && systemSources.indexOf(sheetSystemSource) === -1) systemSources.push(sheetSystemSource);
+    if (systemSources.length) {
       html += '<div class="detail-section-title"><span>ИСТОЧНИКИ</span></div><div class="source-links">' +
-        system.refs.map(function (ref) {
+        systemSources.map(function (ref) {
           return '<a href="' + escapeHtml(ref) + '" target="_blank" rel="noreferrer">' + escapeHtml(shortUrl(ref)) + ' ↗</a>';
         }).join('') + '</div>';
     }
@@ -2204,7 +2328,6 @@
 
     el.detailFooter.innerHTML =
       '<span>' + escapeHtml(system.id) + '</span>' +
-      '<button type="button" data-action="center">Центрировать</button>' +
       '<button type="button" data-action="link">Ссылка</button>';
   }
 
@@ -2232,6 +2355,9 @@
     if (planet.parent) html += badge('родитель: ' + planet.parent);
     html += '</div>';
 
+    html += '<div class="detail-note detail-description"><strong>Описание:</strong> ' +
+      escapeHtml(planet.note || 'отсутствует.') + '</div>';
+
     html += '<div class="detail-section-title"><span>СИСТЕМА</span></div>';
     html += '<div class="world-list">';
     if (system) {
@@ -2254,12 +2380,31 @@
     if (planet.sourceLine) {
       html += '<div class="detail-note"><strong>Источник.</strong> ' + escapeHtml(planet.sourceLine) + '</div>';
     }
-    if (planet.pointOfInterest && planet.mapCoord) {
-      html += '<div class="detail-note"><strong>Точка интереса.</strong> Координаты на карте: X ' +
-        planet.mapCoord.x + ', Y ' + planet.mapCoord.y + '.</div>';
-    } else if (planet.mapCoord) {
-      html += '<div class="detail-note">На карте подпись «' + escapeHtml(planet.mapLabel || planet.name) + '» в точке ' +
-        planet.mapCoord.x + ', ' + planet.mapCoord.y + '. Точка относится к подписи, а не к орбите.</div>';
+    var placeSource = safeSourceUrl(planet.sourceUrl);
+    if (placeSource) {
+      html += '<div class="source-links"><a href="' + escapeHtml(placeSource) + '" target="_blank" rel="noreferrer">' +
+        escapeHtml(shortUrl(placeSource)) + ' ↗</a></div>';
+    }
+    var placePosition = planet.mapCoord ||
+      (system && system.coord && system.coordSource === 'map'
+        ? { x: system.coord[0], y: system.coord[1] } : null);
+    var placePositionTitle = planet.mapCoord ? 'ПОЛОЖЕНИЕ НА СХЕМЕ' : 'ПОЛОЖЕНИЕ СИСТЕМЫ';
+    if (placePosition) {
+      html += '<div class="detail-section-title"><span>' + placePositionTitle + '</span></div>' +
+        '<div class="detail-position-row">' +
+          '<div class="detail-coordinate-pair">' +
+            '<div class="detail-coordinate"><strong>Координата X:</strong><span>' + escapeHtml(formatCoordinate(placePosition.x)) + '</span></div>' +
+            '<div class="detail-coordinate"><strong>Координата Y:</strong><span>' + escapeHtml(formatCoordinate(placePosition.y)) + '</span></div>' +
+          '</div>' +
+          '<button class="detail-center-button" type="button" data-action="center">Центрировать</button>' +
+        '</div>' +
+        '<div class="detail-position-note">' +
+          (planet.pointOfInterest
+            ? 'Точка интереса отмечена на карте.'
+            : (planet.mapCoord
+              ? 'На карте отмечена подпись «' + escapeHtml(planet.mapLabel || planet.name) + '», а не орбита.'
+              : 'Показано положение родительской системы.')) +
+        '</div>';
     }
     if (planet.canonicalSystem) {
       html += '<div class="detail-note"><strong>Каноническая система.</strong> ' +
@@ -2275,13 +2420,43 @@
     el.detailFooter.innerHTML =
       '<span>' + escapeHtml(planet.id) + '</span>' +
       (system ? '<button type="button" data-action="system">← к системе</button>' : '') +
-      '<button type="button" data-action="center">Центрировать</button>';
+      (!placePosition ? '<button type="button" data-action="center">Центрировать</button>' : '');
+  }
+
+  function formatCoordinate(value) {
+    var number = Number(value);
+    return isFinite(number) ? String(Math.round(number * 100) / 100) : '—';
+  }
+
+  function centerActiveDetail() {
+    var planet = state.activePlanetId ? state.planetsById[state.activePlanetId] : null;
+    if (planet && planet.mapCoord) {
+      centerOn(planet.mapCoord.x, planet.mapCoord.y, Math.max(state.view.scale, fitScale() * 3.4));
+      return;
+    }
+    var systemId = planet ? planet.systemId : state.activeSystemId;
+    var system = systemId ? state.systemsById[systemId] : null;
+    if (system && system.coord) {
+      centerOn(system.coord[0], system.coord[1], Math.max(state.view.scale, fitScale() * 2.6));
+    }
+  }
+
+  function safeSourceUrl(value) {
+    var text = sheetValue(value);
+    if (!text) return '';
+    if (!/^[a-z][a-z\d+.-]*:\/\//i.test(text)) text = 'https://' + text;
+    try {
+      var parsed = new URL(text);
+      return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname
+        ? parsed.href : '';
+    } catch (err) { return ''; }
   }
 
   function shortUrl(url) {
     try {
       var parsed = new URL(url);
-      return parsed.host.replace('www.', '') + parsed.pathname.split('/').filter(Boolean).slice(-1)[0].replace(/_/g, ' ');
+      var tail = parsed.pathname.split('/').filter(Boolean).slice(-1)[0] || '';
+      return parsed.host.replace(/^www\./i, '') + (tail ? '/' + tail.replace(/_/g, ' ') : '');
     } catch (err) { return url; }
   }
 
@@ -2511,8 +2686,9 @@
 
   function cacheElements() {
     ['searchInput', 'clearSearch', 'suggestions', 'searchWrap', 'mapFactionFilter', 'mapStage', 'mapCanvas',
-      'leftPanel', 'closePanel', 'toggleSidePanel', 'filters', 'filterResultCount',
-      'listCaption', 'sortButton', 'catalogList', 'detailPanel',
+      'leftPanel', 'closePanel', 'toggleSidePanel', 'filters', 'filterResultCount', 'filterIndicator',
+      'catalogSectionDropdown', 'catalogSectionSummary', 'catalogSectionSummaryCount',
+      'catalogListDropdown', 'listCaption', 'sortButton', 'catalogList', 'detailPanel',
       'detailType', 'detailContent', 'detailFooter', 'pinButton', 'closeDetail',
       'helpButton', 'closeHelp', 'helpModal', 'zoomIn', 'zoomOut', 'resetMap', 'zoomPercent', 'labelsToggle',
       'coordinateToggle', 'mapCoordinateReadout', 'toast'].forEach(function (id) {
@@ -2671,6 +2847,11 @@
       if (!state.pinned) clearDetail();
     });
     el.detailContent.addEventListener('click', function (event) {
+      var actionButton = event.target.closest('[data-action]');
+      if (actionButton && actionButton.getAttribute('data-action') === 'center') {
+        centerActiveDetail();
+        return;
+      }
       var card = event.target.closest('[data-planet],[data-system]');
       if (!card) return;
       if (card.hasAttribute('data-planet')) selectPlanet(card.getAttribute('data-planet'));
@@ -2681,12 +2862,7 @@
       if (!button) return;
       var action = button.getAttribute('data-action');
       if (action === 'center') {
-        var planet = state.activePlanetId ? state.planetsById[state.activePlanetId] : null;
-        if (planet && planet.mapCoord) centerOn(planet.mapCoord.x, planet.mapCoord.y, Math.max(state.view.scale, fitScale() * 3.4));
-        else if (state.activeSystemId) {
-          var system = state.systemsById[state.activeSystemId];
-          if (system && system.coord) centerOn(system.coord[0], system.coord[1], Math.max(state.view.scale, fitScale() * 2.6));
-        }
+        centerActiveDetail();
       } else if (action === 'link') {
         copyLink();
       } else if (action === 'system') {
