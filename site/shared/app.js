@@ -53,9 +53,7 @@
       maxRadius: 46,
       worldFont: 38,
       minFont: 9.5,
-      maxFont: 56,
-      labelBudgetMin: 16,
-      labelBudgetMax: 54
+      maxFont: 56
     },
     hitRadius: 15,
     maxSuggestions: 22
@@ -1303,18 +1301,10 @@
     };
   }
 
-  function boxesIntersect(a, b, padding) {
-    padding = padding || 0;
-    return !(a.right + padding <= b.left || a.left >= b.right + padding ||
-      a.bottom + padding <= b.top || a.top >= b.bottom + padding);
-  }
-
   function drawMarkers() {
     var scale = state.view.scale;
     var list = visibleSystems();
     var metrics = markerMetrics(scale);
-    var showAllNames = state.labelsOn;
-    var entries = [];
     var labelCandidates = [];
 
     ctx.save();
@@ -1330,27 +1320,26 @@
       var isActive = state.activeSystemId === system.id;
       var verified = system.coordSource === 'map';
       var fromLabel = verified && !system.fromSheet;
+      var highlighted = isHover || isActive;
       var emphasis = (isHover ? clamp(5 * scale, 1.5, 4.5) : 0) +
         (isActive ? clamp(8 * scale, 1.6, 7) : 0);
       var radius = metrics.radius + emphasis;
-      var color = verified ? theme.accent : theme.muted;
+      var color = highlighted ? theme.accent : 'rgba(36,234,219,.38)';
       var entry = {
         system: system, point: point, radius: radius, color: color,
         hover: isHover, active: isActive, verified: verified,
         fromLabel: fromLabel
       };
-      entries.push(entry);
-
       ctx.save();
-      if (isHover) {
-        ctx.shadowColor = 'rgba(190,215,250,.55)';
+      if (highlighted) {
+        ctx.shadowColor = theme.accent;
         ctx.shadowBlur = clamp(32 * scale, 12, 30);
       }
-      ctx.globalAlpha = verified ? 1 : (state.labelsOn ? 0.82 : 0.66);
+      ctx.globalAlpha = highlighted || verified ? 1 : 0.66;
 
       ctx.beginPath();
       ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-      ctx.lineWidth = metrics.stroke * (isHover ? 1.35 : 1);
+      ctx.lineWidth = metrics.stroke * (highlighted ? 1.35 : 1);
       ctx.strokeStyle = color;
       if (!verified) {
         var dash = clamp(9 * scale, 3, 8);
@@ -1360,7 +1349,7 @@
       ctx.setLineDash([]);
 
       if (verified) {
-        ctx.fillStyle = 'rgba(181,211,250,.16)';
+        ctx.fillStyle = 'rgba(36,234,219,.08)';
         ctx.fill();
       }
       ctx.beginPath();
@@ -1390,104 +1379,29 @@
         ctx.fill();
       }
 
-      var showName = showAllNames;
-      if (showName) {
-        labelCandidates.push({
-          entry: entry,
-          priority: isActive ? 0 : (isHover ? 1 : (verified ? 2 : 3)),
-          distance: Math.hypot(point.x - state.viewport.w / 2, point.y - state.viewport.h / 2)
-        });
-      }
+      if (state.labelsOn || highlighted) labelCandidates.push(entry);
     });
 
-    // Подписи получают несколько позиций вокруг круга. На дальнем LOD бюджет
-    // и проверка пересечений убирают кашу; active/hover остаются видимыми всегда.
-    labelCandidates.sort(function (a, b) {
-      return a.priority - b.priority || a.distance - b.distance;
-    });
-    var labelBudget = clamp(
-      Math.round(CONFIG.markerLod.labelBudgetMin + scale * 48),
-      CONFIG.markerLod.labelBudgetMin,
-      CONFIG.markerLod.labelBudgetMax
-    );
-    if (scale >= 0.8) labelBudget = CONFIG.markerLod.labelBudgetMax;
-
-    var markerBoxes = entries.map(function (entry) {
-      return {
-        id: entry.system.id,
-        left: entry.point.x - entry.radius - metrics.crossLength,
-        right: entry.point.x + entry.radius + metrics.crossLength,
-        top: entry.point.y - entry.radius - metrics.crossLength,
-        bottom: entry.point.y + entry.radius + metrics.crossLength
-      };
-    });
-    var placed = [];
-    var drawn = 0;
-
-    for (var i = 0; i < labelCandidates.length && drawn < labelBudget; i++) {
-      var candidate = labelCandidates[i];
-      var e = candidate.entry;
+    // Включённый режим рисует каждое имя без лимита, LOD или устранения перекрытий.
+    for (var i = 0; i < labelCandidates.length; i++) {
+      var e = labelCandidates[i];
       var text = e.system.name.replace(/^Система\s+/, '');
       var fontSize = metrics.fontSize * (e.active || e.hover ? 1.08 : 1);
+      var x = e.point.x + e.radius + metrics.gap;
+      var y = e.point.y + e.radius * 0.56;
+      ctx.save();
       ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
-      var width = ctx.measureText(text).width;
-      var height = fontSize * 1.18;
-      var gap = metrics.gap;
-      var positions = [
-        { x: e.point.x + e.radius + gap, y: e.point.y + e.radius * 0.56, align: 'left' },
-        { x: e.point.x + e.radius + gap, y: e.point.y - e.radius * 0.56, align: 'left' },
-        { x: e.point.x - e.radius - gap, y: e.point.y + e.radius * 0.56, align: 'right' },
-        { x: e.point.x - e.radius - gap, y: e.point.y - e.radius * 0.56, align: 'right' }
-      ];
-      var chosen = null;
-
-      for (var posIndex = 0; posIndex < positions.length; posIndex++) {
-        var pos = positions[posIndex];
-        var left = pos.align === 'left' ? pos.x : pos.x - width;
-        var box = {
-          left: left - 2, right: left + width + 2,
-          top: pos.y - height / 2 - 2, bottom: pos.y + height / 2 + 2
-        };
-        var blocked = false;
-        for (var m = 0; m < markerBoxes.length; m++) {
-          if (markerBoxes[m].id !== e.system.id && boxesIntersect(box, markerBoxes[m], 2)) {
-            blocked = true; break;
-          }
-        }
-        if (!blocked) {
-          for (var p = 0; p < placed.length; p++) {
-            if (boxesIntersect(box, placed[p], 3)) { blocked = true; break; }
-          }
-        }
-        if (!blocked) {
-          chosen = { position: pos, box: box };
-          break;
-        }
-      }
-
-      // Фокус пользователя важнее автоматической раскладки.
-      if (!chosen && candidate.priority <= 1) {
-        var fallback = positions[0];
-        chosen = {
-          position: fallback,
-          box: {
-            left: fallback.x - 2, right: fallback.x + width + 2,
-            top: fallback.y - height / 2 - 2, bottom: fallback.y + height / 2 + 2
-          }
-        };
-      }
-      if (!chosen) continue;
-
-      placed.push(chosen.box);
-      drawn++;
-      ctx.textAlign = chosen.position.align;
+      ctx.textAlign = 'left';
       ctx.lineWidth = clamp(fontSize * 0.24, 2.6, 9);
       ctx.strokeStyle = 'rgba(2,5,10,.80)';
-      ctx.fillStyle = e.hover || e.active
-        ? theme.text
-        : (e.verified ? 'rgba(230,240,252,.88)' : 'rgba(190,201,216,.74)');
-      ctx.strokeText(text, chosen.position.x, chosen.position.y);
-      ctx.fillText(text, chosen.position.x, chosen.position.y);
+      ctx.fillStyle = e.hover || e.active ? theme.accent : 'rgba(36,234,219,.38)';
+      if (e.hover || e.active) {
+        ctx.shadowColor = theme.accent;
+        ctx.shadowBlur = clamp(24 * scale, 8, 22);
+      }
+      ctx.strokeText(text, x, y);
+      ctx.fillText(text, x, y);
+      ctx.restore();
     }
 
     ctx.restore();
