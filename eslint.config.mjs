@@ -19,6 +19,7 @@ export default [
         // общие объекты между файлами сайта
         CursorFx: 'readonly',     // shared/cursor-fx.js → страница /cursor-test/
         FocusFx: 'readonly',      // shared/focus-fx.js → galaxy.js
+        GalaxySpiral: 'readonly', // shared/galaxy-spiral.js → galaxy.js, /spiral-test/
         LagFx: 'readonly',        // shared/lag-fx.js → galaxy.js
         SITE_LINKS: 'readonly'    // shared/links.js → остальные
       }
