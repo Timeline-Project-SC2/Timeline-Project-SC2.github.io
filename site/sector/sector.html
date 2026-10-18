@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="sector.css?v=coordinates-1">
   <link rel="stylesheet" href="/shared/wiki-skin.css?v=structure-1">
   <link rel="stylesheet" href="/shared/readability.css?v=structure-1">
-  <link rel="stylesheet" href="/shared/timeline-skin.css?v=layout-safe-2">
+  <link rel="stylesheet" href="/shared/timeline-skin.css?v=search-hint-cycle-1">
   <link rel="stylesheet" href="/shared/catalog-typography.css?v=catalog-dropdown-2">
   <link rel="stylesheet" href="/shared/travel-planner.css?v=travel-ui-1">
   <!-- минимальный скин вынесен в minimal.html: он скрывает каталог, вики-навигацию и «О данных» -->
@@ -28,7 +28,8 @@
         </button>
       <div class="search-wrap" id="searchWrap">
         <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.4 15.4 5 5"></path></svg>
-        <input id="searchInput" type="search" autocomplete="off" placeholder="Место, система или 8 цифр…" aria-label="Поиск по названию или восьмизначным координатам">
+        <input id="searchInput" type="search" autocomplete="off" placeholder="Место, система или координаты…" aria-label="Поиск по названию, восьмизначным координатам или вставленной паре X и Y через табуляцию">
+        <span class="search-hint-viewport" id="searchHintViewport" aria-hidden="true"><span class="search-hint-track" id="searchHintTrack">Место или система · 8 цифр XY: первые 4 — X, последние 4 — Y · можно вставить скопированные X и Y из таблицы через Tab</span></span>
         <kbd>/</kbd>
         <button class="search-clear" id="clearSearch" type="button" aria-label="Очистить поиск" hidden>×</button>
         <div class="suggestions" id="suggestions" role="listbox" hidden></div>
@@ -211,8 +212,8 @@
       });
     })();
   </script>
-  <script src="/shared/travel-planner.js?v=travel-core-1" defer></script>
-  <script src="/shared/app.js?v=travel-calculator-1" defer></script>
+  <script src="/shared/travel-planner.js?v=map-query-2" defer></script>
+  <script src="/shared/app.js?v=search-tab-coords-1" defer></script>
   <script src="/shared/cursor-fx.js?v=cursor-6" defer></script>
 </body>
 </html>

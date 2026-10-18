@@ -21,6 +21,18 @@
     return isFinite(number) && number > 0 ? number : null;
   }
 
+  function parseMapCoordinateQuery(value, mapLimit) {
+    var text = value == null ? '' : String(value).trim();
+    var match = text.match(/^(\d{4})(\d{4})$/);
+    if (!match) match = text.match(/^(\d{1,5})\s+(\d{1,5})$/);
+    if (!match) return null;
+    var x = Number(match[1]);
+    var y = Number(match[2]);
+    var limit = mapLimit == null ? 10000 : Number(mapLimit);
+    if (!isFinite(x) || !isFinite(y) || !isFinite(limit) || limit < 0 || x > limit || y > limit) return null;
+    return { x: x, y: y, xText: match[1], yText: match[2] };
+  }
+
   function formatNumber(value, significantDigits) {
     if (!isFinite(value)) return '—';
     if (value === 0) return '0';
@@ -132,6 +144,7 @@
     LIGHT_YEARS_PER_MAP_UNIT: LIGHT_YEARS_PER_MAP_UNIT,
     HOURS_PER_DAY: HOURS_PER_DAY,
     parseSpeed: parseSpeed,
+    parseMapCoordinateQuery: parseMapCoordinateQuery,
     formatNumber: formatNumber,
     formatExactNumber: formatExactNumber,
     roundMapCoordinates: roundMapCoordinates,

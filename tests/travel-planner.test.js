@@ -12,6 +12,16 @@ assert.equal(planner.parseSpeed('0'), null);
 assert.equal(planner.parseSpeed('-1'), null);
 assert.equal(planner.parseSpeed('10abc'), null);
 assert.equal(planner.parseSpeed('Infinity'), null);
+assert.deepEqual(planner.parseMapCoordinateQuery('60505608', 10000), {
+  x: 6050, y: 5608, xText: '6050', yText: '5608'
+});
+assert.deepEqual(planner.parseMapCoordinateQuery('6050\t5608', 10000), {
+  x: 6050, y: 5608, xText: '6050', yText: '5608'
+});
+assert.deepEqual(planner.parseMapCoordinateQuery('10000 1', 10000), {
+  x: 10000, y: 1, xText: '10000', yText: '1'
+});
+assert.equal(planner.parseMapCoordinateQuery('10001\t1', 10000), null);
 
 var a = { id: 'a', name: 'A', coord: [0, 0, 999] };
 var b = { id: 'b', name: 'B', coord: [3, 4, -999] };

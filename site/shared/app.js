@@ -771,22 +771,18 @@
 
   function search(query) {
     var rawQuery = String(query || '').trim();
-    var coordinateMatch = rawQuery.match(/^(\d{4})(\d{4})$/);
-    if (coordinateMatch) {
-      var coordinateX = Number(coordinateMatch[1]);
-      var coordinateY = Number(coordinateMatch[2]);
-      if (coordinateX <= mapSize() && coordinateY <= mapSize()) {
-        return [{
-          kind: 'coordinate',
-          kindLabel: 'Координаты',
-          glyph: '⌖',
-          id: 'coordinates:' + coordinateX + ',' + coordinateY,
-          title: 'X ' + coordinateMatch[1] + ' · Y ' + coordinateMatch[2],
-          subtitle: 'Перейти к этой точке на карте',
-          x: coordinateX,
-          y: coordinateY
-        }];
-      }
+    var coordinate = travelCore && travelCore.parseMapCoordinateQuery(rawQuery, mapSize());
+    if (coordinate) {
+      return [{
+        kind: 'coordinate',
+        kindLabel: 'Координаты',
+        glyph: '⌖',
+        id: 'coordinates:' + coordinate.x + ',' + coordinate.y,
+        title: 'X ' + coordinate.xText + ' · Y ' + coordinate.yText,
+        subtitle: 'Перейти к точке карты · можно вставить X и Y из таблицы через Tab',
+        x: coordinate.x,
+        y: coordinate.y
+      }];
     }
 
     var needle = normalize(rawQuery);
@@ -2356,6 +2352,12 @@
 
   /* ------------------------------------------------------------------ поиск: подсказки */
 
+  function updateSearchHintDistance() {
+    if (!el.searchHintViewport || !el.searchHintTrack) return;
+    var distance = Math.max(0, el.searchHintTrack.scrollWidth - el.searchHintViewport.clientWidth);
+    el.searchHintTrack.style.setProperty('--search-hint-offset', '-' + distance + 'px');
+  }
+
   function updateSuggestions() {
     var value = el.searchInput.value.trim();
     state.query = value;
@@ -3193,6 +3195,7 @@
   }
 
   function resize() {
+    updateSearchHintDistance();
     var rect = el.mapStage.getBoundingClientRect();
     var w = Math.max(1, Math.round(rect.width));
     var h = Math.max(1, Math.round(rect.height));
@@ -3226,7 +3229,7 @@
   /* ------------------------------------------------------------------ привязка интерфейса */
 
   function cacheElements() {
-    ['searchInput', 'clearSearch', 'suggestions', 'searchWrap', 'mapFactionFilter', 'mapStage', 'mapCanvas',
+    ['searchInput', 'clearSearch', 'suggestions', 'searchWrap', 'searchHintViewport', 'searchHintTrack', 'mapFactionFilter', 'mapStage', 'mapCanvas',
       'leftPanel', 'closePanel', 'toggleSidePanel', 'filters', 'filterResultCount', 'filterIndicator',
       'catalogSectionDropdown', 'catalogSectionSummary', 'catalogSectionSummaryCount',
       'catalogListDropdown', 'listCaption', 'sortButton', 'catalogList', 'detailPanel',
@@ -3570,7 +3573,9 @@
     window.addEventListener('resize', resize);
 
     if (window.ResizeObserver) {
-      new ResizeObserver(resize).observe(el.mapStage);
+      var layoutObserver = new ResizeObserver(resize);
+      layoutObserver.observe(el.mapStage);
+      if (el.searchHintViewport) layoutObserver.observe(el.searchHintViewport);
     }
   }
 
@@ -3602,6 +3607,7 @@
 
   function boot() {
     cacheElements();
+    updateSearchHintDistance();
     // Страховка: экран аутентификации не должен зависнуть даже при сетевой ошибке.
     window.setTimeout(dismissTimelineLoader, 8000);
 
