@@ -35,6 +35,7 @@ assert.equal(planner.formatNumber(tiny.totalHours), '0.000024');
 assert.equal(planner.formatNumber(12345.67), '12300');
 assert.equal(planner.formatExactNumber(1234.567), '1234.567');
 assert.equal(planner.formatExactNumber(1234.5), '1234.5');
+assert.deepEqual(planner.roundMapCoordinates([6050.49, 5608.5]), [6050, 5609]);
 
 var log = planner.buildLog([a, b], planner.calculate([a, b], 100, false), 100, false, '');
 assert.match(log, /^МАРШРУТ: A → B/m);

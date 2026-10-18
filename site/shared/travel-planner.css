@@ -4,31 +4,29 @@
 .travel-tape {
   position: absolute;
   z-index: 24;
-  left: 12px;
-  right: 12px;
+  left: 0;
+  right: 0;
   height: 30px;
   overflow: hidden;
-  border: 1px solid rgba(255, 151, 57, .78);
+  border: 1px solid rgba(255, 151, 57, .42);
   background:
-    repeating-linear-gradient(135deg, rgba(8, 12, 11, .96) 0 13px, rgba(255, 143, 46, .92) 13px 25px),
-    #080b09;
-  box-shadow: 0 0 18px rgba(255, 135, 42, .22), inset 0 0 12px rgba(255, 184, 91, .16);
+    repeating-linear-gradient(135deg, rgba(8, 12, 11, .24) 0 13px, rgba(255, 143, 46, .34) 13px 25px),
+    rgba(8, 11, 9, .12);
+  box-shadow: 0 0 11px rgba(255, 135, 42, .09), inset 0 0 8px rgba(255, 184, 91, .07);
   pointer-events: none;
 }
 .travel-tape-top { top: max(8px, env(safe-area-inset-top)); }
-.travel-tape-bottom { bottom: max(8px, env(safe-area-inset-bottom)); }
+.travel-tape-bottom { bottom: max(8px, env(safe-area-inset-bottom)); height: 22px; }
 .travel-tape-track {
   width: max-content;
   min-width: 200%;
   height: 100%;
   display: flex;
   align-items: center;
-  animation: none;
-}
-.map-stage.travel-animated .travel-tape-track {
   animation: travel-tape-flow 20s linear infinite;
   will-change: transform;
 }
+.travel-tape-bottom .travel-tape-track { animation-delay: -8s; }
 .travel-tape-track span {
   flex: 0 0 auto;
   padding: 0 21px;
@@ -155,7 +153,14 @@
 }
 .map-stage.free-point-mode #mapCanvas { cursor: crosshair; }
 .map-stage.free-point-mode #mapCanvas.dragging { cursor: grabbing; }
-.map-stage.travel-mode .map-hint { bottom: 48px; }
+@media (min-width: 600px) {
+  .map-stage.travel-mode {
+    --travel-bottom-line: calc(max(8px, env(safe-area-inset-bottom)) + 30px);
+  }
+  .map-stage.travel-mode .map-controls,
+  .map-stage.travel-mode .coordinates-label,
+  .map-stage.travel-mode .map-hint { bottom: var(--travel-bottom-line); }
+}
 .map-stage.travel-mode .map-coordinate-readout { z-index: 30; }
 
 @media (max-width: 900px) {

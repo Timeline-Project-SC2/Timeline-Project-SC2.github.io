@@ -1484,7 +1484,8 @@
         });
         if (savedCoordinates) {
           entity = {
-            id: key, name: 'Произвольная точка', coord: savedCoordinates,
+            id: key, name: 'Произвольная точка',
+            coord: travelCore.roundMapCoordinates(savedCoordinates),
             coordSource: 'map', isFreePoint: true
           };
           state.travel.customPoints[key] = entity;
@@ -1696,10 +1697,11 @@
     do {
       id = '__travel_free_point__:' + state.travel.nextFreePointId++;
     } while (state.travel.customPoints[id] || state.systemsById[id]);
+    var roundedCoordinates = travelCore.roundMapCoordinates([point.x, point.y]);
     state.travel.customPoints[id] = {
       id: id,
       name: 'Произвольная точка',
-      coord: [point.x, point.y],
+      coord: roundedCoordinates,
       coordSource: 'map',
       isFreePoint: true
     };

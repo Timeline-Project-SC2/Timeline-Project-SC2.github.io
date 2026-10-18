@@ -32,6 +32,10 @@
     return isFinite(value) ? String(Number(value)) : '—';
   }
 
+  function roundMapCoordinates(point) {
+    return [Math.round(Number(point[0])), Math.round(Number(point[1]))];
+  }
+
   function formatTimestamp(date) {
     if (!(date instanceof Date) || !isFinite(date.getTime())) return '';
     function pad(value) { return value < 10 ? '0' + value : String(value); }
@@ -130,6 +134,7 @@
     parseSpeed: parseSpeed,
     formatNumber: formatNumber,
     formatExactNumber: formatExactNumber,
+    roundMapCoordinates: roundMapCoordinates,
     formatTimestamp: formatTimestamp,
     calculate: calculate,
     buildLog: buildLog
