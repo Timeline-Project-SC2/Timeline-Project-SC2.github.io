@@ -1,6 +1,16 @@
-/* CursorFx — курсор сайта в духе брифингов StarCraft II: зелёная стрелка-шеврон, по грани
-   которой раз в 2,25 с пробегает шлейф синих частиц, а при наведении на кликабельное —
-   цепочка из четырёх треугольников с «каскадом» и «волной» заливки.
+/* CursorFx — курсор сайта в духе брифингов StarCraft II: зелёная стрелка-шеврон, по краям
+   которой раз в 2,25 с бегут синие соты, а при наведении на кликабельное — стопка из четырёх
+   непрозрачных треугольников с «каскадом» и «волной» заливки.
+
+   РИСУНОК
+     • Стрелка: из острия выходят два потока сот — по верхней и по левой грани. Они огибают
+       концы крыльев, по внутренним граням возвращаются к выемке и там сходятся во вспышке.
+       Голова потока — светящиеся шестиугольники, хвост рассыпается на обломки-многоугольники,
+       к выемке поток сужается. Маршрут и соты — CONFIG.arrow.route и CONFIG.arrow.cells.
+     • Наведение: четыре треугольника задумки, каждый следующий меньше и лежит поверх заднего.
+       Слои непрозрачные, как на образце пользователя: тёмная заливка с кромкой, а там, где
+       слой лежит на заднем, — тёмный зазор и светлая линия. «Каскад» и «волна» по очереди
+       заливают слои светлым градиентом.
 
    ПОЧЕМУ СИСТЕМНЫЙ КУРСОР, А НЕ НАРИСОВАННЫЙ ЭЛЕМЕНТ
    Курсор рисует операционная система, поэтому он не отстаёт от мыши ни на кадр. Элемент
@@ -14,7 +24,7 @@
    КАК УСТРОЕНО
    1. Кадры строятся из геометрии задумки (SVG, единицы задумки → px через CONFIG.*.scale):
       стрелка — кадр каждые 50 мс цикла 2,25 с, треугольники — цикла 3 с. Одинаковые подряд
-      кадры склеиваются, поэтому пауза между пролётами частиц — один кадр.
+      кадры склеиваются, поэтому пауза между пролётами сот — один кадр.
    2. Каждый кадр растеризуется в браузере (программный canvas) в PNG 32×32 и 64×64 для
       экранов 2×. Файлов-картинок нет, сборка не нужна. Сначала готовятся статичные кадры
       (курсор появляется сразу), анимация — следом, в фоне (≈0,4 с). Готовые PNG хранятся в
@@ -24,7 +34,7 @@
         наведение      — ссылки, кнопки, [role=button], классы сайта из CONFIG.hover и системы
                          на карте атласа (#mapCanvas.marker-hover);
         недоступно     — CONFIG.disabled (ОЗД после отказа, :disabled): приглушённая стрелка;
-        перетаскивание — пока зажата карта (CONFIG.drag): стрелка без частиц.
+        перетаскивание — пока зажата карта (CONFIG.drag): стрелка без сот.
       Какое состояние показать, решает браузер по элементу под мышью: координаты мыши модуль
       не отслеживает, поэтому задержки нет.
    4. Анимация: таймер ставит очередной кадр в style того элемента, что под мышью (с него
@@ -72,24 +82,44 @@
                                  // смена cursor у родителя пересчитывает стили всех детей
     colors: {
       core: '#00ff66', mid: '#008822', dark: '#003300', cut: '#0d0e12', glint: '#00ffff',
-      particles: ['#00d9ff', '#00d9ff', '#00ffff', '#00aaff'], particleEdge: '#ffffff'
+      // соты — голубые задумки (#00d9ff, #00ffff, #00aaff), белая кромка, глубокий синий
+      cell: { light: '#ffffff', cyan: '#00d9ff', aqua: '#00ffff', blue: '#00aaff', deep: '#0a66ff',
+        wall: '#1452e0', edge: '#7fefff' },
+      // треугольники наведения: тёмная заливка слоя, его кромка (тёмная и залитая) и зазор
+      shade: ['#0b3a1a', '#04170b'], rim: '#00cc55', rimLit: '#66ffa3', gap: '#020a05'
     },
     arrow: {
-      cycle: 2250,               // мс — период пролёта частиц
+      cycle: 2250,               // мс — период: пролёт сот и пауза
       scale: 0.809,              // px на единицу задумки: тело ≈ 27,5 px из 32
       tip: 2.1,                  // px — вершина острия; с острым углом контура остриё ≈ 1 px
-      delays: [0, 60, 120, 180], // мс — шлейф частиц
-      sizes: [[4, 4], [5, 3], [3, 5], [4, 4]]
+      // Маршрут сот в единицах задумки — контур стрелки, сдвинутый внутрь на 1,1 (середина
+      // зелёной полосы у края): из острия по верхней и по левой грани к концам крыльев, затем
+      // по внутренним граням обратно, к выемке, где оба потока сходятся.
+      route: { tip: [7.91, 8.12], wings: [[37.05, 21.83], [18.21, 37.29]], notch: [24.24, 26.09] },
+      // соты одного потока от головы к хвосту: [форма, радиус, стиль, задержка мс,
+      // сдвиг поперёк маршрута наружу]. Голова светится, хвост рассыпается на обломки.
+      cells: [
+        ['hex', 3.6, 'lit', 0, 0],
+        ['hex', 3.2, 'cyan', 40, 0.8],
+        ['hex', 3, 'deep', 80, -0.6],
+        ['hex', 3, 'line', 125, 0.9],
+        ['pent', 2.6, 'shard', 170, -0.7],
+        ['broken', 2.4, 'broken', 215, 0.4]
+      ]
     },
     tri: {
       cycle: 3000,               // мс — каскад + волна
       scale: 0.8,
       tip: 2.1,
-      stroke: 1.6,               // px — контур одинаковой толщины у всех сегментов
-      // [масштаб, сдвиг по диагонали в единицах задумки]: сегменты наложены, как в задумке
+      // px — [кромка слоя, тёмный зазор вокруг слоя там, где он лежит на заднем, светлая линия
+      // за зазором]. В картинке 1× тонкая светлая линия рябит: её нет, зазор и кромка толще.
+      lines: { fine: [0.8, 0.55, 0.45], coarse: [0.9, 0.75, 0] },
+      // [масштаб, сдвиг по диагонали в единицах задумки]: сегменты наложены, как в задумке;
+      // рисуются от большого к малому, каждый следующий закрывает задние
       segments: [[1, 0], [1 / 1.7, 15], [1 / (1.7 * 1.7), 25], [1 / (1.7 * 1.7 * 1.7), 31]],
       hoverStart: 150,           // мс цикла, с которых начинается анимация при наведении
-      still: 750                 // мс цикла — кадр для prefers-reduced-motion
+      still: 2700                // мс цикла — кадр для prefers-reduced-motion: задний слой
+                                 // залит, передние тёмные, как на образце пользователя
     },
     hover: [
       'a[href]', 'button:not(:disabled)', '[role="button"]', 'select', 'summary', 'label[for]',
@@ -137,21 +167,23 @@
       return curve(y1, y2, s);
     };
   }
-  var easeOut = bezier(0.25, 1, 0.5, 1);     // частицы
+  var easeOut = bezier(0.25, 1, 0.5, 1);     // соты (как у частиц задумки)
   var easeInOut = bezier(0.42, 0, 0.58, 1);  // блик грани
 
-  // частицы: [доля цикла, позиция на грани (0 — нос 6,6; 1 — хвост 40,22), масштаб, поворот°,
-  // непрозрачность]. До 65 % частица скрыта у носа.
-  var PARTICLE_KEYS = [
-    [0.65, 0, 0.2, 0, 0],
-    [0.75, 6 / 34, 1.2, 15, 1],
-    [0.90, 24 / 34, 0.9, 45, 0.9],
-    [1.00, 36 / 34, 0.1, 90, 0]
+  // соты: [доля цикла, место на маршруте (0 — остриё, 1 — конец крыла, 2 — выемка), масштаб,
+  // поворот°, непрозрачность]. До 58 % цикла сота скрыта в острие; у конца крыла и у выемки
+  // поток притормаживает и сужается. Сглаживание — как у CSS-анимации, на каждом отрезке.
+  var CELL_KEYS = [
+    [0.58, 0, 0.25, 0, 0],
+    [0.68, 0.3, 1.15, 25, 1],
+    [0.82, 1, 1, 60, 1],
+    [0.92, 1.62, 0.7, 95, 0.85],
+    [0.98, 2, 0.2, 120, 0]
   ];
-  function particleAt(p) {
-    if (p < PARTICLE_KEYS[0][0]) return null;
-    for (var i = 1; i < PARTICLE_KEYS.length; i++) {
-      var a = PARTICLE_KEYS[i - 1], b = PARTICLE_KEYS[i];
+  function cellAt(p) {
+    if (p < CELL_KEYS[0][0]) return null;
+    for (var i = 1; i < CELL_KEYS.length; i++) {
+      var a = CELL_KEYS[i - 1], b = CELL_KEYS[i];
       if (p <= b[0]) {
         var k = easeOut((p - a[0]) / (b[0] - a[0]));
         return { u: lerp(a[1], b[1], k), s: lerp(a[2], b[2], k), r: lerp(a[3], b[3], k), o: lerp(a[4], b[4], k) };
@@ -159,11 +191,37 @@
     }
     return null;
   }
-  // блик грани: 0 — покой, 1 — вспышка (70 % → 85 % → 100 %)
+  // Блик грани и вспышка в выемке приходятся на схождение потоков и заходят в начало
+  // следующего цикла, поэтому начало цикла считается его продолжением (p + 1).
+  function wrap(p) { return p < 0.3 ? p + 1 : p; }
+  // блик грани: 0 — покой, 1 — вспышка (80 % → 96 % → 106 %)
   function glintAt(p) {
-    if (p < 0.7) return 0;
-    if (p < 0.85) return easeInOut((p - 0.7) / 0.15);
-    return easeInOut(1 - (p - 0.85) / 0.15);
+    var q = wrap(p);
+    if (q < 0.8 || q >= 1.06) return 0;
+    if (q < 0.96) return easeInOut((q - 0.8) / 0.16);
+    return easeInOut(1 - (q - 0.96) / 0.1);
+  }
+  // вспышка в выемке: фаза 0…1 (95,5 % → 105,5 %), вне вспышки −1
+  function flashAt(p) {
+    var q = wrap(p);
+    return q >= 0.955 && q < 1.055 ? (q - 0.955) / 0.1 : -1;
+  }
+  function smooth(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  // нормаль наружу от стрелки: верхний поток обходит контур по часовой стрелке — наружу
+  // слева от хода, нижний — против, наружу справа
+  function outward(a, b, stream) {
+    var dx = b[0] - a[0], dy = b[1] - a[1], len = Math.sqrt(dx * dx + dy * dy);
+    return stream === 0 ? [dy / len, -dx / len] : [-dy / len, dx / len];
+  }
+  // точка маршрута: stream 0 — по верхней грани, 1 — по левой; u от 0 до 2.
+  // Нормаль на конце крыла поворачивается плавно, чтобы сдвинутые соты не прыгали.
+  function routePoint(stream, u) {
+    var R = CONFIG.arrow.route, a = R.tip, b = R.wings[stream], c = R.notch;
+    var x = u <= 1 ? lerp(a[0], b[0], u) : lerp(b[0], c[0], u - 1);
+    var y = u <= 1 ? lerp(a[1], b[1], u) : lerp(b[1], c[1], u - 1);
+    var n1 = outward(a, b, stream), n2 = outward(b, c, stream), k = smooth((u - 0.85) / 0.3);
+    var nx = lerp(n1[0], n2[0], k), ny = lerp(n1[1], n2[1], k), len = Math.sqrt(nx * nx + ny * ny) || 1;
+    return { x: x, y: y, nx: nx / len, ny: ny / len };
   }
   // заливка сегментов треугольника, линейно: [доля цикла, заливка]; 1 — большой … 4 — малый
   var FILL_KEYS = [
@@ -181,17 +239,23 @@
 
   // --- кадры: описание → SVG ---------------------------------------------------------------
 
+  // кадр стрелки: соты [поток, номер соты, место на маршруте, масштаб, поворот, непрозрачность],
+  // g — блик грани, fx — фаза вспышки в выемке. opts.parts: false — стрелка без сот.
   function arrowFrame(t, opts) {
     var A = CONFIG.arrow;
-    var parts = [];
+    var cells = [];
     if (opts.parts) {
-      for (var i = 0; i < A.delays.length; i++) {
-        var local = (((t - A.delays[i]) % A.cycle) + A.cycle) % A.cycle;
-        var k = particleAt(local / A.cycle);
-        if (k && k.o > 0.02) parts.push([i, num(k.u, 3), num(k.s, 2), num(k.r, 0), num(k.o, 2)]);
+      for (var s = 0; s < 2; s++) {
+        for (var i = 0; i < A.cells.length; i++) {
+          var local = (((t - A.cells[i][3]) % A.cycle) + A.cycle) % A.cycle;
+          var k = cellAt(local / A.cycle);
+          if (k && k.o > 0.02) cells.push([s, i, num(k.u, 3), num(k.s, 2), num(k.r, 0), num(k.o, 2)]);
+        }
       }
     }
-    return { kind: 'arrow', g: opts.parts ? num(glintAt(t / A.cycle), 2) : '0', parts: parts, glow: opts.glow || 1, dim: !!opts.dim };
+    var p = t / A.cycle;
+    return { kind: 'arrow', g: opts.parts ? num(glintAt(p), 2) : '0', fx: opts.parts ? num(flashAt(p), 2) : '-1',
+      cells: cells, glow: opts.glow || 1, dim: !!opts.dim };
   }
 
   function triFrame(t) {
@@ -204,10 +268,59 @@
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + px + '" height="' + px + '" viewBox="' + box + '">';
   }
 
-  function glowFilter(id, sd) {
-    return '<filter id="' + id + '" x="-50%" y="-50%" width="200%" height="200%">' +
-      '<feGaussianBlur stdDeviation="' + sd + '" result="b"/>' +
-      '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
+  // Область фильтров — весь холст в единицах задумки: у мелкой соты рамка по её размеру
+  // обрезала бы свечение.
+  var FILTER_AREA = ' filterUnits="userSpaceOnUse" x="0" y="0" width="50" height="50"';
+
+  // ореол: силуэт рисунка, размытый на sd и залитый цветом color, под самим рисунком —
+  // края остаются чёткими, светится только вокруг
+  function haloFilter(id, sd, color, opacity) {
+    return '<filter id="' + id + '"' + FILTER_AREA + '>' +
+      '<feGaussianBlur in="SourceAlpha" stdDeviation="' + sd + '" result="a"/>' +
+      '<feFlood flood-color="' + color + '" flood-opacity="' + opacity + '"/><feComposite in2="a" operator="in" result="g"/>' +
+      '<feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
+  }
+
+  function ring(n) {
+    var pts = [];
+    for (var i = 0; i < n; i++) pts.push([Math.cos(i * 2 * Math.PI / n), Math.sin(i * 2 * Math.PI / n)]);
+    return pts;
+  }
+  // формы сот, вершины в долях радиуса
+  var SHAPES = {
+    hex: ring(6),                                                                    // шестиугольник
+    pent: [[-0.95, -0.35], [-0.2, -1], [0.85, -0.55], [0.75, 0.6], [-0.45, 0.9]],    // обломок
+    broken: ring(6).slice(0, 5)                     // шестиугольник без двух граней — линия
+  };
+  // как закрашены соты: голова светится, к хвосту остаются контуры
+  var CELL = CONFIG.colors.cell;
+  // Тёмно-синяя граница у светлых сот — как стенки сот на образце: без неё на экране 1×
+  // мелкая сота сливается в пятно.
+  var PAINT = {
+    lit: ' fill="url(#h)" stroke="' + CELL.wall + '" stroke-width="0.6"',
+    cyan: ' fill="' + CELL.cyan + '" stroke="' + CELL.wall + '" stroke-width="0.6"',
+    deep: ' fill="' + CELL.deep + '" fill-opacity="0.9" stroke="' + CELL.edge + '" stroke-width="0.6"',
+    line: ' fill="' + CELL.deep + '" fill-opacity="0.35" stroke="' + CELL.aqua + '" stroke-width="0.7"',
+    shard: ' fill="' + CELL.aqua + '" fill-opacity="0.2" stroke="' + CELL.aqua + '" stroke-width="0.65"',
+    broken: ' fill="none" stroke="' + CELL.blue + '" stroke-width="0.7" stroke-linecap="round" stroke-linejoin="round"'
+  };
+
+  // вершины формы с центром (cx, cy), радиусом size и поворотом deg — в единицах задумки
+  function shapePoints(shape, cx, cy, size, deg) {
+    var a = deg * Math.PI / 180, cos = Math.cos(a) * size, sin = Math.sin(a) * size;
+    return shape.map(function (v) {
+      return num(cx + v[0] * cos - v[1] * sin, 2) + ',' + num(cy + v[0] * sin + v[1] * cos, 2);
+    }).join(' ');
+  }
+
+  // смесь двух цветов #rrggbb: k = 0 — первый, 1 — второй
+  function mix(a, b, k) {
+    var out = '#';
+    for (var i = 1; i < 7; i += 2) {
+      var v = Math.round(lerp(parseInt(a.substr(i, 2), 16), parseInt(b.substr(i, 2), 16), k));
+      out += (v < 16 ? '0' : '') + v.toString(16);
+    }
+    return out;
   }
 
   function arrowSVG(f, px) {
@@ -225,33 +338,70 @@
       '<feMerge>' + (cyan ? '<feMergeNode in="c2"/>' : '') + '<feMergeNode in="g2"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
     var grad = '<linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + C.core + '"/>' +
       '<stop offset="0.6" stop-color="' + C.mid + '"/><stop offset="1" stop-color="' + C.dark + '"/></linearGradient>';
-    var parts = '';
-    f.parts.forEach(function (q) {
-      var size = A.sizes[q[0]], u = +q[1];
-      parts += '<rect x="' + (-size[0] / 2) + '" y="' + (-size[1] / 2) + '" width="' + size[0] + '" height="' + size[1] + '"' +
-        ' fill="' + C.particles[q[0]] + '" stroke="' + C.particleEdge + '" stroke-width="0.5" opacity="' + q[4] + '"' +
-        ' transform="translate(' + num(6 + 34 * u, 2) + ' ' + num(6 + 16 * u, 2) + ') rotate(' + q[3] + ') scale(' + q[2] + ')"/>';
+    // соты: нижний поток — зеркало верхнего (поворот в другую сторону); номер соты сбивает
+    // поворот, чтобы соты одного потока не крутились в такт
+    var cells = '';
+    f.cells.forEach(function (q) {
+      var cell = A.cells[q[1]], k = +q[3], at = routePoint(q[0], +q[2]), off = cell[4] * k;
+      cells += '<' + (cell[0] === 'broken' ? 'polyline' : 'polygon') + ' points="' +
+        shapePoints(SHAPES[cell[0]], at.x + at.nx * off, at.y + at.ny * off, cell[1] * k, (q[0] ? -1 : 1) * (+q[4] + q[1] * 17)) +
+        '"' + PAINT[cell[2]] + ' opacity="' + q[5] + '"/>';
     });
+    // вспышка в выемке, где сошлись потоки: расходящийся контур соты и гаснущее ядро
+    var phase = +f.fx;
+    if (phase >= 0) {
+      var N = A.route.notch;
+      cells += '<polygon points="' + shapePoints(SHAPES.hex, N[0], N[1], lerp(1.4, 5.2, easeOut(phase)), 30) + '"' +
+        ' fill="none" stroke="' + C.cell.aqua + '" stroke-width="0.8" opacity="' + num(1 - phase, 2) + '"/>' +
+        '<polygon points="' + shapePoints(SHAPES.hex, N[0], N[1], lerp(3, 0.8, phase), 0) + '"' +
+        ' fill="url(#h)" stroke="' + C.cell.wall + '" stroke-width="0.5" opacity="' + num(1 - phase * phase, 2) + '"/>';
+    }
+    var cellDefs = cells ? '<radialGradient id="h"><stop offset="0" stop-color="' + C.cell.light + '"/>' +
+      '<stop offset="0.5" stop-color="#9ff8ff"/><stop offset="1" stop-color="#00b8ff"/></radialGradient>' +
+      haloFilter('p', 0.9, C.cell.cyan, 0.7) : '';
     return svgOpen(px, 6 - A.tip / s, CONFIG.size / s) +
-      '<defs>' + grad + edge + (parts ? glowFilter('p', 1.1) : '') + '</defs>' +
+      '<defs>' + grad + edge + cellDefs + '</defs>' +
       (f.dim ? '<g opacity="0.45">' : '<g>') +
       '<path d="M6 6L40 22L25 27L18 40Z" fill="url(#b)" stroke="' + C.core + '" stroke-width="1.5" stroke-linejoin="miter" filter="url(#e)"/>' +
       '<path d="M10 10L32 21L23 24L18 33Z" fill="' + C.cut + '"/>' +
-      (parts ? '<g filter="url(#p)">' + parts + '</g>' : '') +
+      (cells ? '<g filter="url(#p)">' + cells + '</g>' : '') +
       '</g></svg>';
   }
 
+  // Треугольники наведения — непрозрачная стопка, как на образце пользователя. Каждый слой:
+  // тёмная заливка, поверх неё светлый градиент по «каскаду» (fills), кромка. Там, где слой
+  // лежит на заднем, вокруг него тёмный зазор и за ним светлая линия (обрезаны по задним слоям,
+  // поэтому над фоном их нет). У заднего слоя кромка — яркая линия края всей стопки.
   function triSVG(f, px) {
     var T = CONFIG.tri, C = CONFIG.colors, s = T.scale;
+    var w = px > CONFIG.size ? T.lines.fine : T.lines.coarse, rim = w[0], gap = w[1], line = w[2];
+    var pts = '4,4 36,12 12,36';
+    function place(seg) { return 'translate(' + seg[1] + ' ' + seg[1] + ') scale(' + num(seg[0], 5) + ')'; }
+    var defs = '<linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + C.core + '"/>' +
+      '<stop offset="0.6" stop-color="' + C.mid + '"/><stop offset="1" stop-color="' + C.dark + '"/></linearGradient>' +
+      '<linearGradient id="d" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + C.shade[0] + '"/>' +
+      '<stop offset="1" stop-color="' + C.shade[1] + '"/></linearGradient>' +
+      // свечение вокруг всей стопки — 1 px
+      haloFilter('t', num(1 / s, 2), C.core, 0.55);
     var body = '';
     T.segments.forEach(function (seg, i) {
-      // толщина в единицах сегмента: после масштаба сегмента и viewBox получается T.stroke px
-      body += '<polygon points="4,4 36,12 12,36" transform="translate(' + seg[1] + ' ' + seg[1] + ') scale(' + num(seg[0], 5) + ')"' +
-        ' fill="' + C.core + '" fill-opacity="' + f.fills[i] + '" stroke="' + C.core + '"' +
-        ' stroke-width="' + num(T.stroke / (s * seg[0]), 3) + '" stroke-linejoin="miter"/>';
+      var unit = 1 / (s * seg[0]);   // px → единицы сегмента: толщины линий одинаковы у всех слоёв
+      var lit = +f.fills[i];
+      if (i > 0) {
+        defs += '<clipPath id="c' + i + '">' + T.segments.slice(0, i).map(function (back) {
+          return '<polygon points="' + pts + '" transform="' + place(back) + '"/>';
+        }).join('') + '</clipPath>';
+        body += '<g clip-path="url(#c' + i + ')"><g transform="' + place(seg) + '" fill="none" stroke-linejoin="round">' +
+          (line ? '<polygon points="' + pts + '" stroke="' + C.core + '" stroke-width="' + num((rim + 2 * (gap + line)) * unit, 3) + '"/>' : '') +
+          '<polygon points="' + pts + '" stroke="' + C.gap + '" stroke-width="' + num((rim + 2 * gap) * unit, 3) + '"/></g></g>';
+      }
+      body += '<g transform="' + place(seg) + '"><polygon points="' + pts + '" fill="url(#d)"/>' +
+        (lit > 0 ? '<polygon points="' + pts + '" fill="url(#b)" fill-opacity="' + f.fills[i] + '"/>' : '') +
+        '<polygon points="' + pts + '" fill="none" stroke="' + (i ? mix(C.rim, C.rimLit, lit) : C.core) + '"' +
+        ' stroke-width="' + num(rim * unit, 3) + '" stroke-linejoin="miter"/></g>';
     });
     return svgOpen(px, 4 - T.tip / s, CONFIG.size / s) +
-      '<defs>' + glowFilter('t', 1.1) + '</defs><g filter="url(#t)">' + body + '</g></svg>';
+      '<defs>' + defs + '</defs><g filter="url(#t)">' + body + '</g></svg>';
   }
 
   function frameSVG(f, px) { return f.kind === 'tri' ? triSVG(f, px) : arrowSVG(f, px); }
