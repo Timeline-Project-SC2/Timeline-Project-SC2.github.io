@@ -41,7 +41,6 @@
       animate: 340
     },
     layers: {
-      systemLabelScale: 0.055,  // подписи систем с подтверждённой координатой
       labelScale: 0.11,         // подписи объектов карты
       noisyLabelScale: 0.5,     // «шумные» подписи OCR — только крупно
       labelBudget: 120
@@ -1145,7 +1144,7 @@
 
   function drawMapLabels() {
     var labels = state.labels;
-    if (!labels || !labels.length) return;
+    if (!state.labelsOn || !labels || !labels.length) return;
     var scale = state.view.scale;
     if (scale < CONFIG.layers.labelScale) return;
     var fontSize = clamp(28 * scale, 8.5, 38);
@@ -1295,7 +1294,7 @@
     var scale = state.view.scale;
     var list = visibleSystems();
     var metrics = markerMetrics(scale);
-    var showAllNames = state.labelsOn || scale >= 0.34;
+    var showAllNames = state.labelsOn;
     var entries = [];
     var labelCandidates = [];
 
@@ -1372,8 +1371,7 @@
         ctx.fill();
       }
 
-      var showName = showAllNames || isHover || isActive ||
-        (fromLabel && scale >= CONFIG.layers.systemLabelScale);
+      var showName = showAllNames;
       if (showName) {
         labelCandidates.push({
           entry: entry,
@@ -1510,7 +1508,7 @@
       ctx.stroke();
       ctx.restore();
 
-      if (state.labelsOn || scale >= 0.34 || hovered || active) {
+      if (state.labelsOn) {
         var fontSize = clamp(25 * scale, 8, 18);
         ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
         ctx.textAlign = 'left';
@@ -1548,13 +1546,15 @@
     ctx.moveTo(point.x, point.y - radius - armLength); ctx.lineTo(point.x, point.y - radius - armGap);
     ctx.moveTo(point.x, point.y + radius + armGap); ctx.lineTo(point.x, point.y + radius + armLength);
     ctx.stroke();
-    ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = theme.text;
-    ctx.lineWidth = clamp(fontSize * 0.25, 3, 9);
-    ctx.strokeStyle = 'rgba(2,5,10,.82)';
-    ctx.strokeText(planet.name, point.x + radius + labelGap, point.y - radius - labelGap);
-    ctx.fillText(planet.name, point.x + radius + labelGap, point.y - radius - labelGap);
+    if (state.labelsOn) {
+      ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = theme.text;
+      ctx.lineWidth = clamp(fontSize * 0.25, 3, 9);
+      ctx.strokeStyle = 'rgba(2,5,10,.82)';
+      ctx.strokeText(planet.name, point.x + radius + labelGap, point.y - radius - labelGap);
+      ctx.fillText(planet.name, point.x + radius + labelGap, point.y - radius - labelGap);
+    }
     ctx.restore();
   }
 
@@ -2588,7 +2588,10 @@
   }
 
   function applyLabelsToggle() {
+    var label = state.labelsOn ? 'Скрыть подписи карты' : 'Показать подписи карты';
     el.labelsToggle.setAttribute('aria-pressed', String(state.labelsOn));
+    el.labelsToggle.setAttribute('title', label);
+    el.labelsToggle.setAttribute('aria-label', label);
     writeJSON(CONFIG.storage.labels, state.labelsOn);
     requestRender();
   }
