@@ -130,6 +130,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 
 /* Detail dossier */
 .detail-panel { position: absolute; z-index: 11; top: 86px; right: 14px; bottom: 14px; width: 328px; display: flex; flex-direction: column; overflow: hidden; animation: panel-in .18s ease-out; }
+/* Незакреплённая карточка — предпросмотр системы под мышью: мышь проходит сквозь неё к карте,
+   иначе система под панелью мигала бы (см. syncDetailPreview в app.js) */
+.detail-panel.is-preview { pointer-events: none; }
 @keyframes panel-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
 .detail-topline { min-height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
 .detail-actions { display: flex; gap: 2px; }

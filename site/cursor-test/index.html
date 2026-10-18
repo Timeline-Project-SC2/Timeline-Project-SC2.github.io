@@ -74,7 +74,7 @@
     ol { margin: 0; padding-left: 20px; }
     li { margin: 0 0 6px; }
   </style>
-  <script src="/shared/cursor-fx.js?v=cursor-5" defer></script>
+  <script src="/shared/cursor-fx.js?v=cursor-6" defer></script>
 </head>
 <body>
 <main>
@@ -126,9 +126,13 @@
         крестовиной: четыре пары шевронов остриями к центру проявляются за 0,2 с, заливка бежит снаружи
         внутрь (цикл 2 с). Ведите мышь — крест смещается в сторону движения и возвращается в центр,
         когда мышь стоит. Правая кнопка крестовину не включает.</p>
-      <p class="note">Отпустите кнопку где угодно, даже за окном. На картах так же: нажатие на пустое место —
-        крестовина; нажатие на сектор, кнопку или систему — щелчок, крестовина только если потянули.
-        Правой кнопкой карты не тащатся.</p>
+      <div class="row">
+        <button type="button" id="dragTarget">Сектор</button>
+        <span class="note">щелчков: <b id="dragClicks">0</b></span>
+      </div>
+      <p class="note">Отпустите кнопку где угодно, даже за окном. Кнопка «Сектор» — как сектор или система на
+        карте: левой — щелчок, крестовина, только если потянули; колесом щелчка нет — крестовина сразу,
+        счётчик не растёт. Правой кнопкой карты не тащатся.</p>
     </div>
     <div class="zone">
       <h3>4. Недоступно</h3>
@@ -196,7 +200,8 @@
       <li>Точка клика: совпадает ли промах с кончиком стрелки (±1 px — норма).</li>
       <li>Края окна: у краёв курсор не должен превращаться в обычную стрелку.</li>
       <li>Карты: крестовина сразу при нажатии на пустое место и без мигания при перетаскивании; щелчок
-        по сектору или системе — без крестовины; наведение на системы атласа и квадраты секторов.</li>
+        левой по сектору или системе — без крестовины, колесом — крестовина сразу и ничего не выбирается;
+        наведение на системы атласа и квадраты секторов; карточка системы у правого края атласа не мигает.</li>
       <li>Крестовина: читается ли на вашем экране и попадает ли центр креста в точку, куда смотрит мышь;
         плавно ли проявляется при нажатии; включается ли колесом и не включается ли правой кнопкой.</li>
     </ol>
@@ -306,15 +311,31 @@
     });
 
     // перетаскивание: класс is-dragging у .galaxy-stage, как на карте галактики;
-    // левая кнопка и колесо, правая — нет (как на картах)
+    // левая кнопка и колесо, правая — нет (как на картах). Нажатие на кнопку — щелчок:
+    // захват и is-dragging, только когда потянули дальше 4 px (как в galaxy.js)
     var dragZone = document.getElementById('dragZone');
-    dragZone.addEventListener('pointerdown', function (event) {
-      if (event.button > 1) return;
+    var dragStart = null;
+    function startDrag(event) {
       dragZone.setPointerCapture(event.pointerId);
       dragZone.classList.add('is-dragging');
+    }
+    dragZone.addEventListener('pointerdown', function (event) {
+      if (event.button > 1) return;
+      dragStart = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      if (!event.target.closest('button')) startDrag(event);
+    });
+    dragZone.addEventListener('pointermove', function (event) {
+      if (!dragStart || event.pointerId !== dragStart.id || dragZone.classList.contains('is-dragging')) return;
+      if (!event.buttons) { dragStart = null; return; }
+      if (Math.abs(event.clientX - dragStart.x) + Math.abs(event.clientY - dragStart.y) > 4) startDrag(event);
     });
     ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (type) {
-      dragZone.addEventListener(type, function () { dragZone.classList.remove('is-dragging'); });
+      dragZone.addEventListener(type, function () { dragStart = null; dragZone.classList.remove('is-dragging'); });
+    });
+    // «Сектор» в зоне: click бывает только у левой кнопки — колесом счётчик не растёт
+    var dragClicks = 0;
+    document.getElementById('dragTarget').addEventListener('click', function () {
+      document.getElementById('dragClicks').textContent = String(++dragClicks);
     });
 
     // точность клика
