@@ -33,8 +33,8 @@
         <div class="suggestions" id="suggestions" role="listbox" hidden></div>
       </div>
       <div class="map-faction-filter">
-        <label class="sr-only" for="mapFactionFilter">Фильтр системы по фракции</label>
-        <select id="mapFactionFilter" aria-label="Фильтр систем по фракции">
+        <label class="sr-only" for="mapFactionFilter">Фильтр карты по фракции</label>
+        <select id="mapFactionFilter" aria-label="Фильтр карты по фракции">
           <option value="all">Все фракции</option>
         </select>
       </div>
@@ -126,7 +126,7 @@
         <button class="map-control" id="zoomOut" type="button" title="Отдалить (−)" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"></path></svg></button>
         <div class="control-divider"></div>
         <button class="map-control" id="resetMap" type="button" title="Показать всю карту (0)" aria-label="Показать всю карту"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path><path d="M9 4a8 8 0 0 1 10 5M15 20a8 8 0 0 1-10-5"></path></svg></button>
-        <button class="map-control label-toggle" id="labelsToggle" type="button" title="Показать подписи систем" aria-label="Переключить подписи систем" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h11M4 19h16"></path><path d="M18 10v4"></path></svg></button>
+        <button class="map-control label-toggle" id="labelsToggle" type="button" title="Показать подписи карты" aria-label="Переключить подписи карты" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h11M4 19h16"></path><path d="M18 10v4"></path></svg></button>
         <div class="control-divider"></div>
         <button class="map-control coordinate-toggle" id="coordinateToggle" type="button" title="Включить координаты наведения" aria-label="Включить координаты наведения" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path></svg></button>
       </div>
@@ -146,7 +146,7 @@
           <div class="note-block"><span class="note-number">01</span><div><h3>Что это за карта</h3><p>Неофициальная кастомная карта сектора Копрулу. Это не копия официальной схемы, а собранная заново визуальная модель: поиск по местам и системам, фильтр по фракциям, подписи систем.</p></div></div>
           <div class="note-block"><span class="note-number">02</span><div><h3>Основа: канон</h3><p>Названия миров, систем и фракций опираются на канонические сведения о вселенной StarCraft. Основной каталог собран по реестру StarCraft Wiki.</p></div></div>
           <div class="note-block"><span class="note-number">03</span><div><h3>Как читать схему</h3><p>Расположение систем условное. В источниках нет точных астрометрических координат, поэтому расстояния и взаимное положение объектов не отражают реальный масштаб. StarCraft и связанные названия принадлежат Blizzard Entertainment.</p></div></div>
-          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Колесо мыши или жест pinch — приблизить; зажми и перетаскивай — переместить; <kbd>+</kbd>/<kbd>−</kbd> — масштаб; <kbd>0</kbd> — вернуть обзор; <kbd>/</kbd> — фокус поиска. Наведи на узел, чтобы увидеть места системы, нажми — закрепить карточку.</p></div></div>
+          <div class="note-block"><span class="note-number">04</span><div><h3>Управление</h3><p>Колесо мыши или жест pinch — приблизить; зажми и перетаскивай — переместить; <kbd>+</kbd>/<kbd>−</kbd> — масштаб; <kbd>0</kbd> — вернуть обзор; <kbd>/</kbd> — фокус поиска. Наведи на узел, чтобы увидеть места системы, нажми — закрепить карточку. Место с координатами и пустым system_id становится отдельной точкой интереса на карте.</p></div></div>
         </div>
         <div class="modal-foot"><span>КАСТОМНАЯ КАРТА</span><span>НЕОФИЦИАЛЬНЫЙ ПРОЕКТ</span></div>
       </section>
@@ -164,6 +164,6 @@
       });
     })();
   </script>
-  <script src="/shared/app.js?v=coordinates-2" defer></script>
+  <script src="/shared/app.js?v=poi-1" defer></script>
 </body>
 </html>
