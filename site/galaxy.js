@@ -71,8 +71,8 @@
     '...',
     'Welcome, Commander.'
   ];
-  var BOOT_TOTAL_MS = 8000;
-  var BOOT_TOTAL_MOBILE_MS = 2000;
+  var BOOT_TOTAL_MS = 9500;
+  var BOOT_TOTAL_MOBILE_MS = 2500;
   var BOOT_FADE_MS = 400;
   var BOOT_LINE_PAUSE_MS = 90;
   var BOOT_TICK_MS = 16;
