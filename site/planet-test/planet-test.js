@@ -216,6 +216,7 @@
     'layout(location=2) in float aEmissive;',
     'layout(location=3) in vec3 aCenter;',
     'layout(location=4) in float aBirth;',
+    'layout(location=6) in float aKind;', // 0 — стена разлома, 1 — нижняя оболочка
     'uniform mat4 uMvp;',
     'uniform mat4 uModel;',
     'uniform float uScale;',
@@ -246,6 +247,8 @@
     'out float vEmissive;',
     'out float vFlash;',
     'out vec3 vWorldPos;',
+    'out float vBirth;',
+    'out float vKind;',
     'void main() {',
     // Каскад — та же математика, что у поверхности: объём садится вместе со своей ячейкой.
     '  float t = clamp((uBuild - aBirth) / 0.22, 0.0, 1.0);',
@@ -266,6 +269,8 @@
     '  vColor = aColor;',
     '  vEmissive = aEmissive;',
     '  vFlash = 1.0 - ease;',
+    '  vBirth = aBirth;',
+    '  vKind = aKind;',
     '  vWorldPos = (uModel * vec4(p, 1.0)).xyz;',
     '  gl_Position = uMvp * vec4(p, 1.0);',
     '}'
@@ -278,9 +283,21 @@
     'in float vEmissive;',
     'in float vFlash;',
     'in vec3 vWorldPos;',
+    'in float vBirth;',
+    'in float vKind;',
     'uniform vec3 uSunDir;',
+    'uniform float uBuild;',
+    'uniform float uHide;',
     'out vec4 fragColor;',
     'void main() {',
+    // Нижняя оболочка связывает центры РАЗНЫХ ячеек. До своей волны её
+    // вершины стоят в точках взлёта (центры x1.38), и связная оболочка
+    // натягивается в «призрачную сферу» вокруг ещё не собранной планеты.
+    // Поэтому низ не летит отдельными плитками, а проявляется по волне:
+    // фрагмент виден только там, где ячейки уже сели (birth + 0.22).
+    // Стены принадлежат одной ячейке и честно летят с ней — их не режем.
+    '  if (vKind > 0.5 && uBuild < vBirth + 0.22) discard;',
+    '  if (vKind > 0.5 && uHide > vBirth + 0.11) discard;',
     // Плоская нормаль из производных мировой позиции — гранёная порода без атрибутов нормалей.
     '  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));',
     '  if (!gl_FrontFacing) n = -n;',
@@ -896,7 +913,7 @@
     var thickEff = sp.thick * (1 - 0.45 * sp.loss);
     var fracNoise = PlanetNoise.makeNoise('simplex',
       PlanetNoise.hash32(PlanetNoise.stringSeed(sp.seedText + ':fracture')));
-    var pos = [], col = [], emi = [], cen = [], bir = [], shr = [], idx = [];
+    var pos = [], col = [], emi = [], cen = [], bir = [], shr = [], kind = [], idx = [];
     var c, n, k;
 
     var isBoundary = new Uint8Array(F);
@@ -921,12 +938,13 @@
       return 1 - thickEff * (0.65 + 0.55 * bottomNoise01);
     }
 
-    function pushVert(ox, oy, oz, s, cell, r, g, b, e) {
+    function pushVert(ox, oy, oz, s, cell, r, g, b, e, kindFlag) {
       var o = pos.length;
       pos.push(ox, oy, oz);
       col.push(r, g, b);
       emi.push(e);
       shr.push(s);
+      kind.push(kindFlag || 0);
       cen.push(surfPos[cell * 3], surfPos[cell * 3 + 1], surfPos[cell * 3 + 2]);
       bir.push(birthArr[cell]);
       return o / 3;
@@ -940,7 +958,7 @@
       // участок оболочки — в среднем горячее.
       var heat = 0.08 + 0.30 * bottomNoise01 * bottomNoise01;
       return pushVert(x * rr, y * rr, z * rr, s, cell,
-        0.105 * shade, 0.064 * shade, 0.048 * shade, heat);
+        0.105 * shade, 0.064 * shade, 0.048 * shade, heat, 1);
     }
 
     var bottomCenterIndex = new Int32Array(F).fill(-1);
@@ -1047,6 +1065,7 @@
     attr(3, 3, cen);
     attr(4, 1, bir);
     attr(5, 1, shr);
+    attr(6, 1, kind);
     var ibo = gl.createBuffer();
     state.buffers.push(ibo);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
@@ -1054,7 +1073,7 @@
     gl.bindVertexArray(null);
     state.vaoVol = vao;
     state.volIndexCount = idx.length;
-    state.gpuBytes += (pos.length + col.length + cen.length + emi.length + bir.length + shr.length + idx.length) * 4;
+    state.gpuBytes += (pos.length + col.length + cen.length + emi.length + bir.length + shr.length + kind.length + idx.length) * 4;
   }
 
   function uploadGeometry(grid, colors, deferVol) {
