@@ -118,6 +118,10 @@
 
 Откройте лог **Actions → Sync upstream map data**. Валидатор пишет номер строки, `place_id`, поле и ожидаемый ключ, если проблема именно в нём. Исправьте Google-лист и запустите синк снова. Прежний снимок сайта при ошибке не заменяется: синк сначала проверяет все URL-листы в памяти и записывает файлы только после успешной проверки.
 
+## Будущие листы архетипов и кастомизации
+
+Для дальнейшей разработки в той же книге можно уже подготовить вкладки `planet_archetypes` и `planet_customizations` по макету [`docs/stages/planet-sheet-layout.md`](stages/planet-sheet-layout.md) и шаблонам в `data/`. Это пока **не источники сайта**: синк их не читает, а правки в них ни на что не влияют. `planet_archetypes` — каталог архетипов без `place_id` (привязка к месту остаётся через `planet_generation.preset_id`), `planet_customizations` — будущие индивидуальные render-настройки по `place_id`. Текущий обязательный шаг не меняется: сначала опубликовать `planet_generation` и передать её URL разработчику; URL будущих вкладок можно прислать следом, но разработчик включит их только после расширения валидатора и runtime.
+
 ## Координаты
 
 - Для самостоятельных мест вводите `x` первым, `y` вторым. Shift+клик по карте сектора копирует X и Y через табуляцию — вставка заполняет две соседние ячейки.
@@ -164,6 +168,9 @@
 - Колонки систем: [`data/systems-template.csv`](../data/systems-template.csv)
 - Колонки мест: [`data/places-template.csv`](../data/places-template.csv)
 - Колонки профилей планет: [`data/planet-generation-template.csv`](../data/planet-generation-template.csv)
+- Будущие архетипы (макет, пока не источник): [`data/planet-archetypes-template.csv`](../data/planet-archetypes-template.csv)
+- Будущая кастомизация (макет, пока не источник): [`data/planet-customizations-template.csv`](../data/planet-customizations-template.csv)
+- Макет будущих листов: [`docs/stages/planet-sheet-layout.md`](stages/planet-sheet-layout.md)
 - Таблица: https://docs.google.com/spreadsheets/d/1OlpLm6dwAF1tB-r6FVDoAyLFKrUXqiRhWZ6Pzdg4v1o/
 - Источники и адреса публикации: [`data/sources.json`](../data/sources.json)
 - Валидатор и инструмент ключей: [`tools/planet_generation.py`](../tools/planet_generation.py)
