@@ -41,6 +41,7 @@
     'uniform sampler2D uShardTex;',
     'uniform float uSep;',
     'uniform float uHide;',
+    'uniform float uCenterGrow;',
     'uniform float uShardMode;',
     // Трансформ осколка на GPU: строки текстуры — pivot / ось / дрейф /
     // (spin, a, b), где фактический разлёт осколка sepEff = uSep*a + b
@@ -79,8 +80,15 @@
     '    float th = clamp((uHide - aBirth) / 0.22, 0.0, 1.0);',
     '    base = aCenter + (base - aCenter) * (1.0 - th * th);',
     '  }',
+    // Подмена прокси финалом: финал не спускается снаружи (точки взлёта
+    // x1.38), а выходит из центра планеты. Берём финальную позу вершины,
+    // применяем трансформ осколка и уже результат гомотетично тянем из
+    // начала координат по той же волне birth: плитка стартует точкой в
+    // центре и садится ровно на место уходящей плитки прокси.
+    '  if (uCenterGrow > 0.5) base = aPos;',
     '  vec3 bp = base;',
     '  if (uShardMode > 0.5) bp = shardTransform(base, aShard);',
+    '  if (uCenterGrow > 0.5) bp *= ease;',
     '  vec3 p = bp * uScale;',
     '  vNormal = normalize(mat3(uModel) * normalize(aPos));',
     '  vColor = aColor;',
@@ -225,6 +233,7 @@
     'uniform sampler2D uShardTex;',
     'uniform float uSep;',
     'uniform float uHide;',
+    'uniform float uCenterGrow;',
     'uniform float uShardMode;',
     // Трансформ осколка на GPU: строки текстуры — pivot / ось / дрейф /
     // (spin, a, b), где фактический разлёт осколка sepEff = uSep*a + b
@@ -263,8 +272,15 @@
     '    float th = clamp((uHide - aBirth) / 0.22, 0.0, 1.0);',
     '    base = aCenter + (base - aCenter) * (1.0 - th * th);',
     '  }',
+    // Подмена прокси финалом: финал не спускается снаружи (точки взлёта
+    // x1.38), а выходит из центра планеты. Берём финальную позу вершины,
+    // применяем трансформ осколка и уже результат гомотетично тянем из
+    // начала координат по той же волне birth: плитка стартует точкой в
+    // центре и садится ровно на место уходящей плитки прокси.
+    '  if (uCenterGrow > 0.5) base = aPos;',
     '  vec3 bp = base;',
     '  if (uShardMode > 0.5) bp = shardTransform(base, aShard);',
+    '  if (uCenterGrow > 0.5) bp *= ease;',
     '  vec3 p = bp * uScale;',
     '  vColor = aColor;',
     '  vEmissive = aEmissive;',
@@ -346,6 +362,7 @@
     shardMode: gl.getUniformLocation(prog, 'uShardMode'),
     sep: gl.getUniformLocation(prog, 'uSep'),
     hide: gl.getUniformLocation(prog, 'uHide'),
+    centerGrow: gl.getUniformLocation(prog, 'uCenterGrow'),
     shardTex: gl.getUniformLocation(prog, 'uShardTex')
   };
   var UA = {
@@ -371,6 +388,7 @@
     shardMode: gl.getUniformLocation(progVol, 'uShardMode'),
     sep: gl.getUniformLocation(progVol, 'uSep'),
     hide: gl.getUniformLocation(progVol, 'uHide'),
+    centerGrow: gl.getUniformLocation(progVol, 'uCenterGrow'),
     shardTex: gl.getUniformLocation(progVol, 'uShardTex')
   };
 
@@ -1306,16 +1324,18 @@
   /* Показать готовую планету: прокси, финал из воркера или синхронный путь. */
   function showPlanet(grid, d, gridLabel, note, proxyFlag) {
     // Бесшовная подмена прокси финалом: прежняя геометрия остаётся жить как
-    // prev-слой, финал прорастает под ним той же широтной волной рождения
-    // (birth зависит от широты, фронты совпадают), прокси следом сжимается
-    // в центры своих ячеек. Каскад с полюса при этом не перезапускается.
+    // prev-слой, финал под ним выходит из центра планеты той же широтной
+    // волной рождения (birth зависит от широты, фронты совпадают), прокси
+    // следом сжимается в центры своих ячеек. Каскад с полюса при этом не
+    // перезапускается, а после волны prev-слой утилизируется полностью.
     var doSwap = !proxyFlag && state.isProxy && !!state.vao && !!state.grid && state.grid !== grid;
     if (doSwap) {
       disposePrev();
       state.prev = {
         vao: state.vao, vaoVol: state.vaoVol,
         indexCount: state.indexCount, volIndexCount: state.volIndexCount,
-        buffers: state.buffers, shardTex: state.shardTex, shardMode: state.shardMode
+        buffers: state.buffers, shardTex: state.shardTex, shardMode: state.shardMode,
+        shardMaxB: state.shardMaxB
       };
       state.vao = null; state.vaoVol = null; state.buffers = []; state.shardTex = null;
       state.swapStart = performance.now();
@@ -1527,8 +1547,10 @@
       mat4Multiply(mat4TranslateZ(-state.dist), model));
 
     var buildP = buildProgress(tNow);
-    // Волна бесшовной подмены: финал рождается по swapP, прокси прячется с
-    // отставанием 0.15 (ячейка финала успевает сесть до сжатия прокси).
+    // Волна бесшовной подмены: финал выходит из центра планеты по swapP
+    // (uCenterGrow в шейдерах), прокси прячется с отставанием 0.15 —
+    // плитка финала успевает долететь до поверхности и сесть ровно на
+    // место сжимающейся плитки прокси.
     var swapP = -1, hideP = 0;
     if (state.prev) {
       swapP = (tNow - state.swapStart) / state.swapDur;
@@ -1546,6 +1568,7 @@
     gl.uniform1f(U.highlight, 0);
     gl.uniform1f(U.build, effBuild);
     gl.uniform1f(U.hide, 0);
+    gl.uniform1f(U.centerGrow, swapP >= 0 ? 1 : 0);
     gl.uniform1f(U.shardMode, state.shardMode);
     gl.uniform1f(U.sep, state.shardSep);
     gl.activeTexture(gl.TEXTURE0);
@@ -1565,7 +1588,8 @@
     }
     gl.bindVertexArray(null);
 
-    if (state.vaoVol && state.volIndexCount > 0) {
+    var volumeVisible = state.shardSep > 0.0001 || state.shardMaxB > 0.0001;
+    if (volumeVisible && state.vaoVol && state.volIndexCount > 0) {
       gl.useProgram(progVol);
       gl.disable(gl.CULL_FACE);
       gl.uniformMatrix4fv(UV.mvp, false, mvp);
@@ -1573,6 +1597,7 @@
       gl.uniform1f(UV.scale, 1.0);
       gl.uniform1f(UV.build, effBuild);
       gl.uniform1f(UV.hide, 0);
+      gl.uniform1f(UV.centerGrow, swapP >= 0 ? 1 : 0);
       gl.uniform1f(UV.shardMode, state.shardMode);
       gl.uniform1f(UV.sep, state.shardSep);
       gl.activeTexture(gl.TEXTURE0);
@@ -1598,6 +1623,7 @@
       gl.uniform1f(U.highlight, 0);
       gl.uniform1f(U.build, 1);
       gl.uniform1f(U.hide, hideP);
+      gl.uniform1f(U.centerGrow, 0);
       gl.uniform1f(U.shardMode, pv.shardMode);
       gl.uniform1f(U.sep, state.shardSep);
       gl.activeTexture(gl.TEXTURE0);
@@ -1608,7 +1634,7 @@
       gl.bindVertexArray(null);
       gl.uniform1f(U.hide, 0);
       gl.uniform1f(U.scale, 1.0);
-      if (pv.vaoVol && pv.volIndexCount > 0) {
+      if ((state.shardSep > 0.0001 || pv.shardMaxB > 0.0001) && pv.vaoVol && pv.volIndexCount > 0) {
         gl.useProgram(progVol);
         gl.disable(gl.CULL_FACE);
         gl.uniformMatrix4fv(UV.mvp, false, mvp);
@@ -1616,6 +1642,7 @@
         gl.uniform1f(UV.scale, 1.0015);
         gl.uniform1f(UV.build, 1);
         gl.uniform1f(UV.hide, hideP);
+        gl.uniform1f(UV.centerGrow, 0);
         gl.uniform1f(UV.shardMode, pv.shardMode);
         gl.uniform1f(UV.sep, state.shardSep);
         gl.activeTexture(gl.TEXTURE0);
