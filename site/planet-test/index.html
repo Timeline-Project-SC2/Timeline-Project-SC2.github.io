@@ -37,6 +37,26 @@
     <div class="row"><label for="gain">gain</label><input id="gain" type="range" min="0.3" max="0.7" step="0.01" value="0.5"><output id="gainV"></output></div>
     <div class="row"><label for="warp">domain warp</label><input id="warp" type="range" min="0" max="1" step="0.05" value="0.35"><output id="warpV"></output></div>
     <div class="row"><label for="ocean">океан, %</label><input id="ocean" type="range" min="30" max="90" step="1" value="70"><output id="oceanV"></output></div>
+    <div class="row"><label for="paletteSel">палитра</label><select id="paletteSel">
+      <option value="0" selected>текущая спайковая</option>
+      <option value="1">пустынная</option>
+      <option value="2">ледяная</option>
+      <option value="3">вулканическая</option>
+      <option value="4">океан и острова</option>
+      <option value="5">чужая</option>
+      <option value="6">голограмма</option>
+    </select><output></output></div>
+    <div class="row"><label for="textureSel">текстура</label><select id="textureSel">
+      <option value="0">нет (плоские гексы)</option>
+      <option value="1" selected>рельефное зерно</option>
+      <option value="2">дюны и волны</option>
+      <option value="3">трещины</option>
+      <option value="4">пятна и кристаллы</option>
+      <option value="5">голографическая сетка</option>
+    </select><output></output></div>
+    <div class="row"><label for="texAmt">сила текстуры</label><input id="texAmt" type="range" min="0" max="1" step="0.01" value="0.35"><output id="texAmtV"></output></div>
+    <div class="row"><label for="texScale">масштаб текст.</label><input id="texScale" type="range" min="4" max="64" step="1" value="24"><output id="texScaleV"></output></div>
+    <div class="row"><label for="hueShift">сдвиг оттенка</label><input id="hueShift" type="range" min="-180" max="180" step="1" value="0"><output id="hueShiftV"></output></div>
     <div class="row"><label for="buildSec">сборка, сек</label><input id="buildSec" type="range" min="0.5" max="6" step="0.1" value="2.4"><output id="buildSecV"></output></div>
     <div class="row"><label for="shards">осколки</label><input id="shards" type="range" min="1" max="50" step="1" value="10"><output id="shardsV"></output></div>
     <div class="row"><label for="shardDist">размеры осколков</label><select id="shardDist">
@@ -54,6 +74,7 @@
     <div class="btns">
       <button id="regenBtn" type="button">перегенерировать</button>
       <button id="bordersBtn" type="button" aria-pressed="true">границы ячеек</button>
+      <button id="themeSeedBtn" type="button" title="Детерминированно подобрать палитру и текстуру из текущего seed">тема из seed</button>
       <button id="spinBtn" type="button" aria-pressed="true" title="Пауза вращения — пробел">автоповорот (пробел)</button>
       <button id="buildBtn" type="button" title="Повторить каскадную сборку без перегенерации">собрать заново</button>
       <button id="buildAnimBtn" type="button" aria-pressed="true">анимация сборки</button>
@@ -66,7 +87,10 @@
       CPU-шуме, WebGL2-глобус. Не боевая страница: здесь подбираются плотность,
       шум и частота, меряются время генерации и FPS.<br><br>
       Клик по глобусу выбирает ячейку и показывает её черновой адрес.
-      При каждой генерации планета собирается каскадом шестиугольников от
+      Палитры и процедурные текстуры — только render-кастомизация поверх тех
+      же полей: seed, берег, биомы и адреса не меняются; фактура уникальна
+      от seed и полей ячейки, а кнопка «тема из seed» собирает тему
+      детерминированно. При каждой генерации планета собирается каскадом шестиугольников от
       северного полюса к южному (анимация целиком в вершинном шейдере);
       кнопка «собрать заново» повторяет её без перегенерации.
       Осколки — тест разломанной планеты: ячейки делятся сферическим Вороным
@@ -94,6 +118,6 @@
 
   <script src="/shared/geodesic-grid.js?v=planet-spike-6"></script>
   <script src="/shared/planet-noise.js?v=planet-spike-1"></script>
-  <script src="planet-test.js?v=planet-spike-16"></script>
+  <script src="planet-test.js?v=planet-spike-17"></script>
 </body>
 </html>

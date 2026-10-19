@@ -33,6 +33,9 @@
     'layout(location=2) in float aCenterW;',
     'layout(location=3) in vec3 aCenter;',
     'layout(location=4) in float aBirth;',
+    // Байтовый vec4 полей ячейки: relief / влажность / температура / хэш.
+    // Нужен только render-кастомизации и не влияет на географию.
+    'layout(location=7) in vec4 aField;',
     'uniform mat4 uMvp;',
     'uniform mat4 uModel;',
     'uniform float uScale;',
@@ -64,6 +67,8 @@
     'out vec3 vNormal;',
     'out float vCenterW;',
     'out float vFlash;',
+    'out vec3 vObj;',
+    'out vec4 vField;',
     'void main() {',
     // Каскадная сборка: aBirth — момент старта ячейки (0 у северного полюса),
     // посадка одной ячейки длится 0.22 от всей анимации. При uBuild=1 — покой.
@@ -94,6 +99,8 @@
     '  vColor = aColor;',
     '  vCenterW = aCenterW;',
     '  vFlash = 1.0 - ease;',
+    '  vObj = normalize(aPos);',
+    '  vField = aField;',
     '  gl_Position = uMvp * vec4(p, 1.0);',
     '}'
   ].join('\n');
@@ -105,15 +112,152 @@
     'in vec3 vNormal;',
     'in float vCenterW;',
     'in float vFlash;',
+    'in vec3 vObj;',
+    'in vec4 vField;',
     'uniform vec3 uSunDir;',
     'uniform float uBorder;',
     'uniform float uHighlight;',
     'uniform float uShardMode;',
+    'uniform float uPalette;',
+    'uniform float uTexMode;',
+    'uniform float uTexAmount;',
+    'uniform float uTexScale;',
+    'uniform float uHueShift;',
+    'uniform vec3 uTexSeed;',
     'out vec4 fragColor;',
+    // Декоративный GPU-шум только для фактуры поверхности. Он не является
+    // источником географии: берег, биом и адрес ячейки задают CPU-поля.
+    'float hash13(vec3 p) {',
+    '  p = fract(p * 0.1031);',
+    '  p += dot(p, p.zyx + 31.32);',
+    '  return fract((p.x + p.y) * p.z);',
+    '}',
+    'float vnoise(vec3 p) {',
+    '  vec3 i = floor(p);',
+    '  vec3 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float n000 = hash13(i);',
+    '  float n100 = hash13(i + vec3(1.0, 0.0, 0.0));',
+    '  float n010 = hash13(i + vec3(0.0, 1.0, 0.0));',
+    '  float n110 = hash13(i + vec3(1.0, 1.0, 0.0));',
+    '  float n001 = hash13(i + vec3(0.0, 0.0, 1.0));',
+    '  float n101 = hash13(i + vec3(1.0, 0.0, 1.0));',
+    '  float n011 = hash13(i + vec3(0.0, 1.0, 1.0));',
+    '  float n111 = hash13(i + vec3(1.0, 1.0, 1.0));',
+    '  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),',
+    '             mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);',
+    '}',
+    'float fbm3(vec3 p) {',
+    '  return vnoise(p) * 0.55 + vnoise(p * 2.13) * 0.30 + vnoise(p * 4.41) * 0.15;',
+    '}',
+    'vec3 hueRotate(vec3 c, float a) {',
+    '  if (abs(a) < 0.001) return c;',
+    '  vec3 k = vec3(0.577350269);',
+    '  float ca = cos(a);',
+    '  return c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca);',
+    '}',
+    'vec3 paletteColor(vec3 base, vec4 f) {',
+    '  if (uPalette < 0.5) return base;',
+    '  float relief = f.x * 2.0 - 1.0;',
+    '  float depth = clamp(-relief, 0.0, 1.0);',
+    '  float landH = clamp(relief, 0.0, 1.0);',
+    '  float moist = f.y;',
+    '  float temp = f.z;',
+    '  bool ocean = relief < 0.0;',
+    '  if (uPalette < 1.5) {',
+    '    vec3 oc = mix(vec3(0.05, 0.30, 0.33), vec3(0.01, 0.07, 0.16), smoothstep(0.04, 0.82, depth));',
+    '    vec3 land = mix(vec3(0.80, 0.62, 0.31), vec3(0.56, 0.34, 0.19), smoothstep(0.22, 0.88, landH));',
+    '    land = mix(land, vec3(0.40, 0.48, 0.21), smoothstep(0.62, 0.92, moist) * 0.55);',
+    '    land = mix(land, vec3(0.90, 0.84, 0.69), smoothstep(0.86, 1.0, landH));',
+    '    land = mix(land, vec3(0.93, 0.91, 0.83), (1.0 - smoothstep(0.05, 0.18, temp)) * 0.65);',
+    '    return ocean ? oc : land;',
+    '  }',
+    '  if (uPalette < 2.5) {',
+    '    vec3 oc = mix(vec3(0.10, 0.55, 0.72), vec3(0.01, 0.10, 0.28), smoothstep(0.03, 0.80, depth));',
+    '    oc = mix(oc, vec3(0.88, 0.95, 1.0), (1.0 - smoothstep(0.06, 0.20, temp)) * 0.82);',
+    '    vec3 land = mix(vec3(0.68, 0.82, 0.92), vec3(0.96, 0.99, 1.0), smoothstep(0.15, 0.95, landH));',
+    '    land = mix(land, vec3(0.36, 0.55, 0.62), smoothstep(0.55, 0.95, moist) * 0.35);',
+    '    land = mix(land, vec3(1.0), (1.0 - smoothstep(0.10, 0.30, temp)) * 0.55);',
+    '    return ocean ? oc : land;',
+    '  }',
+    '  if (uPalette < 3.5) {',
+    '    vec3 oc = mix(vec3(0.10, 0.05, 0.06), vec3(0.015, 0.012, 0.025), smoothstep(0.03, 0.82, depth));',
+    '    vec3 land = mix(vec3(0.16, 0.10, 0.09), vec3(0.48, 0.18, 0.09), smoothstep(0.18, 0.92, landH));',
+    '    land = mix(land, vec3(0.85, 0.32, 0.07), smoothstep(0.55, 0.92, temp) * 0.55);',
+    '    land = mix(land, vec3(0.40, 0.37, 0.34), smoothstep(0.78, 1.0, landH) * 0.55);',
+    '    return ocean ? oc : land;',
+    '  }',
+    '  if (uPalette < 4.5) {',
+    '    vec3 oc = mix(vec3(0.05, 0.65, 0.72), vec3(0.005, 0.16, 0.48), smoothstep(0.03, 0.82, depth));',
+    '    vec3 land = mix(vec3(0.76, 0.68, 0.38), vec3(0.08, 0.52, 0.25), smoothstep(0.34, 0.78, moist));',
+    '    land = mix(land, vec3(0.45, 0.43, 0.39), smoothstep(0.70, 0.95, landH) * 0.80);',
+    '    land = mix(land, vec3(0.94, 0.97, 1.0), smoothstep(0.90, 1.0, landH));',
+    '    return ocean ? oc : land;',
+    '  }',
+    '  if (uPalette < 5.5) {',
+    '    vec3 oc = mix(vec3(0.35, 0.10, 0.65), vec3(0.03, 0.02, 0.22), smoothstep(0.03, 0.82, depth));',
+    '    vec3 land = mix(vec3(0.10, 0.75, 0.65), vec3(0.85, 0.25, 0.90), smoothstep(0.20, 0.85, moist));',
+    '    land = mix(land, vec3(0.95, 0.55, 0.20), smoothstep(0.62, 0.95, temp) * 0.45);',
+    '    land = mix(land, vec3(0.90, 0.90, 1.0), smoothstep(0.82, 1.0, landH) * 0.70);',
+    '    return ocean ? oc : land;',
+    '  }',
+    '  float lum = ocean ? (0.10 + 0.20 * (1.0 - depth)) : (0.24 + 0.58 * landH);',
+    '  vec3 holo = mix(vec3(0.01, 0.10, 0.16), vec3(0.10, 0.95, 0.78), lum);',
+    '  holo = mix(holo, vec3(0.75, 1.0, 0.98), (1.0 - smoothstep(0.05, 0.20, temp)) * 0.45);',
+    '  return holo;',
+    '}',
     'void main() {',
     '  vec3 n = normalize(vNormal);',
+    '  vec3 dir = normalize(vObj);',
     '  float diff = 0.38 + 0.62 * max(dot(n, normalize(uSunDir)), 0.0);',
-    '  vec3 col = vColor * diff;',
+    '  vec3 albedo = hueRotate(paletteColor(vColor, vField), uHueShift);',
+    '  float relief = vField.x * 2.0 - 1.0;',
+    '  float landMask = smoothstep(-0.015, 0.015, relief);',
+    '  float oceanMask = 1.0 - landMask;',
+    '  vec3 emissive = vec3(0.0);',
+    '  float amount = clamp(uTexAmount, 0.0, 1.0);',
+    '  if (amount > 0.001 && uTexMode > 0.5) {',
+    '    vec3 p = dir * max(uTexScale, 0.1) + uTexSeed;',
+    '    float n1 = fbm3(p);',
+    '    float n2 = vnoise(p * 3.7 + uTexSeed * 1.31 + vec3(17.7, 9.2, 4.3));',
+    '    float cellTone = 0.96 + 0.08 * vField.w;',
+    '    if (uTexMode < 1.5) {',
+    '      float grain = mix(0.80, 1.20, n1) * mix(0.92, 1.08, n2) * cellTone;',
+    '      albedo *= mix(1.0, grain, amount * (0.35 + 0.65 * landMask));',
+    '      albedo = mix(albedo, albedo * vec3(1.05, 0.99, 0.90), amount * smoothstep(0.68, 0.96, n2) * landMask * 0.35);',
+    '    } else if (uTexMode < 2.5) {',
+    '      float bands = 0.5 + 0.5 * sin((dir.x * 1.7 - dir.y * 2.3 + dir.z * 1.1) * uTexScale * 2.2 + n1 * 9.0);',
+    '      float dry = landMask * (1.0 - smoothstep(0.34, 0.74, vField.y));',
+    '      float duneMask = max(dry, oceanMask * 0.32);',
+    '      albedo *= mix(1.0, mix(0.86, 1.16, bands), amount * duneMask);',
+    '      albedo = mix(albedo, albedo * vec3(1.09, 1.02, 0.84), amount * dry * smoothstep(0.72, 0.98, bands) * 0.45);',
+    '    } else if (uTexMode < 3.5) {',
+    '      float ridge = 1.0 - abs(n1 * 2.0 - 1.0);',
+    '      float line = smoothstep(0.86, 0.995, ridge) * (0.55 + 0.45 * n2);',
+    '      float hot = smoothstep(0.54, 0.86, vField.z);',
+    '      float cold = 1.0 - smoothstep(0.16, 0.38, vField.z);',
+    '      vec3 crackCol = mix(vec3(0.045, 0.032, 0.026), vec3(1.0, 0.36, 0.05), hot);',
+    '      crackCol = mix(crackCol, vec3(0.72, 0.90, 1.0), cold * 0.82);',
+    '      float crackMask = max(landMask, cold * oceanMask * 0.85);',
+    '      albedo = mix(albedo, crackCol, clamp(amount * line * crackMask, 0.0, 0.92));',
+    '      emissive += vec3(1.0, 0.34, 0.04) * line * amount * hot * landMask * 0.90;',
+    '    } else if (uTexMode < 4.5) {',
+    '      float patchMask = smoothstep(0.60, 0.84, n1);',
+    '      float spark = smoothstep(0.93, 0.995, n2);',
+    '      vec3 accent = (uPalette > 4.5 && uPalette < 5.5) ? vec3(0.95, 0.35, 1.0) : vec3(0.22, 0.95, 0.78);',
+    '      albedo = mix(albedo, accent, amount * patchMask * landMask * 0.38);',
+    '      albedo += accent * spark * amount * landMask * 0.38;',
+    '    } else {',
+    '      float lat = 0.5 + 0.5 * sin(dir.y * uTexScale * 6.28318 + n1 * 2.0);',
+    '      float tri = max(max(abs(sin(dir.x * uTexScale * 2.0)), abs(sin(dir.y * uTexScale * 2.0))), abs(sin(dir.z * uTexScale * 2.0)));',
+    '      float gridLine = max(smoothstep(0.965, 1.0, lat), smoothstep(0.985, 1.0, tri));',
+    '      float scan = 0.94 + 0.06 * sin(dir.y * uTexScale * 24.0);',
+    '      albedo *= mix(1.0, scan, amount * 0.45);',
+    '      albedo = mix(albedo, vec3(0.32, 1.0, 0.90), amount * gridLine * 0.55);',
+    '    }',
+    '  }',
+    '  albedo = clamp(albedo, vec3(0.0), vec3(1.4));',
+    '  vec3 col = albedo * diff + emissive;',
     // vCenterW = 1 в центре ячейки и 0 на внешнем ребре веера.
     '  float edge = 1.0 - smoothstep(0.02, 0.14, vCenterW);',
     '  col = mix(col, vec3(0.45, 1.0, 0.88), edge * uBorder * 0.28);',
@@ -128,7 +272,6 @@
     '  fragColor = vec4(col, 1.0);',
     '}'
   ].join('\n');
-
   var VS_ATMO = [
     '#version 300 es',
     'layout(location=0) in vec3 aPos;',
@@ -363,6 +506,12 @@
     sep: gl.getUniformLocation(prog, 'uSep'),
     hide: gl.getUniformLocation(prog, 'uHide'),
     centerGrow: gl.getUniformLocation(prog, 'uCenterGrow'),
+    palette: gl.getUniformLocation(prog, 'uPalette'),
+    texMode: gl.getUniformLocation(prog, 'uTexMode'),
+    texAmount: gl.getUniformLocation(prog, 'uTexAmount'),
+    texScale: gl.getUniformLocation(prog, 'uTexScale'),
+    hueShift: gl.getUniformLocation(prog, 'uHueShift'),
+    texSeed: gl.getUniformLocation(prog, 'uTexSeed'),
     shardTex: gl.getUniformLocation(prog, 'uShardTex')
   };
   var UA = {
@@ -506,7 +655,14 @@
     isProxy: false,
     vaoVol: null,
     volIndexCount: 0,
-    atmoFade: 1
+    atmoFade: 1,
+    fieldCells: null,
+    palette: 0,
+    texMode: 1,
+    texAmount: 0.35,
+    texScale: 24,
+    hueShift: 0,
+    texSeed: [0, 0, 0]
   };
   var gridCache = new Map();
   var geomToken = 0; // инвалидация отложенного построения объёма осколков
@@ -1094,7 +1250,7 @@
     state.gpuBytes += (pos.length + col.length + cen.length + emi.length + bir.length + shr.length + kind.length + idx.length) * 4;
   }
 
-  function uploadGeometry(grid, colors, deferVol) {
+  function uploadGeometry(grid, colors, deferVol, fieldCells) {
     disposeGeometry();
     var myGeomToken = ++geomToken;
     var F = grid.cellCount;
@@ -1106,6 +1262,8 @@
     var centersAttr = new Float32Array(vertexCount * 3);
     var birthArr = new Float32Array(vertexCount);
     var shardAttr = new Float32Array(vertexCount);
+    var fieldVert = new Uint8Array(vertexCount * 4);
+    if (fieldCells && fieldCells.length === F * 4) fieldVert.set(fieldCells, 0);
     colorArr.set(colors, 0);
     var sp = readShardParams();
     var layout = computeShardLayout(grid, sp); // null при осколках <= 1; трансформ делает GPU
@@ -1184,6 +1342,12 @@
         centersAttr[slot * 3 + 1] = positions[c * 3 + 1];
         centersAttr[slot * 3 + 2] = positions[c * 3 + 2];
         birthArr[slot] = birthArr[c];
+        if (fieldCells && fieldCells.length === F * 4) {
+          fieldVert[slot * 4] = fieldCells[c * 4];
+          fieldVert[slot * 4 + 1] = fieldCells[c * 4 + 1];
+          fieldVert[slot * 4 + 2] = fieldCells[c * 4 + 2];
+          fieldVert[slot * 4 + 3] = fieldCells[c * 4 + 3];
+        }
         slot++;
       }
     }
@@ -1219,6 +1383,12 @@
     attrBuffer(3, 3, centersAttr);
     attrBuffer(4, 1, birthArr);
     attrBuffer(5, 1, shardAttr);
+    var fieldBuf = gl.createBuffer();
+    state.buffers.push(fieldBuf);
+    gl.bindBuffer(gl.ARRAY_BUFFER, fieldBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, fieldVert, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(7);
+    gl.vertexAttribPointer(7, 4, gl.UNSIGNED_BYTE, true, 0, 0);
     var ibo = gl.createBuffer();
     state.buffers.push(ibo);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
@@ -1245,7 +1415,7 @@
     state.cellIndexStart = cellIndexStart;
     state.vertexCount = vertexCount;
     state.gpuBytes = positions.byteLength + colorArr.byteLength + centerW.byteLength +
-      centersAttr.byteLength + birthArr.byteLength + shardAttr.byteLength + indices.byteLength +
+      centersAttr.byteLength + birthArr.byteLength + shardAttr.byteLength + fieldVert.byteLength + indices.byteLength +
       grid.centers.byteLength + grid.triangles.byteLength;
     trisEl.textContent = (indices.length / 3).toLocaleString('ru-RU');
     if (deferVol && layout) {
@@ -1354,11 +1524,32 @@
       colors[c * 3] = rgb[0]; colors[c * 3 + 1] = rgb[1]; colors[c * 3 + 2] = rgb[2];
     }
 
+    var fieldCells = new Uint8Array(F * 4);
+    for (c = 0; c < F; c++) {
+      var relief;
+      if (d.elev[c] <= d.sea) {
+        relief = -clamp01((d.sea - d.elev[c]) / Math.max(1e-6, d.sea - d.minE));
+      } else {
+        relief = clamp01((d.elev[c] - d.sea) / Math.max(1e-6, d.maxE - d.sea));
+      }
+      fieldCells[c * 4] = Math.round((relief * 0.5 + 0.5) * 255);
+      fieldCells[c * 4 + 1] = Math.round(clamp01(d.moist[c]) * 255);
+      fieldCells[c * 4 + 2] = Math.round(clamp01(d.temp[c]) * 255);
+      fieldCells[c * 4 + 3] =
+        PlanetNoise.hash32(((d.masterSeed >>> 0) ^ Math.imul(c + 1, 0x9E3779B1)) >>> 0) >>> 24;
+    }
+    state.fieldCells = fieldCells;
+    state.texSeed = [
+      PlanetNoise.hash32(((d.masterSeed >>> 0) ^ 0xA53A9DBD) >>> 0) / 4294967296 * 64,
+      PlanetNoise.hash32(((d.masterSeed >>> 0) ^ 0x5F356495) >>> 0) / 4294967296 * 64,
+      PlanetNoise.hash32(((d.masterSeed >>> 0) ^ 0x1B873593) >>> 0) / 4294967296 * 64
+    ];
+
     state.colors = colors;
     state.statsArgs = { grid: grid, d: d, gridLabel: gridLabel, note: note };
 
     var t = now();
-    uploadGeometry(grid, colors, state.buildAnim);
+    uploadGeometry(grid, colors, state.buildAnim, fieldCells);
     var msGeom = now() - t;
     state.lastMsGeom = msGeom;
     if (doSwap) state.buildStart = -1; // рост финала ведёт волна подмены, не каскад
@@ -1417,7 +1608,7 @@
       if (!state.grid || !state.colors || !state.statsArgs) return;
       state.selected = -1;
       var t = now();
-      uploadGeometry(state.grid, state.colors);
+      uploadGeometry(state.grid, state.colors, false, state.fieldCells);
       renderStats(now() - t);
     }, 120);
   }
@@ -1571,6 +1762,12 @@
     gl.uniform1f(U.centerGrow, swapP >= 0 ? 1 : 0);
     gl.uniform1f(U.shardMode, state.shardMode);
     gl.uniform1f(U.sep, state.shardSep);
+    gl.uniform1f(U.palette, state.palette);
+    gl.uniform1f(U.texMode, state.texMode);
+    gl.uniform1f(U.texAmount, state.texAmount);
+    gl.uniform1f(U.texScale, state.texScale);
+    gl.uniform1f(U.hueShift, state.hueShift);
+    gl.uniform3f(U.texSeed, state.texSeed[0], state.texSeed[1], state.texSeed[2]);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, state.shardTex);
     gl.uniform1i(U.shardTex, 0);
@@ -1934,6 +2131,46 @@
   [shardsEl, shardSepEl, shardThickEl, shardJagEl, shardLossEl].forEach(function (el) {
     el.addEventListener('input', function () { if (boomRaf) cancelBoom(); });
   });
+  var paletteSel = document.getElementById('paletteSel');
+  var textureSel = document.getElementById('textureSel');
+  var texAmtEl = document.getElementById('texAmt');
+  var texAmtV = document.getElementById('texAmtV');
+  var texScaleEl = document.getElementById('texScale');
+  var texScaleV = document.getElementById('texScaleV');
+  var hueEl = document.getElementById('hueShift');
+  var hueV = document.getElementById('hueShiftV');
+  function syncCustom() {
+    state.palette = paletteSel ? parseFloat(paletteSel.value) : 0;
+    state.texMode = textureSel ? parseFloat(textureSel.value) : 1;
+    state.texAmount = texAmtEl ? parseFloat(texAmtEl.value) : 0.35;
+    state.texScale = texScaleEl ? parseFloat(texScaleEl.value) : 24;
+    state.hueShift = hueEl ? parseFloat(hueEl.value) * Math.PI / 180 : 0;
+    if (texAmtV) texAmtV.textContent = state.texAmount.toFixed(2);
+    if (texScaleV) texScaleV.textContent = String(Math.round(state.texScale));
+    if (hueV) hueV.textContent = hueEl ? hueEl.value + '°' : '0°';
+  }
+  [paletteSel, textureSel, texAmtEl, texScaleEl, hueEl].forEach(function (el) {
+    if (el) el.addEventListener('input', syncCustom);
+    if (el) el.addEventListener('change', syncCustom);
+  });
+  var themeSeedBtn = document.getElementById('themeSeedBtn');
+  if (themeSeedBtn) themeSeedBtn.addEventListener('click', function () {
+    var base = state.statsArgs && state.statsArgs.d
+      ? (state.statsArgs.d.masterSeed >>> 0)
+      : PlanetNoise.stringSeed(ui.seedText.value || 'planet');
+    function rnd(n) {
+      return PlanetNoise.hash32((base ^ Math.imul(n + 1, 0x85EBCA6B)) >>> 0) / 4294967296;
+    }
+    if (paletteSel) paletteSel.value = String(1 + Math.floor(rnd(1) * 6));
+    if (textureSel) textureSel.value = String(1 + Math.floor(rnd(2) * 5));
+    if (texAmtEl) texAmtEl.value = (0.30 + rnd(3) * 0.45).toFixed(2);
+    if (texScaleEl) texScaleEl.value = String(12 + Math.floor(rnd(4) * 37));
+    if (hueEl) hueEl.value = String(Math.round((rnd(5) - 0.5) * 70));
+    syncCustom();
+    statusLine.textContent = 'тема поверхности собрана из текущего seed (только рендер)';
+  });
+  syncCustom();
+
   boomLabel();
   syncShards();
   syncOutputs();
