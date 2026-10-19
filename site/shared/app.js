@@ -3108,7 +3108,7 @@
   }
 
   function copyCoordinatesToClipboard(value, displayValue) {
-    copyTextToClipboard(value, 'Скопировано в две ячейки: ' + displayValue,
+    copyTextToClipboard(value, 'Координаты скопированы: ' + displayValue,
       'Не удалось скопировать координаты');
   }
 
