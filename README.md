@@ -68,8 +68,11 @@ site/          ── страницы, стили, скрипты ────�
 ```
 
 - **Данные.** Системы и места ведутся в Google-таблице (вкладки `systems` и `places`).
-  Воркфлоу синка раз в 6 часов забирает опубликованные CSV, проверяет и кладёт в `data/`.
-  Если в таблице ошибка, синк падает, на сайте остаются прежние данные, а в репозитории
+  Для будущих 3D-планет подготовлена третья вкладка `planet_generation` с профилями
+  генерации; её источник включится после создания и публикации вкладки. Воркфлоу синка
+  раз в 6 часов забирает опубликованные CSV, проверяет их все вместе (профили — строгим
+  валидатором против `places`) и только после успеха заменяет снимки в `data/`. Если в
+  таблице ошибка, синк падает, на сайте остаются прежние данные, а в репозитории
   появляется issue «Sync failed».
 - **Картинки.** В Git хранятся только исходники (`assets/src/`). Тайлы карты сектора и
   WebP-версии карты галактики, логотипа и превью собирает `tools/build_assets.py` при
@@ -97,7 +100,8 @@ site/                     корень сайта — именно он публ
     └── *.css               стили и скины
 data/                     данные сайта (пишет синк) и список источников (sources.json)
 assets/src/               исходники картинок (в Git, на сайт не попадают)
-tools/                    sync.py — синк данных, build_assets.py — сборка картинок
+tools/                    sync.py — синк данных, planet_generation.py — профили/ключи планет,
+                          build_assets.py — сборка картинок
 docs/                     инструкции и заметки
 .github/workflows/        pages.yml — деплой, check.yml — проверка PR,
                           sync.yml — синк, assets.yml — картинки артефактом
@@ -157,7 +161,9 @@ python3 -m http.server 8080 --bind 0.0.0.0 --directory .publish
 ```bash
 for f in site/*.js site/shared/*.js; do node --check "$f"; done
 npm install --no-save --no-package-lock eslint@10 globals@17 && npx eslint site
-python3 -m py_compile tools/build_assets.py tools/sync.py
+python3 -m py_compile tools/build_assets.py tools/sync.py tools/planet_generation.py
+python3 tools/planet_generation.py validate
+python3 -m unittest discover -s tests -p 'test_*.py'
 python3 tools/build_assets.py --check
 ```
 

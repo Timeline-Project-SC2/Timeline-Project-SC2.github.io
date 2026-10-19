@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""Автосинк данных и картинок из upstream-репозитория разработчика карты.
+"""Автосинк данных из Google Sheets и legacy GitHub-источников.
 
-Читает data/sources.json, для каждого источника:
-  1. Запрашивает последний commit SHA через GitHub API.
-  2. Сравнивает с data/upstream/manifest.json.
-  3. Если изменилось — скачивает файлы через raw.githubusercontent.com.
-  4. Валидирует (формат, вес, координаты).
-  5. Читает размеры картинки, пишет meta.json.
-  6. Применяет transform к координатам CSV.
-  7. Пишет data/upstream/<id>.<ext> (оригинал) и рабочие data/*.
+URL-источники обрабатываются в две фазы: сначала все опубликованные CSV
+скачиваются, нормализуются и проверяются в памяти, включая перекрёстную
+валидацию planet_generation против places. Только после успешной проверки
+снимки в data/ атомарно заменяются. Поэтому ошибочная строка нового листа
+не попадает на сайт и не ломает предыдущий снимок.
 
 При любой ошибке — ненулевой код выхода (workflow создаёт Issue).
 При отсутствии изменений — выход 0 без записи (нет пустых коммитов).
 """
+import copy
+import csv
+import datetime
+import hashlib
+import io
 import json
 import os
+import shutil
 import sys
+import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
-import csv
-import io
-import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +31,11 @@ UPSTREAM = DATA / "upstream"
 SOURCES = DATA / "sources.json"
 MANIFEST = UPSTREAM / "manifest.json"
 META = DATA / "meta.json"
+
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+import planet_generation
 
 GITHUB_API = "https://api.github.com"
 RAW = "https://raw.githubusercontent.com"
@@ -46,9 +52,64 @@ def load_json(path, default=None):
     return default if default is not None else {}
 
 
-def save_json(path, obj):
+def write_text_atomically(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def write_bytes_atomically(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _backup_file(path):
+    return path.read_bytes() if path.exists() else None
+
+
+def _restore_file(path, data):
+    if data is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    else:
+        write_bytes_atomically(path, data)
+
+
+def save_json(path, obj):
+    write_text_atomically(
+        path, json.dumps(obj, ensure_ascii=False, indent=2) + "\n"
+    )
 
 
 # Токен GitHub уходит только на хосты GitHub. Источники типа url (Google Sheets и др.)
@@ -193,8 +254,196 @@ def validate_csv(rows, fieldnames, img_w, img_h):
     return True
 
 
+def read_local_csv_dataset(path):
+    if not path.exists():
+        return [], []
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        fail(f"cannot read local snapshot {path}: {e}")
+    table = planet_generation.parse_csv_text(text)
+    if table.errors:
+        fail(f"local snapshot {path}: " + "; ".join(table.errors))
+    return table.fieldnames, [row.values for row in table.rows]
+
+
+def check_unique_ids(sid, rows, fieldnames):
+    id_cols = [
+        c for c in (fieldnames or []) if c.lower() in ("id", "system_id", "place_id")
+    ]
+    if id_cols:
+        ids = [r[id_cols[0]] for r in rows]
+        if len(set(ids)) != len(ids):
+            fail(f"source {sid}: duplicate id")
+
+
+def prepare_url_source(src, manifest):
+    """Скачать и нормализовать URL-источник, ничего не записывая в data/."""
+
+    sid = src["id"]
+    role = src.get("role")
+    target = src.get("target", f"data/{sid}.csv")
+    target_path = ROOT / target
+    enabled = src.get("enabled", True) is not False
+
+    if not enabled:
+        print(f"== source {sid} (url, disabled)")
+        fieldnames, rows = read_local_csv_dataset(target_path)
+        return {
+            "id": sid,
+            "role": role,
+            "target": target,
+            "target_path": target_path,
+            "enabled": False,
+            "sha": None,
+            "text": None,
+            "fieldnames": fieldnames,
+            "rows": rows,
+        }
+
+    url = src.get("url")
+    if not url or "SPREADSHEET_ID" in url:
+        fail(f"source {sid}: url not configured (still placeholder)")
+
+    print(f"== source {sid} (url)")
+    try:
+        data, headers = http_get(url)  # сторонний адрес — без токена
+    except Exception as e:
+        fail(f"source {sid}: download failed: {e}")
+    if len(data) == 0:
+        fail(f"source {sid}: empty response")
+    if looks_like_html(data, headers):
+        fail(
+            f"source {sid}: вместо CSV пришёл HTML — таблица не опубликована в интернете. "
+            f"Откройте таблицу → Файл → Поделиться → Опубликовать в интернете, "
+            f"выберите нужный лист и формат CSV, затем обновите url в data/sources.json"
+        )
+
+    sha = hashlib.sha256(data).hexdigest()
+    stored = manifest.get("sources", {}).get(sid, {}).get("sha")
+    changed = stored != sha or not target_path.exists()
+    if changed:
+        print(f"   new content {sha[:7]}")
+    else:
+        print(f"   up to date ({sha[:7]})")
+
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.decode("cp1251")
+    first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+    if "," not in first_line and ";" not in first_line and "\t" not in first_line:
+        fail(f"source {sid}: ответ не похож на CSV — первая строка «{first_line[:60]}»")
+
+    if role == "planet_generation":
+        table = planet_generation.parse_csv_text(text)
+        if table.errors:
+            fail(
+                f"source {sid}: структурные ошибки planet_generation:\n- "
+                + "\n- ".join(table.errors)
+            )
+        fieldnames = table.fieldnames
+        rows = [row.values for row in table.rows]
+        transformed_text = planet_generation.serialize_profiles(rows)
+    else:
+        transformed_text, rows, fieldnames = transform_csv(
+            text, src.get("transform", {}), None, None
+        )
+        check_unique_ids(sid, rows, fieldnames)
+
+    return {
+        "id": sid,
+        "role": role,
+        "target": target,
+        "target_path": target_path,
+        "enabled": True,
+        "sha": sha,
+        "text": transformed_text if changed else None,
+        "fieldnames": fieldnames,
+        "rows": rows,
+    }
+
+
+def validate_prepared_url_datasets(prepared):
+    """Проверить связи между подготовленными, но ещё не записанными CSV."""
+
+    by_role = {}
+    for item in prepared:
+        role = item.get("role")
+        if not role:
+            continue
+        if role in by_role:
+            fail(f"data/sources.json: несколько URL-источников с role={role}")
+        by_role[role] = item
+
+    if "planet_generation" not in by_role:
+        return None
+    if "places" not in by_role:
+        fail("data/sources.json: для planet_generation нужен URL-источник с role=places")
+
+    result = planet_generation.validate_profiles(
+        by_role["planet_generation"]["rows"],
+        by_role["planet_generation"]["fieldnames"],
+        by_role["places"]["rows"],
+        by_role["places"]["fieldnames"],
+    )
+    for warning in result.warnings:
+        print(f"WARNING: planet_generation: {warning}", file=sys.stderr)
+    if result.errors:
+        fail(
+            "planet_generation validation failed; предыдущие снимки не изменены:\n- "
+            + "\n- ".join(result.errors)
+        )
+    print(f"   planet_generation: OK ({len(result.profiles)} профилей)")
+    return result
+
+
+def apply_prepared_url_sources(prepared, manifest, overall_meta, enabled_source_ids):
+    """Применить подготовленные URL-снимки одной группой с откатом при сбое."""
+
+    changed = [item for item in prepared if item.get("text") is not None]
+    if not changed:
+        return manifest, overall_meta
+
+    paths = [item["target_path"] for item in changed] + [META, MANIFEST]
+    backups = {path: _backup_file(path) for path in paths}
+    updated_manifest = copy.deepcopy(manifest)
+    updated_meta = copy.deepcopy(overall_meta)
+    generated_at = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    try:
+        for item in changed:
+            write_text_atomically(item["target_path"], item["text"])
+            print(f"   wrote {item['target']} ({len(item['rows'])} rows)")
+            updated_manifest.setdefault("sources", {})[item["id"]] = {
+                "sha": item["sha"],
+                "updatedAt": generated_at,
+            }
+
+        last = changed[-1]
+        updated_meta.update(
+            {
+                "source": last["id"],
+                "sha": last["sha"],
+                "generatedAt": generated_at,
+                "sources": enabled_source_ids,
+            }
+        )
+        save_json(META, updated_meta)
+        save_json(MANIFEST, updated_manifest)
+    except Exception as e:
+        for path in reversed(paths):
+            _restore_file(path, backups[path])
+        fail(f"failed to apply synced CSV snapshots; previous files restored: {e}")
+
+    return updated_manifest, updated_meta
+
+
 def main():
-    import datetime
     token = os.environ.get("GITHUB_TOKEN")
     sources_cfg = load_json(SOURCES)
     sources = sources_cfg.get("sources", [])
@@ -206,59 +455,25 @@ def main():
 
     overall_meta = load_json(META, {})
 
+    url_sources = [
+        src for src in sources if src.get("type", "github") == "url"
+    ]
+    prepared_url_sources = [
+        prepare_url_source(src, manifest) for src in url_sources
+    ]
+    validate_prepared_url_datasets(prepared_url_sources)
+    enabled_source_ids = [
+        src["id"] for src in sources if src.get("enabled", True) is not False
+    ]
+    manifest, overall_meta = apply_prepared_url_sources(
+        prepared_url_sources, manifest, overall_meta, enabled_source_ids
+    )
+
     for src in sources:
         sid = src["id"]
         src_type = src.get("type", "github")
 
         if src_type == "url":
-            url = src.get("url")
-            if not url or "SPREADSHEET_ID" in url:
-                fail(f"source {sid}: url not configured (still placeholder)")
-            print(f"== source {sid} (url)")
-            try:
-                data, headers = http_get(url)  # сторонний адрес — без токена
-            except Exception as e:
-                fail(f"source {sid}: download failed: {e}")
-            if len(data) == 0:
-                fail(f"source {sid}: empty response")
-            if looks_like_html(data, headers):
-                fail(
-                    f"source {sid}: вместо CSV пришёл HTML — таблица не опубликована в интернете. "
-                    f"Откройте таблицу → Файл → Поделиться → Опубликовать в интернете, "
-                    f"выберите нужный лист и формат CSV, затем обновите url в data/sources.json"
-                )
-            # sha = hash of content (for change detection)
-            import hashlib
-            sha = hashlib.sha256(data).hexdigest()
-            stored = manifest.get("sources", {}).get(sid, {}).get("sha")
-            if stored == sha:
-                print(f"   up to date ({sha[:7]})")
-                continue
-            print(f"   new content {sha[:7]}")
-            # decode
-            try:
-                text = data.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text = data.decode("cp1251")
-            first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
-            if "," not in first_line and ";" not in first_line and "\t" not in first_line:
-                fail(f"source {sid}: ответ не похож на CSV — первая строка «{first_line[:60]}»")
-            # transform (no image dims for sheet)
-            transformed_text, rows, fieldnames = transform_csv(text, src.get("transform", {}), None, None)
-            # basic validation: unique id if present
-            id_cols = [c for c in (fieldnames or []) if c.lower() in ("id", "system_id", "place_id")]
-            if id_cols:
-                ids = [r[id_cols[0]] for r in rows]
-                if len(set(ids)) != len(ids):
-                    fail(f"source {sid}: duplicate id")
-            target = src.get("target", f"data/{sid}.csv")
-            (ROOT / target).parent.mkdir(parents=True, exist_ok=True)
-            (ROOT / target).write_text(transformed_text, encoding="utf-8")
-            print(f"   wrote {target} ({len(rows)} rows)")
-            overall_meta.update({"source": sid, "sha": sha, "generatedAt": datetime.datetime.utcnow().isoformat() + "Z"})
-            save_json(META, overall_meta)
-            manifest.setdefault("sources", {})[sid] = {"sha": sha, "updatedAt": overall_meta["generatedAt"]}
-            save_json(MANIFEST, manifest)
             continue
 
         # github type
@@ -363,7 +578,6 @@ def main():
             "image": {"width": img_w, "height": img_h},
             "generatedAt": None,
         })
-        import datetime
         overall_meta["generatedAt"] = datetime.datetime.utcnow().isoformat() + "Z"
         save_json(META, overall_meta)
 
