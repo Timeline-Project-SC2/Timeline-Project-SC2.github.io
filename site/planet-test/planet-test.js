@@ -876,11 +876,18 @@
     return other;
   }
 
-  /* Объём осколков: стены по периметрам шардов + пирамидальный низ.
+  /* Объём осколков: стены по периметрам шардов + закрытая нижняя оболочка.
      Вся геометрия — функция исходных (неразломанных) координат, поэтому при
      разлёте 0 стены соседних осколков совпадают и уходят внутрь планеты:
      реконструкция точная. Толщина и рваность — шум по исходной позиции,
-     одинаковый для обеих сторон общей стены. */
+     одинаковый для обеих сторон общей стены.
+
+     Низ специально НЕ сводится в один апекс на осколок: такой веер на крупных
+     плитах давал длинные треугольники через весь шард и читался как зонт.
+     Внутри шарда нижняя оболочка идёт по первичной триангуляции центров
+     ячеек; у границы смешанные треугольники доводятся через угол ячейки, а
+     каждая граничная сторона закрывается локальным веером центр ячейки ->
+     нижняя кромка стены. Получается плита примерно постоянной толщины. */
   function buildShardVolume(grid, layout, sp, surfPos, birthArr) {
     state.vaoVol = null;
     state.volIndexCount = 0;
@@ -899,20 +906,19 @@
       }
     }
 
-    var apexIndex = new Int32Array(layout.count).fill(-1);
-    function apexOf(s) {
-      if (apexIndex[s] >= 0) return apexIndex[s];
-      var px = layout.pivots[s * 3], py = layout.pivots[s * 3 + 1], pz = layout.pivots[s * 3 + 2];
-      var rr = 1 - thickEff * 1.05;
-      var o = pos.length;
-      pos.push(px * rr, py * rr, pz * rr);
-      col.push(0.09, 0.055, 0.045);
-      emi.push(1.0);
-      shr.push(s);
-      cen.push(pos[o], pos[o + 1], pos[o + 2]);
-      bir.push(cellBirth(py, 7919 + s));
-      apexIndex[s] = o / 3;
-      return apexIndex[s];
+    function shadeAt(x, y, z) {
+      return 0.85 + 0.3 * (0.5 + 0.5 * fracNoise(x * 21 - 3.7, y * 21 + 8.9, z * 21 + 1.3));
+    }
+
+    // Единая глубина нижней поверхности для стены, центров и углов: одинаковая
+    // функция исходного направления не даёт щелей между кусками оболочки.
+    // bottomNoise01 переиспользуется для оттенка/нагрева низа, чтобы не
+    // платить три вызова шума на каждую из десятков тысяч вершин оболочки.
+    var bottomNoise01 = 0.5;
+    function bottomRadius(x, y, z) {
+      bottomNoise01 =
+        0.5 + 0.5 * fracNoise(x * 9 + 1.9, y * 9 + 5.5, z * 9 - 6.2);
+      return 1 - thickEff * (0.65 + 0.55 * bottomNoise01);
     }
 
     function pushVert(ox, oy, oz, s, cell, r, g, b, e) {
@@ -924,6 +930,53 @@
       cen.push(surfPos[cell * 3], surfPos[cell * 3 + 1], surfPos[cell * 3 + 2]);
       bir.push(birthArr[cell]);
       return o / 3;
+    }
+
+    function pushBottomVert(x, y, z, s, cell, knownRadius) {
+      var rr = knownRadius === undefined ? bottomRadius(x, y, z) : knownRadius;
+      var shade = 0.80 + 0.38 * bottomNoise01;
+      // Низ — преимущественно тёмная порода с горячими пятнами, а не сплошная
+      // лавовая плёнка: иначе эмиссия забивает гранёную геометрию. Глубже
+      // участок оболочки — в среднем горячее.
+      var heat = 0.08 + 0.30 * bottomNoise01 * bottomNoise01;
+      return pushVert(x * rr, y * rr, z * rr, s, cell,
+        0.105 * shade, 0.064 * shade, 0.048 * shade, heat);
+    }
+
+    var bottomCenterIndex = new Int32Array(F).fill(-1);
+    function bottomCenterOf(cell) {
+      if (bottomCenterIndex[cell] >= 0) return bottomCenterIndex[cell];
+      var vi = pushBottomVert(
+        grid.centers[cell * 3], grid.centers[cell * 3 + 1], grid.centers[cell * 3 + 2],
+        layout.shardOf[cell], cell);
+      bottomCenterIndex[cell] = vi;
+      return vi;
+    }
+
+    function bottomCornerOf(t, s, anchorCell) {
+      return pushBottomVert(
+        grid.corners[t * 3], grid.corners[t * 3 + 1], grid.corners[t * 3 + 2],
+        s, anchorCell);
+    }
+
+    // Внутренняя часть низа: один треугольник центров на первичную ячейку
+    // триангуляции. В смешанном треугольнике пара ячеек одного шарда
+    // доводится до общего угла; оставшуюся приграничную часть закроют веера
+    // граничных сторон ниже. Ориентация обратная верхней поверхности.
+    for (var t = 0; t < grid.triangleCount; t++) {
+      var ta = grid.triangles[t * 3];
+      var tb = grid.triangles[t * 3 + 1];
+      var tc = grid.triangles[t * 3 + 2];
+      var sa = layout.shardOf[ta];
+      var sb = layout.shardOf[tb];
+      var sc = layout.shardOf[tc];
+      if (sa === sb && sb === sc) {
+        idx.push(bottomCenterOf(ta), bottomCenterOf(tc), bottomCenterOf(tb));
+      } else {
+        if (sa === sb) idx.push(bottomCenterOf(ta), bottomCornerOf(t, sa, ta), bottomCenterOf(tb));
+        if (sb === sc) idx.push(bottomCenterOf(tb), bottomCornerOf(t, sb, tb), bottomCenterOf(tc));
+        if (sc === sa) idx.push(bottomCenterOf(tc), bottomCornerOf(t, sc, tc), bottomCenterOf(ta));
+      }
     }
 
     var SEG = 3;
@@ -942,6 +995,7 @@
         var ex = bx - ax, ey = by - ay, ez = bz - az;
         var edgeLen = Math.sqrt(ex * ex + ey * ey + ez * ez);
         var prevTop = -1, prevBot = -1;
+        var sideBottom = [];
         for (var j = 0; j <= SEG; j++) {
           var tt = j / SEG;
           var px = ax + ex * tt, py = ay + ey * tt, pz = az + ez * tt;
@@ -956,17 +1010,22 @@
             pl = Math.sqrt(px * px + py * py + pz * pz) || 1;
             px /= pl; py /= pl; pz /= pl;
           }
-          var shade = 0.85 + 0.3 * (0.5 + 0.5 * fracNoise(px * 21 - 3.7, py * 21 + 8.9, pz * 21 + 1.3));
-          var thickLocal = thickEff * (0.65 + 0.55 * (0.5 + 0.5 * fracNoise(px * 9 + 1.9, py * 9 + 5.5, pz * 9 - 6.2)));
-          var rr2 = 1 - thickLocal;
+          var shade = shadeAt(px, py, pz);
+          var rr2 = bottomRadius(px, py, pz);
           var topIdx = pushVert(px, py, pz, s, c, 0.23 * shade, 0.145 * shade, 0.09 * shade, 0.03);
           var botIdx = pushVert(px * rr2, py * rr2, pz * rr2, s, c,
             0.075 * shade, 0.05 * shade, 0.045 * shade, 0.85);
+          sideBottom.push(pushBottomVert(px, py, pz, s, c, rr2));
           if (prevTop >= 0) {
             idx.push(prevTop, topIdx, botIdx, prevTop, botIdx, prevBot);
-            idx.push(prevBot, botIdx, apexOf(s));
           }
           prevTop = topIdx; prevBot = botIdx;
+        }
+        // Локальное закрытие именно этой стороны: короткий веер в пределах
+        // одной ячейки, без лучей через весь осколок.
+        var bottomCenter = bottomCenterOf(c);
+        for (j = 0; j < SEG; j++) {
+          idx.push(bottomCenter, sideBottom[j + 1], sideBottom[j]);
         }
       }
     }
