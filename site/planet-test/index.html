@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Planet spike — гексагональный глобус (Этап 1)</title>
-<link rel="stylesheet" href="planet-test.css?v=planet-spike-1">
+<link rel="stylesheet" href="planet-test.css?v=planet-spike-23">
 </head>
 <body>
   <div class="stage">
@@ -13,7 +13,11 @@
   </div>
 
   <aside class="panel" aria-label="Параметры спайка">
-    <h1>PLANET SPIKE · ЭТАП 1</h1>
+    <div class="panel-head">
+      <h1>PLANET SPIKE · ЭТАП 1</h1>
+      <button id="panelToggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panelBody" title="Свернуть панель параметров" aria-label="Свернуть панель параметров">−</button>
+    </div>
+    <div id="panelBody">
 
     <div class="row"><label for="seedText">seed</label><input id="seedText" type="text" value="korhal-iv" autocomplete="off" spellcheck="false"><button id="seedBtn" type="button">⟳</button></div>
     <div class="row"><label for="vSel">макс. частота v</label><select id="vSel">
@@ -129,6 +133,7 @@
       Массивы суши в статистике — физические связные области, а не будущие
       идентичности C100 (они появятся на Этапе 4).
     </p>
+    </div>
   </aside>
 
   <div class="hud">
@@ -142,6 +147,6 @@
   <script src="/shared/geodesic-grid.js?v=planet-spike-6"></script>
   <script src="/shared/planet-noise.js?v=planet-spike-1"></script>
   <script src="/shared/planet-geometry.js?v=planet-spike-1"></script>
-  <script src="planet-test.js?v=planet-spike-22"></script>
+  <script src="planet-test.js?v=planet-spike-23"></script>
 </body>
 </html>
