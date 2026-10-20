@@ -759,7 +759,7 @@
   var fieldCacheCells = 0;
   var FIELD_CACHE_MAX_CELLS = 1200000;
   try {
-    worker = new Worker('planet-worker.js?v=planet-spike-8');
+    worker = new Worker('planet-worker.js?v=planet-spike-23');
     worker.onmessage = onWorkerMessage;
     worker.onerror = function () {
       worker = null;
