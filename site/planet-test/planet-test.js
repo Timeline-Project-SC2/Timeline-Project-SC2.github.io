@@ -16,6 +16,8 @@
   var fpsEl = document.getElementById('fps');
   var cellsEl = document.getElementById('cells');
   var trisEl = document.getElementById('tris');
+  var lodHudEl = document.getElementById('lodHud');
+  var renderScaleEl = document.getElementById('renderScale');
 
   var gl = canvas.getContext('webgl2', { antialias: true });
   if (!gl) {
@@ -621,6 +623,10 @@
 
   /* ------------------------------------------------------------ состояние */
 
+  var coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  var renderScaleBase = Math.min(window.devicePixelRatio || 1, 1.75);
+  var initialRenderScale = Math.min(renderScaleBase, coarsePointer ? 1.5 : 1.75);
+
   var state = {
     grid: null,
     elev: null,
@@ -662,7 +668,11 @@
     texAmount: 0.35,
     texScale: 24,
     hueShift: 0,
-    texSeed: [0, 0, 0]
+    texSeed: [0, 0, 0],
+    renderV: 0,
+    maxV: 0,
+    renderScale: initialRenderScale,
+    renderScaleBase: renderScaleBase
   };
   var gridCache = new Map();
   var geomToken = 0; // инвалидация отложенного построения объёма осколков
@@ -674,6 +684,25 @@
   var genToken = 0;
   var workerPending = false;
   var worker = null;
+
+  /* LOD-пирамида детализации: выбранная в панели v — потолок, а фактический
+     рендер выбирается по экранному размеру гекса. Поля планеты непрерывны и
+     от v не зависят, поэтому уровни — одна и та же планета на разной сетке.
+     Это оптимизация рендера спайка, а не будущая каноническая плотность:
+     её зафиксирует Этап 3/выбор владельца, адреса ниже — адреса текущего
+     рендер-уровня. */
+  var LOD_LEVELS = [16, 24, 34, 48, 64, 80, 100, 128, 160, 192];
+  var lodSel = document.getElementById('lodSel');
+  var lodOut = document.getElementById('lodV');
+  var activeParams = null; // параметры планеты; params.v здесь — максимум
+  var pendingParams = null;
+  var pendingShowOpts = null;
+  var lodQueuedV = 0;
+  var lodQueuedOpts = null;
+  var lodTimer = 0;
+  var fieldCache = new Map();
+  var fieldCacheCells = 0;
+  var FIELD_CACHE_MAX_CELLS = 1200000;
   try {
     worker = new Worker('planet-worker.js?v=planet-spike-7');
     worker.onmessage = onWorkerMessage;
@@ -681,7 +710,10 @@
       worker = null;
       if (workerPending) {
         workerPending = false;
-        try { generateSync(readParams()); } catch (err) {
+        try {
+          var fallback = pendingParams || readParams();
+          generateSync(fallback, pendingShowOpts || null);
+        } catch (err) {
           statusLine.textContent = 'Ошибка генерации: ' + err.message;
         }
       }
@@ -710,6 +742,98 @@
     gridCache.set(v, grid);
     idbPutGrid(v, grid);
     return { grid: grid, ms: ms };
+  }
+
+  function cloneParams(params, v) {
+    var out = {};
+    Object.keys(params).forEach(function (k) { out[k] = params[k]; });
+    out.v = v;
+    return out;
+  }
+
+  function fieldCacheKey(params) {
+    return JSON.stringify([
+      params.seedText, params.kind, params.freq, params.octaves,
+      params.gain, params.warp, params.ocean, params.v
+    ]);
+  }
+
+  function getCachedFields(params) {
+    var key = fieldCacheKey(params);
+    var hit = fieldCache.get(key);
+    if (!hit) return null;
+    // LRU: недавно использованный уровень переживает чистку дольше.
+    fieldCache.delete(key);
+    fieldCache.set(key, hit);
+    return hit;
+  }
+
+  function cacheFields(params, d) {
+    if (!params || !d || !d.elev) return;
+    var key = fieldCacheKey(params);
+    var old = fieldCache.get(key);
+    if (old) fieldCacheCells -= old.elev.length;
+    fieldCache.set(key, d);
+    fieldCacheCells += d.elev.length;
+    while (fieldCacheCells > FIELD_CACHE_MAX_CELLS && fieldCache.size > 1) {
+      var oldestKey = fieldCache.keys().next().value;
+      var oldest = fieldCache.get(oldestKey);
+      fieldCache.delete(oldestKey);
+      if (oldest && oldest.elev) fieldCacheCells -= oldest.elev.length;
+    }
+  }
+
+  function lodEnabled() {
+    return !lodSel || lodSel.value === 'auto';
+  }
+
+  function lodLevelsFor(maxV) {
+    var levels = LOD_LEVELS.filter(function (v) { return v <= maxV; });
+    if (!levels.length || levels[levels.length - 1] !== maxV) levels.push(maxV);
+    return levels;
+  }
+
+  function cellPixelsApprox(v) {
+    var h = canvas.clientHeight || window.innerHeight || 600;
+    var surfaceDist = Math.max(0.55, state.dist - 1);
+    // Среднее угловое расстояние центров GP(v,0) ≈ 1.107/v; пикселей на
+    // радиан у ближайшей точки сферы ≈ 1.207*h/(dist-1) при FOV 45°.
+    return 1.337 * h / (surfaceDist * Math.max(1, v));
+  }
+
+  function desiredRenderV(maxV) {
+    if (!lodEnabled()) return maxV;
+    var levels = lodLevelsFor(maxV);
+    var current = state.renderV;
+    if (current && levels.indexOf(current) >= 0) {
+      var px = cellPixelsApprox(current);
+      if (px >= 8 && px <= 15) return current; // гистерезис против дёргания уровней
+    }
+    var h = canvas.clientHeight || window.innerHeight || 600;
+    var surfaceDist = Math.max(0.55, state.dist - 1);
+    var raw = 1.337 * h / (surfaceDist * 11); // целевой размер гекса ≈ 11 CSS px
+    for (var i = 0; i < levels.length; i++) {
+      if (levels[i] >= raw * 0.9) return levels[i];
+    }
+    return maxV;
+  }
+
+  function lodNote(v) {
+    if (!lodEnabled() || !activeParams) return '';
+    return 'рендер-LOD: v=' + v + ' из макс. v=' + activeParams.v +
+      ' · поля те же, меняется только детализация гексов';
+  }
+
+  function syncLodHud(targetV) {
+    var shown = state.renderV || targetV || 0;
+    var lodText = shown
+      ? ('v=' + shown + (activeParams ? '/' + activeParams.v : ''))
+      : '—';
+    var shortText = shown ? ('v=' + shown) : '';
+    var scaleText = state.renderScale.toFixed(2) + '×';
+    if (lodHudEl && lodHudEl.textContent !== lodText) lodHudEl.textContent = lodText;
+    if (lodOut && lodOut.textContent !== shortText) lodOut.textContent = shortText;
+    if (renderScaleEl && renderScaleEl.textContent !== scaleText) renderScaleEl.textContent = scaleText;
   }
 
   /* IndexedDB-кэш сеток: сетка зависит только от v, поэтому повторные
@@ -1492,13 +1616,18 @@
   }
 
   /* Показать готовую планету: прокси, финал из воркера или синхронный путь. */
-  function showPlanet(grid, d, gridLabel, note, proxyFlag) {
+  function showPlanet(grid, d, gridLabel, note, proxyFlag, opts) {
+    opts = opts || {};
     // Бесшовная подмена прокси финалом: прежняя геометрия остаётся жить как
     // prev-слой, финал под ним выходит из центра планеты той же широтной
     // волной рождения (birth зависит от широты, фронты совпадают), прокси
     // следом сжимается в центры своих ячеек. Каскад с полюса при этом не
     // перезапускается, а после волны prev-слой утилизируется полностью.
-    var doSwap = !proxyFlag && state.isProxy && !!state.vao && !!state.grid && state.grid !== grid;
+    // Тот же механизм коротко (opts.swapMs) подменяет LOD-уровни при зуме.
+    var doSwap = opts.swap
+      ? (!!state.vao && !!state.grid && state.grid !== grid)
+      : (!proxyFlag && state.isProxy && !!state.vao && !!state.grid && state.grid !== grid);
+    state.swapDur = opts.swapMs || 1500;
     if (doSwap) {
       disposePrev();
       state.prev = {
@@ -1515,6 +1644,8 @@
     }
     state.isProxy = !!proxyFlag;
     state.grid = grid;
+    state.renderV = grid.v;
+    state.maxV = activeParams ? activeParams.v : grid.v;
     state.selected = -1;
     var F = grid.cellCount;
     var colors = new Float32Array(F * 3);
@@ -1548,12 +1679,13 @@
     state.colors = colors;
     state.statsArgs = { grid: grid, d: d, gridLabel: gridLabel, note: note };
 
+    var animateBuild = state.buildAnim && !opts.noBuild;
     var t = now();
-    uploadGeometry(grid, colors, state.buildAnim, fieldCells);
+    uploadGeometry(grid, colors, animateBuild || doSwap, fieldCells);
     var msGeom = now() - t;
     state.lastMsGeom = msGeom;
     if (doSwap) state.buildStart = -1; // рост финала ведёт волна подмены, не каскад
-    else if (state.buildAnim) playBuild(); else state.buildStart = -1;
+    else if (animateBuild) playBuild(); else state.buildStart = -1;
 
     state.elev = d.elev;
     state.moist = d.moist;
@@ -1563,6 +1695,7 @@
     state.maxE = d.maxE;
 
     cellsEl.textContent = F.toLocaleString('ru-RU');
+    syncLodHud(grid.v);
     renderStats(msGeom);
   }
 
@@ -1614,10 +1747,25 @@
   }
 
   /* Синхронный путь без воркера: старое поведение, вкладка подвисает. */
-  function generateSync(params) {
+  function generateSync(params, opts) {
+    opts = opts || {};
     var got = getGrid(params.v);
-    var d = withStats(got.grid, computeFields(got.grid, params));
-    showPlanet(got.grid, d, got.ms ? got.ms.toFixed(0) + ' мс' : 'кэш', '');
+    var d = getCachedFields(params);
+    if (!d) {
+      d = withStats(got.grid, computeFields(got.grid, params));
+      cacheFields(params, d);
+    }
+    var proxyFlag = Object.prototype.hasOwnProperty.call(opts, 'proxyFlag')
+      ? opts.proxyFlag
+      : !!(activeParams && params.v < activeParams.v);
+    showPlanet(
+      got.grid,
+      d,
+      got.ms ? got.ms.toFixed(0) + ' мс' : 'кэш',
+      opts.note || lodNote(params.v),
+      proxyFlag,
+      opts
+    );
     statusLine.textContent = '';
   }
 
@@ -1625,9 +1773,10 @@
     var msg = e.data;
     if (msg.type === 'progress') {
       if (msg.token !== genToken) return;
+      var prefix = pendingShowOpts && pendingShowOpts.lod ? 'LOD-воркер: ' : 'воркер: ';
       statusLine.textContent = msg.stage === 'grid'
-        ? 'воркер: сетка v=' + msg.v + '…'
-        : 'воркер: поля ' + msg.pct + '%…';
+        ? prefix + 'сетка v=' + msg.v + '…'
+        : prefix + 'поля ' + msg.pct + '%…';
       return;
     }
     if (msg.type === 'error') {
@@ -1635,7 +1784,7 @@
       workerPending = false;
       worker = null;
       try {
-        generateSync(readParams());
+        generateSync(pendingParams || readParams(), pendingShowOpts || null);
       } catch (err) {
         statusLine.textContent = 'Ошибка генерации: ' + err.message;
       }
@@ -1644,42 +1793,142 @@
     if (msg.grid) gridCache.set(msg.v, msg.grid);
     if (msg.token !== genToken) return;
     workerPending = false;
+    var params = pendingParams;
+    var opts = pendingShowOpts || {};
+    pendingParams = null;
+    pendingShowOpts = null;
     var grid = gridCache.get(msg.v);
     if (!grid) return;
+    if (params) cacheFields(params, msg);
     var gridLabel = msg.gridSource === 'built' ? msg.msGrid.toFixed(0) + ' мс (воркер)'
       : msg.gridSource === 'idb' ? 'IndexedDB-кэш' : 'кэш';
-    showPlanet(grid, msg, gridLabel, '');
+    var proxyFlag = Object.prototype.hasOwnProperty.call(opts, 'proxyFlag')
+      ? opts.proxyFlag
+      : !!(activeParams && msg.v < activeParams.v);
+    showPlanet(grid, msg, gridLabel, opts.note || lodNote(msg.v), proxyFlag, opts);
     statusLine.textContent = '';
+    if (lodQueuedV && lodQueuedV !== msg.v) {
+      var queuedV = lodQueuedV;
+      var queuedOpts = lodQueuedOpts;
+      lodQueuedV = 0;
+      lodQueuedOpts = null;
+      requestRenderV(queuedV, queuedOpts);
+    }
   }
 
-  function generate() {
-    var params = readParams();
-    genToken++;
-    state.selected = -1;
-    cellInfo.textContent = 'ячейка не выбрана — кликните по глобусу';
-    if (!worker) { generateSync(params); return; }
-
-    // Прокси низкого разрешения: та же планета (поля не зависят от v).
-    // Собирается каскадом немедленно, пока воркер считает полную плотность, —
-    // анимация и есть фактическая загрузка. Показываем при высокой плотности
-    // и при любом «холодном» v (сетки ещё нет в памяти: первый визит, новая
-    // плотность) — первый кадр за десятки мс вместо пустого экрана; при
-    // тёплом кэше воркер отвечает быстрее, чем прокси успел бы мигнуть.
-    var proxyV = params.v > 64 ? PROXY_V : 16;
-    if (params.v > proxyV && (params.v > 64 || !gridCache.has(params.v))) {
-      var got = getGrid(proxyV);
-      var d = withStats(got.grid, computeFields(got.grid, params));
-      showPlanet(got.grid, d, 'прокси',
-        'прокси v=' + proxyV + ' · полная v=' + params.v + ' строится в воркере…', true);
+  function requestPlanet(params, opts) {
+    opts = opts || {};
+    if (!Object.prototype.hasOwnProperty.call(opts, 'proxyFlag')) {
+      opts.proxyFlag = !!(activeParams && params.v < activeParams.v);
     }
+
+    var grid = gridCache.get(params.v);
+    var cached = getCachedFields(params);
+    if (grid && cached) {
+      // Уже посчитанный уровень показываем сразу и отменяем логически
+      // устаревший ответ воркера, если он ещё занят предыдущим запросом.
+      genToken++;
+      pendingParams = null;
+      pendingShowOpts = null;
+      workerPending = false;
+      // Этот показ — самый свежий запрос; ранее поставленный в очередь
+      // уровень уже устарел и не должен всплыть после следующего ответа.
+      lodQueuedV = 0;
+      lodQueuedOpts = null;
+      showPlanet(grid, cached, 'LOD-кэш', opts.note || lodNote(params.v), opts.proxyFlag, opts);
+      statusLine.textContent = '';
+      return;
+    }
+
+    if (!worker) { generateSync(params, opts); return; }
+    if (workerPending && opts.lod) {
+      lodQueuedV = params.v;
+      lodQueuedOpts = opts;
+      syncLodHud(params.v);
+      return;
+    }
+    if (!opts.lod) { lodQueuedV = 0; lodQueuedOpts = null; }
+
+    genToken++;
+    pendingParams = params;
+    pendingShowOpts = opts;
+
+    if (opts.allowProxy) {
+      // Прокси низкого разрешения: та же планета (поля не зависят от v).
+      // Собирается каскадом немедленно, пока воркер считает целевую
+      // плотность, — анимация и есть фактическая загрузка.
+      var proxyV = params.v > 64 ? PROXY_V : 16;
+      if (params.v > proxyV && (params.v > 64 || !gridCache.has(params.v))) {
+        var proxyParams = cloneParams(params, proxyV);
+        var got = getGrid(proxyV);
+        var proxyData = getCachedFields(proxyParams);
+        if (!proxyData) {
+          proxyData = withStats(got.grid, computeFields(got.grid, proxyParams));
+          cacheFields(proxyParams, proxyData);
+        }
+        showPlanet(got.grid, proxyData, 'прокси',
+          'прокси v=' + proxyV + ' · ' +
+          (lodEnabled() ? 'LOD v=' : 'полная v=') + params.v + ' строится в воркере…',
+          true, { noBuild: false, swapMs: 1500 });
+        // Цель LOD ниже максимума помечена proxyFlag, поэтому для неё
+        // бесшовную подмену прокси включаем явно.
+        opts.swap = true;
+        opts.swapMs = 1500;
+      }
+    }
+
     prefetchGrid(params.v);
-    statusLine.textContent = 'воркер: запуск…';
+    statusLine.textContent = opts.lod
+      ? 'LOD: подготовка v=' + params.v + '…'
+      : 'воркер: запуск…';
     workerPending = true;
     worker.postMessage({
       token: genToken,
       v: params.v,
       haveGrid: gridCache.has(params.v),
       params: params
+    });
+  }
+
+  function requestRenderV(v, queuedOpts) {
+    if (!activeParams) return;
+    if (v === state.renderV && !workerPending) { syncLodHud(v); return; }
+    var opts = queuedOpts || {
+      lod: true,
+      swap: true,
+      swapMs: 350,
+      noBuild: true,
+      note: lodNote(v)
+    };
+    if (!opts.note) opts.note = lodNote(v);
+    syncLodHud(v);
+    statusLine.textContent = 'LOD: подготовка v=' + v + '…';
+    requestPlanet(cloneParams(activeParams, v), opts);
+  }
+
+  function scheduleLodUpdate(delay) {
+    if (!lodEnabled() || !activeParams) return;
+    window.clearTimeout(lodTimer);
+    lodTimer = window.setTimeout(function () {
+      if (!activeParams || !lodEnabled()) return;
+      var desired = desiredRenderV(activeParams.v);
+      syncLodHud(desired);
+      if (desired !== state.renderV) requestRenderV(desired);
+    }, delay == null ? 260 : delay);
+  }
+
+  function generate() {
+    var maxParams = readParams();
+    activeParams = maxParams;
+    lodQueuedV = 0;
+    lodQueuedOpts = null;
+    state.selected = -1;
+    cellInfo.textContent = 'ячейка не выбрана — кликните по глобусу';
+    var targetV = desiredRenderV(maxParams.v);
+    requestPlanet(cloneParams(maxParams, targetV), {
+      allowProxy: true,
+      swapMs: 1500,
+      note: lodNote(targetV)
     });
   }
 
@@ -1700,26 +1949,71 @@
 
   var lastTime = performance.now();
   var fpsAccum = 0, fpsFrames = 0, fpsShown = performance.now();
+  var perfAccum = 0, perfFrames = 0, perfShown = performance.now();
+  var qualityCooldownUntil = 0;
+  var qualityGoodSamples = 0;
 
   function resize() {
-    var dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+    var dpr = state.renderScale || initialRenderScale;
     var w = Math.max(2, Math.round(canvas.clientWidth * dpr));
     var h = Math.max(2, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
     }
+    syncLodHud(state.renderV);
+  }
+
+  /* Адаптивный внутренний масштаб: фрагментный шейдер с процедурной
+     текстурой на телефоне часто дороже вершин, поэтому при просадке сначала
+     уменьшаем число реально рисуемых пикселей. CSS-размер канваса и пикинг
+     не меняются. Подъём обратно — только после нескольких стабильных
+     секунд, чтобы качество не дёргалось туда-сюда. */
+  function adaptRenderScale(measuredFps, tNow) {
+    if (!lodEnabled() || !state.vao || workerPending || state.prev || state.buildStart >= 0) {
+      qualityGoodSamples = 0;
+      return;
+    }
+    if (tNow < qualityCooldownUntil) return;
+    var minScale = 0.6;
+    if (measuredFps < 38 && state.renderScale > minScale) {
+      state.renderScale = Math.max(minScale, state.renderScale * 0.82);
+      qualityCooldownUntil = tNow + 1800;
+      qualityGoodSamples = 0;
+      syncLodHud(state.renderV);
+      return;
+    }
+    if (measuredFps > 57 && state.renderScale < state.renderScaleBase) {
+      qualityGoodSamples++;
+      if (qualityGoodSamples >= 4) {
+        state.renderScale = Math.min(state.renderScaleBase, state.renderScale * 1.12);
+        qualityCooldownUntil = tNow + 1800;
+        qualityGoodSamples = 0;
+        syncLodHud(state.renderV);
+      }
+    } else {
+      qualityGoodSamples = 0;
+    }
   }
 
   function frame(tNow) {
     requestAnimationFrame(frame);
-    var dt = Math.min(0.05, (tNow - lastTime) / 1000);
+    var rawDt = Math.min(0.25, Math.max(0, (tNow - lastTime) / 1000));
+    var dt = Math.min(0.05, rawDt);
     lastTime = tNow;
     fpsAccum += dt;
     fpsFrames++;
+    perfAccum += rawDt;
+    perfFrames++;
     if (tNow - fpsShown > 500) {
       fpsEl.textContent = fpsFrames ? Math.round(fpsFrames / Math.max(fpsAccum, 1e-6)) : '—';
       fpsAccum = 0; fpsFrames = 0; fpsShown = tNow;
+    }
+    if (tNow - perfShown > 1000) {
+      var measuredFps = perfFrames / Math.max(perfAccum, 1e-6);
+      perfAccum = 0; perfFrames = 0; perfShown = tNow;
+      adaptRenderScale(measuredFps, tNow);
+      scheduleLodUpdate(0);
     }
     if (!state.vao) return;
     if (state.spin && !dragging) {
@@ -1946,6 +2240,7 @@
       var d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       if (pinchDist > 0) {
         state.dist = Math.min(7, Math.max(1.7, state.dist * (pinchDist / d)));
+        scheduleLodUpdate(260);
       }
       pinchDist = d;
       return;
@@ -1975,7 +2270,10 @@
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
     state.dist = Math.min(7, Math.max(1.7, state.dist * Math.exp(e.deltaY * 0.001)));
+    scheduleLodUpdate(260);
   }, { passive: false });
+
+  window.addEventListener('resize', function () { scheduleLodUpdate(260); });
 
   /* ------------------------------------------------------------ панель */
 
@@ -1991,6 +2289,23 @@
     ui[id].addEventListener('input', function () { syncOutputs(); scheduleGenerate(); });
     ui[id].addEventListener('change', function () { syncOutputs(); scheduleGenerate(); });
   });
+  if (lodSel) {
+    lodSel.addEventListener('change', function () {
+      window.clearTimeout(lodTimer);
+      if (!activeParams) return;
+      if (lodEnabled()) {
+        scheduleLodUpdate(0);
+      } else {
+        // Фиксированный режим — честный полный рендер выбранной v без
+        // динамического масштаба, чтобы замеры плотности оставались чистыми.
+        state.renderScale = state.renderScaleBase;
+        syncLodHud(activeParams.v);
+        requestRenderV(activeParams.v, {
+          swap: true, swapMs: 350, noBuild: true, note: ''
+        });
+      }
+    });
+  }
   document.getElementById('regenBtn').addEventListener('click', scheduleGenerate);
   document.getElementById('seedBtn').addEventListener('click', function () {
     ui.seedText.value = 'planet-' + Math.floor(Math.random() * 1e9).toString(36);

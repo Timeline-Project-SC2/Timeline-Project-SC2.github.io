@@ -16,7 +16,7 @@
     <h1>PLANET SPIKE · ЭТАП 1</h1>
 
     <div class="row"><label for="seedText">seed</label><input id="seedText" type="text" value="korhal-iv" autocomplete="off" spellcheck="false"><button id="seedBtn" type="button">⟳</button></div>
-    <div class="row"><label for="vSel">частота v</label><select id="vSel">
+    <div class="row"><label for="vSel">макс. частота v</label><select id="vSel">
       <option value="16">16 · 2 562 ячеек</option>
       <option value="24">24 · 5 762</option>
       <option value="34">34 · 11 562 (≈Марс)</option>
@@ -28,6 +28,10 @@
       <option value="160">160 · 256 002</option>
       <option value="192">192 · 368 642 (Земля ×9, долгая генерация)</option>
     </select><output id="vV"></output></div>
+    <div class="row"><label for="lodSel">детализация</label><select id="lodSel">
+      <option value="auto" selected>авто LOD по зуму</option>
+      <option value="fixed">фиксированная v</option>
+    </select><output id="lodV"></output></div>
     <div class="row"><label for="noiseSel">шум</label><select id="noiseSel">
       <option value="simplex" selected>simplex (градиентный)</option>
       <option value="value">value (собственный)</option>
@@ -105,19 +109,27 @@
       полная плотность досчитывается воркером и бесшовно
       выходит из центра планеты сквозь прокси той же широтной волной; сетки
       кэшируются в IndexedDB — повторные визиты без перестроения.
+      Авто-LOD — пирамида детализации поверх тех же непрерывных полей:
+      вдали рисуется крупная сетка, при приближении воркер подготавливает
+      более мелкую и коротко подменяет слой; уровни полей кэшируются.
+      На телефоне дополнительно адаптивно снижается внутренний масштаб
+      рендера при просадке FPS. Фиксированный режим отключает обе
+      оптимизации и всегда рисует выбранную максимальную v. В авто-режиме
+      клик показывает адрес текущего рендер-уровня; каноническая адресация
+      появится на Этапе 3.
       Массивы суши в статистике — физические связные области, а не будущие
       идентичности C100 (они появятся на Этапе 4).
     </p>
   </aside>
 
   <div class="hud">
-    <div>fps <i id="fps">—</i> · ячеек <i id="cells">—</i> · треугольников <i id="tris">—</i></div>
+    <div>fps <i id="fps">—</i> · ячеек <i id="cells">—</i> · треугольников <i id="tris">—</i> · LOD <i id="lodHud">—</i> · рендер <i id="renderScale">—</i></div>
     <div id="cellInfo">ячейка не выбрана — кликните по глобусу</div>
     <div id="statusLine" role="status"></div>
   </div>
 
   <script src="/shared/geodesic-grid.js?v=planet-spike-6"></script>
   <script src="/shared/planet-noise.js?v=planet-spike-1"></script>
-  <script src="planet-test.js?v=planet-spike-17"></script>
+  <script src="planet-test.js?v=planet-spike-18"></script>
 </body>
 </html>
