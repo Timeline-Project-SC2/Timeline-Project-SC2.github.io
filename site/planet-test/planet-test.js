@@ -810,7 +810,9 @@
     var current = state.renderV;
     if (current && levels.indexOf(current) >= 0) {
       var px = cellPixelsApprox(current);
-      if (px >= 8 && px <= 15) return current; // гистерезис против дёргания уровней
+      // Широкий гистерезис вокруг цели 11 px: уровень не должен прыгать
+      // туда-сюда от мелких движений колеса около одной границы.
+      if (px >= 7.5 && px <= 16.5) return current;
     }
     var h = canvas.clientHeight || window.innerHeight || 600;
     var surfaceDist = Math.max(0.55, state.dist - 1);
@@ -1357,7 +1359,10 @@
     if (!bundle) {
       if (!payload) {
         payload = PlanetGeometry.buildGeometry(grid, d, sp, PlanetNoise, {
-          includeVolume: !(animateBuild || doSwap)
+          // LOD-подмена теперь мгновенная, без волны из центров ячеек,
+          // но синхронный fallback всё равно не должен блокировать первый
+          // кадр объёмом осколков: он достроится сразу после commit.
+          includeVolume: !(animateBuild || doSwap || opts.lod)
         });
       }
       bundle = createGeometryBundle(grid, payload, sp, key);
@@ -1509,12 +1514,18 @@
   }
 
   function processQueuedLod(doneV) {
-    if (!lodQueuedV || lodQueuedV === doneV) return;
-    var queuedV = lodQueuedV;
-    var queuedOpts = lodQueuedOpts;
+    if (!lodQueuedV) return;
     lodQueuedV = 0;
     lodQueuedOpts = null;
-    requestRenderV(queuedV, queuedOpts);
+    if (!activeParams || !lodEnabled()) return;
+    // Очередь — только сигнал «пока готовился уровень, камера могла уйти».
+    // Сам queued-уровень к моменту commit уже может устареть, поэтому
+    // цель пересчитываем от текущего renderV и дистанции, а не слепо
+    // запускаем ещё одну подмену ради давно поставленного запроса.
+    var desired = desiredRenderV(activeParams.v);
+    if (desired !== state.renderV && desired !== doneV) {
+      requestRenderV(desired);
+    }
   }
 
   /* Воркер уже посчитал поля и массивы геометрии. Осталось залить буферы,
@@ -1776,13 +1787,24 @@
   function requestRenderV(v, queuedOpts) {
     if (!activeParams) return;
     if (v === state.renderV && !workerPending) { syncLodHud(v); return; }
+    if (workerPending && pendingParams && pendingParams.v === v) {
+      syncLodHud(v);
+      return;
+    }
     var opts = queuedOpts || {
       lod: true,
-      swap: true,
-      swapMs: 350,
       noBuild: true,
       note: lodNote(v)
     };
+    // Обычный LOD не запускает волну «регенерации» из центров ячеек и не
+    // держит второй полный глобус prev-слоем: при v=192 двойной рендер сам
+    // становится спайком. Двухслойный swap сохранён только для замены
+    // загрузочного прокси финалом, где он осознанно нужен как анимация
+    // загрузки; showPlanet включит его по состоянию isProxy.
+    opts.lod = true;
+    opts.noBuild = true;
+    opts.swap = false;
+    opts.swapMs = 0;
     if (!opts.note) opts.note = lodNote(v);
     syncLodHud(v);
     statusLine.textContent = 'LOD: подготовка v=' + v + '…';
@@ -1793,11 +1815,27 @@
     if (!lodEnabled() || !activeParams) return;
     window.clearTimeout(lodTimer);
     lodTimer = window.setTimeout(function () {
+      lodTimer = 0;
       if (!activeParams || !lodEnabled()) return;
+      // Не подменяем уровень посреди жеста. Для будущего chunk-LOD
+      // непрерывная переоценка экранной ошибки останется нужна, но
+      // дорогая глобальная перестройка в спайке должна дождаться settle.
+      if (dragging || pointers.size > 0) {
+        scheduleLodUpdate(220);
+        return;
+      }
       var desired = desiredRenderV(activeParams.v);
       syncLodHud(desired);
       if (desired !== state.renderV) requestRenderV(desired);
     }, delay == null ? 260 : delay);
+  }
+
+  /* Периодический watchdog из frame() не должен сбрасывать уже идущий
+     debounce колеса/pinch нулевой задержкой. Он лишь ставит мягкую
+     перепроверку, если никакого LOD-таймера сейчас нет. */
+  function scheduleLodRecheck() {
+    if (lodTimer) return;
+    scheduleLodUpdate(350);
   }
 
   function generate() {
@@ -1902,7 +1940,7 @@
       var measuredFps = perfFrames / Math.max(perfAccum, 1e-6);
       perfAccum = 0; perfFrames = 0; perfShown = tNow;
       adaptRenderScale(measuredFps, tNow);
-      scheduleLodUpdate(0);
+      scheduleLodRecheck();
     }
     if (!state.vao) return;
     if (state.spin && !dragging) {
@@ -2127,9 +2165,12 @@
     if (pointers.size === 2) {
       var pts = Array.from(pointers.values());
       var d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      if (pinchDist > 0) {
-        state.dist = Math.min(7, Math.max(1.7, state.dist * (pinchDist / d)));
-        scheduleLodUpdate(260);
+      if (pinchDist > 0 && d > 0) {
+        var nextPinchDist = Math.min(7, Math.max(1.7, state.dist * (pinchDist / d)));
+        if (nextPinchDist !== state.dist) {
+          state.dist = nextPinchDist;
+          scheduleLodUpdate(260);
+        }
       }
       pinchDist = d;
       return;
@@ -2158,7 +2199,10 @@
 
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
-    state.dist = Math.min(7, Math.max(1.7, state.dist * Math.exp(e.deltaY * 0.001)));
+    var nextDist = Math.min(7, Math.max(1.7, state.dist * Math.exp(e.deltaY * 0.001)));
+    // На упоре зума колесо не должно снова и снова будить LOD-планировщик.
+    if (nextDist === state.dist) return;
+    state.dist = nextDist;
     scheduleLodUpdate(260);
   }, { passive: false });
 
@@ -2190,7 +2234,7 @@
         state.renderScale = state.renderScaleBase;
         syncLodHud(activeParams.v);
         requestRenderV(activeParams.v, {
-          swap: true, swapMs: 350, noBuild: true, note: ''
+          swap: false, swapMs: 0, noBuild: true, note: ''
         });
       }
     });
