@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.js');
 const PlanetNoise = require('../site/shared/planet-noise.js');
+const PlanetGeometry = require('../site/shared/planet-geometry.js');
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -109,6 +110,51 @@ for (const v of [34, 64, 100]) {
     check(`v=${v} ${kind}: поля за ${ms} мс`, ms > 0,
       `суша ${landPct}%, массивов ${st.count}, медиана ${st.median}, P90 ${st.p90}, макс ${st.max} (${maxShare}% суши)`);
   }
+}
+
+console.log('\n== Геометрия поверхности и объёма осколков ==');
+{
+  const grid = GeodesicGrid.build(16);
+  const sampler = PlanetNoise.createSampler({
+    seedText: 'korhal-iv', kind: 'simplex', freq: 2.2, octaves: 5, gain: 0.5, warp: 0.35,
+  });
+  const elev = new Float32Array(grid.cellCount);
+  const moist = new Float32Array(grid.cellCount);
+  const temp = new Float32Array(grid.cellCount);
+  const out = [0, 0, 0];
+  let minE = Infinity;
+  let maxE = -Infinity;
+  for (let c = 0; c < grid.cellCount; c++) {
+    sampler.sample(grid.centers[c * 3], grid.centers[c * 3 + 1], grid.centers[c * 3 + 2], out);
+    elev[c] = out[0]; moist[c] = out[1]; temp[c] = out[2];
+    minE = Math.min(minE, out[0]); maxE = Math.max(maxE, out[0]);
+  }
+  const t = Date.now();
+  const geom = PlanetGeometry.buildGeometry(
+    grid,
+    { elev, moist, temp, sea: 0, minE, maxE, masterSeed: sampler.masterSeed },
+    { count: 10, dist: 'power', sep: 0.3, thick: 0.14, jag: 0.5, loss: 0, seedText: 'korhal-iv' },
+    PlanetNoise,
+    { includeVolume: true },
+  );
+  const surface = geom.surface;
+  const volume = geom.volume;
+  let surfaceIndicesOk = surface.cellIndexStart[grid.cellCount] === surface.indexCount;
+  for (let i = 0; i < surface.indices.length; i++) {
+    if (surface.indices[i] >= surface.vertexCount) surfaceIndicesOk = false;
+  }
+  let volumeIndicesOk = !!volume && volume.indexCount % 3 === 0;
+  const volumeVerts = volume ? volume.positions.length / 3 : 0;
+  if (volume) {
+    for (let i = 0; i < volume.indices.length; i++) {
+      if (volume.indices[i] >= volumeVerts) volumeIndicesOk = false;
+    }
+  }
+  check('v=16: поверхность', surface.vertexCount === grid.cellCount + grid.cellCorners.length &&
+    surface.indexCount === grid.cellCorners.length * 3 && surfaceIndicesOk,
+    `вершин ${surface.vertexCount}, индексов ${surface.indexCount}, построение ${Date.now() - t} мс`);
+  check('v=16: объём осколков', volumeIndicesOk && volumeVerts > grid.cellCount,
+    `вершин ${volumeVerts}, индексов ${volume ? volume.indexCount : 0}`);
 }
 
 console.log(failures ? `\nИТОГО: ${failures} провалов` : '\nИТОГО: все проверки пройдены');
