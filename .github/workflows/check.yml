@@ -26,7 +26,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Синтаксис скриптов Python
-        run: python -m py_compile tools/build_assets.py tools/sync.py
+        run: python -m py_compile tools/build_assets.py tools/sync.py tools/planet_generation.py
+      - name: Профили генерации планет
+        run: |
+          python tools/planet_generation.py validate
+          python -m unittest discover -s tests -p 'test_*.py'
       - name: Собрать картинки
         run: |
           python -m pip install --quiet --disable-pip-version-check -r tools/requirements.txt
@@ -47,7 +51,8 @@ jobs:
           # страницы и то, на что они ссылаются, на месте
           for f in index.html sector/sector.html minimal/minimal.html galaxy.js shared/app.js \
                    shared/focus-fx.js shared/lag-fx.js shared/cursor-fx.js cursor-test/index.html \
-                   assets/tiles.json assets/galaxy-map-3000.webp data/systems.csv data/places.csv; do
+                   assets/tiles.json assets/galaxy-map-3000.webp data/systems.csv data/places.csv \
+                   data/planet-generation.csv; do
             test -s ".publish/$f" || { echo "нет файла: $f"; exit 1; }
           done
 

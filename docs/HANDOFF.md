@@ -1,7 +1,11 @@
 # Конспект для следующего агента
 
-Дата: 18 октября 2026. Обновлено в ветке `arena/711432bb-timelineprojectsc2-github-io`
-(PR #111: спираль поверх карты галактики — ревизия демо `galaxy-spiral` и внедрение).
+Дата: 19 октября 2026. Обновлено в ветке `arena/c6424c78-timelineprojectsc2-github-io`
+(PR #115: спайк Этапа 1 планет и кодовая часть Этапа 2 — профили
+`planet_generation`, валидатор/ключ и двухфазный синк; отчёты —
+`docs/stages/stage-1-spike-report.md` и
+`docs/stages/stage-2-data-and-sync.md`). До этого — PR #111: спираль поверх карты
+галактики — ревизия демо `galaxy-spiral` и внедрение.
 PR #110 (каталог и поиск атласа), #109 (тайминг первого клика), #108 (переход в Копрулу),
 #106 (атлас), #103 (карта сектора), #105 (инструкции к таблице) и #107 (явные координаты
 систем) слиты в `main`. Основные актуальные
@@ -12,17 +16,65 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 
 | | |
 |---|---|
-| Последняя работа | [PR #111](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/111): спираль поверх карты галактики: демо `galaxy-spiral` (ветка `arena/42c599c5-…`, без PR) пересобрано под карту — звёзды текут по орбитам, яркость берут из самой карты; слой над картой, под остальными анимациями |
-| До этого | [PR #109](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/109): тайминг первого клика на галактике: приближение после центрирования — отдельная `CONFIG.focusZoomMs`, у перехода свои `dive*`; пользователь подбирает тайминг сам |
-| Ещё раньше | [PR #108](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/108): переход в Копрулу на галактике — рамка по контуру квадрата, одно приближение до 2000 % как у выбора, ≈2,9 с вместо ≈4,4 с; пользователь: «Найс! Отличная работа» |
+| Последняя работа | Этап 2 планет (PR #115): контракт `planet_generation` из 37 колонок, пресеты/валидатор/ключ `PG1` в `tools/planet_generation.py`, начальный снимок и шаблон CSV, источник в `data/sources.json` включён для вкладки `planet_generation` (`gid=1183479406`; живой Sync применит его после merge PR), двухфазный атомарный синк и 26 Python-тестов. Отчёт — `docs/stages/stage-2-data-and-sync.md`; сайт новый CSV пока не читает |
+| До этого | Спайк Этапа 1 планет (та же ветка): сетка Голдберга GP(v,0) (`site/shared/geodesic-grid.js`), детерминированные поля (`site/shared/planet-noise.js`: simplex vs value), WebGL2-глобус на тестовой странице `/planet-test/`, проверка `tools/check_planet_spike.mjs`. Отчёт и замеры — `docs/stages/stage-1-spike-report.md`; визуальная часть гейта G1 — за пользователем |
+| Ещё раньше | [PR #111](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/111): спираль поверх карты галактики: демо `galaxy-spiral` (ветка `arena/42c599c5-…`, без PR) пересобрано под карту — звёзды текут по орбитам, яркость берут из самой карты; слой над картой, под остальными анимациями |
+| Ранее | [PR #109](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/109): тайминг первого клика на галактике: приближение после центрирования — отдельная `CONFIG.focusZoomMs`, у перехода свои `dive*`; пользователь подбирает тайминг сам |
+| Ранее | [PR #108](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/108): переход в Копрулу на галактике — рамка по контуру квадрата, одно приближение до 2000 % как у выбора, ≈2,9 с вместо ≈4,4 с; пользователь: «Найс! Отличная работа» |
 | Атлас | [PR #106](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/106): карточка-предпросмотр в атласе (`is-preview`), щелчок только левой, колесом крестовина сразу и над сектором или системой |
 | PR сектора | [PR #103](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/103) слит в `main`; публикация Pages прошла успешно |
 | Инструкции к таблице | [PR #105](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/105) слит в `main` |
 | История курсора | [PR #99](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/99) и [#104](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/104) слиты в `main` 18.10; пользователь проверяет курсор на сайте и пишет замечания |
-| Как показать | сам сайт; страница проверки курсора — `/cursor-test/`; демо и настройка ядра спирали — `/spiral-test/` |
+| Как показать | сам сайт; страница проверки курсора — `/cursor-test/`; демо и настройка ядра спирали — `/spiral-test/`; спайк гексагонального глобуса — `/planet-test/` |
 
 Что изменено (подробно — в `CHANGELOG.md`, правила — в `AGENTS.md`, разделы «Прицел» и «Курсор»):
 
+- Этап 2 планет: данные и синхронизация (19.10, та же ветка/PR #115; владелец
+  направил работу на Этап 2 до закрытия Этапа 1.5 и визуальной части G1).
+  `tools/planet_generation.py` задаёт схему будущего листа `planet_generation`
+  (37 колонок), восемь пресетов, раскрытие эффективных значений, строгую
+  проверку против `places` и ключ `PG1` по каноническому географическому
+  манифесту; CLI выдаёт seed, draft-строку, манифест, ключ и полную
+  freeze-строку. Добавлены пустой снимок `data/planet-generation.csv`,
+  шаблон с draft-примерами и третий источник в `data/sources.json`.
+  20.10 владелец создал живую вкладку `planet_generation`
+  (`gid=1183479406`, пока только заголовок); источник включён по CSV-URL
+  общей опубликованной книги, первый живой Sync — после merge PR.
+  URL-синк переписан на две фазы: все CSV проверяются в памяти, профили —
+  против новой версии `places`, и только затем снимки/`meta.json`/манифест
+  заменяются атомарно одной группой с откатом при сбое. Интеграционный тест
+  доказывает, что ошибочный профиль оставляет прежние CSV байт-в-байт.
+  Поддерживаемые версии пока прототипные (`goldberg-gp-v0`,
+  `planet-noise-spike-1`, `c100-soft-v0`, `planet-presets-v0`); боевой
+  массовый freeze — после версий v1 Этапов 3–4. Сайт новый CSV ещё не читает.
+  Отчёт — `docs/stages/stage-2-data-and-sync.md`.
+- Спайк Этапа 1 планет (19.10, ветка `arena/c6424c78-timelineprojectsc2-github-io`). Пользователь
+  после плановых документов (`PREPARATION_PLAN`, в эту ветку не входят): «Газуй». Сделано:
+  `site/shared/geodesic-grid.js` — Goldberg GP(v,0) для произвольного v (ячейки, соседи, площади,
+  черновые адреса `goldberg-gp-v0/...`, `validate()`); `site/shared/planet-noise.js` — simplex vs
+  value noise, fBm, касательный warp, сэмплер полей по направлению; `/planet-test/` — WebGL2-глобус
+  (веер из центра ячейки, граница по весу центра, атмосфера, вращение/зум/pinch, клик выбирает
+  ячейку). Node-замеры: v=64 строится ~250 мс, поля ~50 мс; value noise даёт суперконтинент
+  84–85% суши, simplex ~17% — стартовый кандидат simplex f=2.2. Проверка:
+  `node tools/check_planet_spike.mjs` (все OK), eslint чисто. Отчёт —
+  `docs/stages/stage-1-spike-report.md`. Визуальная часть гейта G1 (вид планет, FPS на устройствах
+  пользователя) не закрыта — следующий шаг после его оценки: Этап 1.5 (глобус → плоскость).
+  Дополнения по просьбам пользователя: пробел ставит автоповорот на паузу; каскадная анимация
+  сборки планеты (19.10) — атрибуты `aCenter`/`aBirth`, юниформ `uBuild` в вершинном шейдере:
+  ячейки прилетают волной от северного полюса к южному, атмосфера включается в конце; кнопки
+  «собрать заново»/«анимация сборки» и ползунок длительности на той же странице. Пользователь
+  одобрил каскад как паттерн поэтапной «загрузки» планеты вместо мгновенного появления —
+  переносить в боевую страницу планеты на соответствующих этапах.
+  Продолжение 19.10: владелец дал стабильные 50 FPS при v=64 (i5-8400 + GTX 1050 Ti) и запросил
+  модель плотности ×8: `tools/bench_planet_density.mjs` — v=192 (368 642 ячеек): сетка 2,3 с,
+  поля 341 мс, буферы GPU 146 МБ (оптимизированная раскладка — 89 МБ); на страницу добавлены
+  v=128/160/192 и строка стоимости геометрии. Следствие: калиброванный континент при v=192 —
+  ~900 ячеек, а не 100; каноничную плотность фиксировать после FPS-тестов владельца (вкл. телефон).
+  Генерация вынесена в воркер `site/planet-test/planet-worker.js`: при v>64 главный поток сразу
+  показывает прокси v=32 (поля не зависят от v — та же планета), каскад идёт во время фактической
+  загрузки, готовая геометрия подменяет прокси; без воркера — синхронный fallback.
+  Сводка всего обсуждённого по этапам — живой журнал `docs/stages/stage_patches.md`
+  (заведён 19.10 по просьбе пользователя; дописывать по мере этапов).
 - Спираль на галактике (18.10, ветка `arena/711432bb-timelineprojectsc2-github-io`, PR #111). Пользователь
   про демо `galaxy-spiral`: «Сделай по нему ревизию для имплементации. Пусть анимация лежит под
   всеми иными анимациями но поверх карты». Исходный коммит перенесён с авторством
@@ -134,7 +186,8 @@ site/                  ← корень публикации (это и есть
 └── shared/            app.js, links.js, timeline-loader.js, focus-fx.js, lag-fx.js, cursor-fx.js,
                        galaxy-spiral.js + все общие CSS
 
-data/                  CSV и JSON; пишут tools/sync.py и tools/build_assets.py
+data/                  CSV и JSON; пишут tools/sync.py и tools/build_assets.py;
+                       planet-generation.csv — пока пустой снимок профилей Этапа 2
 assets/src/            ИСХОДНИКИ картинок (в Git, в веб не публикуются)
 assets/                собранные тайлы и WebP (Git-ignored, собираются при деплое)
 docs/, tools/, .github/ — служебное
@@ -147,7 +200,7 @@ docs/, tools/, .github/ — служебное
   `node --check` и ESLint (`no-undef`), без публикации.
 - **Pages настроен как GitHub Actions** (пользователь переключил в Settings). Если вернуть
   «Deploy from a branch», публиковаться будет корень репозитория через Jekyll и всё сломается.
-- Данные: `tools/sync.py` каждые 6 ч тянет две таблицы Google Sheets из `data/sources.json`.
+- Данные: `tools/sync.py` каждые 6 ч тянет включённые листы одной опубликованной книги Google Sheets из `data/sources.json` (`systems`, `places`, `planet_generation`; вкладка выбирается `gid`). Workflow чекаутит `main`, поэтому источник из PR начнёт применяться после merge. URL-листы проверяются все вместе до атомарной замены снимков.
 
 ## 3. Что сделано по частям
 
@@ -349,7 +402,9 @@ for f in site/*.js site/shared/*.js; do node --check "$f"; done   # синтак
 npm install --no-save --no-package-lock eslint@10 globals@17      # node_modules/ в .gitignore
 npx eslint site                                 # необъявленные переменные (eslint.config.mjs)
 python3 tools/build_assets.py --check           # свежесть собранных картинок
-python3 -m py_compile tools/build_assets.py tools/sync.py
+python3 -m py_compile tools/build_assets.py tools/sync.py tools/planet_generation.py
+python3 tools/planet_generation.py validate     # снимок профилей против places
+python3 -m unittest discover -s tests -p 'test_*.py'
 
 # предпросмотр: собрать как при деплое
 rm -rf /tmp/publish && mkdir -p /tmp/publish
