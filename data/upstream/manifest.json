@@ -1,12 +1,16 @@
 {
   "sources": {
     "systems-sheet": {
-      "sha": "cfae353c13e1ed2e015e9a9605dae85aba3ff325cee896c8896e417a59de8324",
-      "updatedAt": "2026-10-19T02:45:20.491444Z"
+      "sha": "2261f90dd75cdd4c7cde436dddc7d5eecd1639d66d83c195a45634fda6b61f16",
+      "updatedAt": "2026-10-20T01:49:48.238211Z"
     },
     "places-sheet": {
-      "sha": "fc5a07391b8648b2d1e5903e8642f7bc3ff85f8ab11a48e00a263a6ff83b797b",
-      "updatedAt": "2026-10-19T02:45:21.058773Z"
+      "sha": "02a349a947fc77e417fa0f3ed6d7cc5bec45281e5308f1a07c0ebe81184fa4c7",
+      "updatedAt": "2026-10-20T01:49:48.238211Z"
+    },
+    "planet-generation-sheet": {
+      "sha": "f75560c354364b201fac29b0def051c6495ce828cf216c9dd8a003c82a4cb908",
+      "updatedAt": "2026-10-20T01:49:48.238211Z"
     }
   }
 }
