@@ -625,6 +625,7 @@
   /* ------------------------------------------------------------ состояние */
 
   var coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  var reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   var renderScaleBase = Math.min(window.devicePixelRatio || 1, 1.75);
   var initialRenderScale = Math.min(renderScaleBase, coarsePointer ? 1.5 : 1.75);
 
@@ -642,9 +643,13 @@
     selected: -1,
     quat: [0, 0, 0, 1],
     dist: 3.1,
+    targetDist: 3.1,
+    zoomMoving: false,
+    flightScale: 1,
+    flightStillSince: 0,
     borders: true,
-    spin: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-    buildAnim: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    spin: !reduceMotion,
+    buildAnim: !reduceMotion,
     buildStart: -1,
     buildDur: 2400,
     colors: null,
@@ -703,6 +708,9 @@
   var lodQueuedV = 0;
   var lodQueuedOpts = null;
   var lodTimer = 0;
+  var lodPredictTimer = 0;
+  var readyLodBundle = null;
+  var readyLodTimer = 0;
   var fieldCache = new Map();
   var fieldCacheCells = 0;
   var FIELD_CACHE_MAX_CELLS = 1200000;
@@ -796,26 +804,28 @@
     return levels;
   }
 
-  function cellPixelsApprox(v) {
+  function cellPixelsApprox(v, distValue) {
     var h = canvas.clientHeight || window.innerHeight || 600;
-    var surfaceDist = Math.max(0.55, state.dist - 1);
+    var d = distValue == null ? state.dist : distValue;
+    var surfaceDist = Math.max(0.55, d - 1);
     // Среднее угловое расстояние центров GP(v,0) ≈ 1.107/v; пикселей на
     // радиан у ближайшей точки сферы ≈ 1.207*h/(dist-1) при FOV 45°.
     return 1.337 * h / (surfaceDist * Math.max(1, v));
   }
 
-  function desiredRenderV(maxV) {
+  function desiredRenderV(maxV, distValue) {
     if (!lodEnabled()) return maxV;
     var levels = lodLevelsFor(maxV);
     var current = state.renderV;
     if (current && levels.indexOf(current) >= 0) {
-      var px = cellPixelsApprox(current);
+      var px = cellPixelsApprox(current, distValue);
       // Широкий гистерезис вокруг цели 11 px: уровень не должен прыгать
       // туда-сюда от мелких движений колеса около одной границы.
       if (px >= 7.5 && px <= 16.5) return current;
     }
     var h = canvas.clientHeight || window.innerHeight || 600;
-    var surfaceDist = Math.max(0.55, state.dist - 1);
+    var d = distValue == null ? state.dist : distValue;
+    var surfaceDist = Math.max(0.55, d - 1);
     var raw = 1.337 * h / (surfaceDist * 11); // целевой размер гекса ≈ 11 CSS px
     for (var i = 0; i < levels.length; i++) {
       if (levels[i] >= raw * 0.9) return levels[i];
@@ -829,13 +839,17 @@
       ' · поля те же, меняется только детализация гексов';
   }
 
+  function effectiveRenderScale() {
+    return Math.max(0.6, (state.renderScale || initialRenderScale) * (state.flightScale || 1));
+  }
+
   function syncLodHud(targetV) {
     var shown = state.renderV || targetV || 0;
     var lodText = shown
       ? ('v=' + shown + (activeParams ? '/' + activeParams.v : ''))
       : '—';
     var shortText = shown ? ('v=' + shown) : '';
-    var scaleText = state.renderScale.toFixed(2) + '×';
+    var scaleText = effectiveRenderScale().toFixed(2) + '×';
     if (lodHudEl && lodHudEl.textContent !== lodText) lodHudEl.textContent = lodText;
     if (lodOut && lodOut.textContent !== shortText) lodOut.textContent = shortText;
     if (renderScaleEl && renderScaleEl.textContent !== scaleText) renderScaleEl.textContent = scaleText;
@@ -1513,6 +1527,45 @@
     statusLine.textContent = '';
   }
 
+  /* Один предиктивно подготовленный бандл может быть готов раньше, чем
+     камера фактически пересекла экранный порог. Его нельзя полагаться
+     только на LRU-кэш: v=192 больше бюджета кэша и был бы сразу удалён.
+     Держим ровно один такой бандл отдельно, но недолго. */
+  function releaseReadyLodBundle(toCache) {
+    if (!readyLodBundle) return;
+    window.clearTimeout(readyLodTimer);
+    readyLodTimer = 0;
+    var bundle = readyLodBundle.bundle;
+    readyLodBundle = null;
+    releaseBundle(bundle, !!toCache);
+  }
+
+  function holdReadyLodBundle(bundle, grid, fieldData, gridLabel, proxyFlag, opts, msg) {
+    releaseReadyLodBundle(true);
+    readyLodBundle = {
+      bundle: bundle,
+      grid: grid,
+      fieldData: fieldData,
+      gridLabel: gridLabel,
+      proxyFlag: proxyFlag,
+      params: opts.params || null,
+      msGeometry: msg.msGeometry,
+      v: msg.v
+    };
+    readyLodTimer = window.setTimeout(function () {
+      releaseReadyLodBundle(true);
+    }, 5000);
+  }
+
+  function takeReadyLodBundle(key) {
+    if (!readyLodBundle || readyLodBundle.bundle.key !== key) return null;
+    window.clearTimeout(readyLodTimer);
+    readyLodTimer = 0;
+    var ready = readyLodBundle;
+    readyLodBundle = null;
+    return ready;
+  }
+
   function processQueuedLod(doneV) {
     if (!lodQueuedV) return;
     lodQueuedV = 0;
@@ -1525,6 +1578,10 @@
     var desired = desiredRenderV(activeParams.v);
     if (desired !== state.renderV && desired !== doneV) {
       requestRenderV(desired);
+    } else {
+      // Фактическая дистанция ещё может лететь к следующей границе:
+      // пусть предиктивный путь заново оценит targetDist.
+      schedulePredictiveLod();
     }
   }
 
@@ -1591,6 +1648,22 @@
       workerPending = false;
       pendingParams = null;
       pendingShowOpts = null;
+
+      if (opts.predictive && activeParams && lodEnabled()) {
+        var desiredNow = desiredRenderV(activeParams.v);
+        var canCommitInFlight = msg.v === desiredNow && pointers.size < 2;
+        if (!canCommitInFlight) {
+          // Подготовка обогнала камеру или траектория уже изменилась.
+          // Не тормозим подлёт и не показываем уровень раньше порога:
+          // готовый бандл подождёт фактического запроса отдельно от LRU.
+          holdReadyLodBundle(bundle, grid, fieldData, gridLabel, proxyFlag, opts, msg);
+          statusLine.textContent = '';
+          scheduleLodUpdate(160);
+          processQueuedLod(msg.v);
+          return;
+        }
+      }
+
       opts.geometryBundle = bundle;
       showPlanet(grid, fieldData, gridLabel, opts.note || lodNote(msg.v), proxyFlag, opts);
       statusLine.textContent = '';
@@ -1705,10 +1778,20 @@
     if (!opts.shardParams) opts.shardParams = readShardParams();
     if (!opts.geometryKey) opts.geometryKey = geometryCacheKey(params, opts.shardParams);
 
+    if (readyLodBundle && readyLodBundle.bundle.key !== opts.geometryKey) {
+      releaseReadyLodBundle(true);
+    }
+    var ready = opts.predictive ? null : takeReadyLodBundle(opts.geometryKey);
     var grid = gridCache.get(params.v);
     var cached = getCachedFields(params);
+    if (ready) {
+      grid = ready.grid;
+      gridCache.set(params.v, grid);
+      cached = ready.fieldData;
+      if (cached && cached.elev) cacheFields(params, cached);
+    }
     opts.cachedFields = cached || null;
-    var cachedBundle = peekCachedGeometry(opts.geometryKey);
+    var cachedBundle = ready ? ready.bundle : peekCachedGeometry(opts.geometryKey);
     if (grid && cached && cachedBundle) {
       // Повторная планета/уровень: поля и готовый GPU-бандл уже есть,
       // поэтому переход — просто commit VAO без воркера и пересборки.
@@ -1721,8 +1804,16 @@
       lodQueuedV = 0;
       lodQueuedOpts = null;
       opts.geometryBundle = cachedBundle;
-      opts.geometryCacheHit = true;
-      showPlanet(grid, cached, 'GPU-кэш', opts.note || lodNote(params.v), opts.proxyFlag, opts);
+      opts.geometryCacheHit = !ready;
+      if (ready) opts.msGeometryBuild = ready.msGeometry;
+      showPlanet(
+        grid,
+        cached,
+        ready ? ready.gridLabel : 'GPU-кэш',
+        opts.note || lodNote(params.v),
+        opts.proxyFlag,
+        opts
+      );
       statusLine.textContent = '';
       return;
     }
@@ -1824,6 +1915,14 @@
         scheduleLodUpdate(220);
         return;
       }
+      // Во время плавного подлёта обычный settle-запрос не должен плодить
+      // промежуточные уровни. Подготовкой занимается предиктивный путь по
+      // targetDist; фактический запрос выполнится у цели или заберёт уже
+      // готовый ready-bundle.
+      if (state.zoomMoving) {
+        scheduleLodUpdate(160);
+        return;
+      }
       var desired = desiredRenderV(activeParams.v);
       syncLodHud(desired);
       if (desired !== state.renderV) requestRenderV(desired);
@@ -1838,9 +1937,47 @@
     scheduleLodUpdate(350);
   }
 
+  function predictiveBundleReady(v) {
+    if (!activeParams) return false;
+    var params = cloneParams(activeParams, v);
+    var key = geometryCacheKey(params, readShardParams());
+    return !!(
+      (readyLodBundle && readyLodBundle.bundle.key === key) ||
+      peekCachedGeometry(key)
+    );
+  }
+
+  /* Предиктивная подготовка по целевой дистанции: тот же принцип, что в
+     зафиксированном для локальной карты dive-in flow — воркер стартует в
+     начале подлёта, текущий глобус остаётся видимым, камера не ждёт
+     готовность. Это не параллельный рендер двух сфер: второй бандл до
+     commit вообще не рисуется. */
+  function schedulePredictiveLod() {
+    if (reduceMotion || !lodEnabled() || !activeParams || !state.renderV) return;
+    window.clearTimeout(lodPredictTimer);
+    lodPredictTimer = window.setTimeout(function () {
+      lodPredictTimer = 0;
+      if (!activeParams || !lodEnabled() || !state.renderV) return;
+      var candidate = desiredRenderV(activeParams.v, state.targetDist);
+      if (candidate === state.renderV) return;
+      if (workerPending && pendingParams && pendingParams.v === candidate) return;
+      if (lodQueuedV === candidate) return;
+      if (predictiveBundleReady(candidate)) return;
+      requestRenderV(candidate, {
+        lod: true,
+        predictive: true,
+        noBuild: true,
+        note: lodNote(candidate)
+      });
+    }, 140);
+  }
+
   function generate() {
     var maxParams = readParams();
     activeParams = maxParams;
+    window.clearTimeout(lodPredictTimer);
+    lodPredictTimer = 0;
+    releaseReadyLodBundle(true);
     lodQueuedV = 0;
     lodQueuedOpts = null;
     state.selected = -1;
@@ -1875,7 +2012,7 @@
   var qualityGoodSamples = 0;
 
   function resize() {
-    var dpr = state.renderScale || initialRenderScale;
+    var dpr = effectiveRenderScale();
     var w = Math.max(2, Math.round(canvas.clientWidth * dpr));
     var h = Math.max(2, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) {
@@ -1898,7 +2035,7 @@
     // Во время подготовки нового бандла/подмены подъём качества запрещён,
     // а вот снижение полезно сразу двум вещам: текущий кадр дешевеет и
     // порционная заливка получает больше шансов выполниться между кадрами.
-    var busy = workerPending || !!state.prev || state.buildStart >= 0;
+    var busy = workerPending || state.zoomMoving || !!state.prev || state.buildStart >= 0;
     if (busy) qualityGoodSamples = 0;
     if (tNow < qualityCooldownUntil) return;
     var minScale = 0.6;
@@ -1923,6 +2060,44 @@
     }
   }
 
+  /* Плавный зум существует только вокруг прямого управления:
+     - колесо меняет targetDist, фактическая дистанция догоняет её в
+       лог-пространстве без overshoot;
+     - pinch пока пальцы на экране остаётся прямым 1:1, инерция возможна
+       только после отпускания;
+     - prefers-reduced-motion отключает полёт полностью.
+     На время движения один раз снижаем эффективный render scale, а не
+     пересоздаём канвас каждый кадр ради «плавной» шкалы. */
+  function updateSmoothZoom(rawDt, tNow) {
+    var activePinch = pointers.size === 2;
+    if (activePinch || reduceMotion) {
+      state.targetDist = state.dist;
+    } else {
+      var logCur = Math.log(state.dist);
+      var logTarget = Math.log(state.targetDist);
+      var diff = logTarget - logCur;
+      if (Math.abs(diff) < 0.0005) {
+        state.dist = state.targetDist;
+      } else {
+        var alpha = 1 - Math.exp(-Math.min(rawDt, 0.05) * 10);
+        state.dist = Math.exp(logCur + diff * alpha);
+      }
+    }
+
+    var moving = activePinch
+      ? Math.abs(pinchLogVelocity) > 0.12
+      : Math.abs(Math.log(state.targetDist / state.dist)) > 0.002;
+    state.zoomMoving = moving;
+    if (moving) {
+      state.flightStillSince = 0;
+      state.flightScale = lodEnabled() ? (coarsePointer ? 0.82 : 0.9) : 1;
+    } else {
+      if (!state.flightStillSince) state.flightStillSince = tNow;
+      if (tNow - state.flightStillSince > 220) state.flightScale = 1;
+    }
+    return moving;
+  }
+
   function frame(tNow) {
     requestAnimationFrame(frame);
     var rawDt = Math.min(0.25, Math.max(0, (tNow - lastTime) / 1000));
@@ -1942,8 +2117,9 @@
       adaptRenderScale(measuredFps, tNow);
       scheduleLodRecheck();
     }
+    updateSmoothZoom(rawDt, tNow);
     if (!state.vao) return;
-    if (state.spin && !dragging) {
+    if (state.spin && !dragging && !state.zoomMoving) {
       state.quat = quatNormalize(quatMultiply(quatFromAxisAngle(0, 1, 0, dt * 0.12), state.quat));
     }
     resize();
@@ -2115,6 +2291,8 @@
   var lastX = 0, lastY = 0;
   var pointers = new Map();
   var pinchDist = 0;
+  var pinchLogVelocity = 0;
+  var pinchLastAt = 0;
 
   function pickAt(clientX, clientY) {
     if (!state.grid || !state.elev) return;
@@ -2147,10 +2325,14 @@
 
   canvas.addEventListener('pointerdown', function (e) {
     if (e.button > 1) return;
+    // Новый прямой жест всегда отменяет инерционный подлёт.
+    state.targetDist = state.dist;
+    pinchLogVelocity = 0;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
       var pts = Array.from(pointers.values());
       pinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchLastAt = performance.now();
     }
     dragging = true;
     dragMoved = 0;
@@ -2168,7 +2350,17 @@
       if (pinchDist > 0 && d > 0) {
         var nextPinchDist = Math.min(7, Math.max(1.7, state.dist * (pinchDist / d)));
         if (nextPinchDist !== state.dist) {
+          var pinchNow = performance.now();
+          if (pinchLastAt) {
+            var dtSec = Math.max(0.001, (pinchNow - pinchLastAt) / 1000);
+            var instVelocity = Math.max(-3, Math.min(3,
+              Math.log(nextPinchDist / state.dist) / dtSec));
+            pinchLogVelocity = pinchLogVelocity * 0.65 + instVelocity * 0.35;
+          }
+          pinchLastAt = pinchNow;
           state.dist = nextPinchDist;
+          state.targetDist = nextPinchDist;
+          schedulePredictiveLod();
           scheduleLodUpdate(260);
         }
       }
@@ -2188,8 +2380,31 @@
   });
 
   function endPointer(e) {
+    var wasPinch = pointers.size === 2 && pointers.has(e.pointerId);
     pointers.delete(e.pointerId);
+    if (wasPinch && pointers.size === 1) {
+      // Один палец остался для вращения: инерцию зума отменяем и
+      // переякоряем drag на его текущие координаты без прыжка.
+      var remaining = Array.from(pointers.values())[0];
+      lastX = remaining.x;
+      lastY = remaining.y;
+      state.targetDist = state.dist;
+      pinchLogVelocity = 0;
+      pinchDist = 0;
+    }
     if (pointers.size === 0) {
+      if (wasPinch && !reduceMotion &&
+          performance.now() - pinchLastAt < 100 &&
+          Math.abs(pinchLogVelocity) > 0.35) {
+        var extraLog = Math.max(-0.22, Math.min(0.22, pinchLogVelocity * 0.18));
+        state.targetDist = Math.min(7, Math.max(1.7, state.dist * Math.exp(extraLog)));
+        schedulePredictiveLod();
+        scheduleLodUpdate(300);
+      } else if (wasPinch) {
+        state.targetDist = state.dist;
+      }
+      pinchLogVelocity = 0;
+      pinchDist = 0;
       if (dragging && dragMoved < 5 && e.button === 0) pickAt(e.clientX, e.clientY);
       dragging = false;
     }
@@ -2199,11 +2414,14 @@
 
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
-    var nextDist = Math.min(7, Math.max(1.7, state.dist * Math.exp(e.deltaY * 0.001)));
+    var nextTarget = Math.min(7, Math.max(1.7,
+      state.targetDist * Math.exp(e.deltaY * 0.001)));
     // На упоре зума колесо не должно снова и снова будить LOD-планировщик.
-    if (nextDist === state.dist) return;
-    state.dist = nextDist;
-    scheduleLodUpdate(260);
+    if (nextTarget === state.targetDist) return;
+    state.targetDist = nextTarget;
+    if (reduceMotion) state.dist = nextTarget;
+    schedulePredictiveLod();
+    scheduleLodUpdate(300);
   }, { passive: false });
 
   window.addEventListener('resize', function () { scheduleLodUpdate(260); });

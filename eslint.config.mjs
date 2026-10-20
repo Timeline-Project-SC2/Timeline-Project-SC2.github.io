@@ -10,6 +10,14 @@ import globals from 'globals';
 
 export default [
   {
+    // `temp_code_structures.js` из PR #119 — не исполняемый JS-модуль, а
+    // временный текстовый пакет будущей интеграции Этапов 8/9: внутри
+    // склеены ESM/worker/renderer-части и сырые GLSL-шейдеры. Файл не
+    // подключён к страницам. Когда его разрежут на настоящие модули,
+    // это исключение нужно удалить.
+    ignores: ['site/shared/temp_code_structures.js']
+  },
+  {
     files: ['site/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
