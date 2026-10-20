@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Источники. Сейчас активны два листа одной книги Google Sheets: systems (gid=0) и places (gid=1). Третий источник planet_generation подготовлен Этапом 2, но выключен: администратор должен создать вкладку по data/planet-generation-template.csv, опубликовать её отдельно как CSV и передать URL разработчику; после этого вписать url и поставить enabled=true. Таблица должна быть опубликована в интернете (Файл → Поделиться → Опубликовать в интернете → CSV): доступ «по ссылке» для синхронизации не подходит, без публикации вместо CSV приходит страница входа.",
+  "note": "Источники. Включены три листа одной опубликованной целиком книги Google Sheets: systems (gid=0), places (gid=1415856610) и planet_generation (gid=1183479406). Конкретная вкладка выбирается параметром gid в каждом CSV-URL. Книга должна оставаться опубликованной в интернете с тем же токеном 2PACX: доступ «по ссылке» для синхронизации не подходит, а отмена или повторная публикация может сменить адрес.",
   "sources": [
     {
       "id": "systems-sheet",
@@ -33,8 +33,8 @@
     {
       "id": "planet-generation-sheet",
       "type": "url",
-      "enabled": false,
-      "url": "",
+      "enabled": true,
+      "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQrNzh4Te01vHYmnHxZQoNrTMmeeWjU2XbOGsTl9M6U8djTZ8evbNMmPTONwWZYbNeImHcqMpGiKKy7/pub?gid=1183479406&single=true&output=csv",
       "kind": "sheet",
       "role": "planet_generation",
       "sheetName": "planet_generation",
