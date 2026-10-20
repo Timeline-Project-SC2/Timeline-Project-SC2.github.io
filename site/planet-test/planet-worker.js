@@ -31,6 +31,13 @@ var fieldCacheCells = 0;
 var FIELD_CACHE_MAX_CELLS = 1200000;
 var GRID_CACHE_PREFIX = 'gp-v0:';
 
+function perfMark(name) {
+  try { performance.mark(name); } catch (_) { /* диагностика не ломает воркер */ }
+}
+function perfMeasure(name, start, end) {
+  try { performance.measure(name, { start: start, end: end }); } catch (_) { /* noop */ }
+}
+
 function idbOpen(onOk) {
   try {
     var open = indexedDB.open('planet-spike-cache', 1);
@@ -148,6 +155,8 @@ function cacheFields(params, d) {
 }
 
 function computeFields(msg, params, grid) {
+  var perfStart = performance.now();
+  perfMark('planet: field calculation start');
   var sampler = PlanetNoise.createSampler({
     seedText: params.seedText,
     kind: params.kind,
@@ -180,7 +189,7 @@ function computeFields(msg, params, grid) {
   var stats = landmassStats(grid, elev, sea);
   var msStats = performance.now() - t;
 
-  return {
+  var result = {
     elev: elev, moist: moist, temp: temp,
     sea: sea, minE: minE, maxE: maxE,
     masterSeed: sampler.masterSeed,
@@ -188,6 +197,9 @@ function computeFields(msg, params, grid) {
     msFields: msFields,
     msStats: msStats
   };
+  perfMark('planet: field calculation end');
+  perfMeasure('planet: field calculation', perfStart, performance.now());
+  return result;
 }
 
 function collectGeometryTransfers(geometry, out) {
@@ -219,6 +231,7 @@ function runFields(msg, params, grid, gridSource, msGrid) {
     jag: 0.5, loss: 0, seedText: params.seedText
   };
   var t = performance.now();
+  perfMark('planet: geometry build start');
   var geometry = PlanetGeometry.buildGeometry(grid, d, sp, PlanetNoise, {
     includeVolume: true,
     onPhase: function (phase) {
@@ -229,6 +242,8 @@ function runFields(msg, params, grid, gridSource, msGrid) {
     }
   });
   var msGeometry = performance.now() - t;
+  perfMark('planet: geometry build end');
+  perfMeasure('planet: geometry build', t, performance.now());
   // Раскладка шардов нужна была только для построения массивов; на главный
   // поток её не шлём, чтобы не клонировать лишние типизированные массивы.
   geometry.layout = null;
@@ -288,6 +303,7 @@ self.onmessage = function (e) {
     }
     var grid;
     var t = performance.now();
+    perfMark('planet: mesh build start');
     try {
       grid = GeodesicGrid.build(params.v);
     } catch (err) {
@@ -295,6 +311,8 @@ self.onmessage = function (e) {
       return;
     }
     var msGrid = performance.now() - t;
+    perfMark('planet: mesh build end');
+    perfMeasure('planet: mesh build', t, performance.now());
     gridCache.set(params.v, grid);
     idbPutGrid(params.v, grid);
     proceed(grid, 'built', msGrid);

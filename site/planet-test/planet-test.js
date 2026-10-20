@@ -19,6 +19,21 @@
   var trisEl = document.getElementById('tris');
   var lodHudEl = document.getElementById('lodHud');
   var renderScaleEl = document.getElementById('renderScale');
+  var frameP50El = document.getElementById('frameP50');
+  var frameP95El = document.getElementById('frameP95');
+  var frameP99El = document.getElementById('frameP99');
+  var frameOver50El = document.getElementById('frameOver50');
+  var frameOver100El = document.getElementById('frameOver100');
+  var frameWorstEl = document.getElementById('frameWorst');
+  var gpuTimeEl = document.getElementById('gpuTime');
+
+  function perfMark(name) {
+    try { performance.mark(name); } catch (_) { /* User Timing недоступен */ }
+  }
+  function perfMeasure(name, start, end) {
+    try { performance.measure(name, { start: start, end: end }); }
+    catch (_) { /* старые браузеры: диагностика не должна ломать спайк */ }
+  }
 
   var gl = canvas.getContext('webgl2', { antialias: true });
   if (!gl) {
@@ -26,6 +41,8 @@
     statsBox.textContent = 'WebGL2: нет';
     return;
   }
+  var gpuTimerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  if (gpuTimeEl) gpuTimeEl.textContent = gpuTimerExt ? '…' : 'n/a';
 
   /* ------------------------------------------------------------ шейдеры */
 
@@ -748,8 +765,12 @@
     var hit = gridCache.get(v);
     if (hit) return { grid: hit, ms: 0 };
     var t = now();
+    perfMark('planet: mesh build start');
     var grid = GeodesicGrid.build(v);
-    var ms = now() - t;
+    var end = now();
+    perfMark('planet: mesh build end');
+    perfMeasure('planet: mesh build', t, end);
+    var ms = end - t;
     gridCache.set(v, grid);
     idbPutGrid(v, grid);
     return { grid: grid, ms: ms };
@@ -1307,6 +1328,7 @@
   /* Поля планеты на главном потоке — для прокси и синхронного fallback. */
   function computeFields(grid, params) {
     var t = now();
+    perfMark('planet: field calculation start');
     var sampler = PlanetNoise.createSampler({
       seedText: params.seedText,
       kind: params.kind,
@@ -1327,12 +1349,17 @@
       if (out[0] < minE) minE = out[0];
       if (out[0] > maxE) maxE = out[0];
     }
-    return {
+    var result = {
       elev: elev, moist: moist, temp: temp,
       sea: weightedQuantile(elev, grid.areas, params.ocean / 100),
       minE: minE, maxE: maxE, masterSeed: sampler.masterSeed,
-      msFields: now() - t
+      msFields: 0
     };
+    var end = now();
+    result.msFields = end - t;
+    perfMark('planet: field calculation end');
+    perfMeasure('planet: field calculation', t, end);
+    return result;
   }
 
   function withStats(grid, d) {
@@ -1372,12 +1399,16 @@
     var t = now();
     if (!bundle) {
       if (!payload) {
+        var geomStart = now();
+        perfMark('planet: geometry build start');
         payload = PlanetGeometry.buildGeometry(grid, d, sp, PlanetNoise, {
           // LOD-подмена теперь мгновенная, без волны из центров ячеек,
           // но синхронный fallback всё равно не должен блокировать первый
           // кадр объёмом осколков: он достроится сразу после commit.
           includeVolume: !(animateBuild || doSwap || opts.lod)
         });
+        perfMark('planet: geometry build end');
+        perfMeasure('planet: geometry build', geomStart, now());
       }
       bundle = createGeometryBundle(grid, payload, sp, key);
       finishBundleUpload(bundle);
@@ -1481,6 +1512,7 @@
       var cacheHit = !!bundle;
       var t = now();
       if (!bundle) {
+        perfMark('planet: geometry build start');
         var payload = PlanetGeometry.buildGeometry(state.grid, null, sp, PlanetNoise, {
           cellData: {
             colors: state.colors,
@@ -1489,6 +1521,8 @@
           },
           includeVolume: true
         });
+        perfMark('planet: geometry build end');
+        perfMeasure('planet: geometry build', t, now());
         bundle = createGeometryBundle(state.grid, payload, sp, key);
         finishBundleUpload(bundle);
         bundle.uploadMs = now() - t;
@@ -2008,8 +2042,102 @@
   var lastTime = performance.now();
   var fpsAccum = 0, fpsFrames = 0, fpsShown = performance.now();
   var perfAccum = 0, perfFrames = 0, perfShown = performance.now();
-  var qualityCooldownUntil = 0;
-  var qualityGoodSamples = 0;
+
+  /* Честная кадровая диагностика mini-spike-22: скользящее окно 10 секунд
+     по реальным интервалам rAF. Никакого cap 50 мс здесь нет: долгий кадр
+     должен быть виден именно как долгий кадр. */
+  var FRAME_WINDOW_MS = 10000;
+  var frameSamples = [];
+  var lastFrameStats = null;
+  var frameHudShown = 0;
+
+  function framePercentile(sorted, q) {
+    if (!sorted.length) return null;
+    var idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1));
+    return sorted[idx];
+  }
+
+  function recordFrameSample(tNow, deltaMs) {
+    if (deltaMs > 0 && isFinite(deltaMs)) frameSamples.push({ t: tNow, dt: deltaMs });
+    while (frameSamples.length && tNow - frameSamples[0].t > FRAME_WINDOW_MS) {
+      frameSamples.shift();
+    }
+  }
+
+  function collectFrameStats(tNow) {
+    while (frameSamples.length && tNow - frameSamples[0].t > FRAME_WINDOW_MS) {
+      frameSamples.shift();
+    }
+    var values = frameSamples.map(function (s) { return s.dt; }).sort(function (a, b) { return a - b; });
+    var over50 = 0;
+    var over100 = 0;
+    values.forEach(function (v) {
+      if (v > 50) over50++;
+      if (v > 100) over100++;
+    });
+    lastFrameStats = {
+      count: values.length,
+      windowMs: frameSamples.length ? tNow - frameSamples[0].t : 0,
+      p50: framePercentile(values, 0.50),
+      p95: framePercentile(values, 0.95),
+      p99: framePercentile(values, 0.99),
+      over50: over50,
+      over100: over100,
+      worst5: values.slice(-5).reverse()
+    };
+    return lastFrameStats;
+  }
+
+  function fmtFrameMs(v) {
+    return v == null ? '—' : v.toFixed(1) + 'ms';
+  }
+
+  function syncFrameHud(stats) {
+    if (frameP50El) frameP50El.textContent = fmtFrameMs(stats.p50);
+    if (frameP95El) frameP95El.textContent = fmtFrameMs(stats.p95);
+    if (frameP99El) frameP99El.textContent = fmtFrameMs(stats.p99);
+    if (frameOver50El) frameOver50El.textContent = String(stats.over50);
+    if (frameOver100El) frameOver100El.textContent = String(stats.over100);
+    if (frameWorstEl) {
+      frameWorstEl.textContent = stats.worst5.length
+        ? stats.worst5.map(function (v) { return v.toFixed(1); }).join('/')
+        : '—';
+    }
+  }
+
+  var gpuQueryQueue = [];
+  var gpuActiveQuery = null;
+  var gpuFrameCounter = 0;
+  var gpuTimeMs = null;
+
+  function pollGpuTimers() {
+    if (!gpuTimerExt) return;
+    while (gpuQueryQueue.length) {
+      var q = gpuQueryQueue[0];
+      var available = gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE);
+      var disjoint = gl.getParameter(gpuTimerExt.GPU_DISJOINT_EXT);
+      if (!available) break;
+      if (!disjoint) gpuTimeMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+      gl.deleteQuery(q);
+      gpuQueryQueue.shift();
+    }
+    if (gpuTimeEl) gpuTimeEl.textContent = gpuTimeMs == null ? '…' : gpuTimeMs.toFixed(2) + 'ms';
+  }
+
+  function beginGpuTimer() {
+    if (!gpuTimerExt || gpuActiveQuery) return;
+    gpuFrameCounter++;
+    if (gpuFrameCounter % 5 !== 0) return;
+    gpuActiveQuery = gl.createQuery();
+    if (gpuActiveQuery) gl.beginQuery(gpuTimerExt.TIME_ELAPSED_EXT, gpuActiveQuery);
+  }
+
+  function endGpuTimer() {
+    if (!gpuTimerExt || !gpuActiveQuery) return;
+    gl.endQuery(gpuTimerExt.TIME_ELAPSED_EXT);
+    gpuQueryQueue.push(gpuActiveQuery);
+    gpuActiveQuery = null;
+  }
 
   function resize() {
     var dpr = effectiveRenderScale();
@@ -2022,42 +2150,105 @@
     syncLodHud(state.renderV);
   }
 
-  /* Адаптивный внутренний масштаб: фрагментный шейдер с процедурной
-     текстурой на телефоне часто дороже вершин, поэтому при просадке сначала
-     уменьшаем число реально рисуемых пикселей. CSS-размер канваса и пикинг
-     не меняются. Подъём обратно — только после нескольких стабильных
-     секунд, чтобы качество не дёргалось туда-сюда. */
-  function adaptRenderScale(measuredFps, tNow) {
-    if (!lodEnabled() || !state.vao) {
-      qualityGoodSamples = 0;
+  /* Адаптивный внутренний масштаб (mini-spike-22): решения принимаются по
+     p95 frame time скользящего окна 10 секунд, а не по среднему FPS.
+     Scale-down быстрый, но не чаще раза в 2 секунды. Scale-up — только
+     после 8 секунд стабильности, без длинных кадров и не на том же уровне
+     зума, где произошло снижение. */
+  var scaleLastDownAt = 0;
+  var scaleLastChangeAt = 0;
+  var scaleStableSince = 0;
+  var scaleStableNotBefore = 0;
+  var scaleDownLogDist = null;
+  var scaleBlockedLogAt = 0;
+  var SCALE_UP_P95_MS = 17.5;
+  var SCALE_DOWN_P95_MS = 25;
+  var SCALE_ZOOM_CHANGE_LOG = Math.log(1.2);
+
+  function scaleDebug(action, reason, stats) {
+    console.debug('[planet-scale]', action, reason, {
+      p95Ms: stats && stats.p95 != null ? Number(stats.p95.toFixed(2)) : null,
+      over50: stats ? stats.over50 : null,
+      renderScale: Number(state.renderScale.toFixed(3)),
+      dist: Number(state.dist.toFixed(3))
+    });
+  }
+
+  function scaleBlocked(reason, stats, tNow) {
+    scaleStableSince = 0;
+    if (tNow - scaleBlockedLogAt >= 2000) {
+      scaleDebug('scale-up', 'blocked: ' + reason, stats);
+      scaleBlockedLogAt = tNow;
+    }
+  }
+
+  function adaptRenderScale(stats, tNow) {
+    if (!lodEnabled() || !state.vao || !stats || stats.p95 == null) {
+      scaleStableSince = 0;
       return;
     }
-    // Во время подготовки нового бандла/подмены подъём качества запрещён,
-    // а вот снижение полезно сразу двум вещам: текущий кадр дешевеет и
-    // порционная заливка получает больше шансов выполниться между кадрами.
-    var busy = workerPending || state.zoomMoving || !!state.prev || state.buildStart >= 0;
-    if (busy) qualityGoodSamples = 0;
-    if (tNow < qualityCooldownUntil) return;
     var minScale = 0.6;
-    if (measuredFps < 38 && state.renderScale > minScale) {
-      state.renderScale = Math.max(minScale, state.renderScale * (busy ? 0.72 : 0.82));
-      qualityCooldownUntil = tNow + (busy ? 900 : 1800);
-      qualityGoodSamples = 0;
+    var explosionActive = typeof boomRaf !== 'undefined' && !!boomRaf;
+    var busyReason = explosionActive ? 'explosion active'
+      : workerPending ? 'worker/staging active'
+      : state.prev ? 'proxy transition active'
+      : state.buildStart >= 0 ? 'build transition active'
+      : state.zoomMoving ? 'zoom transition active'
+      : '';
+
+    if (stats.p95 > SCALE_DOWN_P95_MS && state.renderScale > minScale) {
+      scaleStableSince = 0;
+      if (tNow - scaleLastChangeAt < 2000) return;
+      var factor = stats.p95 > 50 ? 0.72 : stats.p95 > 33.4 ? 0.82 : 0.9;
+      state.renderScale = Math.max(minScale, state.renderScale * factor);
+      scaleLastDownAt = tNow;
+      scaleLastChangeAt = tNow;
+      scaleStableNotBefore = tNow;
+      scaleDownLogDist = Math.log(state.targetDist || state.dist);
+      scaleDebug('scale-down',
+        'p95=' + stats.p95.toFixed(1) + 'ms > ' + SCALE_DOWN_P95_MS + 'ms', stats);
       syncLodHud(state.renderV);
       return;
     }
-    if (busy) return;
-    if (measuredFps > 57 && state.renderScale < state.renderScaleBase) {
-      qualityGoodSamples++;
-      if (qualityGoodSamples >= 4) {
-        state.renderScale = Math.min(state.renderScaleBase, state.renderScale * 1.12);
-        qualityCooldownUntil = tNow + 1800;
-        qualityGoodSamples = 0;
-        syncLodHud(state.renderV);
-      }
-    } else {
-      qualityGoodSamples = 0;
+
+    if (state.renderScale >= state.renderScaleBase) {
+      scaleStableSince = 0;
+      return;
     }
+    if (busyReason) {
+      scaleBlocked(busyReason, stats, tNow);
+      return;
+    }
+    if (scaleDownLogDist != null) {
+      var zoomDelta = Math.abs(Math.log(state.targetDist || state.dist) - scaleDownLogDist);
+      if (zoomDelta <= SCALE_ZOOM_CHANGE_LOG) {
+        scaleBlocked('zoom unchanged after scale-down (needs >20% distance change)', stats, tNow);
+        return;
+      }
+      scaleDownLogDist = null;
+    }
+    if (scaleLastDownAt && tNow - scaleLastDownAt < 8000) {
+      scaleBlocked('8s after scale-down not elapsed', stats, tNow);
+      return;
+    }
+    var stable = stats.count >= 30 && stats.p95 <= SCALE_UP_P95_MS && stats.over50 === 0;
+    if (!stable) {
+      scaleBlocked('stability criteria not met (p95<=' + SCALE_UP_P95_MS +
+        'ms and 0 frames >50ms required)', stats, tNow);
+      return;
+    }
+    if (!scaleStableSince) {
+      scaleStableSince = Math.max(scaleStableNotBefore, tNow - stats.windowMs);
+    }
+    if (tNow - scaleStableSince < 8000) return;
+    if (tNow - scaleLastChangeAt < 2000) return;
+
+    state.renderScale = Math.min(state.renderScaleBase, state.renderScale * 1.12);
+    scaleLastChangeAt = tNow;
+    scaleStableSince = 0;
+    scaleStableNotBefore = tNow;
+    scaleDebug('scale-up', 'stable 8s, p95=' + stats.p95.toFixed(1) + 'ms', stats);
+    syncLodHud(state.renderV);
   }
 
   /* Плавный зум существует только вокруг прямого управления:
@@ -2100,10 +2291,12 @@
 
   function frame(tNow) {
     requestAnimationFrame(frame);
-    var rawDt = Math.min(0.25, Math.max(0, (tNow - lastTime) / 1000));
-    var dt = Math.min(0.05, rawDt);
+    var rawFrameMs = Math.max(0, tNow - lastTime);
+    var rawDt = Math.min(0.25, rawFrameMs / 1000);
+    var dt = Math.min(0.05, rawDt); // только интеграция анимации, не HUD
     lastTime = tNow;
-    fpsAccum += dt;
+    recordFrameSample(tNow, rawFrameMs);
+    fpsAccum += rawFrameMs / 1000;
     fpsFrames++;
     perfAccum += rawDt;
     perfFrames++;
@@ -2111,10 +2304,14 @@
       fpsEl.textContent = fpsFrames ? Math.round(fpsFrames / Math.max(fpsAccum, 1e-6)) : '—';
       fpsAccum = 0; fpsFrames = 0; fpsShown = tNow;
     }
+    if (tNow - frameHudShown > 250) {
+      syncFrameHud(collectFrameStats(tNow));
+      frameHudShown = tNow;
+    }
+    pollGpuTimers();
     if (tNow - perfShown > 1000) {
-      var measuredFps = perfFrames / Math.max(perfAccum, 1e-6);
       perfAccum = 0; perfFrames = 0; perfShown = tNow;
-      adaptRenderScale(measuredFps, tNow);
+      adaptRenderScale(collectFrameStats(tNow), tNow);
       scheduleLodRecheck();
     }
     updateSmoothZoom(rawDt, tNow);
@@ -2123,6 +2320,7 @@
       state.quat = quatNormalize(quatMultiply(quatFromAxisAngle(0, 1, 0, dt * 0.12), state.quat));
     }
     resize();
+    beginGpuTimer();
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0.008, 0.02, 0.04, 1);
@@ -2282,6 +2480,7 @@
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE);
+    endGpuTimer();
   }
 
   /* ------------------------------------------------------------ управление и пикинг */
@@ -2314,7 +2513,11 @@
     var tHit = -b - Math.sqrt(disc);
     var p = [origin[0] + d[0] * tHit, origin[1] + d[1] * tHit, origin[2] + d[2] * tHit];
     var pl = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) || 1;
+    var pickStart = now();
+    perfMark('planet: pick start');
     var cell = GeodesicGrid.pick(state.grid, [p[0] / pl, p[1] / pl, p[2] / pl]);
+    perfMark('planet: pick end');
+    perfMeasure('planet: pick', pickStart, now());
     state.selected = cell;
     cellInfo.textContent =
       GeodesicGrid.addressOf(state.grid, cell) +
@@ -2539,57 +2742,95 @@
   coreEl.addEventListener('input', syncCore);
   syncCore();
 
-  /* Взрыв/сброс: разлёт анимируется юниформом uSep на GPU — плавно, без
-     пересборки геометрии; рваность и толщину ведём ползунками параллельно,
-     объём пересобирается шагами ~4 раза/сек. Повторное нажатие (или нажатие
+  /* Взрыв/сброс (mini-spike-22): во время анимации двигается только uSep
+     на GPU. Целевые рваность/толщина не пересобираются синхронно шагами:
+     один целевой бандл готовит воркер, главный поток заливает его скрыто
+     порциями и подменяет одним commit. Повторное нажатие (или нажатие
      при большом разлёте) возвращает затронутые ползунки к стандартным
      значениям. Нажатие во время анимации или ручной ползунок — стоп. */
   var BOOM_DEFAULTS = { sep: 0.3, jag: 0.5, thick: 0.14 };
   var BOOM_TARGET = { sep: 2.1, jag: 0.95, thick: 0.05 };
   var boomRaf = 0;
+  var boomPerfStart = 0;
   var boomBtn = document.getElementById('shardBoom');
   function boomLabel() {
     boomBtn.textContent = parseFloat(shardSepEl.value) >= 1.0 ? '↩ собрать (сброс)' : '💥 взрыв';
   }
   function cancelBoom() {
     if (boomRaf) { cancelAnimationFrame(boomRaf); boomRaf = 0; }
+    if (boomPerfStart) {
+      perfMark('planet: explosion animation end');
+      perfMeasure('planet: explosion animation', boomPerfStart, now());
+      boomPerfStart = 0;
+    }
     boomLabel();
   }
   boomBtn.addEventListener('click', function () {
     if (boomRaf) { cancelBoom(); statusLine.textContent = 'анимация остановлена'; return; }
-    if (parseInt(shardsEl.value, 10) < 2) { shardsEl.value = '14'; syncShards(); scheduleGeometry(); }
+    if (workerPending) {
+      statusLine.textContent = 'взрыв подождёт: воркер уже готовит планету/LOD';
+      return;
+    }
+    if (parseInt(shardsEl.value, 10) < 2) shardsEl.value = '14';
     var reset = parseFloat(shardSepEl.value) >= 1.0;
-    var from = {
-      sep: parseFloat(shardSepEl.value),
-      jag: parseFloat(shardJagEl.value),
-      thick: parseFloat(shardThickEl.value)
-    };
+    var fromSep = parseFloat(shardSepEl.value);
     var to = reset ? BOOM_DEFAULTS : BOOM_TARGET;
+
+    // Целевые jag/thick выставляются один раз до анимации (без input-event,
+    // поэтому scheduleGeometry не запускается). Геометрию под них один раз
+    // готовит существующий worker/staged-bundle путь; до commit текущий
+    // бандл продолжает рисоваться, а в кадре меняется только uSep.
+    shardJagEl.value = String(to.jag);
+    shardThickEl.value = String(to.thick);
+    syncShards();
+    var targetSp = readShardParams();
+    var targetParams = state.fieldParams || (activeParams
+      ? cloneParams(activeParams, state.renderV || activeParams.v) : null);
+    var targetKey = targetParams ? geometryCacheKey(targetParams, targetSp) : '';
+    var targetReady = !!(state.geomBundle && state.geomBundle.key === targetKey);
+    if (!targetReady && worker && targetParams) {
+      console.debug('[planet-boom]', 'prepare target geometry in worker', { key: targetKey });
+      requestPlanet(cloneParams(targetParams, targetParams.v), {
+        shardParams: targetSp,
+        geometryKey: targetKey,
+        noBuild: true,
+        proxyFlag: false,
+        note: lodNote(targetParams.v)
+      });
+    } else if (!targetReady) {
+      console.debug('[planet-boom]', 'worker unavailable: animate uSep only; jag/thick apply on next generation');
+    }
+
     var t0 = performance.now();
+    boomPerfStart = t0;
+    perfMark('planet: explosion animation start');
     var dur = reset ? 1500 : 2400;
-    var lastGeom = 0;
-    statusLine.textContent = reset ? 'сброс: ползунки возвращаются к стандартным…' : 'взрыв: разлёт и рваность растут, толщина падает…';
+    statusLine.textContent = reset
+      ? 'сброс: разлёт возвращается; целевая геометрия готовится скрыто…'
+      : 'взрыв: разлёт анимируется на GPU; целевая геометрия готовится скрыто…';
     boomBtn.textContent = '⏹ стоп';
     function step(ts) {
       var t = Math.min(1, (ts - t0) / dur);
       var e = reset
         ? (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2)
         : 1 - Math.pow(1 - t, 3); // взрыв: резкий выброс, затем затухание
-      shardSepEl.value = String(from.sep + (to.sep - from.sep) * e);
-      shardJagEl.value = String(from.jag + (to.jag - from.jag) * e);
-      shardThickEl.value = String(from.thick + (to.thick - from.thick) * e);
+      shardSepEl.value = String(fromSep + (to.sep - fromSep) * e);
       syncShards();
       applySepLive();
-      if (ts - lastGeom > 250) { lastGeom = ts; scheduleGeometry(); }
       if (t < 1) {
         boomRaf = requestAnimationFrame(step);
       } else {
         boomRaf = 0;
-        scheduleGeometry();
+        perfMark('planet: explosion animation end');
+        perfMeasure('planet: explosion animation', boomPerfStart, now());
+        boomPerfStart = 0;
         boomLabel();
-        statusLine.textContent = reset
-          ? 'сброс завершён: стандартные разлёт/рваность/толщина'
-          : 'взрыв завершён — повторное нажатие соберёт планету обратно';
+        var readyNow = !!(state.geomBundle && state.geomBundle.key === targetKey);
+        statusLine.textContent = readyNow
+          ? (reset
+            ? 'сброс завершён: стандартные разлёт/рваность/толщина'
+            : 'взрыв завершён — повторное нажатие соберёт планету обратно')
+          : 'разлёт завершён; целевая геометрия ещё готовится скрыто и подменится одним кадром';
       }
     }
     boomRaf = requestAnimationFrame(step);
