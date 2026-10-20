@@ -967,6 +967,7 @@ export class StructureRenderer {
 // ============================================================
 //  structure.vert — Instanced structures vertex shader
 // ============================================================
+export const STRUCTURE_VERTEX_SHADER = `
 #version 300 es
 precision highp float;
 
@@ -1031,6 +1032,7 @@ void main() {
   float dist = length(worldPos.xy);     // от центра карты (origin)
   v_fog = clamp((dist - u_fogStart) / (u_fogEnd - u_fogStart), 0.0, 1.0);
 }
+`;
 
 
 /* ============================================================================
@@ -1042,6 +1044,7 @@ void main() {
 // ============================================================
 //  structure.frag — Instanced structures fragment shader
 // ============================================================
+export const STRUCTURE_FRAGMENT_SHADER = `
 #version 300 es
 precision highp float;
 
@@ -1072,6 +1075,7 @@ void main() {
 
   fragColor = vec4(finalColor, 1.0);
 }
+`;
 
 
 /* ============================================================================
@@ -1083,6 +1087,7 @@ void main() {
 // ============================================================
 //  terrain.vert — Terrain vertex shader
 // ============================================================
+export const TERRAIN_VERTEX_SHADER = `
 #version 300 es
 precision highp float;
 
@@ -1111,6 +1116,7 @@ void main() {
   float dist = length(a_position.xy);
   v_fog = clamp((dist - u_fogStart) / (u_fogEnd - u_fogStart), 0.0, 1.0);
 }
+`;
 
 
 /* ============================================================================
@@ -1122,6 +1128,7 @@ void main() {
 // ============================================================
 //  terrain.frag — Terrain fragment shader
 // ============================================================
+export const TERRAIN_FRAGMENT_SHADER = `
 #version 300 es
 precision highp float;
 
@@ -1166,3 +1173,4 @@ void main() {
   vec3 finalColor = mix(lit, u_fogColor, v_fog);
   fragColor = vec4(finalColor, 1.0);
 }
+`;
