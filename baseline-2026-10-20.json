@@ -1,0 +1,365 @@
+{
+  "schema": "planet-performance-baseline/v1",
+  "generatedAt": "2026-10-20T07:10:19.247Z",
+  "date": "2026-10-20",
+  "command": "node tools/bench_planet_baseline.mjs",
+  "node": "v22.22.3",
+  "platform": "linux/x64",
+  "notes": [
+    "CPU numbers are Node.js on the benchmark host.",
+    "Browser frame numbers use headless Chromium SwiftShader and are a regression reference, not Redmi Note 10 FPS.",
+    "Browser scenarios use fixed LOD so each requested v is actually rendered."
+  ],
+  "results": [
+    {
+      "v": 64,
+      "cpu": {
+        "v": 64,
+        "cellCount": 40962,
+        "triangleCount": 81920,
+        "meshBuildMs": 230.22894,
+        "meshBuildSamplesMs": [
+          257.024538,
+          230.22894,
+          169.901241
+        ],
+        "fieldCalculationMs": 59.575831,
+        "peakMemoryBytes": 184422400,
+        "peakMemoryMiB": 175.87890625,
+        "processMemoryAfterBytes": {
+          "rss": 149639168,
+          "heapTotal": 47292416,
+          "heapUsed": 16920672,
+          "external": 8455146,
+          "arrayBuffers": 5110236
+        },
+        "gridTypedArrayBytes": 5038186,
+        "pick100RandomRays": {
+          "meanMs": 0.15700038000000002,
+          "p50Ms": 0.129784,
+          "p95Ms": 0.164705,
+          "p99Ms": 0.206758,
+          "maxMs": 2.489146,
+          "checksum": 2082576.4844752834
+        }
+      },
+      "browser": {
+        "available": true,
+        "renderer": "headless Chromium SwiftShader (not a phone GPU)",
+        "peakBrowserJsHeapBytes": 42100000,
+        "memorySamples": [
+          {
+            "label": "after-load",
+            "usedJSHeapSize": 42100000,
+            "totalJSHeapSize": 47400000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-rotation",
+            "usedJSHeapSize": 42100000,
+            "totalJSHeapSize": 47400000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-max-zoom",
+            "usedJSHeapSize": 42100000,
+            "totalJSHeapSize": 47400000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-explosion",
+            "usedJSHeapSize": 42100000,
+            "totalJSHeapSize": 47400000,
+            "jsHeapSizeLimit": 2190000000
+          }
+        ],
+        "rotation10s": {
+          "frames": 9,
+          "meanMs": 918.4777777777776,
+          "p50Ms": 800,
+          "p95Ms": 1583.2000000000007,
+          "p99Ms": 1583.2000000000007,
+          "maxMs": 1583.2000000000007,
+          "over50Ms": 9,
+          "over100Ms": 9,
+          "worst5Ms": [
+            1583.2000000000007,
+            1349.8999999999996,
+            1266.5999999999995,
+            850,
+            800
+          ]
+        },
+        "maxZoom5s": {
+          "frames": 4,
+          "meanMs": 1029.125,
+          "p50Ms": 1016.5999999999985,
+          "p95Ms": 1099.9000000000015,
+          "p99Ms": 1099.9000000000015,
+          "maxMs": 1099.9000000000015,
+          "over50Ms": 4,
+          "over100Ms": 4,
+          "worst5Ms": [
+            1099.9000000000015,
+            1016.6999999999971,
+            1016.5999999999985,
+            983.3000000000029
+          ]
+        },
+        "explosion5s": {
+          "frames": 4,
+          "meanMs": 758.2999999999993,
+          "p50Ms": 983.1999999999971,
+          "p95Ms": 1033.300000000003,
+          "p99Ms": 1033.300000000003,
+          "maxMs": 1033.300000000003,
+          "over50Ms": 3,
+          "over100Ms": 3,
+          "worst5Ms": [
+            1033.300000000003,
+            1000,
+            983.1999999999971,
+            16.69999999999709
+          ]
+        },
+        "hudAfter": {
+          "fpsText": "20",
+          "cellsText": "40 962",
+          "lodText": "v=64/64",
+          "renderScaleText": "1.00×",
+          "statusText": "взрыв завершён — повторное нажатие соберёт планету обратно",
+          "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36"
+        },
+        "problems": []
+      }
+    },
+    {
+      "v": 128,
+      "cpu": {
+        "v": 128,
+        "cellCount": 163842,
+        "triangleCount": 327680,
+        "meshBuildMs": 922.703868,
+        "meshBuildSamplesMs": [
+          992.317418,
+          922.703868,
+          900.301698
+        ],
+        "fieldCalculationMs": 173.460268,
+        "peakMemoryBytes": 356024320,
+        "peakMemoryMiB": 339.53125,
+        "processMemoryAfterBytes": {
+          "rss": 345268224,
+          "heapTotal": 222953472,
+          "heapUsed": 181336792,
+          "external": 43716345,
+          "arrayBuffers": 40376902
+        },
+        "gridTypedArrayBytes": 20152426,
+        "pick100RandomRays": {
+          "meanMs": 0.42970916000000003,
+          "p50Ms": 0.417277,
+          "p95Ms": 0.513315,
+          "p99Ms": 0.569386,
+          "maxMs": 0.585974,
+          "checksum": 7292447.142151588
+        }
+      },
+      "browser": {
+        "available": true,
+        "renderer": "headless Chromium SwiftShader (not a phone GPU)",
+        "peakBrowserJsHeapBytes": 131000000,
+        "memorySamples": [
+          {
+            "label": "after-load",
+            "usedJSHeapSize": 131000000,
+            "totalJSHeapSize": 148000000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-rotation",
+            "usedJSHeapSize": 131000000,
+            "totalJSHeapSize": 148000000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-max-zoom",
+            "usedJSHeapSize": 131000000,
+            "totalJSHeapSize": 148000000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-explosion",
+            "usedJSHeapSize": 131000000,
+            "totalJSHeapSize": 148000000,
+            "jsHeapSizeLimit": 2190000000
+          }
+        ],
+        "rotation10s": {
+          "frames": 3,
+          "meanMs": 2488.7999999999997,
+          "p50Ms": 2949.9000000000015,
+          "p95Ms": 3283.199999999999,
+          "p99Ms": 3283.199999999999,
+          "maxMs": 3283.199999999999,
+          "over50Ms": 3,
+          "over100Ms": 3,
+          "worst5Ms": [
+            3283.199999999999,
+            2949.9000000000015,
+            1233.2999999999993
+          ]
+        },
+        "maxZoom5s": {
+          "frames": 1,
+          "meanMs": 2583.2000000000116,
+          "p50Ms": 2583.2000000000116,
+          "p95Ms": 2583.2000000000116,
+          "p99Ms": 2583.2000000000116,
+          "maxMs": 2583.2000000000116,
+          "over50Ms": 1,
+          "over100Ms": 1,
+          "worst5Ms": [
+            2583.2000000000116
+          ]
+        },
+        "explosion5s": {
+          "frames": 1,
+          "meanMs": 2783.2999999999884,
+          "p50Ms": 2783.2999999999884,
+          "p95Ms": 2783.2999999999884,
+          "p99Ms": 2783.2999999999884,
+          "maxMs": 2783.2999999999884,
+          "over50Ms": 1,
+          "over100Ms": 1,
+          "worst5Ms": [
+            2783.2999999999884
+          ]
+        },
+        "hudAfter": {
+          "fpsText": "20",
+          "cellsText": "163 842",
+          "lodText": "v=128/128",
+          "renderScaleText": "1.00×",
+          "statusText": "взрыв завершён — повторное нажатие соберёт планету обратно",
+          "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36"
+        },
+        "problems": []
+      }
+    },
+    {
+      "v": 192,
+      "cpu": {
+        "v": 192,
+        "cellCount": 368642,
+        "triangleCount": 737280,
+        "meshBuildMs": 2154.796885,
+        "meshBuildSamplesMs": [
+          2154.796885,
+          2343.981584,
+          2112.149383
+        ],
+        "fieldCalculationMs": 340.589023,
+        "peakMemoryBytes": 628477952,
+        "peakMemoryMiB": 599.36328125,
+        "processMemoryAfterBytes": {
+          "rss": 625704960,
+          "heapTotal": 449900544,
+          "heapUsed": 416826168,
+          "external": 94097145,
+          "arrayBuffers": 90757702
+        },
+        "gridTypedArrayBytes": 45342826,
+        "pick100RandomRays": {
+          "meanMs": 1.0393515599999998,
+          "p50Ms": 1.015705,
+          "p95Ms": 1.211756,
+          "p99Ms": 1.435687,
+          "maxMs": 1.588733,
+          "checksum": 18848516.31026999
+        }
+      },
+      "browser": {
+        "available": true,
+        "renderer": "headless Chromium SwiftShader (not a phone GPU)",
+        "peakBrowserJsHeapBytes": 269000000,
+        "memorySamples": [
+          {
+            "label": "after-load",
+            "usedJSHeapSize": 269000000,
+            "totalJSHeapSize": 286000000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-rotation",
+            "usedJSHeapSize": 269000000,
+            "totalJSHeapSize": 286000000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-max-zoom",
+            "usedJSHeapSize": 269000000,
+            "totalJSHeapSize": 286000000,
+            "jsHeapSizeLimit": 2190000000
+          },
+          {
+            "label": "after-explosion",
+            "usedJSHeapSize": 269000000,
+            "totalJSHeapSize": 286000000,
+            "jsHeapSizeLimit": 2190000000
+          }
+        ],
+        "rotation10s": {
+          "frames": 4,
+          "meanMs": 2283.2250000000004,
+          "p50Ms": 899.9000000000015,
+          "p95Ms": 4966.500000000002,
+          "p99Ms": 4966.500000000002,
+          "maxMs": 4966.500000000002,
+          "over50Ms": 4,
+          "over100Ms": 4,
+          "worst5Ms": [
+            4966.500000000002,
+            2799.7999999999993,
+            899.9000000000015,
+            466.6999999999989
+          ]
+        },
+        "maxZoom5s": {
+          "frames": 0,
+          "meanMs": null,
+          "p50Ms": null,
+          "p95Ms": null,
+          "p99Ms": null,
+          "maxMs": null,
+          "over50Ms": 0,
+          "over100Ms": 0,
+          "worst5Ms": []
+        },
+        "explosion5s": {
+          "frames": 1,
+          "meanMs": 4983.099999999977,
+          "p50Ms": 4983.099999999977,
+          "p95Ms": 4983.099999999977,
+          "p99Ms": 4983.099999999977,
+          "maxMs": 4983.099999999977,
+          "over50Ms": 1,
+          "over100Ms": 1,
+          "worst5Ms": [
+            4983.099999999977
+          ]
+        },
+        "hudAfter": {
+          "fpsText": "20",
+          "cellsText": "368 642",
+          "lodText": "v=192/192",
+          "renderScaleText": "1.00×",
+          "statusText": "взрыв завершён — повторное нажатие соберёт планету обратно",
+          "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36"
+        },
+        "problems": []
+      }
+    }
+  ],
+  "browserDepsNodeModules": "/tmp/planet-bench/node_modules"
+}
