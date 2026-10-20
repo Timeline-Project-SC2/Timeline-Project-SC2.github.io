@@ -26,6 +26,33 @@
   var frameOver100El = document.getElementById('frameOver100');
   var frameWorstEl = document.getElementById('frameWorst');
   var gpuTimeEl = document.getElementById('gpuTime');
+  var controlPanel = document.querySelector('.panel');
+  var panelToggle = document.getElementById('panelToggle');
+  var panelBody = document.getElementById('panelBody');
+
+  function setPanelCollapsed(collapsed, persist) {
+    if (!controlPanel || !panelToggle || !panelBody) return;
+    controlPanel.classList.toggle('collapsed', collapsed);
+    panelToggle.setAttribute('aria-expanded', String(!collapsed));
+    panelToggle.textContent = collapsed ? '+' : '−';
+    var label = collapsed ? 'Развернуть панель параметров' : 'Свернуть панель параметров';
+    panelToggle.title = label;
+    panelToggle.setAttribute('aria-label', label);
+    if (persist) {
+      try { localStorage.setItem('planetTestPanelCollapsed', collapsed ? '1' : '0'); }
+      catch (_) { /* хранение состояния необязательно */ }
+    }
+  }
+
+  if (controlPanel && panelToggle && panelBody) {
+    var savedPanelCollapsed = false;
+    try { savedPanelCollapsed = localStorage.getItem('planetTestPanelCollapsed') === '1'; }
+    catch (_) { /* приватный режим/запрет storage: панель просто останется открытой */ }
+    setPanelCollapsed(savedPanelCollapsed, false);
+    panelToggle.addEventListener('click', function () {
+      setPanelCollapsed(!controlPanel.classList.contains('collapsed'), true);
+    });
+  }
 
   function perfMark(name) {
     try { performance.mark(name); } catch (_) { /* User Timing недоступен */ }

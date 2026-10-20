@@ -40,12 +40,38 @@ body {
   backdrop-filter: blur(7px);
 }
 
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
 .panel h1 {
-  margin: 0 0 9px;
+  margin: 0;
   font-size: 11px;
   letter-spacing: 0.16em;
   color: #7fffd4;
 }
+
+.panel .panel-toggle {
+  flex: 0 0 auto;
+  width: 38px;
+  min-height: 32px;
+  padding: 3px 0 5px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.panel.collapsed {
+  width: auto;
+  max-height: none;
+  overflow: hidden;
+}
+
+.panel.collapsed .panel-head { margin-bottom: 0; }
+.panel.collapsed #panelBody { display: none; }
 
 .panel .row {
   display: grid;
@@ -134,5 +160,6 @@ body {
     width: auto;
     max-height: 46vh;
   }
+  .panel.collapsed { left: auto; }
   .hud { left: 10px; bottom: 8px; font-size: 10px; }
 }
