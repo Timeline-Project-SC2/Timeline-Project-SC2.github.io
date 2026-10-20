@@ -27,5 +27,22 @@ export default [
     rules: {
       'no-undef': 'error'
     }
+  },
+  {
+    // Временный агрегат будущих ESM/worker-модулей Этапов 8/9 из PR #119.
+    // Он не подключён к страницам и позже должен быть разрезан на отдельные
+    // модули; до этого ему нужен module-парсинг и оба набора глобалов.
+    files: ['site/shared/temp_code_structures.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        ...globals.browser,
+        ...globals.worker
+      }
+    },
+    rules: {
+      'no-undef': 'error'
+    }
   }
 ];
