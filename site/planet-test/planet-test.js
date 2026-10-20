@@ -9,6 +9,7 @@
 
   var GeodesicGrid = window.GeodesicGrid;
   var PlanetNoise = window.PlanetNoise;
+  var PlanetGeometry = window.PlanetGeometry;
   var canvas = document.getElementById('globe');
   var statsBox = document.getElementById('statsBox');
   var statusLine = document.getElementById('statusLine');
@@ -647,6 +648,8 @@
     buildStart: -1,
     buildDur: 2400,
     colors: null,
+    geomBundle: null,
+    fieldParams: null,
     statsArgs: null,
     shardInfo: null,
     shardSep: 0,
@@ -704,7 +707,7 @@
   var fieldCacheCells = 0;
   var FIELD_CACHE_MAX_CELLS = 1200000;
   try {
-    worker = new Worker('planet-worker.js?v=planet-spike-7');
+    worker = new Worker('planet-worker.js?v=planet-spike-8');
     worker.onmessage = onWorkerMessage;
     worker.onerror = function () {
       worker = null;
@@ -938,53 +941,7 @@
     return (h >>> 0).toString(16);
   }
 
-  /* ------------------------------------------------------------ цвета биомов (спайк) */
-
-  function mix3(a, b, t, out) {
-    out[0] = a[0] + (b[0] - a[0]) * t;
-    out[1] = a[1] + (b[1] - a[1]) * t;
-    out[2] = a[2] + (b[2] - a[2]) * t;
-    return out;
-  }
   function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
-  function smooth(a, b, x) {
-    var t = clamp01((x - a) / (b - a));
-    return t * t * (3 - 2 * t);
-  }
-
-  var COL = {
-    deepOcean: [0.008, 0.05, 0.16],
-    shelf: [0.06, 0.42, 0.52],
-    coast: [0.12, 0.58, 0.62],
-    ice: [0.84, 0.91, 0.96],
-    tundra: [0.52, 0.58, 0.52],
-    desert: [0.74, 0.59, 0.30],
-    plains: [0.44, 0.56, 0.24],
-    forest: [0.10, 0.42, 0.20],
-    rock: [0.43, 0.41, 0.39],
-    snow: [0.95, 0.97, 1.0]
-  };
-
-  function biomeColor(e, sea, minE, maxE, moist, temp, out) {
-    if (e <= sea) {
-      var depth = clamp01((sea - e) / Math.max(1e-6, sea - minE));
-      mix3(COL.coast, COL.shelf, smooth(0, 0.15, depth), out);
-      mix3(out, COL.deepOcean, smooth(0.12, 0.75, depth), out);
-      if (temp < 0.14) mix3(out, COL.ice, (0.14 - temp) / 0.14 * 0.85, out);
-      return out;
-    }
-    var landH = clamp01((e - sea) / Math.max(1e-6, maxE - sea));
-    // База: пустыня → равнина → лес по влажности.
-    mix3(COL.desert, COL.plains, smooth(0.28, 0.48, moist), out);
-    mix3(out, COL.forest, smooth(0.55, 0.78, moist), out);
-    // Холод: тундра и лёд.
-    mix3(out, COL.tundra, smooth(0.38, 0.22, temp), out);
-    mix3(out, COL.ice, smooth(0.20, 0.08, temp), out);
-    // Высота: скалы и снег.
-    mix3(out, COL.rock, smooth(0.68, 0.9, landH) * 0.85, out);
-    mix3(out, COL.snow, smooth(0.9, 1.0, landH), out);
-    return out;
-  }
 
   function biomeName(e, sea, minE, maxE, moist, temp) {
     if (e <= sea) {
@@ -1002,49 +959,91 @@
 
   /* ------------------------------------------------------------ геометрия GPU */
 
-  function disposeGeometry() {
-    state.buffers.forEach(function (b) { gl.deleteBuffer(b); });
-    state.buffers = [];
-    if (state.vao) gl.deleteVertexArray(state.vao);
-    if (state.vaoAtmo) gl.deleteVertexArray(state.vaoAtmo);
-    if (state.vaoVol) gl.deleteVertexArray(state.vaoVol);
-    state.vao = null;
-    state.vaoAtmo = null;
-    state.vaoVol = null;
-    if (state.shardTex) { gl.deleteTexture(state.shardTex); state.shardTex = null; }
+  /* Геометрия живёт бандлами VAO/буферов. Новый бандл можно собрать и
+     залить рядом с текущим, не трогая кадр на экране; commit — мгновенная
+     смена указателей и только тогда старт волны перекрытия. Неактивные
+     бандлы последних планет/LOD держим в маленьком LRU-кэше: частые
+     переходы туда-сюда не должны пересобирать одни и те же вершины. */
+  var geometryCache = new Map();
+  var geometryCacheBytes = 0;
+  var GEOMETRY_CACHE_MAX_BYTES = (coarsePointer ? 72 : 128) * 1048576;
+
+  function disposeBundle(bundle) {
+    if (!bundle) return;
+    if (bundle.key && geometryCache.get(bundle.key) === bundle) {
+      geometryCache.delete(bundle.key);
+      geometryCacheBytes -= bundle.gpuBytes || 0;
+    }
+    bundle.buffers.forEach(function (b) { gl.deleteBuffer(b); });
+    bundle.buffers = [];
+    if (bundle.vao) gl.deleteVertexArray(bundle.vao);
+    if (bundle.vaoAtmo) gl.deleteVertexArray(bundle.vaoAtmo);
+    if (bundle.vaoVol) gl.deleteVertexArray(bundle.vaoVol);
+    bundle.vao = null;
+    bundle.vaoAtmo = null;
+    bundle.vaoVol = null;
+    if (bundle.shardTex) { gl.deleteTexture(bundle.shardTex); bundle.shardTex = null; }
+    bundle.uploadJobs = [];
   }
 
-  /* Утилизация уходящего слоя бесшовной подмены прокси -> финал. */
-  function disposePrev() {
+  function stashGeometry(bundle) {
+    if (!bundle) return;
+    if (!bundle.key || !bundle.complete || (bundle.gpuBytes || 0) > GEOMETRY_CACHE_MAX_BYTES) {
+      disposeBundle(bundle);
+      return;
+    }
+    var existing = geometryCache.get(bundle.key);
+    if (existing === bundle) return;
+    if (existing) {
+      geometryCache.delete(bundle.key);
+      geometryCacheBytes -= existing.gpuBytes || 0;
+      disposeBundle(existing);
+    }
+    geometryCache.set(bundle.key, bundle);
+    geometryCacheBytes += bundle.gpuBytes || 0;
+    while (geometryCacheBytes > GEOMETRY_CACHE_MAX_BYTES && geometryCache.size > 1) {
+      var oldestKey = geometryCache.keys().next().value;
+      var oldest = geometryCache.get(oldestKey);
+      geometryCache.delete(oldestKey);
+      geometryCacheBytes -= (oldest && oldest.gpuBytes) || 0;
+      disposeBundle(oldest);
+    }
+  }
+
+  function releaseBundle(bundle, allowCache) {
+    if (!bundle) return;
+    if (allowCache) stashGeometry(bundle);
+    else disposeBundle(bundle);
+  }
+
+  function releasePrev() {
     var pv = state.prev;
     if (!pv) return;
-    pv.buffers.forEach(function (b) { gl.deleteBuffer(b); });
-    if (pv.vao) gl.deleteVertexArray(pv.vao);
-    if (pv.vaoVol) gl.deleteVertexArray(pv.vaoVol);
-    if (pv.shardTex) gl.deleteTexture(pv.shardTex);
     state.prev = null;
+    releaseBundle(pv, true);
   }
 
-  /* Момент старта сборки ячейки: волна идёт от северного полюса к южному,
-     небольшой детерминированный джиттер убирает «строчку развёртки». */
-  function cellBirth(centerY, cellIndex) {
-    var lat01 = (1 - centerY) / 2;
-    var h = Math.sin(cellIndex * 127.1) * 43758.5453;
-    var jitter = (h - Math.floor(h) - 0.5) * 0.07;
-    var b = lat01 * 0.74 + jitter;
-    return b < 0 ? 0 : b > 0.78 ? 0.78 : b;
+  function peekCachedGeometry(key) {
+    if (!key) return null;
+    var hit = geometryCache.get(key);
+    if (!hit) return null;
+    geometryCache.delete(key);
+    geometryCache.set(key, hit);
+    return hit;
   }
 
-  /* ------------------------------------------------------------ осколки: тест разломанной планеты */
+  function removeCachedGeometry(bundle) {
+    if (!bundle || !bundle.key) return;
+    if (geometryCache.get(bundle.key) !== bundle) return;
+    geometryCache.delete(bundle.key);
+    geometryCacheBytes -= bundle.gpuBytes || 0;
+  }
 
-  function mulberry32(seed) {
-    var a = seed >>> 0;
-    return function () {
-      a = (a + 0x6D2B79F5) | 0;
-      var t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
+  function geometryCacheKey(params, sp) {
+    if (!params || !sp) return '';
+    return fieldCacheKey(params) + '|planet-geom-1|' + JSON.stringify([
+      sp.count, sp.dist, sp.thick, sp.jag, sp.loss, sp.seedText
+    ]);
   }
 
   function readShardParams() {
@@ -1066,495 +1065,207 @@
     };
   }
 
-  var shardCache = { key: '', layout: null };
-
-  /* Раскладка осколков: сферический Вороной по центрам; размер осколка
-     задаётся угловым радиусом ρ из выбранного распределения, метрика
-     (1-dot)/ρ². Раскладка детерминирована seed-ом планеты и кэшируется;
-     разлёт в ключ не входит — трансформы применяются при заливке геометрии. */
-  function computeShardLayout(grid, sp) {
-    if (!(sp.count > 1)) return null;
-    var key = grid.v + '|' + sp.count + '|' + sp.dist + '|' + sp.seedText;
-    if (shardCache.key === key) return shardCache.layout;
-    var K = sp.count;
-    var rnd = mulberry32(PlanetNoise.stringSeed(sp.seedText + ':shards'));
-    var centers = new Float32Array(K * 3);
-    var sizes = new Float32Array(K);
-    var i;
-    if (sp.dist === 'equal') {
-      var golden = Math.PI * (3 - Math.sqrt(5));
-      for (i = 0; i < K; i++) {
-        var y = K === 1 ? 0 : 1 - (i / (K - 1)) * 2;
-        var r = Math.sqrt(Math.max(0, 1 - y * y));
-        var th = golden * i;
-        centers[i * 3] = Math.cos(th) * r;
-        centers[i * 3 + 1] = y;
-        centers[i * 3 + 2] = Math.sin(th) * r;
-        sizes[i] = 1;
-      }
-    } else {
-      for (i = 0; i < K; i++) {
-        var z = rnd() * 2 - 1;
-        var ph = rnd() * Math.PI * 2;
-        var rr = Math.sqrt(Math.max(0, 1 - z * z));
-        centers[i * 3] = Math.cos(ph) * rr;
-        centers[i * 3 + 1] = z;
-        centers[i * 3 + 2] = Math.sin(ph) * rr;
-        if (sp.dist === 'power') {
-          // Парето, α=1.3: пара крупных осколков и много мелочи — как при дроблении.
-          sizes[i] = Math.pow(1 - rnd() * 0.999, -1 / 1.3);
-        } else {
-          // Логнормальная, σ=0.8: плавный разброс без тяжёлого хвоста.
-          var g = Math.sqrt(-2 * Math.log(Math.max(1e-9, rnd()))) * Math.cos(rnd() * Math.PI * 2);
-          sizes[i] = Math.exp(0.8 * g);
-        }
-      }
-    }
-    var sum = 0;
-    for (i = 0; i < K; i++) sum += sizes[i];
-    var rho2 = new Float32Array(K);
-    for (i = 0; i < K; i++) {
-      var frac = Math.min(0.9, sizes[i] / sum);
-      var rho = Math.acos(1 - 2 * frac);
-      rho2[i] = Math.max(1e-8, rho * rho);
-    }
-    var F = grid.cellCount;
-    var shardOf = new Uint16Array(F);
-    var counts = new Uint32Array(K);
-    var cent = new Float64Array(K * 3);
-    for (var c = 0; c < F; c++) {
-      var cx = grid.centers[c * 3], cy = grid.centers[c * 3 + 1], cz = grid.centers[c * 3 + 2];
-      var best = 0, bestScore = Infinity;
-      for (i = 0; i < K; i++) {
-        var dot = cx * centers[i * 3] + cy * centers[i * 3 + 1] + cz * centers[i * 3 + 2];
-        var score = (1 - dot) / rho2[i];
-        if (score < bestScore) { bestScore = score; best = i; }
-      }
-      shardOf[c] = best;
-      counts[best]++;
-      cent[best * 3] += cx; cent[best * 3 + 1] += cy; cent[best * 3 + 2] += cz;
-    }
-    var pivots = new Float32Array(K * 3);
-    var axes = new Float32Array(K * 3);
-    var driftVec = new Float32Array(K * 3);
-    var spin = new Float32Array(K);
-    var nonEmpty = 0;
-    for (i = 0; i < K; i++) {
-      spin[i] = (rnd() * 2 - 1) * 0.7;
-      var px = cent[i * 3], py = cent[i * 3 + 1], pz = cent[i * 3 + 2];
-      var pl = Math.sqrt(px * px + py * py + pz * pz);
-      if (counts[i] > 0 && pl > 1e-9) {
-        nonEmpty++;
-        pivots[i * 3] = px / pl; pivots[i * 3 + 1] = py / pl; pivots[i * 3 + 2] = pz / pl;
-      } else {
-        pivots[i * 3] = centers[i * 3]; pivots[i * 3 + 1] = centers[i * 3 + 1]; pivots[i * 3 + 2] = centers[i * 3 + 2];
-      }
-      var ax = rnd() * 2 - 1, ay = rnd() * 2 - 1, az = rnd() * 2 - 1;
-      var gx = pivots[i * 3 + 1] * az - pivots[i * 3 + 2] * ay;
-      var gy = pivots[i * 3 + 2] * ax - pivots[i * 3] * az;
-      var gz = pivots[i * 3] * ay - pivots[i * 3 + 1] * ax;
-      var gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
-      if (gl < 1e-6) { gx = 1; gy = 0; gz = 0; gl = 1; }
-      axes[i * 3] = gx / gl; axes[i * 3 + 1] = gy / gl; axes[i * 3 + 2] = gz / gl;
-      var actualFrac = counts[i] / F;
-      var sizeFactor = actualFrac > 0
-        ? Math.min(1.9, Math.max(0.7, Math.pow((1 / K) / actualFrac, 0.18))) : 1.5;
-      var radial = (0.5 + rnd() * 0.9) * sizeFactor;
-      var tx = rnd() * 2 - 1, ty = rnd() * 2 - 1, tz = rnd() * 2 - 1;
-      var tdot = tx * pivots[i * 3] + ty * pivots[i * 3 + 1] + tz * pivots[i * 3 + 2];
-      tx -= tdot * pivots[i * 3]; ty -= tdot * pivots[i * 3 + 1]; tz -= tdot * pivots[i * 3 + 2];
-      var tl = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
-      var tang = 0.35 * rnd() * sizeFactor;
-      driftVec[i * 3] = pivots[i * 3] * radial + (tx / tl) * tang;
-      driftVec[i * 3 + 1] = pivots[i * 3 + 1] * radial + (ty / tl) * tang;
-      driftVec[i * 3 + 2] = pivots[i * 3 + 2] * radial + (tz / tl) * tang;
-    }
-    var layout = {
-      shardOf: shardOf, counts: counts, pivots: pivots, axes: axes,
-      driftVec: driftVec, spin: spin, count: K, nonEmpty: nonEmpty
-    };
-    shardCache.key = key;
-    shardCache.layout = layout;
-    return layout;
+  function allocateBundleBuffer(bundle, target, data, vao) {
+    var buf = gl.createBuffer();
+    bundle.buffers.push(buf);
+    if (vao) gl.bindVertexArray(vao);
+    gl.bindBuffer(target, buf);
+    gl.bufferData(target, data.byteLength, gl.STATIC_DRAW);
+    bundle.uploadJobs.push({
+      target: target, buffer: buf, data: data, offset: 0, vao: vao || null
+    });
+    bundle.uploadDone = false;
+    return buf;
   }
 
-  /* Сосед ячейки c через сторону между углами t1,t2: общая вершина двух
-     треугольников первичной триангуляции, отличная от c (угол = треугольник). */
-  function sideNeighbor(grid, c, t1, t2) {
-    var other = -1;
-    for (var i = 0; i < 3; i++) {
-      var a = grid.triangles[t1 * 3 + i];
-      for (var j = 0; j < 3; j++) {
-        if (a === grid.triangles[t2 * 3 + j] && a !== c) other = a;
-      }
-    }
-    return other;
+  function bundleAttr(bundle, location, size, data, type, normalized) {
+    var buf = allocateBundleBuffer(bundle, gl.ARRAY_BUFFER, data, null);
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, size, type || gl.FLOAT, !!normalized, 0, 0);
+    return buf;
   }
 
-  /* Объём осколков: стены по периметрам шардов + закрытая нижняя оболочка.
-     Вся геометрия — функция исходных (неразломанных) координат, поэтому при
-     разлёте 0 стены соседних осколков совпадают и уходят внутрь планеты:
-     реконструкция точная. Толщина и рваность — шум по исходной позиции,
-     одинаковый для обеих сторон общей стены.
-
-     Низ специально НЕ сводится в один апекс на осколок: такой веер на крупных
-     плитах давал длинные треугольники через весь шард и читался как зонт.
-     Внутри шарда нижняя оболочка идёт по первичной триангуляции центров
-     ячеек; у границы смешанные треугольники доводятся через угол ячейки, а
-     каждая граничная сторона закрывается локальным веером центр ячейки ->
-     нижняя кромка стены. Получается плита примерно постоянной толщины. */
-  function buildShardVolume(grid, layout, sp, surfPos, birthArr) {
-    state.vaoVol = null;
-    state.volIndexCount = 0;
-    if (!layout) return;
-    var F = grid.cellCount;
-    var thickEff = sp.thick * (1 - 0.45 * sp.loss);
-    var fracNoise = PlanetNoise.makeNoise('simplex',
-      PlanetNoise.hash32(PlanetNoise.stringSeed(sp.seedText + ':fracture')));
-    var pos = [], col = [], emi = [], cen = [], bir = [], shr = [], kind = [], idx = [];
-    var c, n, k;
-
-    var isBoundary = new Uint8Array(F);
-    for (c = 0; c < F; c++) {
-      for (n = 0; n < grid.neighborCount[c]; n++) {
-        if (layout.shardOf[grid.neighbors[c * 6 + n]] !== layout.shardOf[c]) { isBoundary[c] = 1; break; }
+  function uploadBundleSlice(bundle, byteBudget) {
+    var spent = 0;
+    while (bundle.uploadJobs.length) {
+      if (byteBudget !== Infinity && spent >= byteBudget) break;
+      var job = bundle.uploadJobs[0];
+      var bpe = job.data.BYTES_PER_ELEMENT || 1;
+      var remaining = job.data.length - job.offset;
+      var count = remaining;
+      if (byteBudget !== Infinity) {
+        count = Math.min(remaining, Math.max(1, Math.floor((byteBudget - spent) / bpe)));
       }
+      if (job.target === gl.ELEMENT_ARRAY_BUFFER) gl.bindVertexArray(job.vao);
+      else gl.bindVertexArray(null);
+      gl.bindBuffer(job.target, job.buffer);
+      gl.bufferSubData(
+        job.target,
+        job.offset * bpe,
+        job.data.subarray(job.offset, job.offset + count)
+      );
+      job.offset += count;
+      spent += count * bpe;
+      if (job.offset >= job.data.length) bundle.uploadJobs.shift();
     }
+    gl.bindVertexArray(null);
+    bundle.uploadDone = bundle.uploadJobs.length === 0;
+    return bundle.uploadDone;
+  }
 
-    function shadeAt(x, y, z) {
-      return 0.85 + 0.3 * (0.5 + 0.5 * fracNoise(x * 21 - 3.7, y * 21 + 8.9, z * 21 + 1.3));
-    }
+  function finishBundleUpload(bundle) {
+    uploadBundleSlice(bundle, Infinity);
+  }
 
-    // Единая глубина нижней поверхности для стены, центров и углов: одинаковая
-    // функция исходного направления не даёт щелей между кусками оболочки.
-    // bottomNoise01 переиспользуется для оттенка/нагрева низа, чтобы не
-    // платить три вызова шума на каждую из десятков тысяч вершин оболочки.
-    var bottomNoise01 = 0.5;
-    function bottomRadius(x, y, z) {
-      bottomNoise01 =
-        0.5 + 0.5 * fracNoise(x * 9 + 1.9, y * 9 + 5.5, z * 9 - 6.2);
-      return 1 - thickEff * (0.65 + 0.55 * bottomNoise01);
-    }
-
-    function pushVert(ox, oy, oz, s, cell, r, g, b, e, kindFlag) {
-      var o = pos.length;
-      pos.push(ox, oy, oz);
-      col.push(r, g, b);
-      emi.push(e);
-      shr.push(s);
-      kind.push(kindFlag || 0);
-      cen.push(surfPos[cell * 3], surfPos[cell * 3 + 1], surfPos[cell * 3 + 2]);
-      bir.push(birthArr[cell]);
-      return o / 3;
-    }
-
-    function pushBottomVert(x, y, z, s, cell, knownRadius) {
-      var rr = knownRadius === undefined ? bottomRadius(x, y, z) : knownRadius;
-      var shade = 0.80 + 0.38 * bottomNoise01;
-      // Низ — преимущественно тёмная порода с горячими пятнами, а не сплошная
-      // лавовая плёнка: иначе эмиссия забивает гранёную геометрию. Глубже
-      // участок оболочки — в среднем горячее.
-      var heat = 0.08 + 0.30 * bottomNoise01 * bottomNoise01;
-      return pushVert(x * rr, y * rr, z * rr, s, cell,
-        0.105 * shade, 0.064 * shade, 0.048 * shade, heat, 1);
-    }
-
-    var bottomCenterIndex = new Int32Array(F).fill(-1);
-    function bottomCenterOf(cell) {
-      if (bottomCenterIndex[cell] >= 0) return bottomCenterIndex[cell];
-      var vi = pushBottomVert(
-        grid.centers[cell * 3], grid.centers[cell * 3 + 1], grid.centers[cell * 3 + 2],
-        layout.shardOf[cell], cell);
-      bottomCenterIndex[cell] = vi;
-      return vi;
-    }
-
-    function bottomCornerOf(t, s, anchorCell) {
-      return pushBottomVert(
-        grid.corners[t * 3], grid.corners[t * 3 + 1], grid.corners[t * 3 + 2],
-        s, anchorCell);
-    }
-
-    // Внутренняя часть низа: один треугольник центров на первичную ячейку
-    // триангуляции. В смешанном треугольнике пара ячеек одного шарда
-    // доводится до общего угла; оставшуюся приграничную часть закроют веера
-    // граничных сторон ниже. Ориентация обратная верхней поверхности.
-    for (var t = 0; t < grid.triangleCount; t++) {
-      var ta = grid.triangles[t * 3];
-      var tb = grid.triangles[t * 3 + 1];
-      var tc = grid.triangles[t * 3 + 2];
-      var sa = layout.shardOf[ta];
-      var sb = layout.shardOf[tb];
-      var sc = layout.shardOf[tc];
-      if (sa === sb && sb === sc) {
-        idx.push(bottomCenterOf(ta), bottomCenterOf(tc), bottomCenterOf(tb));
-      } else {
-        if (sa === sb) idx.push(bottomCenterOf(ta), bottomCornerOf(t, sa, ta), bottomCenterOf(tb));
-        if (sb === sc) idx.push(bottomCenterOf(tb), bottomCornerOf(t, sb, tb), bottomCenterOf(tc));
-        if (sc === sa) idx.push(bottomCenterOf(tc), bottomCornerOf(t, sc, tc), bottomCenterOf(ta));
-      }
-    }
-
-    var SEG = 3;
-    for (c = 0; c < F; c++) {
-      if (!isBoundary[c]) continue;
-      var s = layout.shardOf[c];
-      var start = grid.cellCornerStart[c];
-      var sides = grid.cellCornerStart[c + 1] - start;
-      for (k = 0; k < sides; k++) {
-        var t1 = grid.cellCorners[start + k];
-        var t2 = grid.cellCorners[start + ((k + 1) % sides)];
-        var nb = sideNeighbor(grid, c, t1, t2);
-        if (nb < 0 || layout.shardOf[nb] === s) continue;
-        var ax = grid.corners[t1 * 3], ay = grid.corners[t1 * 3 + 1], az = grid.corners[t1 * 3 + 2];
-        var bx = grid.corners[t2 * 3], by = grid.corners[t2 * 3 + 1], bz = grid.corners[t2 * 3 + 2];
-        var ex = bx - ax, ey = by - ay, ez = bz - az;
-        var edgeLen = Math.sqrt(ex * ex + ey * ey + ez * ez);
-        var prevTop = -1, prevBot = -1;
-        var sideBottom = [];
-        for (var j = 0; j <= SEG; j++) {
-          var tt = j / SEG;
-          var px = ax + ex * tt, py = ay + ey * tt, pz = az + ez * tt;
-          var pl = Math.sqrt(px * px + py * py + pz * pz) || 1;
-          px /= pl; py /= pl; pz /= pl;
-          if (j > 0 && j < SEG && sp.jag > 0) {
-            var tx = py * ez - pz * ey, ty = pz * ex - px * ez, tz = px * ey - py * ex;
-            var tl = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
-            var off = fracNoise(px * 13 + 7.3, py * 13 - 2.1, pz * 13 + 4.7) *
-              sp.jag * Math.sin(Math.PI * tt) * edgeLen * 0.45;
-            px += (tx / tl) * off; py += (ty / tl) * off; pz += (tz / tl) * off;
-            pl = Math.sqrt(px * px + py * py + pz * pz) || 1;
-            px /= pl; py /= pl; pz /= pl;
-          }
-          var shade = shadeAt(px, py, pz);
-          var rr2 = bottomRadius(px, py, pz);
-          var topIdx = pushVert(px, py, pz, s, c, 0.23 * shade, 0.145 * shade, 0.09 * shade, 0.03);
-          var botIdx = pushVert(px * rr2, py * rr2, pz * rr2, s, c,
-            0.075 * shade, 0.05 * shade, 0.045 * shade, 0.85);
-          sideBottom.push(pushBottomVert(px, py, pz, s, c, rr2));
-          if (prevTop >= 0) {
-            idx.push(prevTop, topIdx, botIdx, prevTop, botIdx, prevBot);
-          }
-          prevTop = topIdx; prevBot = botIdx;
-        }
-        // Локальное закрытие именно этой стороны: короткий веер в пределах
-        // одной ячейки, без лучей через весь осколок.
-        var bottomCenter = bottomCenterOf(c);
-        for (j = 0; j < SEG; j++) {
-          idx.push(bottomCenter, sideBottom[j + 1], sideBottom[j]);
-        }
-      }
-    }
-    if (!idx.length) return;
-
+  function addVolumeToBundle(bundle, volume) {
+    if (!volume) return;
     var vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    function attr(location, size, arr) {
-      var buf = gl.createBuffer();
-      state.buffers.push(buf);
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(location);
-      gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
-    }
-    attr(0, 3, pos);
-    attr(1, 3, col);
-    attr(2, 1, emi);
-    attr(3, 3, cen);
-    attr(4, 1, bir);
-    attr(5, 1, shr);
-    attr(6, 1, kind);
-    var ibo = gl.createBuffer();
-    state.buffers.push(ibo);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
+    bundleAttr(bundle, 0, 3, volume.positions);
+    bundleAttr(bundle, 1, 3, volume.colors);
+    bundleAttr(bundle, 2, 1, volume.emissive);
+    bundleAttr(bundle, 3, 3, volume.centers);
+    bundleAttr(bundle, 4, 1, volume.birth);
+    bundleAttr(bundle, 5, 1, volume.shard);
+    bundleAttr(bundle, 6, 1, volume.kind);
+    allocateBundleBuffer(bundle, gl.ELEMENT_ARRAY_BUFFER, volume.indices, vao);
     gl.bindVertexArray(null);
-    state.vaoVol = vao;
-    state.volIndexCount = idx.length;
-    state.gpuBytes += (pos.length + col.length + cen.length + emi.length + bir.length + shr.length + kind.length + idx.length) * 4;
+    bundle.vaoVol = vao;
+    bundle.volIndexCount = volume.indexCount;
+    bundle.gpuBytes += volume.positions.byteLength + volume.colors.byteLength +
+      volume.emissive.byteLength + volume.centers.byteLength + volume.birth.byteLength +
+      volume.shard.byteLength + volume.kind.byteLength + volume.indices.byteLength;
   }
 
-  function uploadGeometry(grid, colors, deferVol, fieldCells) {
-    disposeGeometry();
-    var myGeomToken = ++geomToken;
-    var F = grid.cellCount;
-    var totalSides = grid.cellCorners.length;
-    var vertexCount = F + totalSides;
-    var positions = new Float32Array(vertexCount * 3);
-    var colorArr = new Float32Array(vertexCount * 3);
-    var centerW = new Float32Array(vertexCount);
-    var centersAttr = new Float32Array(vertexCount * 3);
-    var birthArr = new Float32Array(vertexCount);
-    var shardAttr = new Float32Array(vertexCount);
-    var fieldVert = new Uint8Array(vertexCount * 4);
-    if (fieldCells && fieldCells.length === F * 4) fieldVert.set(fieldCells, 0);
-    colorArr.set(colors, 0);
-    var sp = readShardParams();
-    var layout = computeShardLayout(grid, sp); // null при осколках <= 1; трансформ делает GPU
-    state.shardSep = sp.sep;
-    state.shardMode = layout ? 1 : 0;
-    state.atmoFade = layout ? Math.max(0, 1 - sp.sep * 2.2) : 1;
-    state.shardInfo = layout ? { count: layout.count, nonEmpty: layout.nonEmpty, counts: layout.counts, lost: 0 } : null;
-    var coreEl = document.getElementById('coreScale');
-    state.coreScale = coreEl ? parseFloat(coreEl.value) : 0.55;
-    state.coreVisible = false;
-    if (layout) {
-      // Необратимость: самые мелкие осколки при потерях не возвращаются
-      // (держат минимальный разлёт — на собранной планете остаются шрамы),
-      // мелочь дополнительно разносит. Крупнейший осколок не теряем никогда.
-      var lost = new Uint8Array(layout.count);
-      if (sp.loss > 0) {
-        var order = [];
-        for (var oi = 0; oi < layout.count; oi++) if (layout.counts[oi] > 0) order.push(oi);
-        order.sort(function (a, b) { return layout.counts[a] - layout.counts[b]; });
-        var lostCount = Math.min(Math.max(0, order.length - 1), Math.round(order.length * sp.loss * 0.35));
-        for (var li = 0; li < lostCount; li++) lost[order[li]] = 1;
-        state.shardInfo.lost = lostCount;
-      }
-      // Параметры шардов -> дата-текстура 64x4 RGBA32F для вершинных шейдеров:
-      // строки pivot / ось / дрейф / (spin, a, b); sepEff = uSep*a + b на GPU.
-      // Потерянные (a=1.35, b=0.75) всегда впереди толпы и не возвращаются
-      // даже при разлёте 0 — необратимость; мелочь <12 ячеек разносит сильнее.
-      var texData = new Float32Array(64 * 4 * 4);
-      state.shardMaxB = 0;
-      for (var si = 0; si < layout.count; si++) {
-        var pa = 1, pb = 0;
-        if (lost[si]) { pa = 1.35; pb = 0.75; }
-        else if (layout.counts[si] > 0 && layout.counts[si] < 12) pa = 1 + sp.loss * 0.8;
-        if (pb > state.shardMaxB) state.shardMaxB = pb;
-        texData.set([layout.pivots[si * 3], layout.pivots[si * 3 + 1], layout.pivots[si * 3 + 2], 0], si * 4);
-        texData.set([layout.axes[si * 3], layout.axes[si * 3 + 1], layout.axes[si * 3 + 2], 0], (64 + si) * 4);
-        texData.set([layout.driftVec[si * 3], layout.driftVec[si * 3 + 1], layout.driftVec[si * 3 + 2], 0], (128 + si) * 4);
-        texData.set([layout.spin[si], pa, pb, 0], (192 + si) * 4);
-      }
-      if (!state.shardTex) state.shardTex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, state.shardTex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 64, 4, 0, gl.RGBA, gl.FLOAT, texData);
+  function createGeometryBundle(grid, payload, sp, key) {
+    var s = payload.surface;
+    var bundle = {
+      key: key || '',
+      buffers: [],
+      vao: null,
+      vaoAtmo: null,
+      vaoVol: null,
+      shardTex: null,
+      indexCount: s.indexCount,
+      volIndexCount: 0,
+      cellIndexStart: s.cellIndexStart,
+      vertexCount: s.vertexCount,
+      gpuBytes: 0,
+      shardMode: payload.shardMode,
+      shardInfo: payload.shardInfo,
+      shardMaxB: payload.shardMaxB,
+      cellData: payload.cellData,
+      complete: !payload.layout || !!payload.volume,
+      uploadJobs: [],
+      uploadDone: false,
+      uploadMs: 0,
+      volumeBuild: null
+    };
+    if (payload.layout && !payload.volume) {
+      bundle.volumeBuild = {
+        layout: payload.layout,
+        sp: sp,
+        positions: s.positions,
+        birth: s.birth
+      };
+    }
+
+    if (payload.shardTexData) {
+      bundle.shardTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, bundle.shardTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 64, 4, 0, gl.RGBA, gl.FLOAT, payload.shardTexData);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.bindTexture(gl.TEXTURE_2D, null);
-      state.coreVisible = sp.sep > 0.01 || state.shardMaxB > 0.01;
     }
-    var c, k;
-    for (c = 0; c < F; c++) {
-      centerW[c] = 1;
-      birthArr[c] = cellBirth(grid.centers[c * 3 + 1], c);
-      positions[c * 3] = grid.centers[c * 3];
-      positions[c * 3 + 1] = grid.centers[c * 3 + 1];
-      positions[c * 3 + 2] = grid.centers[c * 3 + 2];
-      shardAttr[c] = layout ? layout.shardOf[c] : 0;
-      centersAttr[c * 3] = positions[c * 3];
-      centersAttr[c * 3 + 1] = positions[c * 3 + 1];
-      centersAttr[c * 3 + 2] = positions[c * 3 + 2];
-    }
-    var slot = F;
-    for (c = 0; c < F; c++) {
-      var start = grid.cellCornerStart[c];
-      var count = grid.cellCornerStart[c + 1] - start;
-      for (k = 0; k < count; k++) {
-        var corner = grid.cellCorners[start + k];
-        positions[slot * 3] = grid.corners[corner * 3];
-        positions[slot * 3 + 1] = grid.corners[corner * 3 + 1];
-        positions[slot * 3 + 2] = grid.corners[corner * 3 + 2];
-        shardAttr[slot] = layout ? layout.shardOf[c] : 0;
-        colorArr[slot * 3] = colors[c * 3];
-        colorArr[slot * 3 + 1] = colors[c * 3 + 1];
-        colorArr[slot * 3 + 2] = colors[c * 3 + 2];
-        centersAttr[slot * 3] = positions[c * 3];
-        centersAttr[slot * 3 + 1] = positions[c * 3 + 1];
-        centersAttr[slot * 3 + 2] = positions[c * 3 + 2];
-        birthArr[slot] = birthArr[c];
-        if (fieldCells && fieldCells.length === F * 4) {
-          fieldVert[slot * 4] = fieldCells[c * 4];
-          fieldVert[slot * 4 + 1] = fieldCells[c * 4 + 1];
-          fieldVert[slot * 4 + 2] = fieldCells[c * 4 + 2];
-          fieldVert[slot * 4 + 3] = fieldCells[c * 4 + 3];
-        }
-        slot++;
-      }
-    }
-    var indices = new Uint32Array(totalSides * 3);
-    var cellIndexStart = new Uint32Array(F + 1);
-    var w = 0;
-    slot = F;
-    for (c = 0; c < F; c++) {
-      cellIndexStart[c] = w;
-      var sides = grid.cellCornerStart[c + 1] - grid.cellCornerStart[c];
-      for (k = 0; k < sides; k++) {
-        indices[w++] = c;
-        indices[w++] = slot + k;
-        indices[w++] = slot + ((k + 1) % sides);
-      }
-      slot += sides;
-    }
-    cellIndexStart[F] = w;
 
-    var vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    function attrBuffer(location, size, data) {
-      var buf = gl.createBuffer();
-      state.buffers.push(buf);
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(location);
-      gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
-    }
-    attrBuffer(0, 3, positions);
-    attrBuffer(1, 3, colorArr);
-    attrBuffer(2, 1, centerW);
-    attrBuffer(3, 3, centersAttr);
-    attrBuffer(4, 1, birthArr);
-    attrBuffer(5, 1, shardAttr);
-    var fieldBuf = gl.createBuffer();
-    state.buffers.push(fieldBuf);
-    gl.bindBuffer(gl.ARRAY_BUFFER, fieldBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, fieldVert, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(7);
-    gl.vertexAttribPointer(7, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-    var ibo = gl.createBuffer();
-    state.buffers.push(ibo);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    bundle.vao = gl.createVertexArray();
+    gl.bindVertexArray(bundle.vao);
+    bundleAttr(bundle, 0, 3, s.positions);
+    bundleAttr(bundle, 1, 3, s.colors);
+    bundleAttr(bundle, 2, 1, s.centerW);
+    bundleAttr(bundle, 3, 3, s.centers);
+    bundleAttr(bundle, 4, 1, s.birth);
+    bundleAttr(bundle, 5, 1, s.shard);
+    bundleAttr(bundle, 7, 4, s.field, gl.UNSIGNED_BYTE, true);
+    allocateBundleBuffer(bundle, gl.ELEMENT_ARRAY_BUFFER, s.indices, bundle.vao);
     gl.bindVertexArray(null);
 
-    var vaoAtmo = gl.createVertexArray();
-    gl.bindVertexArray(vaoAtmo);
-    var atmoPos = gl.createBuffer();
-    state.buffers.push(atmoPos);
-    gl.bindBuffer(gl.ARRAY_BUFFER, atmoPos);
-    gl.bufferData(gl.ARRAY_BUFFER, grid.centers, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-    var atmoIbo = gl.createBuffer();
-    state.buffers.push(atmoIbo);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, atmoIbo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, grid.triangles, gl.STATIC_DRAW);
+    bundle.vaoAtmo = gl.createVertexArray();
+    gl.bindVertexArray(bundle.vaoAtmo);
+    bundleAttr(bundle, 0, 3, grid.centers);
+    allocateBundleBuffer(bundle, gl.ELEMENT_ARRAY_BUFFER, grid.triangles, bundle.vaoAtmo);
     gl.bindVertexArray(null);
 
-    state.vao = vao;
-    state.vaoAtmo = vaoAtmo;
-    state.indexCount = indices.length;
-    state.cellIndexStart = cellIndexStart;
-    state.vertexCount = vertexCount;
-    state.gpuBytes = positions.byteLength + colorArr.byteLength + centerW.byteLength +
-      centersAttr.byteLength + birthArr.byteLength + shardAttr.byteLength + fieldVert.byteLength + indices.byteLength +
-      grid.centers.byteLength + grid.triangles.byteLength;
-    trisEl.textContent = (indices.length / 3).toLocaleString('ru-RU');
-    if (deferVol && layout) {
-      // Объём осколков не блокирует первый кадр: достраивается в фоне, пока
-      // идёт каскад (его ячейки садятся той же волной — шва не видно).
-      var buildVol = function () {
-        if (myGeomToken !== geomToken) return;
-        buildShardVolume(grid, layout, sp, positions, birthArr);
-        if (state.statsArgs && state.statsArgs.grid === grid) renderStats(state.lastMsGeom || 0);
-      };
-      if (window.requestIdleCallback) window.requestIdleCallback(buildVol, { timeout: 300 });
-      else window.setTimeout(buildVol, 30);
+    bundle.gpuBytes = s.positions.byteLength + s.colors.byteLength + s.centerW.byteLength +
+      s.centers.byteLength + s.birth.byteLength + s.shard.byteLength + s.field.byteLength +
+      s.indices.byteLength + grid.centers.byteLength + grid.triangles.byteLength;
+    if (payload.volume) addVolumeToBundle(bundle, payload.volume);
+    return bundle;
+  }
+
+  function applyGeometryBundle(bundle) {
+    state.geomBundle = bundle;
+    state.vao = bundle.vao;
+    state.vaoAtmo = bundle.vaoAtmo;
+    state.vaoVol = bundle.vaoVol;
+    state.buffers = bundle.buffers;
+    state.indexCount = bundle.indexCount;
+    state.volIndexCount = bundle.volIndexCount;
+    state.cellIndexStart = bundle.cellIndexStart;
+    state.vertexCount = bundle.vertexCount;
+    state.gpuBytes = bundle.gpuBytes;
+    state.shardTex = bundle.shardTex;
+    state.shardMode = bundle.shardMode;
+    state.shardInfo = bundle.shardInfo;
+    state.shardMaxB = bundle.shardMaxB;
+
+    var sp = readShardParams();
+    state.shardSep = sp.sep;
+    state.atmoFade = bundle.shardMode ? Math.max(0, 1 - sp.sep * 2.2) : 1;
+    var coreEl = document.getElementById('coreScale');
+    state.coreScale = coreEl ? parseFloat(coreEl.value) : 0.55;
+    state.coreVisible = bundle.shardMode === 1 && (sp.sep > 0.01 || bundle.shardMaxB > 0.01);
+    trisEl.textContent = (bundle.indexCount / 3).toLocaleString('ru-RU');
+  }
+
+  function commitGeometryBundle(bundle, doSwap, cacheOld) {
+    removeCachedGeometry(bundle);
+    var old = state.geomBundle;
+    if (state.prev && state.prev !== old) releasePrev();
+    geomToken++;
+    if (doSwap && old && old !== bundle) {
+      state.prev = old;
+      state.swapStart = performance.now();
     } else {
-      buildShardVolume(grid, layout, sp, positions, birthArr);
+      state.prev = null;
+      state.swapStart = -1;
+      if (old && old !== bundle) releaseBundle(old, cacheOld !== false);
     }
+    applyGeometryBundle(bundle);
+  }
+
+  function scheduleBundleVolume(bundle) {
+    if (!bundle.volumeBuild) return;
+    var token = ++geomToken;
+    var buildVol = function () {
+      if (token !== geomToken || state.geomBundle !== bundle || !state.grid) return;
+      var info = bundle.volumeBuild;
+      var volume = PlanetGeometry.buildVolumeArrays(
+        state.grid, info.layout, info.sp, info.positions, info.birth, PlanetNoise);
+      if (volume) addVolumeToBundle(bundle, volume);
+      finishBundleUpload(bundle);
+      bundle.volumeBuild = null;
+      bundle.complete = true;
+      applyGeometryBundle(bundle);
+      if (state.statsArgs && state.statsArgs.grid === state.grid) {
+        renderStats(state.lastMsGeom || 0);
+      }
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(buildVol, { timeout: 300 });
+    else window.setTimeout(buildVol, 30);
   }
 
   /* ------------------------------------------------------------ генерация */
@@ -1618,71 +1329,68 @@
   /* Показать готовую планету: прокси, финал из воркера или синхронный путь. */
   function showPlanet(grid, d, gridLabel, note, proxyFlag, opts) {
     opts = opts || {};
-    // Бесшовная подмена прокси финалом: прежняя геометрия остаётся жить как
-    // prev-слой, финал под ним выходит из центра планеты той же широтной
-    // волной рождения (birth зависит от широты, фронты совпадают), прокси
-    // следом сжимается в центры своих ячеек. Каскад с полюса при этом не
-    // перезапускается, а после волны prev-слой утилизируется полностью.
-    // Тот же механизм коротко (opts.swapMs) подменяет LOD-уровни при зуме.
+    var sp = opts.shardParams || readShardParams();
+    opts.shardParams = sp;
+    var params = opts.params || null;
+    var key = opts.geometryKey || geometryCacheKey(params, sp);
+    opts.geometryKey = key;
+
+    // Бесшовная подмена прокси финалом: прежний бандл остаётся prev-слоем,
+    // новый выходит из центра планеты той же широтной волной рождения,
+    // а prev следом сжимается в центры своих ячеек. Важно: commit и старт
+    // волны происходят только после того, как новый бандл уже собран и
+    // залит в GPU; иначе таймер перекрытия сгорал внутри синхронной
+    // подготовки геометрии и на телефоне пользователь видел просто фриз.
     var doSwap = opts.swap
-      ? (!!state.vao && !!state.grid && state.grid !== grid)
-      : (!proxyFlag && state.isProxy && !!state.vao && !!state.grid && state.grid !== grid);
-    state.swapDur = opts.swapMs || 1500;
-    if (doSwap) {
-      disposePrev();
-      state.prev = {
-        vao: state.vao, vaoVol: state.vaoVol,
-        indexCount: state.indexCount, volIndexCount: state.volIndexCount,
-        buffers: state.buffers, shardTex: state.shardTex, shardMode: state.shardMode,
-        shardMaxB: state.shardMaxB
-      };
-      state.vao = null; state.vaoVol = null; state.buffers = []; state.shardTex = null;
-      state.swapStart = performance.now();
-    } else {
-      disposePrev();
-      state.swapStart = -1;
+      ? (!!state.geomBundle && !!state.grid && state.grid !== grid)
+      : (!proxyFlag && state.isProxy && !!state.geomBundle && !!state.grid && state.grid !== grid);
+    var animateBuild = state.buildAnim && !opts.noBuild;
+
+    var bundle = opts.geometryBundle || null;
+    var payload = opts.geometryPayload || null;
+    if (!bundle && key) {
+      bundle = peekCachedGeometry(key);
+      if (bundle) opts.geometryCacheHit = true;
     }
+
+    var t = now();
+    if (!bundle) {
+      if (!payload) {
+        payload = PlanetGeometry.buildGeometry(grid, d, sp, PlanetNoise, {
+          includeVolume: !(animateBuild || doSwap)
+        });
+      }
+      bundle = createGeometryBundle(grid, payload, sp, key);
+      finishBundleUpload(bundle);
+      bundle.uploadMs = now() - t;
+    } else if (!bundle.uploadDone) {
+      finishBundleUpload(bundle);
+    }
+
+    var cellData = bundle.cellData || (payload && payload.cellData);
     state.isProxy = !!proxyFlag;
     state.grid = grid;
     state.renderV = grid.v;
     state.maxV = activeParams ? activeParams.v : grid.v;
     state.selected = -1;
-    var F = grid.cellCount;
-    var colors = new Float32Array(F * 3);
-    var rgb = [0, 0, 0];
-    for (var c = 0; c < F; c++) {
-      biomeColor(d.elev[c], d.sea, d.minE, d.maxE, d.moist[c], d.temp[c], rgb);
-      colors[c * 3] = rgb[0]; colors[c * 3 + 1] = rgb[1]; colors[c * 3 + 2] = rgb[2];
-    }
+    state.fieldParams = params;
+    state.fieldCells = cellData.fieldCells;
+    state.texSeed = cellData.texSeed;
+    state.colors = cellData.colors;
+    state.statsArgs = {
+      grid: grid,
+      d: d,
+      gridLabel: gridLabel,
+      note: note,
+      msGeometryBuild: opts.msGeometryBuild,
+      geometryCacheHit: !!opts.geometryCacheHit
+    };
 
-    var fieldCells = new Uint8Array(F * 4);
-    for (c = 0; c < F; c++) {
-      var relief;
-      if (d.elev[c] <= d.sea) {
-        relief = -clamp01((d.sea - d.elev[c]) / Math.max(1e-6, d.sea - d.minE));
-      } else {
-        relief = clamp01((d.elev[c] - d.sea) / Math.max(1e-6, d.maxE - d.sea));
-      }
-      fieldCells[c * 4] = Math.round((relief * 0.5 + 0.5) * 255);
-      fieldCells[c * 4 + 1] = Math.round(clamp01(d.moist[c]) * 255);
-      fieldCells[c * 4 + 2] = Math.round(clamp01(d.temp[c]) * 255);
-      fieldCells[c * 4 + 3] =
-        PlanetNoise.hash32(((d.masterSeed >>> 0) ^ Math.imul(c + 1, 0x9E3779B1)) >>> 0) >>> 24;
-    }
-    state.fieldCells = fieldCells;
-    state.texSeed = [
-      PlanetNoise.hash32(((d.masterSeed >>> 0) ^ 0xA53A9DBD) >>> 0) / 4294967296 * 64,
-      PlanetNoise.hash32(((d.masterSeed >>> 0) ^ 0x5F356495) >>> 0) / 4294967296 * 64,
-      PlanetNoise.hash32(((d.masterSeed >>> 0) ^ 0x1B873593) >>> 0) / 4294967296 * 64
-    ];
+    state.swapDur = opts.swapMs || 1500;
+    commitGeometryBundle(bundle, doSwap, opts.cacheOld);
+    if (bundle.volumeBuild) scheduleBundleVolume(bundle);
 
-    state.colors = colors;
-    state.statsArgs = { grid: grid, d: d, gridLabel: gridLabel, note: note };
-
-    var animateBuild = state.buildAnim && !opts.noBuild;
-    var t = now();
-    uploadGeometry(grid, colors, animateBuild || doSwap, fieldCells);
-    var msGeom = now() - t;
+    var msGeom = bundle.uploadMs || (now() - t);
     state.lastMsGeom = msGeom;
     if (doSwap) state.buildStart = -1; // рост финала ведёт волна подмены, не каскад
     else if (animateBuild) playBuild(); else state.buildStart = -1;
@@ -1694,7 +1402,7 @@
     state.minE = d.minE;
     state.maxE = d.maxE;
 
-    cellsEl.textContent = F.toLocaleString('ru-RU');
+    cellsEl.textContent = grid.cellCount.toLocaleString('ru-RU');
     syncLodHud(grid.v);
     renderStats(msGeom);
   }
@@ -1718,10 +1426,18 @@
         ' · макс ' + nz[nz.length - 1] + ' ячеек' +
         (state.shardInfo.lost ? ' · потеряно ' + state.shardInfo.lost : '');
     }
+    var geomText;
+    if (a.geometryCacheHit) geomText = 'GPU-кэш';
+    else if (a.msGeometryBuild != null) {
+      geomText = 'воркер ' + a.msGeometryBuild.toFixed(0) +
+        ' + заливка ' + msGeom.toFixed(0) + ' мс';
+    } else {
+      geomText = msGeom.toFixed(0) + ' мс';
+    }
     statsBox.textContent =
       (a.note ? a.note + '\n' : '') +
       'сетка: ' + a.gridLabel +
-      ' · поля: ' + d.msFields.toFixed(0) + ' мс · геометрия: ' + msGeom.toFixed(0) + ' мс\n' +
+      ' · поля: ' + d.msFields.toFixed(0) + ' мс · геометрия: ' + geomText + '\n' +
       'master seed: 0x' + d.masterSeed.toString(16) + ' · хэш полей: ' + fieldsHash(d.elev) + '\n' +
       'суша: ' + landPct + '% · массивов: ' + stats.count + '\n' +
       'размер массива: медиана ' + stats.median + ' · P90 ' + stats.p90 + ' · макс ' + stats.max +
@@ -1740,15 +1456,38 @@
     geomTimer = window.setTimeout(function () {
       if (!state.grid || !state.colors || !state.statsArgs) return;
       state.selected = -1;
+      var sp = readShardParams();
+      var key = geometryCacheKey(state.fieldParams, sp);
+      var bundle = peekCachedGeometry(key);
+      var cacheHit = !!bundle;
       var t = now();
-      uploadGeometry(state.grid, state.colors, false, state.fieldCells);
-      renderStats(now() - t);
+      if (!bundle) {
+        var payload = PlanetGeometry.buildGeometry(state.grid, null, sp, PlanetNoise, {
+          cellData: {
+            colors: state.colors,
+            fieldCells: state.fieldCells,
+            texSeed: state.texSeed
+          },
+          includeVolume: true
+        });
+        bundle = createGeometryBundle(state.grid, payload, sp, key);
+        finishBundleUpload(bundle);
+        bundle.uploadMs = now() - t;
+      }
+      state.statsArgs.msGeometryBuild = null;
+      state.statsArgs.geometryCacheHit = cacheHit;
+      commitGeometryBundle(bundle, false, false);
+      state.lastMsGeom = bundle.uploadMs || 0;
+      renderStats(state.lastMsGeom);
     }, 120);
   }
 
   /* Синхронный путь без воркера: старое поведение, вкладка подвисает. */
   function generateSync(params, opts) {
     opts = opts || {};
+    opts.params = params;
+    if (!opts.shardParams) opts.shardParams = readShardParams();
+    if (!opts.geometryKey) opts.geometryKey = geometryCacheKey(params, opts.shardParams);
     var got = getGrid(params.v);
     var d = getCachedFields(params);
     if (!d) {
@@ -1769,14 +1508,103 @@
     statusLine.textContent = '';
   }
 
+  function processQueuedLod(doneV) {
+    if (!lodQueuedV || lodQueuedV === doneV) return;
+    var queuedV = lodQueuedV;
+    var queuedOpts = lodQueuedOpts;
+    lodQueuedV = 0;
+    lodQueuedOpts = null;
+    requestRenderV(queuedV, queuedOpts);
+  }
+
+  /* Воркер уже посчитал поля и массивы геометрии. Осталось залить буферы,
+     но и это делаем порциями в скрытом бандле: текущий глобус/прокси и
+     каскад загрузки продолжают рисоваться, а commit происходит только
+     когда новый VAO полностью готов. */
+  function stageWorkerPlanet(grid, fieldData, msg, gridLabel, proxyFlag, opts) {
+    var bundle;
+    try {
+      bundle = createGeometryBundle(grid, msg.geometry, opts.shardParams, opts.geometryKey);
+    } catch (err) {
+      workerPending = false;
+      pendingParams = null;
+      pendingShowOpts = null;
+      statusLine.textContent = 'Ошибка подготовки геометрии: ' + err.message;
+      return;
+    }
+    var token = msg.token;
+    var started = now();
+    statusLine.textContent = (opts.lod ? 'LOD: ' : 'воркер: ') +
+      'заливка геометрии v=' + msg.v + '…';
+
+    function step() {
+      if (token !== genToken) {
+        disposeBundle(bundle);
+        return;
+      }
+      var done = false;
+      try {
+        // Не одна порция на кадр, а временной бюджет главного потока:
+        // на быстром GPU успеваем несколько мегабайт, на медленном —
+        // останавливаемся после первой дорогой порции. При интерактивном
+        // LOD-зуме сначала бережём кадр (6 мс); при загрузке планеты под
+        // прокси/каскадом важнее общее ожидание, поэтому бюджет шире
+        // (12 мс). Если заливка уже затянулась, расширяем бюджет: короткая
+        // просадка под явной загрузкой лучше нескольких секунд ожидания.
+        var elapsed = now() - started;
+        var budgetMs = opts.lod
+          ? (elapsed > 600 ? 16 : 6)
+          : (elapsed > 600 ? 24 : 12);
+        var deadline = now() + budgetMs;
+        while (!done && now() < deadline) {
+          done = uploadBundleSlice(bundle, 524288);
+        }
+      } catch (err) {
+        disposeBundle(bundle);
+        workerPending = false;
+        pendingParams = null;
+        pendingShowOpts = null;
+        statusLine.textContent = 'Ошибка заливки геометрии: ' + err.message;
+        return;
+      }
+      if (!done) {
+        // Пока кадры идут нормально, заливаем перед следующим кадром.
+        // Если рендер уже редкий/тяжёлый, таймер позволяет продолжить
+        // между кадрами и не растягивать ожидание только из-за vsync.
+        if (now() - started > 600) window.setTimeout(step, 16);
+        else window.requestAnimationFrame(step);
+        return;
+      }
+
+      bundle.uploadMs = now() - started;
+      workerPending = false;
+      pendingParams = null;
+      pendingShowOpts = null;
+      opts.geometryBundle = bundle;
+      showPlanet(grid, fieldData, gridLabel, opts.note || lodNote(msg.v), proxyFlag, opts);
+      statusLine.textContent = '';
+      if (geometryCacheKey(opts.params, readShardParams()) !== bundle.key) {
+        scheduleGeometry();
+      }
+      processQueuedLod(msg.v);
+    }
+    window.requestAnimationFrame(step);
+  }
+
   function onWorkerMessage(e) {
     var msg = e.data;
     if (msg.type === 'progress') {
       if (msg.token !== genToken) return;
       var prefix = pendingShowOpts && pendingShowOpts.lod ? 'LOD-воркер: ' : 'воркер: ';
-      statusLine.textContent = msg.stage === 'grid'
-        ? prefix + 'сетка v=' + msg.v + '…'
-        : prefix + 'поля ' + msg.pct + '%…';
+      if (msg.stage === 'grid') {
+        statusLine.textContent = prefix + 'сетка v=' + msg.v + '…';
+      } else if (msg.stage === 'geometry') {
+        var phaseName = msg.phase === 'volume' ? 'объём осколков'
+          : msg.phase === 'surface' ? 'поверхность' : 'ячейки';
+        statusLine.textContent = prefix + 'геометрия: ' + phaseName + '…';
+      } else {
+        statusLine.textContent = prefix + 'поля ' + msg.pct + '%…';
+      }
       return;
     }
     if (msg.type === 'error') {
@@ -1792,28 +1620,69 @@
     }
     if (msg.grid) gridCache.set(msg.v, msg.grid);
     if (msg.token !== genToken) return;
-    workerPending = false;
     var params = pendingParams;
     var opts = pendingShowOpts || {};
-    pendingParams = null;
-    pendingShowOpts = null;
     var grid = gridCache.get(msg.v);
-    if (!grid) return;
-    if (params) cacheFields(params, msg);
+    if (!grid) {
+      workerPending = false;
+      pendingParams = null;
+      pendingShowOpts = null;
+      return;
+    }
+
+    var fresh = {};
+    Object.keys(msg).forEach(function (k) {
+      if (k !== 'geometry' && k !== 'grid' && k !== 'type') fresh[k] = msg[k];
+    });
+    var fieldData = opts.cachedFields || fresh;
+    if (params && fresh.elev) {
+      var cacheData = {};
+      Object.keys(fresh).forEach(function (k) {
+        if (k !== 'msGeometry') cacheData[k] = fresh[k];
+      });
+      cacheFields(params, cacheData);
+      fieldData = fresh;
+    }
+    if (!fieldData || !fieldData.elev) {
+      workerPending = false;
+      pendingParams = null;
+      pendingShowOpts = null;
+      statusLine.textContent = 'Ошибка генерации: воркер не вернул поля';
+      return;
+    }
+
     var gridLabel = msg.gridSource === 'built' ? msg.msGrid.toFixed(0) + ' мс (воркер)'
       : msg.gridSource === 'idb' ? 'IndexedDB-кэш' : 'кэш';
     var proxyFlag = Object.prototype.hasOwnProperty.call(opts, 'proxyFlag')
       ? opts.proxyFlag
       : !!(activeParams && msg.v < activeParams.v);
-    showPlanet(grid, msg, gridLabel, opts.note || lodNote(msg.v), proxyFlag, opts);
-    statusLine.textContent = '';
-    if (lodQueuedV && lodQueuedV !== msg.v) {
-      var queuedV = lodQueuedV;
-      var queuedOpts = lodQueuedOpts;
-      lodQueuedV = 0;
-      lodQueuedOpts = null;
-      requestRenderV(queuedV, queuedOpts);
+    opts.params = params;
+    opts.msGeometryBuild = msg.msGeometry;
+
+    var cachedBundle = peekCachedGeometry(opts.geometryKey);
+    if (cachedBundle) {
+      workerPending = false;
+      pendingParams = null;
+      pendingShowOpts = null;
+      opts.geometryBundle = cachedBundle;
+      opts.geometryCacheHit = true;
+      showPlanet(grid, fieldData, gridLabel, opts.note || lodNote(msg.v), proxyFlag, opts);
+      statusLine.textContent = '';
+      processQueuedLod(msg.v);
+      return;
     }
+
+    if (msg.geometry) {
+      stageWorkerPlanet(grid, fieldData, msg, gridLabel, proxyFlag, opts);
+      return;
+    }
+
+    workerPending = false;
+    pendingParams = null;
+    pendingShowOpts = null;
+    showPlanet(grid, fieldData, gridLabel, opts.note || lodNote(msg.v), proxyFlag, opts);
+    statusLine.textContent = '';
+    processQueuedLod(msg.v);
   }
 
   function requestPlanet(params, opts) {
@@ -1821,12 +1690,17 @@
     if (!Object.prototype.hasOwnProperty.call(opts, 'proxyFlag')) {
       opts.proxyFlag = !!(activeParams && params.v < activeParams.v);
     }
+    opts.params = params;
+    if (!opts.shardParams) opts.shardParams = readShardParams();
+    if (!opts.geometryKey) opts.geometryKey = geometryCacheKey(params, opts.shardParams);
 
     var grid = gridCache.get(params.v);
     var cached = getCachedFields(params);
-    if (grid && cached) {
-      // Уже посчитанный уровень показываем сразу и отменяем логически
-      // устаревший ответ воркера, если он ещё занят предыдущим запросом.
+    opts.cachedFields = cached || null;
+    var cachedBundle = peekCachedGeometry(opts.geometryKey);
+    if (grid && cached && cachedBundle) {
+      // Повторная планета/уровень: поля и готовый GPU-бандл уже есть,
+      // поэтому переход — просто commit VAO без воркера и пересборки.
       genToken++;
       pendingParams = null;
       pendingShowOpts = null;
@@ -1835,7 +1709,9 @@
       // уровень уже устарел и не должен всплыть после следующего ответа.
       lodQueuedV = 0;
       lodQueuedOpts = null;
-      showPlanet(grid, cached, 'LOD-кэш', opts.note || lodNote(params.v), opts.proxyFlag, opts);
+      opts.geometryBundle = cachedBundle;
+      opts.geometryCacheHit = true;
+      showPlanet(grid, cached, 'GPU-кэш', opts.note || lodNote(params.v), opts.proxyFlag, opts);
       statusLine.textContent = '';
       return;
     }
@@ -1869,7 +1745,12 @@
         showPlanet(got.grid, proxyData, 'прокси',
           'прокси v=' + proxyV + ' · ' +
           (lodEnabled() ? 'LOD v=' : 'полная v=') + params.v + ' строится в воркере…',
-          true, { noBuild: false, swapMs: 1500 });
+          true, {
+            noBuild: false,
+            swapMs: 1500,
+            params: proxyParams,
+            shardParams: opts.shardParams
+          });
         // Цель LOD ниже максимума помечена proxyFlag, поэтому для неё
         // бесшовную подмену прокси включаем явно.
         opts.swap = true;
@@ -1886,7 +1767,9 @@
       token: genToken,
       v: params.v,
       haveGrid: gridCache.has(params.v),
-      params: params
+      haveFields: !!cached,
+      params: params,
+      shardParams: opts.shardParams
     });
   }
 
@@ -1970,19 +1853,25 @@
      не меняются. Подъём обратно — только после нескольких стабильных
      секунд, чтобы качество не дёргалось туда-сюда. */
   function adaptRenderScale(measuredFps, tNow) {
-    if (!lodEnabled() || !state.vao || workerPending || state.prev || state.buildStart >= 0) {
+    if (!lodEnabled() || !state.vao) {
       qualityGoodSamples = 0;
       return;
     }
+    // Во время подготовки нового бандла/подмены подъём качества запрещён,
+    // а вот снижение полезно сразу двум вещам: текущий кадр дешевеет и
+    // порционная заливка получает больше шансов выполниться между кадрами.
+    var busy = workerPending || !!state.prev || state.buildStart >= 0;
+    if (busy) qualityGoodSamples = 0;
     if (tNow < qualityCooldownUntil) return;
     var minScale = 0.6;
     if (measuredFps < 38 && state.renderScale > minScale) {
-      state.renderScale = Math.max(minScale, state.renderScale * 0.82);
-      qualityCooldownUntil = tNow + 1800;
+      state.renderScale = Math.max(minScale, state.renderScale * (busy ? 0.72 : 0.82));
+      qualityCooldownUntil = tNow + (busy ? 900 : 1800);
       qualityGoodSamples = 0;
       syncLodHud(state.renderV);
       return;
     }
+    if (busy) return;
     if (measuredFps > 57 && state.renderScale < state.renderScaleBase) {
       qualityGoodSamples++;
       if (qualityGoodSamples >= 4) {
@@ -2039,7 +1928,7 @@
     var swapP = -1, hideP = 0;
     if (state.prev) {
       swapP = (tNow - state.swapStart) / state.swapDur;
-      if (swapP >= 1) { disposePrev(); swapP = -1; }
+      if (swapP >= 1) { releasePrev(); swapP = -1; }
       else hideP = Math.max(0, Math.min(1, (swapP - 0.15) / 0.85));
     }
     var effBuild = swapP >= 0 ? swapP : buildP;

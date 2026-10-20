@@ -1,23 +1,34 @@
 /* Planet spike — воркер генерации для /planet-test/ (Этап 1).
-   Строит сетку и поля вне главного потока, чтобы каскадная анимация сборки
-   могла идти во время фактической загрузки: страница показывает прокси
-   низкого v и подменяет его результатом отсюда. weightedQuantile и
+   Строит сетку, поля и типизированные массивы геометрии вне главного
+   потока, чтобы текущий глобус/прокси и анимация загрузки не замирали:
+   страница получает готовые массивы, порциями заливает их в скрытый
+   GPU-бандл и подменяет планету/LOD одним commit-ом. weightedQuantile и
    landmassStats — копии одноимённых функций страницы (воркер не делит с ней
    код, кроме общих модулей).
 
    Сетки кэшируются в IndexedDB (та же база, что у страницы): сетка зависит
    только от v, поэтому повторные визиты не перестраивают её (при v=192 это
-   минус ~2.2 с). Ключ с префиксом формата: при смене формата сетки префикс
+   минус ~2.2 с). Поля держит маленький LRU-кэш воркера, поэтому частые
+   переходы между планетами и LOD-уровнями не пересчитывают одни значения.
+   Ключ IndexedDB с префиксом формата: при смене формата сетки префикс
    бампится и старый кэш игнорируется; дополнительно проверяется форма
    объекта (v, cellCount, centers). */
 /* global importScripts */
 'use strict';
 
-importScripts('/shared/geodesic-grid.js?v=planet-spike-6', '/shared/planet-noise.js?v=planet-spike-1');
+importScripts(
+  '/shared/geodesic-grid.js?v=planet-spike-6',
+  '/shared/planet-noise.js?v=planet-spike-1',
+  '/shared/planet-geometry.js?v=planet-spike-1'
+);
 
 var GeodesicGrid = self.GeodesicGrid;
 var PlanetNoise = self.PlanetNoise;
+var PlanetGeometry = self.PlanetGeometry;
 var gridCache = new Map();
+var fieldCache = new Map();
+var fieldCacheCells = 0;
+var FIELD_CACHE_MAX_CELLS = 1200000;
 var GRID_CACHE_PREFIX = 'gp-v0:';
 
 function idbOpen(onOk) {
@@ -106,7 +117,37 @@ function landmassStats(grid, elev, sea) {
   };
 }
 
-function runFields(msg, params, grid, gridSource, msGrid) {
+function fieldCacheKey(params) {
+  return JSON.stringify([
+    params.seedText, params.kind, params.freq, params.octaves,
+    params.gain, params.warp, params.ocean, params.v
+  ]);
+}
+
+function getCachedFields(params) {
+  var key = fieldCacheKey(params);
+  var hit = fieldCache.get(key);
+  if (!hit) return null;
+  fieldCache.delete(key);
+  fieldCache.set(key, hit);
+  return hit;
+}
+
+function cacheFields(params, d) {
+  var key = fieldCacheKey(params);
+  var old = fieldCache.get(key);
+  if (old) fieldCacheCells -= old.elev.length;
+  fieldCache.set(key, d);
+  fieldCacheCells += d.elev.length;
+  while (fieldCacheCells > FIELD_CACHE_MAX_CELLS && fieldCache.size > 1) {
+    var oldestKey = fieldCache.keys().next().value;
+    var oldest = fieldCache.get(oldestKey);
+    fieldCache.delete(oldestKey);
+    if (oldest && oldest.elev) fieldCacheCells -= oldest.elev.length;
+  }
+}
+
+function computeFields(msg, params, grid) {
   var sampler = PlanetNoise.createSampler({
     seedText: params.seedText,
     kind: params.kind,
@@ -139,20 +180,84 @@ function runFields(msg, params, grid, gridSource, msGrid) {
   var stats = landmassStats(grid, elev, sea);
   var msStats = performance.now() - t;
 
-  var reply = {
-    type: 'done',
-    token: msg.token,
-    v: params.v,
+  return {
     elev: elev, moist: moist, temp: temp,
     sea: sea, minE: minE, maxE: maxE,
     masterSeed: sampler.masterSeed,
     stats: stats,
-    msGrid: msGrid, msFields: msFields, msStats: msStats,
-    gridSource: gridSource
+    msFields: msFields,
+    msStats: msStats
   };
+}
+
+function collectGeometryTransfers(geometry, out) {
+  function add(arr) { if (arr && arr.buffer) out.push(arr.buffer); }
+  if (!geometry) return out;
+  add(geometry.cellData && geometry.cellData.colors);
+  add(geometry.cellData && geometry.cellData.fieldCells);
+  add(geometry.shardTexData);
+  add(geometry.shardInfo && geometry.shardInfo.counts);
+  var s = geometry.surface || {};
+  add(s.positions); add(s.colors); add(s.centerW); add(s.centers);
+  add(s.birth); add(s.shard); add(s.field); add(s.indices); add(s.cellIndexStart);
+  var v = geometry.volume || {};
+  add(v.positions); add(v.colors); add(v.emissive); add(v.centers);
+  add(v.birth); add(v.shard); add(v.kind); add(v.indices);
+  return out;
+}
+
+function runFields(msg, params, grid, gridSource, msGrid) {
+  var d = getCachedFields(params);
+  var fieldSource = d ? 'cache' : 'built';
+  if (!d) {
+    d = computeFields(msg, params, grid);
+    cacheFields(params, d);
+  }
+
+  var sp = msg.shardParams || {
+    count: 10, dist: 'power', sep: 0.3, thick: 0.14,
+    jag: 0.5, loss: 0, seedText: params.seedText
+  };
+  var t = performance.now();
+  var geometry = PlanetGeometry.buildGeometry(grid, d, sp, PlanetNoise, {
+    includeVolume: true,
+    onPhase: function (phase) {
+      self.postMessage({
+        type: 'progress', token: msg.token, v: params.v,
+        stage: 'geometry', phase: phase, pct: 0
+      });
+    }
+  });
+  var msGeometry = performance.now() - t;
+  // Раскладка шардов нужна была только для построения массивов; на главный
+  // поток её не шлём, чтобы не клонировать лишние типизированные массивы.
+  geometry.layout = null;
+
+  var reply = {
+    type: 'done',
+    token: msg.token,
+    v: params.v,
+    sea: d.sea, minE: d.minE, maxE: d.maxE,
+    masterSeed: d.masterSeed,
+    stats: d.stats,
+    msGrid: msGrid,
+    msFields: d.msFields,
+    msStats: d.msStats,
+    msGeometry: msGeometry,
+    gridSource: gridSource,
+    fieldSource: fieldSource,
+    geometry: geometry
+  };
+  if (!msg.haveFields) {
+    // Без transfer: воркер сохраняет свою копию полей в LRU для следующих
+    // LOD/планет, главный поток получает structured clone.
+    reply.elev = d.elev;
+    reply.moist = d.moist;
+    reply.temp = d.temp;
+  }
   // Сетку главный поток кэширует у себя; шлём её только если там её ещё нет.
   if (!msg.haveGrid) reply.grid = grid;
-  self.postMessage(reply, [elev.buffer, moist.buffer, temp.buffer]);
+  self.postMessage(reply, collectGeometryTransfers(geometry, []));
 }
 
 self.onmessage = function (e) {
