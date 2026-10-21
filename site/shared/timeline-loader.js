@@ -7,7 +7,7 @@
   var markup =
     '<div class="timeline-loader" id="timelineLoader" role="status" aria-live="polite" aria-label="Загрузка атласа Timeline Project">' +
       '<div class="timeline-loader-core">' +
-        '<img class="timeline-loader-logo" src="/assets/timeline-project-logo.webp?v=0f419d0e" alt="Timeline Project" width="600" height="600" fetchpriority="high" decoding="async">' +
+        '<img class="timeline-loader-logo" src="/assets/timeline-project-logo.webp" alt="Timeline Project" width="600" height="600" fetchpriority="high" decoding="async">' +
         '<div class="timeline-loader-progress" aria-hidden="true"></div>' +
         '<div class="timeline-loader-meta">sector · registry · secure link</div>' +
       '</div>' +

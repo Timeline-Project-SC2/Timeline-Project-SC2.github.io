@@ -1,3 +1,9 @@
+## CR-01 PR 1 — модульный фундамент TypeScript + Vite
+
+- Добавлены строгий `tsconfig.json`, `package.json`/`package-lock.json` и `vite.config.mts`: `npm run build` проверяет типы и собирает статическую публикацию `.publish/` со всеми маршрутами (`/`, `/sector/sector.html`, `/minimal/minimal.html`, `/cursor-test/`, `/spiral-test/`, `/planet-test/`, `/planet-globe/`), данными и собранными картинками без `assets/src`.
+- Ручные `?v=` у JS/CSS/worker заменены автоматическими контент-хэшами в именах файлов публикации; сборщик переписывает подключения страниц, `importScripts` и `new Worker(...)`, а `.publish/build-manifest.json` фиксирует соответствие исходник → hashed-файл. `tools/verify_feature_parity.mjs` проверяет маршруты, манифест и отсутствие битых/нехэшированных ссылок.
+- Общая разметка сектора и minimal-скина вынесена в `templates/atlas-shell.html`; `site/sector/sector.html` и `site/minimal/minimal.html` остались тонкими входами вариантов без дублирования DOM. `tools/build_assets.py` больше не переписывает исходный HTML/JS: он пишет `imageVersion` в `data/meta.json`, а Vite применяет его при сборке публикации. Синхронно обновлены `check.yml` и `pages.yml`.
+
 ## Планеты: Этап 6 — боевой WebGL2-глобус (`planet-globe-v1`)
 
 - Добавлен общий модуль `site/shared/planet-globe.js`: индексированная геометрия гексагональных ячеек, chunk-culling обратной стороны, границы ячеек, терминатор, собственная low-poly атмосфера, вращение/зум/pinch, hover и выделение ячейки, порционная заливка GPU-бандла, адаптивный масштаб рендера и восстановление WebGL-контекста.

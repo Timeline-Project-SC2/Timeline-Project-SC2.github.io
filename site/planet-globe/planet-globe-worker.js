@@ -19,11 +19,11 @@
 /* global importScripts */
 'use strict';
 importScripts(
-  '../shared/geodesic-grid.js?v=planet-stage-6-2',
-  '../shared/planet-noise.js?v=planet-stage-6-2',
-  '../shared/planet-geography.js?v=planet-stage-6-2',
-  '../shared/planet-surface.js?v=planet-stage-6-2',
-  '../shared/planet-globe.js?v=planet-stage-6-2'
+  '../shared/geodesic-grid.js',
+  '../shared/planet-noise.js',
+  '../shared/planet-geography.js',
+  '../shared/planet-surface.js',
+  '../shared/planet-globe.js'
 );
 
 var GeodesicGrid = self.GeodesicGrid;

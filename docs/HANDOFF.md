@@ -176,15 +176,17 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 ## 2. Как устроен репозиторий
 
 ```
-site/                  ← корень публикации (это и есть корень сайта)
+site/                  ← вход Vite-сборки; публикуется собранная .publish/
 ├── index.html         карта галактики, открывается по /
 ├── galaxy.js  galaxy.css
-├── sector/sector.html
-├── minimal/minimal.html + minimal-skin.css
+├── sector/sector.html   вариант-вход атласа (общая разметка — templates/atlas-shell.html)
+├── minimal/minimal.html вариант-вход атласа + minimal-skin.css
 ├── cursor-test/       страница проверки курсора (/cursor-test/, ссылок с сайта нет)
 ├── spiral-test/       демо и настройка ядра спирали (/spiral-test/, ссылок с сайта нет)
 └── shared/            app.js, links.js, timeline-loader.js, focus-fx.js, lag-fx.js, cursor-fx.js,
                        galaxy-spiral.js + все общие CSS
+templates/atlas-shell.html общая разметка sector/minimal (варианты задаёт vite.config.mts)
+vite.config.mts, tsconfig.json строгая TS-конфигурация и сборщик публикации .publish/
 
 data/                  CSV и JSON; пишут tools/sync.py и tools/build_assets.py;
                        planet-generation.csv — пока пустой снимок профилей Этапа 2
@@ -195,7 +197,9 @@ docs/, tools/, .github/ — служебное
 
 - Все внутренние ссылки от корня сайта: `/shared/…`, `/sector/sector.html`, `/data/…`, `/assets/…`.
 - Деплой: `pages.yml` → `setup-python` (3.12) → Pillow из `tools/requirements.txt` → `tools/build_assets.py` →
-  копирует `site/`, `data/`, `assets/` (минус `assets/src`) в `.publish` → `upload-pages-artifact`.
+  `setup-node` → `npm ci` → `npm run build` (Vite собирает маршруты, hashed JS/CSS/worker, `data/` и
+  `assets/` минус `assets/src` в `.publish`, пишет `build-manifest.json`) → `npm run verify:publish`
+  → `upload-pages-artifact`.
 - Проверка PR: `check.yml` — те же шаги сборки на `ubuntu-24.04` и `ubuntu-26.04` плюс
   `node --check` и ESLint (`no-undef`), без публикации.
 - **Pages настроен как GitHub Actions** (пользователь переключил в Settings). Если вернуть
@@ -219,11 +223,12 @@ docs/, tools/, .github/ — служебное
 под `srcset` (119 / 250 / 443 КБ), макеты → по 5 КБ. Вес первой загрузки: главная 9.22 МБ → ~0.45 МБ, сектор 2.29 МБ → ~0.35 МБ.
 Подложка больше не тянется с Google Drive (`links.js` → `sectorMapPreview: ''`).
 
-**Версии.** Манифест несёт `version` = первые 8 символов SHA-256 исходника карты
-(сейчас `17b60184`); `app.js` добавляет `?v=` к адресам тайлов и подложки. Ссылки на
-`galaxy-map-*`, логотип и макеты получают `?v=0f419d0e` — общий хэш всех исходников,
-их расставляет сам `build_assets.py` (шаг «Версии в ссылках»), `--check` следит за свежестью.
-Pages кэширует файлы на 10 минут, без версий после пересборки часть посетителей видела бы старое.
+**Версии.** Манифест тайлов несёт `version` = первые 8 символов SHA-256 исходника карты
+(сейчас `17b60184`); `app.js` добавляет её к адресам тайлов и подложки в рантайме.
+`build_assets.py` пишет общий `imageVersion` исходников картинок в `data/meta.json`, а Vite-сборка
+при формировании `.publish` подставляет его к ссылкам на собранные `galaxy-map-*`, логотип и макеты.
+Исходные HTML/JS ручных `?v=` не содержат; JS/CSS/worker получают контент-хэш прямо в имени файла
+публикации. Pages кэширует файлы на 10 минут, без версий после пересборки часть посетителей видела бы старое.
 
 **Чёткость карты галактики.** `sizes="min(100vw, 100vh)"` — сторона карты в покое, поэтому
 на первый кадр браузер берёт файл по экрану: 1200 px на обычных мониторах и телефонах,
@@ -334,18 +339,15 @@ Pages кэширует файлы на 10 минут, без версий пос
 | `site/shared/lag-fx.js` | «лаги» картинки: `LagFx.attach(img, {busy, …})` → `burst()`, `sweep()`, `pause()`, `resume()`, `destroy()`; настройки — `LagFx.defaults` |
 | `site/shared/galaxy-spiral.js` | спираль: `create` (ядро: `resize`/`view`/`populate`/`frame`/`set`), `mount` (демо `/spiral-test/`), `overlay` (слой на карте: холст в % слоя, узор `patternFromImage`, 30 кадров в покое, без слоя при «уменьшении движения») |
 | `site/galaxy.js` | `CONFIG`: тайминг первого клика (`focusMs`, `focusZoomDelay`, `focusZoomMs` — приближение после центрирования, `focusZoomOutMs`), `focusZoom`, `framePad`, `frameMinVisible`, переход (`diveCenterMs`, `diveZoomDelay`, `diveZoomMs`, `diveZooms: [20]`), спираль поверх карты (`CONFIG.spiral` → `GalaxySpiral.overlay`), `camera` (get / set вида для модуля), `boxOf` / `frameData` / `frameOf`, `selectArea`, `hidePanel` / `closePanel` / `clearAreas`, `focusArea`, `runTransition` / `runZerusTransition` / `runOdzTransition`, сброс при возврате «Назад» (bfcache); `LagFx.attach` молчит на время перехода; `sharpenMap` — чёткость карты при приближении |
-| `site/shared/app.js` и `site/sector/sector.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. Shift+клик копирует X и Y через табуляцию для вставки в два столбца; в minimal-скине кнопки readout нет, обработчик копирования работает условно на секторной карте |
+| `site/shared/app.js` и вариант `sector` в `templates/atlas-shell.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. Shift+клик копирует X и Y через табуляцию для вставки в два столбца; в minimal-скине кнопки readout нет, обработчик копирования работает условно на секторной карте |
 | `site/sector/sector.css` | оформление секторного readout координат, подключается только на карте сектора |
 | `site/index.html` | у квадратов `data-frame="л в п н"` — блок области в % карты (с полем ≈ 0.9 %); когда картинки и надписи станут отдельными элементами сайта, рамку можно считать от них |
 | `site/galaxy.css` | цвета прицела CSS-переменными `--focus-core/-light/-shadow/-glow` и `--focus-dim` на `.galaxy-stage`, `.is-red-target`, `.is-odz-ping` |
 
-После правок поднимать `?v=` у изменённых файлов в подключающих их страницах. Текущие значения:
-`galaxy.js` — `spiral-1`, `galaxy.css` — `spiral-1`, `shared/galaxy-spiral.js` — `spiral-1`
-(в `index.html` и `spiral-test/index.html`), `shared/focus-fx.js` — `frame-11`,
-`shared/lag-fx.js` — `frame-1`, `shared/styles.css` — `panel-1`. У `app.js` в `sector.html` и
-`minimal.html` сейчас `map-markers-1`; `sector.css` — `coordinates-1`; `shared/cursor-fx.js` —
-`cursor-6` во всех четырёх страницах (`index.html`, `sector.html`, `minimal.html`,
-`cursor-test/index.html`).
+После правок ручных `?v=` не поднимать и не добавлять: Vite-сборка сама даёт каждому
+JS/CSS/worker файлу публикации имя с контент-хэшем и переписывает подключения страниц и
+`importScripts`/`new Worker(...)`. Соответствие исходников и файлов публикации проверяется по
+`.publish/build-manifest.json` и `tools/verify_feature_parity.mjs`.
 
 ## 7. Инфраструктурные грабли
 
@@ -354,7 +356,7 @@ Pages кэширует файлы на 10 минут, без версий пос
   `git fetch -q origin <ветка> && git reset --hard FETCH_HEAD`, затем Pillow в venv
   (`python3 -m venv /tmp/venv && /tmp/venv/bin/pip install -r tools/requirements.txt`; системный
   pip упирается в PEP 668) и `/tmp/venv/bin/python tools/build_assets.py`.
-  Сборка детерминирована — версии `?v=` совпадают, правок в файлах не появляется.
+  Сборка картинок детерминирована — `imageVersion` в `meta.json` совпадает, исходный HTML/JS не переписывается.
 - **jsdom не умеет canvas**, и `app.js` на этом останавливается — без подмены контекста
   прогон проверяет только загрузку, а не сам атлас. Стенд лежит в `/home/user/smoke2`
   (вне репозитория, не сохраняется): `mkdir -p /home/user/smoke2 && cd /home/user/smoke2 &&
@@ -398,19 +400,19 @@ Pages кэширует файлы на 10 минут, без версий пос
 `node --check`, ESLint). Локально:
 
 ```bash
+npm ci                                          # Vite + TypeScript (node_modules/ в .gitignore)
+npm run build                                   # tsc --noEmit + Vite -> .publish/
+npm run verify:publish                          # маршруты, manifest и hashed-ассеты
 for f in site/*.js site/shared/*.js; do node --check "$f"; done   # синтаксис JS
-npm install --no-save --no-package-lock eslint@10 globals@17      # node_modules/ в .gitignore
+npm install --no-save --no-package-lock eslint@10 globals@17
 npx eslint site                                 # необъявленные переменные (eslint.config.mjs)
 python3 tools/build_assets.py --check           # свежесть собранных картинок
 python3 -m py_compile tools/build_assets.py tools/sync.py tools/planet_generation.py
 python3 tools/planet_generation.py validate     # снимок профилей против places
 python3 -m unittest discover -s tests -p 'test_*.py'
 
-# предпросмотр: собрать как при деплое
-rm -rf /tmp/publish && mkdir -p /tmp/publish
-cp -R site/. /tmp/publish/ && cp -R data /tmp/publish/ && cp -R assets /tmp/publish/
-rm -rf /tmp/publish/assets/src
-python3 -m http.server 8080 --bind 0.0.0.0 --directory /tmp/publish
+# предпросмотр: .publish уже собрана как при деплое
+python3 -m http.server 8080 --bind 0.0.0.0 --directory .publish
 
 cd /home/user/smoke2 && node run.js             # прогон трёх страниц на данных из CSV
 ```
@@ -426,8 +428,9 @@ cd /home/user/smoke2 && node run.js             # прогон трёх стра
 ## 9. Правила пользователя
 
 - Комментарии, тексты интерфейса и сообщения коммитов — **по-русски**.
-- `sector.html` и `minimal.html` держать в синхроне: любая общая правка разметки или CSS
-  применяется к обоим.
+- Общую разметку `sector.html` и `minimal.html` править один раз в `templates/atlas-shell.html`;
+  различия вариантов — только в `atlasVariants` внутри `vite.config.mts`. Сами
+  `site/sector/sector.html` и `site/minimal/minimal.html` — тонкие входы вариантов, не копии разметки.
 - Работаем только в своей ветке; в `main` не пушим. Путь: правки → коммит → PR →
   пользователь смотрит → `gh pr merge <номер> --merge` (с 17.10 ruleset на `main`
   требует линейную историю — мержить `--squash --admin` или `--rebase --admin`, см. §7).

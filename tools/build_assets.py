@@ -12,9 +12,9 @@
   4. Макеты секторов → assets/<имя>.webp.
   5. data/meta.json получает mapSize и assets.hasRaster — по этому флагу
      app.js решает, запрашивать ли манифест тайлов.
-  6. К ссылкам на собранные картинки дописывается ?v=: Pages кэширует файлы на
-     10 минут, а после пересборки адреса не меняются — без версии часть
-     посетителей увидит старые тайлы.
+  6. data/meta.json получает imageVersion — общий SHA-256 исходников картинок.
+     Исходный HTML/JS этот скрипт больше не переписывает: версию к ссылкам на
+     собранные картинки подставляет Vite-сборка публикации в .publish.
 
 Запуск:
 
@@ -30,7 +30,6 @@ import argparse
 import hashlib
 import io
 import json
-import re
 import shutil
 import sys
 import time
@@ -67,17 +66,6 @@ GALAXY_QUALITY = 82
 LOGO_SOURCE = "timeline-project-logo.png"
 LOGO_EDGE = 600                        # показывается 278 px, запас на 2×
 LOGO_QUALITY = 88                      # у логотипа прозрачность, качество выше
-
-# Ссылки на собранные картинки в разметке и скриптах: к ним добавляется ?v=,
-# чтобы после пересборки браузер не взял устаревшее из кэша Pages (10 минут).
-VERSIONED_REFS = {
-    "site/index.html": ["galaxy-map-1200.webp", "galaxy-map-2000.webp", "galaxy-map-3000.webp", "koprulu-macket.webp",
-                        "ozd-macket.webp", "timeline-project-logo.webp"],
-    "site/sector/sector.html": ["timeline-project-logo.webp"],
-    "site/minimal/minimal.html": ["timeline-project-logo.webp"],
-    "site/shared/links.js": ["galaxy-map-2000.webp"],
-    "site/shared/timeline-loader.js": ["timeline-project-logo.webp"],
-}
 
 MACKETS = {
     "koprulu-macket": ("koprulu-macket.jpg", 300, 84),
@@ -281,30 +269,6 @@ def image_version():
     return digest.hexdigest()[:8]
 
 
-def sync_versions(force):
-    """Проставляет ?v= в ссылки на собранные картинки."""
-    version = image_version()
-    touched = []
-    for rel, names in VERSIONED_REFS.items():
-        path = ROOT / rel
-        if not path.exists():
-            print(f"  ! нет файла {rel} — пропуск")
-            continue
-        text = path.read_text(encoding="utf-8")
-        updated = text
-        for name in names:
-            updated = re.sub(re.escape(name) + r'(\?v=[^"\'\s)]*)?', name + "?v=" + version, updated)
-        if updated != text:
-            path.write_text(updated, encoding="utf-8")
-            touched.append(rel)
-    if touched:
-        joined = ", ".join(touched)
-        print(f"  + ?v={version} проставлен в: {joined}")
-    else:
-        print(f"  = ссылки уже несут ?v={version}")
-    return version
-
-
 def update_meta(force):
     """meta.json: размер карты и флаг растра — по нему app.js берёт тайлы."""
     manifest_path = ASSETS / "tiles.json"
@@ -343,7 +307,6 @@ STEPS = [
     ("Карта галактики", build_galaxy),
     ("Логотип прелоадера", build_logo),
     ("Макеты секторов", build_mackets),
-    ("Версии в ссылках", sync_versions),
     ("meta.json", update_meta),
 ]
 
@@ -383,7 +346,7 @@ def main():
     parser = argparse.ArgumentParser(description="Сборка картинок сайта из assets/src/")
     parser.add_argument("--force", action="store_true", help="пересобрать всё, игнорируя свежесть")
     parser.add_argument("--check", action="store_true", help="проверить свежесть, ничего не собирая")
-    parser.add_argument("--sync-only", action="store_true", help="обновить версии ссылок и meta.json по уже собранным картинкам")
+    parser.add_argument("--sync-only", action="store_true", help="обновить meta.json по уже собранным картинкам")
     args = parser.parse_args()
 
     if not SRC.exists():
@@ -396,8 +359,7 @@ def main():
             for item in problems:
                 print(f"  - {item}")
             sys.exit(1)
-        print("Синхронизация версий и meta.json по кэшированным изображениям")
-        sync_versions(False)
+        print("Синхронизация meta.json по кэшированным изображениям")
         update_meta(False)
         print("Готово.")
         return

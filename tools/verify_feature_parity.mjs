@@ -1,0 +1,166 @@
+#!/usr/bin/env node
+/* Манифест полноты публикации для CR-01 (И-6).
+ *
+ * Проверяет уже собранную папку .publish:
+ *   - все маршруты на месте и непустые;
+ *   - build-manifest.json согласован с файлами;
+ *   - HTML ссылается только на существующие локальные JS/CSS;
+ *   - в публикации не осталось build-token/placeholder;
+ *   - в исходных HTML и worker-подключениях нет ручных статических ?v=.
+ */
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, extname, join, normalize, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const publishRoot = resolve(root, process.argv[2] || '.publish');
+const siteRoot = resolve(root, 'site');
+const routes = [
+  'index.html',
+  'sector/sector.html',
+  'minimal/minimal.html',
+  'cursor-test/index.html',
+  'spiral-test/index.html',
+  'planet-test/index.html',
+  'planet-globe/index.html',
+];
+
+const failures = [];
+
+function fail(message) {
+  failures.push(message);
+}
+
+function walk(dir) {
+  const output = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) output.push(...walk(full));
+    else output.push(full);
+  }
+  return output;
+}
+
+function stripQuery(ref) {
+  return ref.split(/[?#]/, 1)[0];
+}
+
+function isExternal(ref) {
+  return !ref || ref.startsWith('#') || ref.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(ref);
+}
+
+function publishPathForRef(ref, fromRoute) {
+  const clean = stripQuery(ref);
+  if (clean.startsWith('/')) return normalize(clean.slice(1));
+  return normalize(join(dirname(fromRoute), clean));
+}
+
+for (const route of routes) {
+  const path = resolve(publishRoot, route);
+  if (!existsSync(path) || statSync(path).size === 0) fail(`нет маршрута: ${route}`);
+}
+
+const manifestPath = resolve(publishRoot, 'build-manifest.json');
+let manifest = null;
+if (!existsSync(manifestPath)) {
+  fail('нет build-manifest.json');
+} else {
+  manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  for (const route of routes) {
+    if (!manifest.routes?.includes(route)) fail(`в манифесте нет маршрута: ${route}`);
+  }
+  for (const [source, output] of Object.entries(manifest.assets || {})) {
+    const outputPath = resolve(publishRoot, output);
+    if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+      fail(`в манифесте нет файла на диске: ${source} -> ${output}`);
+    }
+    if (!/-[0-9a-f]{10}\.(?:css|js)$/.test(output)) {
+      fail(`ассет без контент-хэша в имени: ${source} -> ${output}`);
+    }
+  }
+}
+
+const assetTagPattern = /<(?:link|script)\b[^>]*\b(?:href|src)\s*=\s*(['"])([^'"]+)\1/gi;
+const publishedHtml = new Map();
+for (const route of routes) {
+  const path = resolve(publishRoot, route);
+  if (!existsSync(path)) continue;
+  const html = readFileSync(path, 'utf8');
+  publishedHtml.set(route, html);
+  if (html.includes('timeline-asset.invalid')) fail(`не заменён build-token: ${route}`);
+  if (html.includes('@@')) fail(`не заменён placeholder шаблона: ${route}`);
+  if (html.includes('atlas-variant:')) fail(`в публикацию попал исходный atlas-entry: ${route}`);
+
+  for (const match of html.matchAll(assetTagPattern)) {
+    const ref = match[2];
+    if (isExternal(ref)) continue;
+    const clean = stripQuery(ref);
+    if (!/\.(?:css|js)$/.test(clean)) continue;
+    const target = publishPathForRef(ref, route);
+    if (!existsSync(resolve(publishRoot, target))) fail(`битая ссылка ${ref} в ${route}`);
+    if (!/-[0-9a-f]{10}\.(?:css|js)$/.test(clean)) fail(`ссылка без контент-хэша ${ref} в ${route}`);
+  }
+}
+
+for (const route of routes) {
+  const html = publishedHtml.get(route) || '';
+  let hasHiddenRule = /\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/.test(html);
+  if (!hasHiddenRule) {
+    for (const match of html.matchAll(/<link\b[^>]*\bhref\s*=\s*(['"])([^'"]+\.css)\1/gi)) {
+      const target = resolve(publishRoot, publishPathForRef(match[2], route));
+      if (existsSync(target) && /\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/.test(readFileSync(target, 'utf8'))) {
+        hasHiddenRule = true;
+        break;
+      }
+    }
+  }
+  if (!hasHiddenRule) fail(`нет глобального [hidden] правила: ${route}`);
+}
+
+const sectorHtml = publishedHtml.get('sector/sector.html') || '';
+const minimalHtml = publishedHtml.get('minimal/minimal.html') || '';
+for (const marker of ['id="mapCanvas"', 'id="searchInput"', 'id="catalogList"', 'id="detailPanel"']) {
+  if (!sectorHtml.includes(marker)) fail(`sector потерял общий узел атласа: ${marker}`);
+  if (!minimalHtml.includes(marker)) fail(`minimal потерял общий узел атласа: ${marker}`);
+}
+if (!sectorHtml.includes('id="coordinateToggle"') || !sectorHtml.includes('id="galaxyReturn"')) {
+  fail('sector потерял секторные элементы варианта');
+}
+if (minimalHtml.includes('id="coordinateToggle"') || minimalHtml.includes('id="galaxyReturn"')) {
+  fail('minimal получил секторные элементы варианта');
+}
+if (!minimalHtml.includes('<body class="minimal-mode">')) fail('minimal потерял body class варианта');
+
+for (const fullPath of walk(publishRoot)) {
+  if (!/\.(?:css|html|js|json)$/.test(fullPath)) continue;
+  const text = readFileSync(fullPath, 'utf8');
+  if (text.includes('timeline-asset.invalid')) {
+    fail(`не заменён build-token: ${relative(publishRoot, fullPath)}`);
+  }
+}
+
+for (const fullPath of walk(siteRoot)) {
+  const extension = extname(fullPath);
+  if (extension === '.html') {
+    const text = readFileSync(fullPath, 'utf8');
+    if (text.includes('?v=')) fail(`ручной ?v= в HTML: ${relative(root, fullPath)}`);
+  }
+  if (extension === '.js') {
+    const text = readFileSync(fullPath, 'utf8');
+    if (/\.js\?v=/.test(text) || /new\s+Worker\([^)]*\?v=/.test(text) || /importScripts\([^)]*\?v=/s.test(text)) {
+      fail(`ручной ?v= в JS/worker-подключении: ${relative(root, fullPath)}`);
+    }
+  }
+}
+
+const templatePath = resolve(root, 'templates/atlas-shell.html');
+if (!existsSync(templatePath)) fail('нет templates/atlas-shell.html');
+else if (readFileSync(templatePath, 'utf8').includes('?v=')) fail('ручной ?v= в templates/atlas-shell.html');
+
+if (failures.length) {
+  console.error('Feature parity FAILED:');
+  for (const failure of failures) console.error(`  - ${failure}`);
+  process.exit(1);
+}
+
+console.log(`Feature parity OK: ${routes.length} маршрутов, ${Object.keys(manifest.assets || {}).length} hashed-ассетов.`);
