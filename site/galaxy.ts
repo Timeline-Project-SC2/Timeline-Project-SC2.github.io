@@ -1,22 +1,71 @@
-(function () {
+import type {
+  FocusFxCamera,
+  FocusFxFrameRect,
+  FocusFxTargetRect,
+} from './shared/focus-fx.ts';
+import type { SiteLinks } from './shared/links.ts';
+
+interface GalaxyView { s: number; tx: number; ty: number; }
+interface GalaxyPoint { x: number; y: number; }
+interface GalaxyDrag {
+  readonly id: number;
+  readonly sx: number;
+  readonly sy: number;
+  readonly tx: number;
+  readonly ty: number;
+  moved: boolean;
+}
+interface GalaxyStar { readonly x: number; readonly y: number; readonly r: number; readonly a: number; }
+interface GalaxyConfig {
+  readonly minFactor: number;
+  readonly maxFactor: number;
+  readonly wheelStep: number;
+  readonly animateMs: number;
+  readonly fitInset: number;
+  readonly panMargin: number;
+  readonly focusMs: number;
+  readonly focusZoomDelay: number;
+  readonly focusZoomMs: number;
+  readonly focusZoomOutMs: number;
+  readonly focusAnchorX: number;
+  readonly focusZoom: number;
+  readonly framePad: number;
+  readonly frameMinVisible: number;
+  readonly diveCenterMs: number;
+  readonly diveZoomDelay: number;
+  readonly diveZoomMs: number;
+  readonly diveZooms: readonly number[];
+  readonly spiral: {
+    readonly enabled: boolean;
+    readonly cx: number; readonly cy: number; readonly r: number;
+    readonly arms: number; readonly pitch: number; readonly psi0: number;
+    readonly bar: number; readonly barAngle: number; readonly barLength: number;
+    readonly ecc: number; readonly speed: number; readonly count: number;
+    readonly countPhone: number; readonly bulge: number; readonly diskK: number;
+    readonly exposure: number; readonly contrast: number; readonly starSize: number;
+    readonly trail: number; readonly opacity: number; readonly fps: number;
+  };
+}
+
+(function (): void {
   'use strict';
 
-  var stage = document.getElementById('galaxyStage');
-  var layer = document.getElementById('mapLayer');
-  var map = document.getElementById('galaxyMap');
-  var hotspot = document.getElementById('sectorHotspot');
-  var panel = document.getElementById('sectorPanel');
-  var panelTitle = document.getElementById('sectorPanelTitle');
-  var closeBtn = document.getElementById('closeSectorPanel');
-  var iconBtn = document.getElementById('sectorIconButton');
-  var loader = document.getElementById('timelineLoader');
-  var toggle = document.getElementById('sectorsToggle');
-  var sectorsList = document.getElementById('sectorsList');
-  var zoomInBtn = document.getElementById('zoomIn');
-  var zoomOutBtn = document.getElementById('zoomOut');
-  var resetBtn = document.getElementById('resetMap');
-  var zoomPercent = document.getElementById('zoomPercent');
-  var preview = document.getElementById('sectorPreview');
+  var stage = document.getElementById('galaxyStage') as HTMLElement;
+  var layer = document.getElementById('mapLayer') as HTMLElement;
+  var map = document.getElementById('galaxyMap') as HTMLImageElement;
+  var hotspot = document.getElementById('sectorHotspot') as HTMLElement;
+  var panel = document.getElementById('sectorPanel') as HTMLElement;
+  var panelTitle = document.getElementById('sectorPanelTitle') as HTMLElement;
+  var closeBtn = document.getElementById('closeSectorPanel') as HTMLElement;
+  var iconBtn = document.getElementById('sectorIconButton') as HTMLElement;
+  var loader = document.getElementById('timelineLoader') as HTMLElement;
+  var toggle = document.getElementById('sectorsToggle') as HTMLElement;
+  var sectorsList = document.getElementById('sectorsList') as HTMLElement;
+  var zoomInBtn = document.getElementById('zoomIn') as HTMLElement;
+  var zoomOutBtn = document.getElementById('zoomOut') as HTMLElement;
+  var resetBtn = document.getElementById('resetMap') as HTMLElement;
+  var zoomPercent = document.getElementById('zoomPercent') as HTMLElement;
+  var preview = document.getElementById('sectorPreview') as HTMLElement;
 
   /* ---------- возврат со страницы сектора ----------
      Кнопка «к галактике» ставит флаг в sessionStorage. При возврате консоль не
@@ -27,7 +76,7 @@
     returnedFromSector = sessionStorage.getItem('galaxyReturn') === '1';
     sessionStorage.removeItem('galaxyReturn');
     if (!returnedFromSector) sessionStorage.removeItem('odzLocked');
-  } catch (e) {}
+  } catch {}
 
   /* ---------- loader: полный логотип не меньше 1.6 с ---------- */
   function dismissLoader() {
@@ -76,8 +125,8 @@
   var BOOT_FADE_MS = 400;
   var BOOT_LINE_PAUSE_MS = 90;
   var BOOT_TICK_MS = 16;
-  var bootTimer = null;
-  var bootHideTimer = null;
+  var bootTimer: number | null = null;
+  var bootHideTimer: number | null = null;
   var bootClosed = false;
   var bootWired = false;
 
@@ -90,8 +139,8 @@
     if (!box || box.hidden) return;
     box.classList.add('is-out');
     window.setTimeout(function () {
-      box.hidden = true;
-      box.classList.remove('is-out');
+      box!.hidden = true;
+      box!.classList.remove('is-out');
     }, BOOT_FADE_MS);
   }
 
@@ -115,7 +164,9 @@
 
     box.hidden = false;
     body.innerHTML = '';
-    var li = 0, ci = 0, row = null, textNode = null;
+    var li = 0, ci = 0;
+    var row: HTMLDivElement | null = null;
+    var textNode: Text | null = null;
     var waitUntil = 0, acc = 0, last = performance.now(), done = false;
 
     function newRow() {
@@ -127,7 +178,7 @@
       cursor.textContent = '▌';
       row.appendChild(textNode);
       row.appendChild(cursor);
-      body.appendChild(row);
+      body!.appendChild(row);
     }
 
     function schedule() {
@@ -145,10 +196,10 @@
         acc -= charMs;
         if (li >= BOOT_SCRIPT.length) { done = true; break; }
         if (!row) newRow();
-        var text = BOOT_SCRIPT[li];
+        var text = BOOT_SCRIPT[li]!;
         if (ci < text.length) {
           ci++;
-          textNode.nodeValue = text.slice(0, ci);
+          textNode!.nodeValue = text.slice(0, ci);
         } else {
           // строка готова: следующая начнётся после короткой паузы
           li++;
@@ -159,7 +210,7 @@
           break;
         }
       }
-      body.scrollTop = body.scrollHeight;
+      body!.scrollTop = body!.scrollHeight;
       schedule();
     }
 
@@ -170,26 +221,26 @@
   if (!hotspot || !stage || !map || !layer) return;
 
   // Картинка карты из links.js (если задана) — запасной src; при srcset браузер берёт файл оттуда
-  var links = window.SITE_LINKS || {};
+  var links: Partial<SiteLinks> = window.SITE_LINKS || {};
   if (links.galaxyMapImage) map.setAttribute('src', links.galaxyMapImage);
 
   /* «Лаги» карты (/shared/lag-fx.js): полосы съезжают, волна, линии-преломления.
      Во время выбора, снятия выбора и перехода они выключены, чтобы не разрывать
      прорисовывающиеся границы. В покое эффект работает как обычно. */
   if (window.LagFx) {
-    LagFx.attach(map, {
+    window.LagFx.attach(map, {
       busy: function () {
-        var fx = window.FocusFx ? FocusFx.active() : null;
+        var fx = window.FocusFx ? window.FocusFx.active() : null;
         return busy || fx === 'select' || fx === 'release' || fx === 'go' || fx === 'idle';
       }
     });
   }
 
   var sectorName = hotspot.getAttribute('data-name') || 'Сектор';
-  var defaultHref = (window.SITE_LINKS && SITE_LINKS.sectorPage) || '/sector/sector.html';
+  var defaultHref = (window.SITE_LINKS && window.SITE_LINKS.sectorPage) || '/sector/sector.html';
 
   // Параметры — как на странице сектора (app.js → CONFIG.view)
-  var CONFIG = {
+  var CONFIG: GalaxyConfig = {
     minFactor: 0.62,     // отъехать от режима «вся карта»
     maxFactor: 8,        // предел приближения (исходник карты 3000px)
     wheelStep: 0.0016,
@@ -253,16 +304,16 @@
      Хотспот живёт внутри слоя, его позиция и размер — в процентах карты,
      поэтому он совпадает с квадратом на карте при любом зуме и панораме. */
   var base = 0;
-  var view = { s: 1, tx: 0, ty: 0 };
-  var anim = null;
-  var focusTimer = null;
+  var view: GalaxyView = { s: 1, tx: 0, ty: 0 };
+  var anim: object | null = null;
+  var focusTimer: number | null = null;
   var busy = false;
 
-  function sceneSize() { return { w: stage.clientWidth, h: stage.clientHeight }; }
-  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+  function sceneSize(): { w: number; h: number } { return { w: stage.clientWidth, h: stage.clientHeight }; }
+  function clamp(v: number, lo: number, hi: number): number { return Math.min(hi, Math.max(lo, v)); }
 
   // Края карты не упираются жёстко в экран: запас CONFIG.panMargin от размера сцены.
-  function panRange(side, size) {
+  function panRange(side: number, size: number): { min: number; max: number } {
     var margin = size * CONFIG.panMargin;
     if (side <= size) {
       var center = (size - side) / 2;
@@ -271,12 +322,12 @@
     return { min: size - side - margin, max: margin };
   }
 
-  function clampAxis(t, side, size) {
+  function clampAxis(t: number, side: number, size: number): number {
     var range = panRange(side, size);
     return clamp(t, range.min, range.max);
   }
 
-  function clampState(st) {
+  function clampState(st: GalaxyView): GalaxyView {
     var sz = sceneSize();
     var out = { s: clamp(st.s, CONFIG.minFactor, CONFIG.maxFactor), tx: st.tx, ty: st.ty };
     var side = out.s * base;
@@ -297,10 +348,10 @@
   }
 
   // Прямоугольник элемента с data-cx / data-cy / data-size (проценты карты) → координаты сцены
-  function boxOf(el) {
-    var cx = parseFloat(el.getAttribute('data-cx'));
-    var cy = parseFloat(el.getAttribute('data-cy'));
-    var size = parseFloat(el.getAttribute('data-size'));
+  function boxOf(el: Element): FocusFxTargetRect {
+    var cx = parseFloat(el.getAttribute('data-cx') as string);
+    var cy = parseFloat(el.getAttribute('data-cy') as string);
+    var size = parseFloat(el.getAttribute('data-size') as string);
     var side = view.s * base;
     var w = side * size / 100;
     var x = view.tx + side * cx / 100;
@@ -310,18 +361,18 @@
 
   // Рамка выделения области: data-frame="левый верх правый низ" в процентах карты (блок
   // области на карте — квадрат, картинки CAM, надписи). null — у элемента рамки нет.
-  function frameData(el) {
+  function frameData(el: Element): FocusFxFrameRect | null {
     var v = String(el.getAttribute('data-frame') || '').trim().split(/\s+/).map(parseFloat);
     if (v.length !== 4 || v.some(function (n) { return !isFinite(n); })) return null;
     // Координаты рамки ограничены реальной картой, а не могут выводить прицел за её край.
     v = v.map(function (n) { return clamp(n, 0, 100); });
-    if (!(v[2] > v[0]) || !(v[3] > v[1])) return null;
-    return { l: v[0], t: v[1], r: v[2], b: v[3] };
+    if (!(v[2]! > v[0]!) || !(v[3]! > v[1]!)) return null;
+    return { l: v[0]!, t: v[1]!, r: v[2]!, b: v[3]! };
   }
 
   // Видимая часть карты: борд ограничен и камерой, и реальными краями карты.
   // Если камера смотрит в угол карты, две стороны проходят по viewport, две — по карте.
-  function mapFrame() {
+  function mapFrame(): FocusFxFrameRect {
     var sz = sceneSize();
     var side = view.s * base;
     return {
@@ -330,7 +381,7 @@
     };
   }
 
-  function frameOf(el) {
+  function frameOf(el: Element): FocusFxFrameRect | null {
     var f = frameData(el);
     if (!f) return null;
     var side = view.s * base;
@@ -348,7 +399,7 @@
      приближение сразу берёт самый крупный файл, без промежуточной загрузки, а на меньший файл
      карта обратно не переключается (лишняя загрузка и мерцание). */
   var mapSizes = Math.min(window.innerWidth, window.innerHeight) || 0;
-  function sharpenMap(side) {
+  function sharpenMap(side: number): void {
     if (!(side > mapSizes)) return;
     mapSizes = Math.ceil(side * 3);
     map.sizes = mapSizes + 'px';
@@ -366,7 +417,7 @@
     zoomPercent.textContent = Math.round(view.s * 100) + '%';
     sharpenMap(side);
     positionPreview();
-    if (window.FocusFx) FocusFx.refresh();
+    if (window.FocusFx) window.FocusFx.refresh();
     parallaxRequest();
   }
 
@@ -388,7 +439,7 @@
     applyView();
   }
 
-  function zoomAt(x, y, factor) {
+  function zoomAt(x: number, y: number, factor: number): void {
     var next = clamp(view.s * factor, CONFIG.minFactor, CONFIG.maxFactor);
     if (next === view.s) return;
     var k = next / view.s;
@@ -400,15 +451,15 @@
     applyView();
   }
 
-  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
 
-  function animateTo(s, tx, ty, ms, done) {
+  function animateTo(s: number, tx: number, ty: number, ms: number, done?: () => void): void {
     var from = { s: view.s, tx: view.tx, ty: view.ty };
     var to = clampState({ s: s, tx: tx, ty: ty });
     var token = {};
     var t0 = performance.now();
     anim = token;
-    function step(now) {
+    function step(now: number): void {
       if (anim !== token) return;               // отменено пользователем
       // ms ≤ 0 (тайминг в CONFIG выставили в 0) — сразу конечный вид, без деления на ноль
       var k = ms > 0 ? easeOutCubic(clamp((now - t0) / ms, 0, 1)) : 1;
@@ -432,7 +483,7 @@
   }
 
   /* ---------- колесо, drag, pinch, двойной клик ---------- */
-  function scenePoint(e) {
+  function scenePoint(e: PointerEvent | MouseEvent): GalaxyPoint {
     var r = stage.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
@@ -445,13 +496,15 @@
     zoomAt(p.x, p.y, Math.exp(-e.deltaY * CONFIG.wheelStep));
   }, { passive: false });
 
-  var pointers = {};
-  var drag = null;
+  var pointers: Record<string, GalaxyPoint> = {};
+  var drag: GalaxyDrag | null = null;
   var pinchDist = 0;
   var suppressClick = false;   // после реального drag click не считается выбором пустого места
 
-  function isUi(target) {
-    return !!(target.closest && target.closest('.sector-panel, .map-controls, .sectors-sidebar, .sectors-curtain, .sectors-backdrop, .map-hint'));
+  function isUi(target: EventTarget | null): boolean {
+    var el = target as Element | null;
+    return !!(el && typeof el.closest === 'function' &&
+      el.closest('.sector-panel, .map-controls, .sectors-sidebar, .sectors-curtain, .sectors-backdrop, .map-hint'));
   }
 
   stage.addEventListener('pointerdown', function (e) {
@@ -478,7 +531,7 @@
     pointers[e.pointerId] = p;
     var ids = Object.keys(pointers);
     if (ids.length === 2) {
-      var a = pointers[ids[0]], b = pointers[ids[1]];
+      var a = pointers[ids[0]!]!, b = pointers[ids[1]!]!;
       var d = Math.hypot(a.x - b.x, a.y - b.y);
       if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
       pinchDist = d;
@@ -488,7 +541,7 @@
       var dx = p.x - drag.sx, dy = p.y - drag.sy;
       if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) {
         drag.moved = true;
-        try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+        try { stage.setPointerCapture(e.pointerId); } catch {}
         stage.classList.add('is-dragging');
       }
       if (drag.moved) {
@@ -500,7 +553,7 @@
     }
   });
 
-  function endPointer(e) {
+  function endPointer(e: PointerEvent): void {
     delete pointers[e.pointerId];
     if (drag && drag.id === e.pointerId) {
       if (drag.moved) suppressClick = true;
@@ -519,7 +572,7 @@
   });
 
   /* ---------- кнопки и клавиатура (как на странице сектора) ---------- */
-  function center() { return { x: sceneSize().w / 2, y: sceneSize().h / 2 }; }
+  function center(): GalaxyPoint { return { x: sceneSize().w / 2, y: sceneSize().h / 2 }; }
 
   if (zoomInBtn) zoomInBtn.addEventListener('click', function () {
     if (busy) return; cancelAnim(); var c = center(); zoomAt(c.x, c.y, 1.45);
@@ -534,7 +587,7 @@
   });
 
   document.addEventListener('keydown', function (e) {
-    var tag = (e.target.tagName || '').toLowerCase();
+    var tag = ((e.target as Element | null)?.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || busy) return;
     if (e.key === 'Escape') { hidePanel(); return; }
     var c = center();
@@ -567,28 +620,28 @@
      Параллакс: фон перерисовывается со смещением от движения карты (view.tx/ty),
      а не от курсора. Смещение заворачивается по размеру холста, поэтому звёзды
      не упираются в край при любом перетаскивании. */
-  var starfield = document.getElementById('galaxyStarfield');
+  var starfield = document.getElementById('galaxyStarfield') as HTMLCanvasElement | null;
   var PAR_PAN = 0.06;                 // звёзды едут в 6 % от сдвига карты
   var parReduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var starState = { w: 0, h: 0, dpr: 1, stars: [] };
+  var starState: { w: number; h: number; dpr: number; stars: GalaxyStar[] } = { w: 0, h: 0, dpr: 1, stars: [] };
   var paintedOff = { x: NaN, y: NaN };
-  function starRandom(seed) {
+  function starRandom(seed: number): () => number {
     var s = seed >>> 0;
     return function () {
       s = (s * 1664525 + 1013904223) >>> 0;
       return s / 4294967296;
     };
   }
-  function wrapMod(v, m) { return ((v % m) + m) % m; }
-  function parallaxOffset() {
+  function wrapMod(v: number, m: number): number { return ((v % m) + m) % m; }
+  function parallaxOffset(): GalaxyPoint {
     if (parReduce) return { x: 0, y: 0 };
     // округляем до полпикселя, чтобы не перерисовывать на микро-сдвигах
     return { x: Math.round(view.tx * PAR_PAN * 2) / 2, y: Math.round(view.ty * PAR_PAN * 2) / 2 };
   }
-  function paintStarfield(ox, oy) {
+  function paintStarfield(ox: number, oy: number): void {
     if (!starfield || !starfield.getContext || !starState.w) return;
     var w = starState.w, h = starState.h;
-    var ctx = starfield.getContext('2d');
+    var ctx = starfield.getContext('2d')!;
     ctx.setTransform(starState.dpr, 0, 0, starState.dpr, 0, 0);
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#03060c';
@@ -642,7 +695,7 @@
   }
   function drawStarfield() {
     if (!starfield || !starfield.getContext) return;
-    var host = starfield.parentNode;
+    var host = starfield.parentNode as HTMLElement;
     var w = host.clientWidth;
     var h = host.clientHeight;
     if (!w || !h) return;
@@ -653,7 +706,7 @@
     starfield.style.height = h + 'px';
     // та же последовательность случайных чисел, что и раньше: вид при нулевом смещении не меняется
     var random = starRandom(100000);
-    var stars = [];
+    var stars: GalaxyStar[] = [];
     for (var i = 0; i < 900; i++) {
       var x = random() * w;
       var y = random() * h;
@@ -680,7 +733,7 @@
     var sp = CONFIG.spiral;
     if (!sp || !sp.enabled || !window.GalaxySpiral || !layer || !map) return;
     var phone = Math.min(window.innerWidth, window.innerHeight) < 700;
-    GalaxySpiral.overlay({
+    window.GalaxySpiral.overlay({
       layer: layer,
       image: map,
       before: layer.querySelector('.lag-fx'),
@@ -724,7 +777,7 @@
     preview.style.transform = 'translate(' + Math.round(left) + 'px,' + Math.round(top) + 'px)';
   }
 
-  function showPreview(anchor) {
+  function showPreview(anchor?: HTMLElement): void {
     anchor = anchor || hotspot;
     if (!preview || (panel && !panel.hidden) || busy) return;
     if (anchor.classList.contains('is-odz-locked')) return;
@@ -750,17 +803,17 @@
 
   /* ---------- панель сектора: первый клик ---------- */
   // Панель общая для Копрулу и Зеруса. Для Зеруса: описание и картинка заменены на «no-data available».
-  var panelInfo = document.getElementById('sectorPanelInfo');
-  var noDataBox = document.getElementById('sectorNoData');
+  var panelInfo = document.getElementById('sectorPanelInfo') as HTMLElement | null;
+  var noDataBox = document.getElementById('sectorNoData') as HTMLElement | null;
   var KOPRULU_INFO = panelInfo ? panelInfo.textContent : '';
   var ZERUS_NAME = 'Пространство Зеруса';
   var ZERUS_NODATA = 'no-data available';
 
   var ODZ_NAME = 'Пространство Директората';
   var iconImg = iconBtn ? iconBtn.querySelector('img') : null;
-  var panelArea = null;   // область, для которой открыта панель
+  var panelArea: HTMLElement | null = null;
 
-  function showPanel(el) {
+  function showPanel(el?: HTMLElement): void {
     el = el || hotspot;
     var isZerus = el === zerus;
     var isOdz = el === odz;
@@ -804,7 +857,7 @@
   function hidePanel() {
     cancelAnim();
     clearAreas();
-    FocusFx.release(function () {
+    window.FocusFx.release(function () {
       stage.classList.remove('is-red-target', 'is-odz-ping');
     });
   }
@@ -813,11 +866,11 @@
      борд карты и ведут его при сжатии до data-frame. Затем камера сначала центрирует
      область, а через паузу отдельно приближает её. Рамка остаётся привязана к карте.
      Цвет: Копрулу и ОЗД — зелёный, Зерус — красный. */
-  function selectArea(el, onContract) {
+  function selectArea(el: HTMLElement, onContract?: (() => void) | null): void {
     cancelAnim();
     stage.classList.toggle('is-red-target', el === zerus);
     stage.classList.toggle('is-odz-ping', el === odz);
-    FocusFx.select({
+    window.FocusFx.select({
       stage: stage,
       target: function () { return boxOf(el); },
       frame: function () { return frameOf(el); },
@@ -859,7 +912,9 @@
   }
   stage.addEventListener('click', function (e) {
     if (suppressClick) { suppressClick = false; return; }
-    if (e.target.closest && e.target.closest('.sector-hotspot, .sector-preview, .sector-panel, .map-controls, .sectors-sidebar, .sectors-curtain, .sectors-backdrop, .map-hint')) return;
+    var clickTarget = e.target as Element | null;
+    if (clickTarget && typeof clickTarget.closest === 'function' &&
+      clickTarget.closest('.sector-hotspot, .sector-preview, .sector-panel, .map-controls, .sectors-sidebar, .sectors-curtain, .sectors-backdrop, .map-hint')) return;
     clearSelection();
   });
 
@@ -869,12 +924,14 @@
      Теперь длительность не меняется, а скорость проигрывания плавно меняется через
      Web Animations (updatePlaybackRate): текущая позиция сохраняется. */
   var SHEEN_HOT_RATE = 3.6 / 1.4;   // 3.6 s → 1.4 s на ховере/фокусе/выбранном
-  function applySheenRate(el) {
+  function applySheenRate(el: Element): void {
     var hot = el.matches(':hover') || el.matches(':focus-visible') || el.classList.contains('is-selected');
     var rate = hot ? SHEEN_HOT_RATE : 1;
     if (!document.getAnimations) return;
     document.getAnimations().forEach(function (a) {
-      if (a.animationName === 'sector-sheen' && a.effect && a.effect.target === el && a.playbackRate !== rate) {
+      var cssAnimation = a as CSSAnimation;
+      var effect = a.effect as KeyframeEffect | null;
+      if (cssAnimation.animationName === 'sector-sheen' && effect && effect.target === el && a.playbackRate !== rate) {
         a.updatePlaybackRate(rate);
       }
     });
@@ -898,11 +955,11 @@
      срыв или отказ. Камеру модуль ведёт сам через camera (get / set вида). Здесь —
      логика: что делать при захвате и чем всё кончается. Переход начинается с того зума
      и положения карты, какие есть в момент клика.                                  */
-  var viewBeforeTransition = null;   // вид до перехода — вернуть, если пришли «Назад»
+  var viewBeforeTransition: GalaxyView | null = null;
 
   // Камера для FocusFx: точка карты p (px при s = 1) видна на экране в t + p · s.
   // Ограничения вида на время перехода сняты (зум до 2000 % — дальше обычного предела).
-  var camera = {
+  var camera: FocusFxCamera = {
     get: function () { return { s: view.s, tx: view.tx, ty: view.ty }; },
     set: function (v) {
       view.s = v.s;
@@ -923,7 +980,7 @@
   function finishTransition() {
     busy = false;
     cancelAnim();
-    FocusFx.stop();
+    window.FocusFx.stop();
     clearAreas();
     viewBeforeTransition = null;
     clampView();
@@ -933,7 +990,7 @@
   function resetTransition() {
     busy = false;
     cancelAnim();
-    FocusFx.stop();
+    window.FocusFx.stop();
     clearAreas();
     stage.classList.remove('is-red-target', 'is-odz-ping');
     if (viewBeforeTransition) {
@@ -947,13 +1004,13 @@
   // Копрулу (второй клик): рамка сжимается по контуру квадрата → центрирование →
   // пауза → приближение до 2000 %, во время которого в рамке проявляется превью,
   // а карта вокруг темнеет → страница сектора.
-  function runTransition(el, href) {
+  function runTransition(el: HTMLElement, href: string): void {
     if (busy) return;
     beginTransition();
     closePanel();
     hidePreview();
     stage.classList.remove('is-red-target', 'is-odz-ping');
-    FocusFx.start({
+    window.FocusFx.start({
       stage: stage,
       target: function () { return boxOf(el); },
       frame: function () { return frameOf(el); },
@@ -963,7 +1020,7 @@
       timing: { center: CONFIG.diveCenterMs, pause: CONFIG.diveZoomDelay, zoom: CONFIG.diveZoomMs },
       zooms: CONFIG.diveZooms,
       ending: 'reveal',
-      preview: el.getAttribute('data-macket') || (iconImg && iconImg.getAttribute('src')) || '',
+      preview: el.getAttribute('data-macket') || (iconImg ? iconImg.getAttribute('src') : null) || '',
       onLock: function () { el.classList.add('is-locked'); },
       onEnd: function () { window.location.href = href; }
     });
@@ -986,10 +1043,10 @@
   }
 
   /* ---------- шторка списка областей ---------- */
-  var backdrop = document.getElementById('sectorsBackdrop');
-  var closeList = document.getElementById('sectorsClose');
+  var backdrop = document.getElementById('sectorsBackdrop') as HTMLElement | null;
+  var closeList = document.getElementById('sectorsClose') as HTMLElement | null;
 
-  function setCurtain(open) {
+  function setCurtain(open: boolean): void {
     if (!sectorsList) return;
     sectorsList.classList.toggle('is-open', open);
     if (backdrop) backdrop.classList.toggle('is-open', open);
@@ -1022,7 +1079,7 @@
 
   if (sectorsList) {
     sectorsList.addEventListener('click', function (e) {
-      var btn = e.target.closest('.sector-list-item');
+      var btn = (e.target as Element | null)?.closest('.sector-list-item');
       if (!btn) return;
       e.preventDefault();
       setCurtain(false);
@@ -1044,18 +1101,18 @@
      Второй клик — переход: квадрат в центр, захват, приближение, срыв захвата,
      затем сообщение «Ошибка. Нет данных»: печатается по буквам, точка в конце
      моргает. */
-  var zerus = document.getElementById('zerusHotspot');
-  var zerusMsg = document.getElementById('galaxyError');
-  var zerusText = document.getElementById('galaxyErrorText');
+  var zerus = document.getElementById('zerusHotspot') as HTMLElement | null;
+  var zerusMsg = document.getElementById('galaxyError') as HTMLElement | null;
+  var zerusText = document.getElementById('galaxyErrorText') as HTMLElement | null;
   var ZERUS_MESSAGE = 'Ошибка. Нет данных';
-  var zerusTimer = null;
+  var zerusTimer: number | null = null;
 
   // Первый клик по области (Копрулу, Зерус, ОЗД): целевой масштаб — focusZoom,
   // ограниченный размером data-frame и полями framePad. Если текущий масштаб выше
   // целевого, после сжатия сразу отъезжаем до него (focusZoomOutMs) и центрируем (focusMs);
   // если ниже — центрируем (focusMs), выдерживаем focusZoomDelay и приближаем
   // (focusZoomMs), а при равном масштабе только центрируем.
-  function focusArea(el) {
+  function focusArea(el: HTMLElement): void {
     // Сначала отменяем прежний фокус/отложенный зум, затем центрируем область
     // на текущем масштабе; отдельный зум начинается после паузы в 1 секунду.
     cancelAnim();
@@ -1063,8 +1120,8 @@
     var visibleW = sz.w - (panel && !panel.hidden ? panel.offsetWidth : 0);
     var f = frameData(el);
     var want = CONFIG.focusZoom;
-    var nx, ny, ns, needZoom = false;   // needZoom — масштаб надо менять
-    var centerMapX, centerMapY, anchorX;
+    var nx = 0, ny = 0, ns = 0, needZoom = false;
+    var centerMapX = 0, centerMapY = 0, anchorX = 0;
     if (f && visibleW >= sz.w * CONFIG.frameMinVisible) {
       var fw = (f.r - f.l) / 100 * base, fh = (f.b - f.t) / 100 * base;   // рамка при s = 1
       var fit = Math.min(visibleW * (1 - 2 * CONFIG.framePad) / fw, sz.h * (1 - 2 * CONFIG.framePad) / fh);
@@ -1075,12 +1132,12 @@
       centerMapY = (f.t + f.b) / 200;
       anchorX = visibleW / 2;
 
-      function placeFrame(scale) {
+      function placeFrame(scale: number): GalaxyPoint | null {
         var side = scale * base;
-        var frameLeft = side * f.l / 100;
-        var frameRight = side * f.r / 100;
-        var frameTop = side * f.t / 100;
-        var frameBottom = side * f.b / 100;
+        var frameLeft = side * f!.l / 100;
+        var frameRight = side * f!.r / 100;
+        var frameTop = side * f!.t / 100;
+        var frameBottom = side * f!.b / 100;
         var xPan = panRange(side, sz.w);
         var yPan = panRange(side, sz.h);
         var xMin = Math.max(xPan.min, visibleW * CONFIG.framePad - frameLeft);
@@ -1091,8 +1148,8 @@
         if (xMin > xMax) xMin = xMax = (xMin + xMax) / 2;
         if (yMin > yMax) yMin = yMax = (yMin + yMax) / 2;
         return {
-          x: clamp(visibleW / 2 - (f.l + f.r) / 200 * side, xMin, xMax),
-          y: clamp(sz.h / 2 - (f.t + f.b) / 200 * side, yMin, yMax)
+          x: clamp(visibleW / 2 - (f!.l + f!.r) / 200 * side, xMin, xMax),
+          y: clamp(sz.h / 2 - (f!.t + f!.b) / 200 * side, yMin, yMax)
         };
       }
 
@@ -1116,8 +1173,8 @@
       // но всё равно приводим и слишком малый, и слишком большой масштаб к focusZoom.
       ns = CONFIG.focusZoom;
       var side = ns * base;
-      var cx = parseFloat(el.getAttribute('data-cx')) / 100;
-      var cy = parseFloat(el.getAttribute('data-cy')) / 100;
+      var cx = parseFloat(el.getAttribute('data-cx') as string) / 100;
+      var cy = parseFloat(el.getAttribute('data-cy') as string) / 100;
       nx = visibleW * CONFIG.focusAnchorX - cx * side;
       ny = sz.h / 2 - cy * side;
       centerMapX = cx;
@@ -1189,14 +1246,14 @@
 
   var ZERUS_SHOW_MS = 5000;   // сколько сообщение висит на экране
   var ZERUS_FADE_MS = 400;    // длительность затухания
-  var zerusHide = null;
-  var zerusFade = null;
+  var zerusHide: number | null = null;
+  var zerusFade: number | null = null;
 
   function hideZerusError() {
     if (!zerusMsg) return;
     zerusMsg.classList.add('is-out');
     zerusFade = window.setTimeout(function () {
-      zerusMsg.hidden = true;
+      zerusMsg!.hidden = true;
       zerusFade = null;
     }, ZERUS_FADE_MS);
   }
@@ -1214,25 +1271,25 @@
     var i = 0;
     zerusTimer = window.setInterval(function () {
       i += 1;
-      zerusText.textContent = ZERUS_MESSAGE.slice(0, i);
+      zerusText!.textContent = ZERUS_MESSAGE.slice(0, i);
       if (i >= ZERUS_MESSAGE.length) {
-        window.clearInterval(zerusTimer);
+        window.clearInterval(zerusTimer!);
         zerusTimer = null;
-        zerusMsg.classList.add('is-done');
+        zerusMsg!.classList.add('is-done');
       }
     }, 45);
   }
 
   // Зерус: красный прицел — квадрат в центр, захват, один «нырок» (в пределах
   // обычного зума), затем захват срывается и печатается сообщение об ошибке
-  function runZerusTransition(el) {
+  function runZerusTransition(el: HTMLElement): void {
     if (busy) return;
     beginTransition();
     closePanel();
     hidePreview();
     stage.classList.remove('is-odz-ping');
     stage.classList.add('is-red-target');
-    FocusFx.start({
+    window.FocusFx.start({
       stage: stage,
       target: function () { return boxOf(el); },
       frame: function () { return frameOf(el); },
@@ -1257,7 +1314,7 @@
       return;
     }
     showPanel(zerus);
-    selectArea(zerus, function () { focusArea(zerus); });
+    selectArea(zerus, function () { focusArea(zerus!); });
   }
 
   if (zerus) {
@@ -1273,20 +1330,20 @@
      квадрат и блик краснеют, камера отдаляется до 100 %, прицел гаснет, затем
      печатаются 12 строк «ОТКАЗ ДОСТУПА.» … «Файл заблокирован.».
      Строки гаснут через 5 с, после этого кнопка неактивна. Перезагрузка сбрасывает всё. */
-  var odz = document.getElementById('odzHotspot');
-  var odzMsg = document.getElementById('odzMessage');
+  var odz = document.getElementById('odzHotspot') as HTMLElement | null;
+  var odzMsg = document.getElementById('odzMessage') as HTMLElement | null;
   var odzListItem = document.querySelector('.sector-list-item[data-odz]');
   var odzDone = false;          // переход уже запущен: повторно не запускается
-  var ODZ_LINES = [];
+  var ODZ_LINES: string[] = [];
   for (var li = 0; li < 11; li++) ODZ_LINES.push('ОТКАЗ ДОСТУПА.');
   ODZ_LINES.push('Файл заблокирован.');
   var ODZ_LINE_STEP = 110;      // мс между началом строк (строки пишутся каскадом)
   var ODZ_CHAR_MS = 22;         // мс на символ
   var ODZ_SHOW_MS = 5000;       // строки висят 5 с от первой буквы
   var ODZ_FADE_MS = 400;
-  var odzTimers = [];
-  var odzHideTimer = null;
-  var odzFadeTimer = null;
+  var odzTimers: number[] = [];
+  var odzHideTimer: number | null = null;
+  var odzFadeTimer: number | null = null;
 
   function setOdzLocked() {
     if (odz) odz.classList.add('is-odz-locked');
@@ -1298,7 +1355,7 @@
   if (returnedFromSector) {
     try {
       if (sessionStorage.getItem('odzLocked') === '1') { odzDone = true; setOdzLocked(); }
-    } catch (e) {}
+    } catch {}
   }
 
   function clearOdzTimers() {
@@ -1312,8 +1369,8 @@
     if (!odzMsg) return;
     odzMsg.classList.add('is-out');
     odzFadeTimer = window.setTimeout(function () {
-      odzMsg.hidden = true;
-      odzMsg.classList.remove('is-out');
+      odzMsg!.hidden = true;
+      odzMsg!.classList.remove('is-out');
     }, ODZ_FADE_MS);
   }
 
@@ -1328,7 +1385,7 @@
     ODZ_LINES.forEach(function (text, i) {
       var line = document.createElement('div');
       line.className = 'odz-line';
-      odzMsg.appendChild(line);
+      odzMsg!.appendChild(line);
       for (var k = 1; k <= text.length; k++) {
         (function (n) {
           var at = i * ODZ_LINE_STEP + n * ODZ_CHAR_MS;
@@ -1343,14 +1400,14 @@
 
   // ОЗД: зелёный прицел — квадрат в центр, захват, затем отказ: прицел и квадрат
   // краснеют, камера отъезжает до 100 %, прицел гаснет, печатаются строки
-  function runOdzTransition(el) {
+  function runOdzTransition(el: HTMLElement): void {
     odzDone = true;
     beginTransition();
     closePanel();
     hidePreview();
     stage.classList.remove('is-red-target');
     stage.classList.add('is-odz-ping');
-    FocusFx.start({
+    window.FocusFx.start({
       stage: stage,
       target: function () { return boxOf(el); },
       frame: function () { return frameOf(el); },
@@ -1384,7 +1441,7 @@
       return;
     }
     showPanel(odz);
-    selectArea(odz, function () { focusArea(odz); });
+    selectArea(odz, function () { focusArea(odz!); });
   }
 
   if (odz) {
@@ -1393,7 +1450,7 @@
       activateOdz();
     });
     odz.addEventListener('pointerenter', function (e) {
-      if (e.pointerType === 'mouse') showPreview(odz);
+      if (e.pointerType === 'mouse') showPreview(odz!);
     });
     odz.addEventListener('pointerleave', hidePreview);
   }

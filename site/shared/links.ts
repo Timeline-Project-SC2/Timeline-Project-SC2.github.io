@@ -9,10 +9,26 @@
                        assets/tiles.json + assets/map-preview.webp, поэтому поле
                        пустое и со сторонних доменов ничего не тянется.
 */
-window.SITE_LINKS = {
+
+export interface SiteLinks {
+  readonly galaxyMapImage: string;
+  readonly sectorPage: string;
+  readonly galaxyPage: string;
+  readonly sectorMapPreview: string;
+}
+
+declare global {
+  interface Window {
+    SITE_LINKS: SiteLinks;
+  }
+}
+
+const siteLinks: SiteLinks = {
   // Картинка карты галактики: локальный файл или внешняя ссылка (например, на GitHub)
   galaxyMapImage: '/assets/galaxy-map-2000.webp',
   sectorPage: '/sector/sector.html',
   galaxyPage: '/index.html',
-  sectorMapPreview: ''
+  sectorMapPreview: '',
 };
+
+window.SITE_LINKS = siteLinks;

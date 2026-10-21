@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, transformWithEsbuild, type Plugin } from 'vite';
+import { build as esbuildBuild } from 'esbuild';
+import { defineConfig, type Plugin } from 'vite';
+import { atlasVariants, type AtlasVariantName } from './src/atlas/atlas-variants.ts';
 
 const repoRoot = fileURLToPath(new URL('.', import.meta.url));
 const siteRoot = resolve(repoRoot, 'site');
@@ -37,6 +39,7 @@ interface LegacyAsset {
 }
 
 interface PublishSource {
+  readonly publishRelative: string;
   readonly sourcePath: string;
   readonly sourceRelative: string;
 }
@@ -61,10 +64,6 @@ function walkFiles(dir: string): string[] {
 
 function siteRelative(fullPath: string): string {
   return relative(siteRoot, fullPath).split('\\').join('/');
-}
-
-function repoRelative(fullPath: string): string {
-  return relative(repoRoot, fullPath).split('\\').join('/');
 }
 
 function isTypeScriptSource(path: string): boolean {
@@ -115,24 +114,37 @@ function logicalSourcePath(rawRef: string, fromSourceRelative: string): string |
   return normalizePosix(baseDir === '.' ? ref : `${baseDir}/${ref}`);
 }
 
-function hashedOutputRelative(sourceRelative: string, content: Buffer): string {
+function publishRelativeForSource(sourceRelative: string): string {
+  if (!isTypeScriptSource(sourceRelative)) return sourceRelative;
+  return `${sourceRelative.slice(0, -extname(sourceRelative).length)}.js`;
+}
+
+function hashedOutputRelative(publishRelative: string, content: Buffer): string {
   const hash = createHash('sha256').update(content).digest('hex').slice(0, 10);
-  const sourceExtension = extname(sourceRelative);
-  const outputExtension = isTypeScriptSource(sourceRelative) ? '.js' : sourceExtension;
-  const base = basename(sourceRelative, sourceExtension);
-  const dir = dirname(sourceRelative).split('\\').join('/');
-  const fileName = `${base}-${hash}${outputExtension}`;
+  const extension = extname(publishRelative);
+  const base = basename(publishRelative, extension);
+  const dir = dirname(publishRelative).split('\\').join('/');
+  const fileName = `${base}-${hash}${extension}`;
   return dir === '.' ? fileName : `${dir}/${fileName}`;
 }
 
 const publishSources = new Map<string, PublishSource>();
 
-function addPublishSource(sourceRelative: string, sourcePath: string): void {
+function addPublishSource(
+  sourceRelative: string,
+  sourcePath: string,
+  publishRelative = publishRelativeForSource(sourceRelative),
+): void {
   const existing = publishSources.get(sourceRelative);
   if (existing && existing.sourcePath !== sourcePath) {
     throw new Error(`Дублирующийся логический путь публикации: ${sourceRelative}`);
   }
-  publishSources.set(sourceRelative, { sourcePath, sourceRelative });
+  for (const source of publishSources.values()) {
+    if (source.publishRelative === publishRelative && source.sourcePath !== sourcePath) {
+      throw new Error(`Дублирующийся выход публикации: ${publishRelative}`);
+    }
+  }
+  publishSources.set(sourceRelative, { publishRelative, sourcePath, sourceRelative });
 }
 
 for (const fullPath of walkFiles(siteRoot)) {
@@ -140,11 +152,22 @@ for (const fullPath of walkFiles(siteRoot)) {
     addPublishSource(siteRelative(fullPath), fullPath);
   }
 }
-if (existsSync(srcRoot)) {
-  for (const fullPath of walkFiles(srcRoot)) {
-    if (isTypeScriptSource(fullPath)) addPublishSource(repoRelative(fullPath), fullPath);
+// Модули src/** сами по себе не публикуются: esbuild встраивает их граф в
+// явные entry-точки. Единственная такая точка из src — атлас сектора: её
+// исходник живёт в src/atlas/app.ts, а URL/имя публикации остаются прежними
+// shared/app-<hash>.js, как у удалённого site/shared/app.js.
+const srcPublishEntries = [
+  { publishRelative: 'shared/app.js', sourceRelative: 'src/atlas/app.ts', sourcePath: resolve(srcRoot, 'atlas/app.ts') },
+] as const;
+for (const entry of srcPublishEntries) {
+  if (existsSync(entry.sourcePath)) {
+    addPublishSource(entry.sourceRelative, entry.sourcePath, entry.publishRelative);
   }
 }
+
+const publishLogicalSources = new Map<string, string>(
+  [...publishSources.values()].map((source) => [source.publishRelative, source.sourceRelative]),
+);
 
 const legacySourceFiles = [...publishSources.keys()].sort();
 const finalizedAssets = new Map<string, LegacyAsset>();
@@ -153,6 +176,8 @@ let finalizedAssetsPromise: Promise<void> | null = null;
 
 function resolvePublishSource(logical: string | null): string | null {
   if (!logical) return null;
+  const byPublishPath = publishLogicalSources.get(logical);
+  if (byPublishPath) return byPublishPath;
   if (publishSources.has(logical)) return logical;
   if (logical.endsWith('.js')) {
     const stem = logical.slice(0, -'.js'.length);
@@ -227,69 +252,49 @@ function browserGlobalName(sourceRelative: string): string {
   return name;
 }
 
-async function compileTypeScriptAsset(
-  sourceRelative: string,
-  sourcePath: string,
-  source: string,
-): Promise<string> {
-  // CR-01 PR 2: публикуемые TS-модули пока остаются standalone classic-script
-  // глобалами, как соседний legacy JS. Поэтому Vite/esbuild честно
-  // транслирует каждый TS-файл, JSON-импорты инлайнятся из репозитория, а
-  // ESM-граф между TS-файлами здесь запрещён до отдельного PR 3: молча
-  // оставить import в браузере было бы публикацией битого модуля.
-  const jsonImportPattern = /^\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+(['"])(\.{1,2}\/[^'"]+\.json)\2\s*(?:with\s*\{[^}]*\})?\s*;?\s*$/gm;
-  const prepared = source.replace(jsonImportPattern, (_match: string, name: string, _quote: string, specifier: string) => {
-    const jsonPath = resolve(dirname(sourcePath), specifier);
-    const jsonRelative = repoRelative(jsonPath);
-    if (jsonRelative.startsWith('../')) {
-      throw new Error(`JSON-импорт выходит за пределы репозитория: ${sourceRelative} -> ${specifier}`);
-    }
-    const jsonText = readFileSync(jsonPath, 'utf8');
-    JSON.parse(jsonText) as unknown;
-    return `const ${name} = (${jsonText.trim()});`;
-  });
-  if (/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]/m.test(prepared)) {
-    throw new Error(`Неподдержанный import в публикуемом TypeScript-модуле ${sourceRelative}: разрешены только относительные JSON-импорты`);
-  }
+async function compileTypeScriptAsset(publishSource: PublishSource): Promise<string> {
+  // CR-01 PR 3: полноценная сборка графа импортов, а не одиночная
+  // транспиляция файла. esbuild сам разрешает TS/JSON-импорты из src/** и
+  // site/**, поэтому многофайловые модули атласа публикуются одним classic
+  // script без runtime ESM-загрузчика и без Vite deprecation warning.
+  const entrySource = readFileSync(publishSource.sourcePath, 'utf8');
+  const hasRuntimeExports = /(^|\n)\s*export\s+(?!(?:interface|type)\b)(?:\{|const|let|var|function|class|default|\*)/.test(entrySource);
+  const globalName = hasRuntimeExports ? browserGlobalName(publishSource.publishRelative) : '';
+  const assignsOwnBrowserGlobal = !!globalName && new RegExp(
+    String.raw`(?:window|globalThis|global|root|self)[^;\n]*\.\s*${globalName}\s*=`,
+  ).test(entrySource);
 
-  const transformed = await transformWithEsbuild(prepared, sourcePath, {
+  const buildOptions: Parameters<typeof esbuildBuild>[0] = {
+    absWorkingDir: repoRoot,
+    bundle: true,
     charset: 'utf8',
-    format: 'esm',
-    loader: 'ts',
+    entryPoints: [publishSource.sourcePath],
+    format: 'iife',
+    legalComments: 'none',
+    logLevel: 'silent',
+    platform: 'browser',
     sourcemap: false,
     target: 'es2022',
-  });
+    write: false,
+  };
+  // globalName нужен только entry, чей ESM-namespace сам и есть browser API
+  // (контракт PG1). Модули, которые внутри ставят честный window/globalThis
+  // API (TravelPlanner, GalaxySpiral и эффекты), с globalName сломались бы:
+  // esbuild присвоил бы var уже после IIFE и перезаписал API namespace-объектом.
+  if (globalName && !assignsOwnBrowserGlobal) buildOptions.globalName = globalName;
 
-  const exported: Array<readonly [string, string]> = [];
-  const withoutExports = transformed.code.replace(/\bexport\s*\{([\s\S]*?)\}\s*;?/g, (_match: string, list: string) => {
-    for (const rawPart of list.split(',')) {
-      const part = rawPart.trim();
-      if (!part) continue;
-      const alias = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(part);
-      if (!alias?.[1]) throw new Error(`Неподдержанный export в ${sourceRelative}: ${part}`);
-      exported.push([alias[2] ?? alias[1], alias[1]]);
-    }
-    return '';
-  });
-  if (/(^|\n)\s*export\b/.test(withoutExports)) {
-    throw new Error(`Неподдержанная форма export в публикуемом TypeScript-модуле: ${sourceRelative}`);
-  }
-  if (!exported.length) {
-    throw new Error(`Публикуемый TypeScript-модуль должен экспортировать browser API: ${sourceRelative}`);
+  let result: Awaited<ReturnType<typeof esbuildBuild>>;
+  try {
+    result = await esbuildBuild(buildOptions);
+  } catch (error) {
+    throw new Error(
+      `esbuild не собрал ${publishSource.sourceRelative}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
-  const globalName = browserGlobalName(sourceRelative);
-  const apiEntries = exported
-    .map(([exportedName, localName]) => (exportedName === localName ? exportedName : `${exportedName}: ${localName}`))
-    .join(', ');
-  return [
-    '(function (root) {',
-    "'use strict';",
-    withoutExports.trimEnd(),
-    `root.${globalName} = { ${apiEntries} };`,
-    "})(typeof window !== 'undefined' ? window : globalThis);",
-    '',
-  ].join('\n');
+  const output = result.outputFiles?.[0];
+  if (!output) throw new Error(`esbuild не вернул JS для ${publishSource.sourceRelative}`);
+  return output.text;
 }
 
 async function finalizeLegacyAsset(sourceRelative: string): Promise<LegacyAsset> {
@@ -303,10 +308,9 @@ async function finalizeLegacyAsset(sourceRelative: string): Promise<LegacyAsset>
 
   finalizingAssets.add(sourceRelative);
   try {
-    let text = readFileSync(publishSource.sourcePath, 'utf8');
-    if (isTypeScriptSource(sourceRelative)) {
-      text = await compileTypeScriptAsset(sourceRelative, publishSource.sourcePath, text);
-    }
+    let text = isTypeScriptSource(sourceRelative)
+      ? await compileTypeScriptAsset(publishSource)
+      : readFileSync(publishSource.sourcePath, 'utf8');
     if (sourceRelative.endsWith('.js') || isTypeScriptSource(sourceRelative)) {
       for (const dependency of collectScriptDependencies(text, sourceRelative)) {
         await finalizeLegacyAsset(dependency);
@@ -317,7 +321,7 @@ async function finalizeLegacyAsset(sourceRelative: string): Promise<LegacyAsset>
     const content = Buffer.from(text, 'utf8');
     const asset: LegacyAsset = {
       content,
-      outputRelative: hashedOutputRelative(sourceRelative, content),
+      outputRelative: hashedOutputRelative(publishSource.publishRelative, content),
       sourceRelative,
     };
     finalizedAssets.set(sourceRelative, asset);
@@ -333,102 +337,6 @@ function ensureFinalizedAssets(): Promise<void> {
   })();
   return finalizedAssetsPromise;
 }
-
-type AtlasVariantName = 'minimal' | 'sector';
-
-interface AtlasVariant {
-  readonly bodyAttrs: string;
-  readonly coordinateControls: string;
-  readonly coordinateReadout: string;
-  readonly galaxyReturn: string;
-  readonly headAfterReadability: string;
-  readonly headAfterStyles: string;
-  readonly headNote: string;
-  readonly helpLabel: string;
-  readonly intro: string;
-  readonly leftToggle: string;
-  readonly legacyToggle: string;
-  readonly modalFoot: string;
-  readonly modalTitle: string;
-  readonly returnScripts: string;
-  readonly title: string;
-}
-
-const atlasVariants: Record<AtlasVariantName, AtlasVariant> = {
-  sector: {
-    bodyAttrs: '',
-    coordinateControls: [
-      '        <div class="control-divider"></div>',
-      '        <button class="map-control coordinate-toggle" id="coordinateToggle" type="button" title="Включить координаты наведения" aria-label="Включить координаты наведения" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path></svg></button>',
-    ].join('\n'),
-    coordinateReadout:
-      '      <div class="map-coordinate-readout" id="mapCoordinateReadout" aria-hidden="true" hidden></div>',
-    galaxyReturn: '        <a class="galaxy-return" id="galaxyReturn" href="/index.html">← К ГАЛАКТИКЕ</a>',
-    headAfterReadability: '',
-    headAfterStyles: '  <link rel="stylesheet" href="sector.css">',
-    headNote:
-      '  <!-- минимальный скин вынесен в minimal.html: он скрывает каталог, вики-навигацию и «О данных» -->',
-    helpLabel: 'О КАРТЕ',
-    intro: [
-      '      <section class="map-page-intro" aria-label="Текущий раздел">',
-      '        <div class="breadcrumb"><span>Лор</span><i>›</i><span>Вводная часть</span><i>›</i><b>Пространство сектора Копрулу</b></div>',
-      '        <h2>Пространство сектора Копрулу</h2>',
-      '        <p>И его ближайшие территории...</p>',
-      '      </section>',
-    ].join('\n'),
-    leftToggle: [
-      '        <!-- Бургер: скрыть/показать каталог — слева в шапке -->',
-      '        <button class="icon-button collapse-button" id="toggleSidePanel" type="button" aria-label="Скрыть каталог" title="Скрыть каталог">',
-      '          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h16"></path><path d="m17 9 3 3-3 3"></path></svg>',
-      '        </button>',
-    ].join('\n'),
-    legacyToggle: '',
-    modalFoot: '<span>КАСТОМНАЯ КАРТА</span><span>НЕОФИЦИАЛЬНЫЙ ПРОЕКТ</span>',
-    modalTitle: 'О карте',
-    returnScripts: [
-      '  <script src="/shared/links.js"></script>',
-      '  <script>',
-      '    (function () {',
-      "      var a = document.getElementById('galaxyReturn');",
-      '      if (!a) return;',
-      '      if (window.SITE_LINKS && SITE_LINKS.galaxyPage) a.href = SITE_LINKS.galaxyPage;',
-      '      // при возврате галактика не проигрывает консоль и сохраняет доступ к ОЗД',
-      "      a.addEventListener('click', function () {",
-      "        try { sessionStorage.setItem('galaxyReturn', '1'); } catch (e) {}",
-      '      });',
-      '    })();',
-      '  </script>',
-    ].join('\n'),
-    title: 'Timeline Project — Map Atlas',
-  },
-  minimal: {
-    bodyAttrs: ' class="minimal-mode"',
-    coordinateControls: '',
-    coordinateReadout: '',
-    galaxyReturn: '',
-    headAfterReadability: '  <link rel="stylesheet" href="minimal-skin.css">',
-    headAfterStyles: '',
-    headNote: '',
-    helpLabel: 'О ДАННЫХ',
-    intro: [
-      '      <section class="map-page-intro" aria-label="Текущий раздел">',
-      '        <div class="breadcrumb"><span>Лор</span><i>›</i><span>Вводная часть</span><i>›</i><b>Карта сектора</b></div>',
-      '        <h2>Карта сектора</h2>',
-      '        <p>Авторская схема систем и мест Копрулу</p>',
-      '      </section>',
-    ].join('\n'),
-    leftToggle: '',
-    legacyToggle: [
-      '          <button class="icon-button collapse-button" id="toggleSidePanel" type="button" aria-label="Скрыть каталог" title="Скрыть каталог">',
-      '            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h16"></path><path d="m17 9 3 3-3 3"></path></svg>',
-      '          </button>',
-    ].join('\n'),
-    modalFoot: '<span>ОБЗОРНАЯ СХЕМА</span><span>КАТАЛОГ СЕКТОРА КОПРУЛУ</span>',
-    modalTitle: 'О карте и данных',
-    returnScripts: '',
-    title: 'Timeline Project — Map Atlas (минимальный скин)',
-  },
-};
 
 function renderAtlasVariant(html: string): string {
   const match = /<!--\s*atlas-variant:\s*(sector|minimal)\s*-->/.exec(html);

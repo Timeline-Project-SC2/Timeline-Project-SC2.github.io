@@ -79,14 +79,166 @@
 
    API (window.CursorFx): info(), frames(), setVariant(name), enable(), disable().
 */
-(function () {
+
+export type CursorFxVariant = 'set' | 'webkit' | 'svg' | 'png';
+export type CursorFxVariantSetting = CursorFxVariant | 'off';
+
+export interface CursorFxInfo {
+  readonly enabled: boolean;
+  readonly ready: boolean;
+  readonly variant: CursorFxVariantSetting | null;
+  readonly auto: CursorFxVariant;
+  readonly rasterBroken: boolean;
+  readonly dpr: number;
+  readonly reducedMotion: boolean;
+  readonly state: string;
+  readonly hold: boolean;
+  readonly frames: {
+    readonly default: number;
+    readonly hover: number;
+    readonly drag: number;
+    readonly dragIntro: number;
+  };
+  readonly drift: readonly [number, number];
+  readonly buildMs: number;
+  readonly cached: boolean;
+}
+
+export interface CursorFxFrameInfo {
+  readonly t: number | undefined;
+  readonly ms: number | undefined;
+  readonly png: string | undefined;
+  readonly svg: string | undefined;
+}
+
+export interface CursorFxFrames {
+  readonly default: CursorFxFrameInfo[];
+  readonly hover: CursorFxFrameInfo[];
+  readonly drag: CursorFxFrameInfo[];
+  readonly dragIntro: CursorFxFrameInfo[];
+  readonly still: {
+    readonly drag: CursorFxFrameInfo;
+    readonly disabled: CursorFxFrameInfo;
+  };
+}
+
+export interface CursorFxApi {
+  info(): CursorFxInfo;
+  frames(): CursorFxFrames;
+  setVariant(name?: string | null): void;
+  enable(): void;
+  disable(): void;
+}
+
+declare global {
+  interface Window {
+    CursorFx: CursorFxApi;
+  }
+}
+
+type CursorPointTuple = readonly [number, number];
+type CursorKeyframes = readonly (readonly [number, number])[];
+type CursorCellKey = readonly [number, number, number, number, number];
+type CursorCellSpec = readonly [string, number, string, number, number];
+type CursorCellFrame = readonly [number, number, string, string, string, string];
+type CursorPairSpec = readonly [number, number, string];
+
+interface CursorConfig {
+  readonly size: number;
+  readonly hotspot: CursorPointTuple;
+  readonly step: number;
+  readonly maxChildren: number;
+  readonly colors: {
+    readonly core: string; readonly mid: string; readonly dark: string;
+    readonly cut: string; readonly glint: string;
+    readonly cell: {
+      readonly light: string; readonly cyan: string; readonly aqua: string;
+      readonly blue: string; readonly deep: string; readonly wall: string; readonly edge: string;
+    };
+    readonly shade: readonly [string, string];
+    readonly rim: string; readonly rimLit: string; readonly gap: string;
+  };
+  readonly arrow: {
+    readonly cycle: number; readonly scale: number; readonly tip: number;
+    readonly route: {
+      readonly tip: CursorPointTuple;
+      readonly wings: readonly [CursorPointTuple, CursorPointTuple];
+      readonly notch: CursorPointTuple;
+    };
+    readonly cells: readonly CursorCellSpec[];
+  };
+  readonly tri: {
+    readonly cycle: number; readonly scale: number; readonly tip: number;
+    readonly lines: {
+      readonly fine: readonly [number, number, number];
+      readonly coarse: readonly [number, number, number];
+    };
+    readonly segments: readonly (readonly [number, number])[];
+    readonly hoverStart: number; readonly still: number;
+  };
+  readonly cross: {
+    readonly cycle: number; readonly scale: number; readonly unit: number;
+    readonly center: number; readonly fade: number;
+    readonly chevron: readonly CursorPointTuple[];
+    readonly pairs: readonly CursorPairSpec[];
+    readonly fills: { readonly outer: CursorKeyframes; readonly inner: CursorKeyframes };
+    readonly still: number;
+    readonly lines: { readonly fine: readonly [number, number]; readonly coarse: readonly [number, number] };
+    readonly glow: number;
+    readonly drift: { readonly lerp: number; readonly max: number };
+  };
+  readonly hold: { readonly slop: number; readonly skip: string };
+  readonly hover: string;
+  readonly disabled: string;
+  readonly drag: string;
+  readonly dragWatch: string;
+}
+
+interface CursorCellState { readonly u: number; readonly s: number; readonly r: number; readonly o: number; }
+interface CursorArrowFrameOptions { readonly parts?: boolean; readonly glow?: number; readonly dim?: boolean; }
+interface CursorArrowFrame {
+  readonly kind: 'arrow'; readonly g: string; readonly fx: string;
+  readonly cells: CursorCellFrame[]; readonly glow: number; readonly dim: boolean;
+}
+interface CursorTriFrame { readonly kind: 'tri'; readonly fills: string[]; }
+interface CursorCrossFrame { readonly kind: 'cross'; readonly fills: string[]; a?: string; }
+type CursorFrameDescription = CursorArrowFrame | CursorTriFrame | CursorCrossFrame;
+
+interface CursorFrame {
+  key?: string;
+  readonly f: CursorFrameDescription;
+  t?: number;
+  ms?: number;
+  hot?: CursorPointTuple;
+  svg1?: string;
+  svg?: string;
+  png1?: string;
+  png2?: string;
+  values?: Record<string, string>;
+}
+
+interface CursorAnimation {
+  readonly fallback: string;
+  index: number;
+  readonly frames: CursorFrame[];
+  readonly intro: CursorFrame[];
+  introAt: number;
+}
+
+type CursorStateName = 'default' | 'hover' | 'disabled' | 'drag';
+type CursorRuleName = 'default' | 'hover' | 'disabled' | 'drag';
+interface CursorHold { readonly id: number; readonly x: number; readonly y: number; moved: boolean; readonly click: boolean; }
+interface CursorRasterCanvas extends HTMLCanvasElement { ctx?: CanvasRenderingContext2D | null; }
+type CursorTimer = ReturnType<typeof setTimeout> | number;
+
+(function (): void {
   'use strict';
 
   var doc = document;
   var root = doc.documentElement;
   if (!window.matchMedia || !window.CSS || !CSS.supports || !doc.head) return;
 
-  var CONFIG = {
+  var CONFIG: CursorConfig = {
     size: 32,                    // CSS px — сторона картинки курсора (надёжный предел)
     hotspot: [1, 1],             // точка клика от левого верхнего угла картинки, CSS px
     step: 50,                    // мс — шаг кадров анимации (20 к/с)
@@ -194,19 +346,19 @@
     dragWatch: '.galaxy-stage, #mapCanvas'
   };
 
-  var VARIANTS = ['set', 'webkit', 'svg', 'png'];
+  var VARIANTS: readonly CursorFxVariant[] = ['set', 'webkit', 'svg', 'png'];
   var STORE_KEY = 'cursorFx.variant';
 
   // --- математика -------------------------------------------------------------------------
 
-  function lerp(a, b, k) { return a + (b - a) * k; }
-  function num(x, digits) { var v = +x.toFixed(digits); return String(v === 0 ? 0 : v); }
+  function lerp(a: number, b: number, k: number): number { return a + (b - a) * k; }
+  function num(x: number, digits: number): string { var v = +x.toFixed(digits); return String(v === 0 ? 0 : v); }
 
   // cubic-bezier, как в CSS: x(s) = t решается методом Ньютона с запасным делением пополам
-  function bezier(x1, y1, x2, y2) {
-    function curve(a, b, s) { return ((1 - 3 * b + 3 * a) * s + (3 * b - 6 * a)) * s * s + 3 * a * s; }
-    function slope(a, b, s) { return 3 * (1 - 3 * b + 3 * a) * s * s + 2 * (3 * b - 6 * a) * s + 3 * a; }
-    return function (t) {
+  function bezier(x1: number, y1: number, x2: number, y2: number): (t: number) => number {
+    function curve(a: number, b: number, s: number): number { return ((1 - 3 * b + 3 * a) * s + (3 * b - 6 * a)) * s * s + 3 * a * s; }
+    function slope(a: number, b: number, s: number): number { return 3 * (1 - 3 * b + 3 * a) * s * s + 2 * (3 * b - 6 * a) * s + 3 * a; }
+    return function (t: number): number {
       if (t <= 0) return 0;
       if (t >= 1) return 1;
       var s = t;
@@ -233,17 +385,17 @@
   // соты: [доля цикла, место на маршруте (0 — остриё, 1 — конец крыла, 2 — выемка), масштаб,
   // поворот°, непрозрачность]. До 58 % цикла сота скрыта в острие; у конца крыла и у выемки
   // поток притормаживает и сужается. Сглаживание — как у CSS-анимации, на каждом отрезке.
-  var CELL_KEYS = [
+  var CELL_KEYS: readonly CursorCellKey[] = [
     [0.58, 0, 0.25, 0, 0],
     [0.68, 0.3, 1.15, 25, 1],
     [0.82, 1, 1, 60, 1],
     [0.92, 1.62, 0.7, 95, 0.85],
     [0.98, 2, 0.2, 120, 0]
   ];
-  function cellAt(p) {
-    if (p < CELL_KEYS[0][0]) return null;
+  function cellAt(p: number): CursorCellState | null {
+    if (p < CELL_KEYS[0]![0]) return null;
     for (var i = 1; i < CELL_KEYS.length; i++) {
-      var a = CELL_KEYS[i - 1], b = CELL_KEYS[i];
+      var a = CELL_KEYS[i - 1]!, b = CELL_KEYS[i]!;
       if (p <= b[0]) {
         var k = easeOut((p - a[0]) / (b[0] - a[0]));
         return { u: lerp(a[1], b[1], k), s: lerp(a[2], b[2], k), r: lerp(a[3], b[3], k), o: lerp(a[4], b[4], k) };
@@ -253,30 +405,30 @@
   }
   // Блик грани и вспышка в выемке приходятся на схождение потоков и заходят в начало
   // следующего цикла, поэтому начало цикла считается его продолжением (p + 1).
-  function wrap(p) { return p < 0.3 ? p + 1 : p; }
+  function wrap(p: number): number { return p < 0.3 ? p + 1 : p; }
   // блик грани: 0 — покой, 1 — вспышка (80 % → 96 % → 106 %)
-  function glintAt(p) {
+  function glintAt(p: number): number {
     var q = wrap(p);
     if (q < 0.8 || q >= 1.06) return 0;
     if (q < 0.96) return easeInOut((q - 0.8) / 0.16);
     return easeInOut(1 - (q - 0.96) / 0.1);
   }
   // вспышка в выемке: фаза 0…1 (95,5 % → 105,5 %), вне вспышки −1
-  function flashAt(p) {
+  function flashAt(p: number): number {
     var q = wrap(p);
     return q >= 0.955 && q < 1.055 ? (q - 0.955) / 0.1 : -1;
   }
-  function smooth(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  function smooth(x: number): number { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
   // нормаль наружу от стрелки: верхний поток обходит контур по часовой стрелке — наружу
   // слева от хода, нижний — против, наружу справа
-  function outward(a, b, stream) {
+  function outward(a: CursorPointTuple, b: CursorPointTuple, stream: number): [number, number] {
     var dx = b[0] - a[0], dy = b[1] - a[1], len = Math.sqrt(dx * dx + dy * dy);
     return stream === 0 ? [dy / len, -dx / len] : [-dy / len, dx / len];
   }
   // точка маршрута: stream 0 — по верхней грани, 1 — по левой; u от 0 до 2.
   // Нормаль на конце крыла поворачивается плавно, чтобы сдвинутые соты не прыгали.
-  function routePoint(stream, u) {
-    var R = CONFIG.arrow.route, a = R.tip, b = R.wings[stream], c = R.notch;
+  function routePoint(stream: number, u: number): { x: number; y: number; nx: number; ny: number } {
+    var R = CONFIG.arrow.route, a = R.tip, b = R.wings[stream]!, c = R.notch;
     var x = u <= 1 ? lerp(a[0], b[0], u) : lerp(b[0], c[0], u - 1);
     var y = u <= 1 ? lerp(a[1], b[1], u) : lerp(b[1], c[1], u - 1);
     var n1 = outward(a, b, stream), n2 = outward(b, c, stream), k = smooth((u - 0.85) / 0.3);
@@ -284,15 +436,16 @@
     return { x: x, y: y, nx: nx / len, ny: ny / len };
   }
   // заливка сегментов треугольника, линейно: [доля цикла, заливка]; 1 — большой … 4 — малый
-  var FILL_KEYS = [
+  var FILL_KEYS: readonly CursorKeyframes[] = [
     [[0, 0], [0.3, 0], [0.4, 1], [0.5, 0], [0.8, 0], [0.9, 1], [1, 0]],
     [[0, 0], [0.2, 0], [0.3, 1], [0.4, 1], [0.5, 0], [0.7, 0], [0.8, 1], [0.9, 0], [1, 0]],
     [[0, 0], [0.1, 0], [0.2, 1], [0.4, 1], [0.5, 0], [0.6, 0], [0.7, 1], [0.8, 0], [1, 0]],
     [[0, 0], [0.1, 1], [0.4, 1], [0.5, 0], [0.6, 1], [0.7, 0], [1, 0]]
   ];
-  function fillAt(keys, p) {
+  function fillAt(keys: CursorKeyframes, p: number): number {
     for (var i = 1; i < keys.length; i++) {
-      if (p <= keys[i][0]) return lerp(keys[i - 1][1], keys[i][1], (p - keys[i - 1][0]) / (keys[i][0] - keys[i - 1][0]));
+      var a = keys[i - 1]!, b = keys[i]!;
+      if (p <= b[0]) return lerp(a[1], b[1], (p - a[0]) / (b[0] - a[0]));
     }
     return 0;
   }
@@ -301,13 +454,13 @@
 
   // кадр стрелки: соты [поток, номер соты, место на маршруте, масштаб, поворот, непрозрачность],
   // g — блик грани, fx — фаза вспышки в выемке. opts.parts: false — стрелка без сот.
-  function arrowFrame(t, opts) {
+  function arrowFrame(t: number, opts: CursorArrowFrameOptions): CursorArrowFrame {
     var A = CONFIG.arrow;
-    var cells = [];
+    var cells: CursorCellFrame[] = [];
     if (opts.parts) {
       for (var s = 0; s < 2; s++) {
         for (var i = 0; i < A.cells.length; i++) {
-          var local = (((t - A.cells[i][3]) % A.cycle) + A.cycle) % A.cycle;
+          var local = (((t - A.cells[i]![3]) % A.cycle) + A.cycle) % A.cycle;
           var k = cellAt(local / A.cycle);
           if (k && k.o > 0.02) cells.push([s, i, num(k.u, 3), num(k.s, 2), num(k.r, 0), num(k.o, 2)]);
         }
@@ -318,21 +471,21 @@
       cells: cells, glow: opts.glow || 1, dim: !!opts.dim };
   }
 
-  function triFrame(t) {
+  function triFrame(t: number): CursorTriFrame {
     var p = t / CONFIG.tri.cycle;
     return { kind: 'tri', fills: FILL_KEYS.map(function (keys) { return num(fillAt(keys, p), 2); }) };
   }
 
   // кадр крестовины: заливка [внешних, внутренних] шевронов по времени цикла;
   // alpha — непрозрачность всего креста при появлении (нет — 1)
-  function crossFrame(t, alpha) {
+  function crossFrame(t: number, alpha?: number): CursorCrossFrame {
     var X = CONFIG.cross, p = t / X.cycle;
-    var f = { kind: 'cross', fills: [num(fillAt(X.fills.outer, p), 2), num(fillAt(X.fills.inner, p), 2)] };
-    if (alpha < 1) f.a = num(alpha, 2);
+    var f: CursorCrossFrame = { kind: 'cross', fills: [num(fillAt(X.fills.outer, p), 2), num(fillAt(X.fills.inner, p), 2)] };
+    if (alpha != null && alpha < 1) f.a = num(alpha, 2);
     return f;
   }
 
-  function svgOpen(px, origin, span) {
+  function svgOpen(px: number, origin: number, span: number): string {
     var box = num(origin, 3) + ' ' + num(origin, 3) + ' ' + num(span, 3) + ' ' + num(span, 3);
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + px + '" height="' + px + '" viewBox="' + box + '">';
   }
@@ -343,20 +496,20 @@
 
   // ореол: силуэт рисунка, размытый на sd и залитый цветом color, под самим рисунком —
   // края остаются чёткими, светится только вокруг
-  function haloFilter(id, sd, color, opacity, area) {
+  function haloFilter(id: string, sd: string | number, color: string, opacity: string | number, area?: string): string {
     return '<filter id="' + id + '"' + (area || FILTER_AREA) + '>' +
       '<feGaussianBlur in="SourceAlpha" stdDeviation="' + sd + '" result="a"/>' +
       '<feFlood flood-color="' + color + '" flood-opacity="' + opacity + '"/><feComposite in2="a" operator="in" result="g"/>' +
       '<feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
   }
 
-  function ring(n) {
-    var pts = [];
+  function ring(n: number): Array<[number, number]> {
+    var pts: Array<[number, number]> = [];
     for (var i = 0; i < n; i++) pts.push([Math.cos(i * 2 * Math.PI / n), Math.sin(i * 2 * Math.PI / n)]);
     return pts;
   }
   // формы сот, вершины в долях радиуса
-  var SHAPES = {
+  var SHAPES: Record<string, readonly CursorPointTuple[]> = {
     hex: ring(6),                                                                    // шестиугольник
     pent: [[-0.95, -0.35], [-0.2, -1], [0.85, -0.55], [0.75, 0.6], [-0.45, 0.9]],    // обломок
     broken: ring(6).slice(0, 5)                     // шестиугольник без двух граней — линия
@@ -365,7 +518,7 @@
   var CELL = CONFIG.colors.cell;
   // Тёмно-синяя граница у светлых сот — как стенки сот на образце: без неё на экране 1×
   // мелкая сота сливается в пятно.
-  var PAINT = {
+  var PAINT: Record<string, string> = {
     lit: ' fill="url(#h)" stroke="' + CELL.wall + '" stroke-width="0.6"',
     cyan: ' fill="' + CELL.cyan + '" stroke="' + CELL.wall + '" stroke-width="0.6"',
     deep: ' fill="' + CELL.deep + '" fill-opacity="0.9" stroke="' + CELL.edge + '" stroke-width="0.6"',
@@ -375,7 +528,7 @@
   };
 
   // вершины формы с центром (cx, cy), радиусом size и поворотом deg — в единицах задумки
-  function shapePoints(shape, cx, cy, size, deg) {
+  function shapePoints(shape: readonly CursorPointTuple[], cx: number, cy: number, size: number, deg: number): string {
     var a = deg * Math.PI / 180, cos = Math.cos(a) * size, sin = Math.sin(a) * size;
     return shape.map(function (v) {
       return num(cx + v[0] * cos - v[1] * sin, 2) + ',' + num(cy + v[0] * sin + v[1] * cos, 2);
@@ -383,7 +536,7 @@
   }
 
   // смесь двух цветов #rrggbb: k = 0 — первый, 1 — второй
-  function mix(a, b, k) {
+  function mix(a: string, b: string, k: number): string {
     var out = '#';
     for (var i = 1; i < 7; i += 2) {
       var v = Math.round(lerp(parseInt(a.substr(i, 2), 16), parseInt(b.substr(i, 2), 16), k));
@@ -392,7 +545,7 @@
     return out;
   }
 
-  function arrowSVG(f, px) {
+  function arrowSVG(f: CursorArrowFrame, px: number): string {
     var A = CONFIG.arrow, C = CONFIG.colors, s = A.scale;
     var g = +f.g;
     // свечение контура: в покое — слабое зелёное; на вспышке — бирюзовое и зелёное.
@@ -411,18 +564,18 @@
     // поворот, чтобы соты одного потока не крутились в такт
     var cells = '';
     f.cells.forEach(function (q) {
-      var cell = A.cells[q[1]], k = +q[3], at = routePoint(q[0], +q[2]), off = cell[4] * k;
+      var cell = A.cells[q[1]]!, k = +q[3], at = routePoint(q[0], +q[2]), off = cell[4] * k;
       cells += '<' + (cell[0] === 'broken' ? 'polyline' : 'polygon') + ' points="' +
-        shapePoints(SHAPES[cell[0]], at.x + at.nx * off, at.y + at.ny * off, cell[1] * k, (q[0] ? -1 : 1) * (+q[4] + q[1] * 17)) +
+        shapePoints(SHAPES[cell[0]]!, at.x + at.nx * off, at.y + at.ny * off, cell[1] * k, (q[0] ? -1 : 1) * (+q[4] + q[1] * 17)) +
         '"' + PAINT[cell[2]] + ' opacity="' + q[5] + '"/>';
     });
     // вспышка в выемке, где сошлись потоки: расходящийся контур соты и гаснущее ядро
     var phase = +f.fx;
     if (phase >= 0) {
       var N = A.route.notch;
-      cells += '<polygon points="' + shapePoints(SHAPES.hex, N[0], N[1], lerp(1.4, 5.2, easeOut(phase)), 30) + '"' +
+      cells += '<polygon points="' + shapePoints(SHAPES.hex!, N[0], N[1], lerp(1.4, 5.2, easeOut(phase)), 30) + '"' +
         ' fill="none" stroke="' + C.cell.aqua + '" stroke-width="0.8" opacity="' + num(1 - phase, 2) + '"/>' +
-        '<polygon points="' + shapePoints(SHAPES.hex, N[0], N[1], lerp(3, 0.8, phase), 0) + '"' +
+        '<polygon points="' + shapePoints(SHAPES.hex!, N[0], N[1], lerp(3, 0.8, phase), 0) + '"' +
         ' fill="url(#h)" stroke="' + C.cell.wall + '" stroke-width="0.5" opacity="' + num(1 - phase * phase, 2) + '"/>';
     }
     var cellDefs = cells ? '<radialGradient id="h"><stop offset="0" stop-color="' + C.cell.light + '"/>' +
@@ -441,11 +594,11 @@
   // тёмная заливка, поверх неё светлый градиент по «каскаду» (fills), кромка. Там, где слой
   // лежит на заднем, вокруг него тёмный зазор и за ним светлая линия (обрезаны по задним слоям,
   // поэтому над фоном их нет). У заднего слоя кромка — яркая линия края всей стопки.
-  function triSVG(f, px) {
+  function triSVG(f: CursorTriFrame, px: number): string {
     var T = CONFIG.tri, C = CONFIG.colors, s = T.scale;
     var w = px > CONFIG.size ? T.lines.fine : T.lines.coarse, rim = w[0], gap = w[1], line = w[2];
     var pts = '4,4 36,12 12,36';
-    function place(seg) { return 'translate(' + seg[1] + ' ' + seg[1] + ') scale(' + num(seg[0], 5) + ')'; }
+    function place(seg: readonly [number, number]): string { return 'translate(' + seg[1] + ' ' + seg[1] + ') scale(' + num(seg[0], 5) + ')'; }
     var defs = '<linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + C.core + '"/>' +
       '<stop offset="0.6" stop-color="' + C.mid + '"/><stop offset="1" stop-color="' + C.dark + '"/></linearGradient>' +
       '<linearGradient id="d" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + C.shade[0] + '"/>' +
@@ -455,7 +608,7 @@
     var body = '';
     T.segments.forEach(function (seg, i) {
       var unit = 1 / (s * seg[0]);   // px → единицы сегмента: толщины линий одинаковы у всех слоёв
-      var lit = +f.fills[i];
+      var lit = +f.fills[i]!;
       if (i > 0) {
         defs += '<clipPath id="c' + i + '">' + T.segments.slice(0, i).map(function (back) {
           return '<polygon points="' + pts + '" transform="' + place(back) + '"/>';
@@ -476,14 +629,14 @@
   // Крестовина перетаскивания, как в задумке: шевроны — контур #00ff66, заливка того же цвета
   // с непрозрачностью по циклу (f.fills), вокруг — свечение. Точки считаются сразу в
   // координатах холста: поворот на 90° по часовой — (x, y) → (−y, x); <use> и transform не нужны.
-  function crossSVG(f, px) {
+  function crossSVG(f: CursorCrossFrame, px: number): string {
     var X = CONFIG.cross, C = CONFIG.colors, s = X.scale, span = CONFIG.size / s, o = -X.center / s;
     var w = px > CONFIG.size ? X.lines.fine : X.lines.coarse;
     var area = ' filterUnits="userSpaceOnUse" x="' + num(o, 2) + '" y="' + num(o, 2) + '" width="' +
       num(span, 2) + '" height="' + num(span, 2) + '"';
     var body = '';
     X.pairs.forEach(function (pair, i) {
-      var fill = +f.fills[i] > 0 ? C.core + '" fill-opacity="' + f.fills[i] : 'none';
+      var fill = +f.fills[i]! > 0 ? C.core + '" fill-opacity="' + f.fills[i] : 'none';
       for (var k = 0; k < 4; k++) {
         var pts = X.chevron.map(function (p) {
           var x = p[0] * pair[1], y = p[1] * pair[1] - pair[0];
@@ -491,7 +644,7 @@
           return num(x, 2) + ',' + num(y, 2);
         }).join(' ');
         body += '<polygon points="' + pts + '" fill="' + fill + '" stroke="' + C.core + '" stroke-width="' +
-          num(w[i] / s, 3) + '"/>';
+          num(w[i]! / s, 3) + '"/>';
       }
     });
     // при появлении прозрачен весь крест вместе со свечением, как .cursor-drag в задумке
@@ -499,50 +652,50 @@
       '</defs><g filter="url(#k)"' + (f.a ? ' opacity="' + f.a + '"' : '') + '>' + body + '</g></svg>';
   }
 
-  function frameSVG(f, px) {
+  function frameSVG(f: CursorFrameDescription, px: number): string {
     if (f.kind === 'tri') return triSVG(f, px);
     if (f.kind === 'cross') return crossSVG(f, px);
     return arrowSVG(f, px);
   }
 
   // кадры цикла с шагом CONFIG.step; одинаковые подряд склеиваются в один длинный
-  function sampleCycle(cycle, make) {
-    var out = [];
+  function sampleCycle(cycle: number, make: (t: number) => CursorFrameDescription): CursorFrame[] {
+    var out: CursorFrame[] = [];
     for (var t = 0; t < cycle; t += CONFIG.step) {
       var f = make(t), key = JSON.stringify(f), last = out[out.length - 1];
-      if (last && last.key === key) last.ms += CONFIG.step;
+      if (last && last.key === key) last.ms = last.ms! + CONFIG.step;
       else out.push({ key: key, f: f, t: t, ms: CONFIG.step });
     }
-    if (out.length > 1 && out[0].key === out[out.length - 1].key) {
-      var tail = out.pop();
-      out[0].ms += tail.ms;
-      out[0].t = tail.t;
-      out.push(out.shift());   // склеенный кадр встаёт в конец, чтобы порядок кадров не нарушился
+    if (out.length > 1 && out[0]!.key === out[out.length - 1]!.key) {
+      var tail = out.pop()!;
+      out[0]!.ms = out[0]!.ms! + tail.ms!;
+      out[0]!.t = tail.t!;
+      out.push(out.shift()!);
     }
     return out;
   }
 
   // --- растеризация ------------------------------------------------------------------------
 
-  function svgUrl(svg) { return 'data:image/svg+xml,' + encodeURIComponent(svg); }
+  function svgUrl(svg: string): string { return 'data:image/svg+xml,' + encodeURIComponent(svg); }
 
   // Холсты программные (willReadFrequently) и общие для всех кадров: ускоренный холст
   // при первом drawImage запускает GPU (сотни мс), а toDataURL тянет кадр из видеопамяти.
-  var canvases = {};
+  var canvases: Record<number, CursorRasterCanvas> = {};
 
-  function toPng(svg, px) {
+  function toPng(svg: string, px: number): Promise<string> {
     return new Promise(function (resolve, reject) {
       var img = new Image();
       img.onload = function () {
         try {
           var canvas = canvases[px];
           if (!canvas) {
-            canvas = canvases[px] = doc.createElement('canvas');
+            canvas = canvases[px] = doc.createElement('canvas') as CursorRasterCanvas;
             canvas.width = canvas.height = px;
             canvas.ctx = canvas.getContext('2d', { willReadFrequently: true });
           }
-          canvas.ctx.clearRect(0, 0, px, px);
-          canvas.ctx.drawImage(img, 0, 0, px, px);
+          canvas.ctx!.clearRect(0, 0, px, px);
+          canvas.ctx!.drawImage(img, 0, 0, px, px);
           resolve(canvas.toDataURL('image/png'));
         } catch (err) { reject(err); }
       };
@@ -551,15 +704,15 @@
     });
   }
 
-  function render(frame) {
+  function render(frame: CursorFrame): Promise<CursorFrame> {
     if (frame.png1 || rasterBroken) return Promise.resolve(frame);
-    return Promise.all([toPng(frame.svg1, CONFIG.size), toPng(frameSVG(frame.f, CONFIG.size * 2), CONFIG.size * 2)])
-      .then(function (png) { frame.png1 = png[0]; frame.png2 = png[1]; return frame; })
+    return Promise.all([toPng(frame.svg1!, CONFIG.size), toPng(frameSVG(frame.f, CONFIG.size * 2), CONFIG.size * 2)])
+      .then(function (png) { frame.png1 = png[0]!; frame.png2 = png[1]!; return frame; })
       .catch(function () { rasterBroken = true; return frame; });
   }
 
-  function renderAll(frames) {
-    return frames.reduce(function (chain, frame) {
+  function renderAll(frames: readonly CursorFrame[]): Promise<unknown> {
+    return frames.reduce<Promise<unknown>>(function (chain, frame) {
       return chain.then(function () { return render(frame); });
     }, Promise.resolve());
   }
@@ -569,24 +722,28 @@
   // цвета или размер — кэш сам становится недействительным.
   var CACHE_KEY = 'cursorFx.frames';
 
-  function fingerprint(frames) {
+  function fingerprint(frames: readonly CursorFrame[]): string {
     var h = 2166136261;
     frames.forEach(function (frame) {
-      for (var i = 0; i < frame.svg1.length; i++) { h ^= frame.svg1.charCodeAt(i); h = Math.imul(h, 16777619); }
+      for (var i = 0; i < frame.svg1!.length; i++) { h ^= frame.svg1!.charCodeAt(i); h = Math.imul(h, 16777619); }
     });
     return (h >>> 0).toString(36) + '-' + frames.length;
   }
 
-  function loadCache(frames, key) {
+  function loadCache(frames: readonly CursorFrame[], key: string): boolean {
     try {
-      var data = JSON.parse(window.localStorage.getItem(CACHE_KEY) || 'null');
+      var data = JSON.parse(window.localStorage.getItem(CACHE_KEY) || 'null') as { key: string; png1: string[]; png2: string[] } | null;
       if (!data || data.key !== key) return false;
-      frames.forEach(function (frame, i) { frame.png1 = data.png1[i]; frame.png2 = data.png2[i]; });
+      var cachedFrames = data;
+      frames.forEach(function (frame, i) {
+        frame.png1 = cachedFrames.png1[i]!;
+        frame.png2 = cachedFrames.png2[i]!;
+      });
       return frames.every(function (frame) { return frame.png1 && frame.png2; });
     } catch (err) { return false; }
   }
 
-  function saveCache(frames, key) {
+  function saveCache(frames: readonly CursorFrame[], key: string): void {
     if (rasterBroken) return;
     try {
       window.localStorage.setItem(CACHE_KEY, JSON.stringify({
@@ -604,35 +761,37 @@
     reduced: window.matchMedia('(prefers-reduced-motion: reduce)'),
     contrast: window.matchMedia('(forced-colors: active)')
   };
-  var autoVariant = detectVariant();
-  var variant = null;
+  var autoVariant: CursorFxVariant = detectVariant();
+  var variant: CursorFxVariantSetting | null = null;
   var rasterBroken = false;
   var enabled = false;
   var staticsReady = false;   // статичные кадры готовы — курсор можно показывать
   var ready = false;          // анимационные кадры готовы
   var started = 0, buildMs = 0, cached = false;
-  var rules = null;
-  var active = 'default';
-  var styled = [];            // элементы, у которых в style стоит кадр анимации
-  var captureEl = null;       // элемент с захватом указателя — карта, пока её тянут
+  var rules: Record<CursorRuleName, CSSStyleRule> | null = null;
+  var active: CursorStateName = 'default';
+  var styled: HTMLElement[] = [];
+  var captureEl: Node | null = null;
   var painted = '';           // какой кадр там стоит
   var hoverStartIndex = 0;
-  var lastTarget = null;
-  var hold = null;          // нажатие на карте: { id, x, y, click — нажали на кнопку/систему, moved }
+  var lastTarget: Node | null = null;
+  var hold: CursorHold | null = null;
   var outside = false;
-  var timer = 0;
+  var timer: CursorTimer = 0;
 
-  var CROSS_HOT = [Math.floor(CONFIG.cross.center), Math.floor(CONFIG.cross.center)];   // центр креста
-  var still = {
+  var CROSS_HOT: CursorPointTuple = [Math.floor(CONFIG.cross.center), Math.floor(CONFIG.cross.center)];
+  var still: Record<'idle' | 'drag' | 'disabled' | 'hover', CursorFrame> = {
     idle: { f: arrowFrame(0, { parts: false }) },
     drag: { f: crossFrame(CONFIG.cross.still), hot: CROSS_HOT },
     disabled: { f: arrowFrame(0, { parts: false, dim: true }) },
     hover: { f: triFrame(CONFIG.tri.still) }
   };
-  var anim = {
+  var anim: Record<'default' | 'hover' | 'drag', CursorAnimation> = {
     default: { fallback: 'default', index: 0,
-      frames: sampleCycle(CONFIG.arrow.cycle, function (t) { return arrowFrame(t, { parts: true }); }) },
-    hover: { fallback: 'pointer', index: 0, frames: sampleCycle(CONFIG.tri.cycle, triFrame) },
+      frames: sampleCycle(CONFIG.arrow.cycle, function (t) { return arrowFrame(t, { parts: true }); }),
+      intro: [], introAt: -1 },
+    hover: { fallback: 'pointer', index: 0, frames: sampleCycle(CONFIG.tri.cycle, triFrame),
+      intro: [], introAt: -1 },
     // крестовина: при каждом нажатии появление (intro), затем цикл с начала, как CSS-анимация
     // задумки; introAt — номер кадра появления, -1 — идёт цикл
     drag: { fallback: 'grabbing', index: 0, frames: sampleCycle(CONFIG.cross.cycle, crossFrame),
@@ -644,7 +803,7 @@
   // Непрозрачность берётся с середины кадра: кадр держится 50 мс, и первый не выходит пустым.
   // Почти непрозрачные кадры не нужны — их не отличить от обычных, дальше идёт цикл.
   function crossIntro() {
-    var out = [], fade = CONFIG.cross.fade;
+    var out: CursorFrame[] = [], fade = CONFIG.cross.fade;
     for (var t = 0; t < fade; t += CONFIG.step) {
       var alpha = ease(Math.min(1, (t + CONFIG.step / 2) / fade));
       if (alpha >= 0.97) break;
@@ -655,9 +814,15 @@
   }
 
   // кадр, который показывает анимация сейчас: у крестовины после нажатия — кадр появления
-  function current(a) { return a.introAt >= 0 ? a.intro[a.introAt] : a.frames[a.index]; }
+  function current(a: CursorAnimation): CursorFrame {
+    return a.introAt >= 0 ? a.intro[a.introAt]! : a.frames[a.index]!;
+  }
 
-  function detectVariant() {
+  function animationFor(name: CursorStateName): CursorAnimation | undefined {
+    return name === 'disabled' ? undefined : anim[name];
+  }
+
+  function detectVariant(): CursorFxVariant {
     // Firefox чётко рисует SVG-курсоры на любом масштабе экрана; image-set в cursor
     // у него исторически работал ненадёжно
     if (CSS.supports('-moz-appearance', 'none')) return 'svg';
@@ -666,19 +831,19 @@
     return 'png';
   }
 
-  function readOverride() {
+  function readOverride(): CursorFxVariantSetting | null {
     var match = /[?&]cursor=([a-z]+)/.exec(window.location.search);
-    var value = match ? match[1] : null;
+    var value: string | null = match?.[1] ?? null;
     try {
       if (value === 'auto') window.localStorage.removeItem(STORE_KEY);
       else if (value) window.localStorage.setItem(STORE_KEY, value);
       else value = window.localStorage.getItem(STORE_KEY);
     } catch (err) { /* хранилище недоступно — действует только адрес */ }
-    return value === 'off' || VARIANTS.indexOf(value) >= 0 ? value : null;
+    return value === 'off' || VARIANTS.indexOf(value as CursorFxVariant) >= 0 ? value as CursorFxVariantSetting : null;
   }
 
   // hot — точка клика; у крестовины это центр, сдвинутый «физикой» (см. drift)
-  function cursorValue(frame, fallback, hot) {
+  function cursorValue(frame: CursorFrame, fallback: string, hot?: readonly number[]): string {
     hot = hot || frame.hot || CONFIG.hotspot;
     var at = ' ' + hot[0] + ' ' + hot[1];
     var mode = rasterBroken || !frame.png1 ? 'svg-only' : variant;
@@ -701,18 +866,24 @@
       'html.cfx :is(' + hover + '), html.cfx :is(' + hover + ') * { cursor: pointer !important; }\n' +
       'html.cfx :is(' + disabled + '), html.cfx :is(' + disabled + ') * { cursor: default !important; }\n' +
       'html.cfx.cfx-drag:is(.cfx-drag, #cfx-z#cfx-z#cfx-z), html.cfx.cfx-drag:is(.cfx-drag, #cfx-z#cfx-z#cfx-z) * { cursor: grabbing !important; }\n';
-    doc.head.appendChild(style);
+    doc.head!.appendChild(style);
     var list = style.sheet && style.sheet.cssRules;
     if (!list || list.length !== 4) { style.remove(); return false; }
-    rules = { default: list[0], hover: list[1], disabled: list[2], drag: list[3] };
+    rules = {
+      default: list[0] as CSSStyleRule,
+      hover: list[1] as CSSStyleRule,
+      disabled: list[2] as CSSStyleRule,
+      drag: list[3] as CSSStyleRule
+    };
     return true;
   }
 
-  function setRule(name, value) { rules[name].style.setProperty('cursor', value, 'important'); }
+  function setRule(name: CursorRuleName, value: string): void { rules![name].style.setProperty('cursor', value, 'important'); }
 
-  function valueOf(frame, fallback) {
+  function valueOf(frame: CursorFrame, fallback: string): string {
     frame.values = frame.values || {};
-    return frame.values[variant] || (frame.values[variant] = cursorValue(frame, fallback));
+    var variantKey = variant as string;
+    return frame.values[variantKey] || (frame.values[variantKey] = cursorValue(frame, fallback));
   }
 
   function animating() {
@@ -725,9 +896,9 @@
     if (!rules || !staticsReady) return;
     var moving = ready && !media.reduced.matches;
     setRule('default', valueOf(still.idle, 'default'));
-    setRule('hover', valueOf(moving ? anim.hover.frames[hoverStartIndex] : still.hover, 'pointer'));
+    setRule('hover', valueOf(moving ? anim.hover.frames[hoverStartIndex]! : still.hover, 'pointer'));
     setRule('disabled', valueOf(still.disabled, 'default'));
-    setRule('drag', valueOf(moving ? anim.drag.frames[0] : still.drag, 'grabbing'));
+    setRule('drag', valueOf(moving ? anim.drag.frames[0]! : still.drag, 'grabbing'));
     painted = '';
   }
 
@@ -736,19 +907,20 @@
   // берут курсор кто с элемента под мышью, кто с захватившего. Менять общее правило нельзя —
   // каждый кадр пересчитывал бы стили всей страницы (на каталоге в 3000 строк это 70 % ядра,
   // проверено).
-  function paintTargets() {
-    var list = [];
+  function paintTargets(): HTMLElement[] {
+    var list: HTMLElement[] = [];
     [lastTarget, active === 'drag' ? captureEl : null].forEach(function (el) {
-      if (el && el.nodeType === 1 && el.style && el.childElementCount <= CONFIG.maxChildren &&
-        list.indexOf(el) < 0) list.push(el);
+      var node = el as HTMLElement | null;
+      if (node && node.nodeType === 1 && node.style && node.childElementCount <= CONFIG.maxChildren &&
+        list.indexOf(node) < 0) list.push(node);
     });
     return list;
   }
 
-  function paint(a) {
+  function paint(a: CursorAnimation): void {
     var els = paintTargets(), frame = current(a);
     var value = a === anim.drag && (drift.ox || drift.oy)
-      ? cursorValue(frame, a.fallback, [frame.hot[0] - drift.ox, frame.hot[1] - drift.oy])
+      ? cursorValue(frame, a.fallback, [frame.hot![0] - drift.ox, frame.hot![1] - drift.oy])
       : valueOf(frame, a.fallback);
     styled.forEach(function (el) { if (els.indexOf(el) < 0) el.style.removeProperty('cursor'); });
     els.forEach(function (el) {
@@ -768,7 +940,8 @@
   // сдвиг мыши за кадр 60 Гц (на 144 Гц события приходят чаще, сдвиг пересчитывается),
   // сглаженный lerp. Картинка курсора не двигается — сдвигается точка клика внутри неё, поэтому
   // крест не обрезается краем картинки, а мышь не отстаёт ни на кадр.
-  var drift = { x: 0, y: 0, t: 0, vx: 0, vy: 0, ox: 0, oy: 0, timer: 0 };
+  var drift: { x: number; y: number; t: number; vx: number; vy: number; ox: number; oy: number; timer: CursorTimer } =
+    { x: 0, y: 0, t: 0, vx: 0, vy: 0, ox: 0, oy: 0, timer: 0 };
 
   function now() { return window.performance ? performance.now() : Date.now(); }
 
@@ -782,7 +955,7 @@
   // true — смещение изменилось
   function driftOffset() {
     var X = CONFIG.cross, k = X.scale / X.unit, max = X.drift.max * k;
-    function off(v) { return Math.round(Math.max(-max, Math.min(max, v * k))); }
+    function off(v: number): number { return Math.round(Math.max(-max, Math.min(max, v * k))); }
     var ox = off(drift.vx), oy = off(drift.vy);
     if (ox === drift.ox && oy === drift.oy) return false;
     drift.ox = ox;
@@ -791,7 +964,7 @@
   }
 
   // каждое движение мыши; во время перетаскивания обновляет скорость. true — надо перерисовать
-  function track(event) {
+  function track(event: PointerEvent): boolean {
     var t = now(), changed = false;
     if (active === 'drag' && animating()) {
       var frames = Math.max(0.25, Math.min(3, (t - drift.t) / 16.67));   // кадров 60 Гц с прошлого события
@@ -823,7 +996,7 @@
   function schedule() {
     clearTimeout(timer);
     timer = 0;
-    var a = anim[active];
+    var a = animationFor(active);
     // перетаскивание и «недоступно» — статичные правила, кадр в style не нужен
     if (!a || !enabled || !ready || media.reduced.matches) { unpaint(); return; }
     if (!animating()) return;   // пауза: последний кадр остаётся на месте
@@ -833,7 +1006,7 @@
 
   function tick() {
     timer = 0;
-    var a = anim[active];
+    var a = animationFor(active);
     if (!a || !animating()) return;
     if (a.introAt >= 0) {
       // появление закончилось — цикл с того же места
@@ -845,18 +1018,18 @@
     timer = setTimeout(tick, current(a).ms);
   }
 
-  function seek(a, t) {
+  function seek(a: CursorAnimation, t: number): number {
     for (var i = a.frames.length - 1; i >= 0; i--) {
-      if (a.frames[i].t <= t) return i;
+      if (a.frames[i]!.t! <= t) return i;
     }
     return 0;
   }
 
   // repaint — кадр тот же, но изменилось смещение крестовины
-  function classify(target, repaint) {
+  function classify(target?: Node | null, repaint?: boolean): void {
     if (target) lastTarget = target;
-    var el = lastTarget && lastTarget.nodeType === 1 ? lastTarget : null;
-    var state = 'default';
+    var el = lastTarget && lastTarget.nodeType === 1 ? lastTarget as Element : null;
+    var state: CursorStateName = 'default';
     if (root.classList.contains('cfx-drag')) state = 'drag';
     else if (el && el.closest(CONFIG.disabled)) state = 'disabled';
     else if (el && el.closest(CONFIG.hover)) state = 'hover';
@@ -870,8 +1043,8 @@
       }
       active = state;
       schedule();
-    } else if ((repaint || styled.indexOf(el) < 0) && anim[active] && animating()) {
-      paint(anim[active]);   // мышь перешла на другой элемент — кадр переезжает за ней
+    } else if ((repaint || styled.indexOf(el as HTMLElement) < 0) && animationFor(active) && animating()) {
+      paint(animationFor(active)!);
     }
   }
 
@@ -889,14 +1062,15 @@
     classify();
   }
 
-  function finePointer(event) {
+  function finePointer(event: PointerEvent): boolean {
     return !event.pointerType || event.pointerType === 'mouse' || event.pointerType === 'pen';
   }
 
-  function onDown(event) {
+  function onDown(event: PointerEvent): void {
     // левая кнопка и колесо — ими карты тащат; правая и боковые — нет (см. CONFIG.hold)
     if (!enabled || event.button > 1 || !finePointer(event)) return;
-    var el = event.target && event.target.nodeType === 1 ? event.target : null;
+    var targetNode = event.target as Node | null;
+    var el = targetNode && targetNode.nodeType === 1 ? targetNode as Element : null;
     if (!el || !el.closest(CONFIG.dragWatch) || el.closest(CONFIG.hold.skip)) return;
     // щелчок бывает только левой кнопкой (так у карт: click в galaxy.js, onPointerUp в app.js);
     // колесом сектор и систему не выбрать — нажатие колесом лишь тащит карту, крестовина сразу.
@@ -907,13 +1081,14 @@
     updateDrag();
   }
 
-  function onUp(event) {
-    if (!hold || (event && event.pointerId != null && event.pointerId !== hold.id)) return;
+  function onUp(event?: Event): void {
+    var pointerEvent = event as PointerEvent | undefined;
+    if (!hold || (pointerEvent && pointerEvent.pointerId != null && pointerEvent.pointerId !== hold.id)) return;
     hold = null;
     updateDrag();
   }
 
-  function onMove(event) {
+  function onMove(event: PointerEvent): void {
     if (!finePointer(event)) return;
     if (outside) { outside = false; schedule(); }
     if (hold && !event.buttons) {
@@ -923,7 +1098,7 @@
       hold.moved = true;
       if (hold.click) updateDrag();
     }
-    var target = event.target, moved = false;
+    var target: Node | null = event.target as Node | null, moved = false;
     if (event.type === 'pointermove') {
       moved = track(event);
       // при захвате указателя событие приходит карте, а не элементу под мышью — его находим сами
@@ -946,7 +1121,7 @@
     window.addEventListener('blur', function () { onUp(); });
     // кто держит захват указателя: пока карту тянут, кадр ставится и ей (см. paint)
     window.addEventListener('gotpointercapture', function (event) {
-      captureEl = event.target;
+      captureEl = event.target as Node | null;
       if (active === 'drag' && animating()) paint(anim.drag);
     }, true);
     window.addEventListener('lostpointercapture', function (event) {
@@ -959,7 +1134,7 @@
     var watched = doc.querySelectorAll(CONFIG.dragWatch);
     if (watched.length && window.MutationObserver) {
       var observer = new MutationObserver(updateDrag);
-      Array.prototype.forEach.call(watched, function (el) {
+      Array.prototype.forEach.call(watched, function (el: Element) {
         observer.observe(el, { attributes: true, attributeFilter: ['class'] });
       });
     }
@@ -967,20 +1142,21 @@
     listen(media.contrast, function () { if (media.contrast.matches) disable(); else enable(); });
   }
 
-  function listen(query, fn) {
+  function listen(query: MediaQueryList, fn: () => void): void {
     if (query.addEventListener) query.addEventListener('change', fn);
     else if (query.addListener) query.addListener(fn);
   }
 
   // --- запуск ------------------------------------------------------------------------------
 
-  var built = null;
+  var built: Promise<unknown> | null = null;
 
-  function build() {
+  function build(): Promise<unknown> {
     if (built) return built;
     started = window.performance ? performance.now() : Date.now();
-    var statics = [still.idle, still.drag, still.disabled, still.hover];
-    var all = statics.concat(anim.default.frames, anim.hover.frames, anim.drag.frames, anim.drag.intro);
+    var statics: CursorFrame[] = [still.idle, still.drag, still.disabled, still.hover];
+    var all: CursorFrame[] = [...statics, ...anim.default.frames, ...anim.hover.frames,
+      ...anim.drag.frames, ...anim.drag.intro];
     all.forEach(function (frame) {
       frame.svg1 = frameSVG(frame.f, CONFIG.size);
       frame.svg = svgUrl(frame.svg1);
@@ -1021,15 +1197,15 @@
     root.classList.remove('cfx', 'cfx-drag');
   }
 
-  function setVariant(name) {
+  function setVariant(name?: string | null): void {
     try {
       if (!name || name === 'auto') window.localStorage.removeItem(STORE_KEY);
       else window.localStorage.setItem(STORE_KEY, name);
     } catch (err) { /* только на эту страницу */ }
-    variant = name && name !== 'auto' ? name : autoVariant;
+    variant = name && name !== 'auto' ? name as CursorFxVariantSetting : autoVariant;
     unpaint();
     if (variant === 'off') { disable(); return; }
-    if (VARIANTS.indexOf(variant) < 0) variant = autoVariant;
+    if (VARIANTS.indexOf(variant as CursorFxVariant) < 0) variant = autoVariant;
     if (enabled) { showAll(); schedule(); } else enable();
   }
 
@@ -1044,9 +1220,11 @@
       };
     },
     frames: function () {
-      function list(frames) { return frames.map(function (fr) { return { t: fr.t, ms: fr.ms, png: fr.png2 || fr.svg, svg: fr.svg }; }); }
+      function list(frames: readonly CursorFrame[]): CursorFxFrameInfo[] {
+        return frames.map(function (fr) { return { t: fr.t, ms: fr.ms, png: fr.png2 || fr.svg, svg: fr.svg }; });
+      }
       return { default: list(anim.default.frames), hover: list(anim.hover.frames), drag: list(anim.drag.frames),
-        dragIntro: list(anim.drag.intro), still: { drag: list([still.drag])[0], disabled: list([still.disabled])[0] } };
+        dragIntro: list(anim.drag.intro), still: { drag: list([still.drag])[0]!, disabled: list([still.disabled])[0]! } };
     },
     setVariant: setVariant,
     enable: enable,

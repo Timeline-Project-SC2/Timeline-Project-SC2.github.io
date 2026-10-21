@@ -64,10 +64,70 @@
 
    prefers-reduced-motion: эффекты не запускаются, attach возвращает заглушку с теми
    же методами — вызывающему коду проверять ничего не нужно. */
-(function (global) {
+
+export type LagFxBurstKind = 'tear' | 'wave' | 'both';
+export type LagFxRange = readonly [number, number];
+
+export interface LagFxConfig {
+  readonly bands: number;
+  readonly gap: LagFxRange;
+  readonly mix: { readonly tear: number; readonly wave: number };
+  readonly tear: {
+    readonly group: number;
+    readonly step: number;
+    readonly chance: number;
+    readonly min: number;
+    readonly max: number;
+    readonly ms: LagFxRange;
+  };
+  readonly wave: { readonly ms: number; readonly half: number; readonly amp: number };
+  readonly sweep: {
+    readonly gap: LagFxRange;
+    readonly ms: number;
+    readonly lag: number;
+    readonly edge: number;
+    readonly half: number;
+    readonly amp: number;
+  };
+}
+
+export interface LagFxOptions {
+  readonly busy?: () => boolean;
+  readonly src?: () => string;
+  readonly autoplay?: boolean;
+  readonly zIndex?: number | string;
+  readonly bands?: number;
+  readonly gap?: LagFxRange;
+  readonly mix?: Partial<LagFxConfig['mix']>;
+  readonly tear?: Partial<LagFxConfig['tear']>;
+  readonly wave?: Partial<LagFxConfig['wave']>;
+  readonly sweep?: Partial<LagFxConfig['sweep']>;
+}
+
+export interface LagFxController {
+  burst(kind?: LagFxBurstKind): void;
+  sweep(): void;
+  pause(): void;
+  resume(): void;
+  destroy(): void;
+  active(): boolean;
+}
+
+export interface LagFxApi {
+  attach(img: HTMLImageElement | null | undefined, options?: LagFxOptions): LagFxController;
+  readonly defaults: LagFxConfig;
+}
+
+declare global {
+  interface Window {
+    LagFx: LagFxApi;
+  }
+}
+
+(function (global: Window) {
   'use strict';
 
-  var DEFAULTS = {
+  var DEFAULTS: LagFxConfig = {
     bands: 240,
     gap: [4000, 9000],
     mix: { tear: 0.4, wave: 0.3 },
@@ -76,29 +136,43 @@
     sweep: { gap: [9000, 14000], ms: 10000, lag: 1600, edge: 0.05, half: 0.004, amp: 0.45 }
   };
 
-  function merge(base, over) {
-    var out = {};
+  function mergeValues(
+    base: Readonly<Record<string, unknown>>,
+    over: Readonly<Record<string, unknown>> | undefined,
+  ): Record<string, unknown> {
+    var out: Record<string, unknown> = {};
     Object.keys(base).forEach(function (k) {
       var b = base[k], o = over ? over[k] : undefined;
-      if (b && typeof b === 'object' && !Array.isArray(b)) out[k] = merge(b, o);
-      else out[k] = o === undefined ? b : o;
+      if (b && typeof b === 'object' && !Array.isArray(b)) {
+        out[k] = mergeValues(
+          b as Readonly<Record<string, unknown>>,
+          o as Readonly<Record<string, unknown>> | undefined,
+        );
+      } else out[k] = o === undefined ? b : o;
     });
     return out;
   }
 
-  function rand(a, b) { return a + Math.random() * (b - a); }
+  function merge(base: LagFxConfig, over: LagFxOptions): LagFxConfig {
+    return mergeValues(
+      base as unknown as Readonly<Record<string, unknown>>,
+      over as Readonly<Record<string, unknown>>,
+    ) as unknown as LagFxConfig;
+  }
 
-  var NOOP = {
+  function rand(a: number, b: number): number { return a + Math.random() * (b - a); }
+
+  var NOOP: LagFxController = {
     burst: function () {}, sweep: function () {}, pause: function () {}, resume: function () {},
     destroy: function () {}, active: function () { return false; }
   };
 
-  function attach(img, options) {
+  function attach(img: HTMLImageElement | null | undefined, options?: LagFxOptions): LagFxController {
     if (!img || !img.parentNode) return NOOP;
     if (global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches) return NOOP;
 
     var opt = options || {};
-    var cfg = merge(DEFAULTS, opt);
+    var cfg: LagFxConfig = merge(DEFAULTS, opt);
     var N = Math.max(8, cfg.bands | 0);
     var G = Math.max(1, cfg.tear.group | 0);
     var userBusy = typeof opt.busy === 'function' ? opt.busy : function () { return false; };
@@ -111,8 +185,8 @@
     layer.setAttribute('aria-hidden', 'true');
     layer.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;display:none;';
     if (opt.zIndex != null) layer.style.zIndex = String(opt.zIndex);
-    var bands = [];
-    var tearDx = [];
+    var bands: HTMLDivElement[] = [];
+    var tearDx: number[] = [];
     for (var i = 0; i < N; i++) {
       var band = document.createElement('div');
       band.className = 'lag-fx-band';
@@ -133,11 +207,11 @@
       if (!cur || cur === bandSrc) return;
       bandSrc = cur;
       var css = 'url("' + String(cur).replace(/"/g, '%22') + '")';
-      for (var k = 0; k < N; k++) bands[k].style.backgroundImage = css;
+      for (var k = 0; k < N; k++) bands[k]!.style.backgroundImage = css;
     }
 
-    var burst = null;     // идущий всплеск: { kind, start, dur }
-    var sweeps = [];      // линии: [{ start }]
+    var burst: { kind: LagFxBurstKind; start: number; dur: number } | null = null;
+    var sweeps: Array<{ start: number }> = [];
     var raf = 0;
     var timerBurst = 0;
     var timerSweep = 0;
@@ -148,7 +222,7 @@
     function busy() { return document.hidden || paused || dead || !!userBusy(); }
 
     function clearBands() {
-      for (var k = 0; k < N; k++) bands[k].style.transform = '';
+      for (var k = 0; k < N; k++) bands[k]!.style.transform = '';
     }
 
     function stopAll() {
@@ -173,13 +247,15 @@
       return 'both';
     }
 
-    function startBurst(kind) {
+    function startBurst(kind?: string): void {
       if (burst || busy()) return;
-      kind = kind === 'tear' || kind === 'wave' || kind === 'both' ? kind : pickKind();
+      var burstKind: LagFxBurstKind = kind === 'tear' || kind === 'wave' || kind === 'both'
+        ? kind
+        : pickKind();
       burst = {
-        kind: kind,
+        kind: burstKind,
         start: global.performance.now(),
-        dur: kind === 'tear' ? rand(cfg.tear.ms[0], cfg.tear.ms[1]) : cfg.wave.ms
+        dur: burstKind === 'tear' ? rand(cfg.tear.ms[0], cfg.tear.ms[1]) : cfg.wave.ms
       };
       lastTear = 0;
       run();
@@ -212,7 +288,7 @@
       }, rand(cfg.sweep.gap[0], cfg.sweep.gap[1]));
     }
 
-    function tick(now) {
+    function tick(now: number): void {
       raf = 0;
       if (busy()) {
         // переход или пауза: гасим сразу, следующий запуск — по расписанию
@@ -250,10 +326,10 @@
 
       // Линии: фронты активных (уже стартовавших) линий
       var S = cfg.sweep;
-      var fronts = [];
+      var fronts: number[] = [];
       var sweepEnded = false;
       for (var q = sweeps.length - 1; q >= 0; q--) {
-        var s = (now - sweeps[q].start) / S.ms;
+        var s = (now - sweeps[q]!.start) / S.ms;
         if (s >= 1) {
           sweeps.splice(q, 1);
           sweepEnded = true;
@@ -268,15 +344,15 @@
 
       for (var j = 0; j < N; j++) {
         var c = (j + 0.5) / N;
-        var dx = tear ? tearDx[j] : 0;
+        var dx = tear ? tearDx[j]! : 0;
         if (wave) {
           var d = (c - waveFront) / W.half;
           if (Math.abs(d) < 1.6) dx += W.amp * Math.exp(-d * d) * Math.sin(d * Math.PI * 2);
         }
         for (var f = 0; f < fronts.length; f++) {
-          if (Math.abs(c - fronts[f]) < S.half) { dx += S.amp; break; }
+          if (Math.abs(c - fronts[f]!) < S.half) { dx += S.amp; break; }
         }
-        bands[j].style.transform = dx ? 'translate3d(' + dx.toFixed(2) + '%,0,0)' : '';
+        bands[j]!.style.transform = dx ? 'translate3d(' + dx.toFixed(2) + '%,0,0)' : '';
       }
       raf = global.requestAnimationFrame(tick);
     }
@@ -285,7 +361,7 @@
     scheduleSweep();
 
     return {
-      burst: function (kind) { startBurst(kind); },
+      burst: function (kind?: LagFxBurstKind) { startBurst(kind); },
       sweep: function () { startSweeps(); },
       pause: function () { paused = true; stopAll(); },
       resume: function () {
