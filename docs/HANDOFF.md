@@ -178,14 +178,15 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 ```
 site/                  ← вход Vite-сборки; публикуется собранная .publish/
 ├── index.html         карта галактики, открывается по /
-├── galaxy.js  galaxy.css
+├── galaxy.ts  galaxy.css
 ├── sector/sector.html   вариант-вход атласа (общая разметка — templates/atlas-shell.html)
 ├── minimal/minimal.html вариант-вход атласа + minimal-skin.css
 ├── cursor-test/       страница проверки курсора (/cursor-test/, ссылок с сайта нет)
 ├── spiral-test/       демо и настройка ядра спирали (/spiral-test/, ссылок с сайта нет)
-└── shared/            app.js, links.js, timeline-loader.js, focus-fx.js, lag-fx.js, cursor-fx.js,
-                       galaxy-spiral.js + все общие CSS
-templates/atlas-shell.html общая разметка sector/minimal (варианты задаёт vite.config.mts)
+└── shared/            links.ts, timeline-loader.ts, travel-planner.ts, focus-fx.ts, lag-fx.ts,
+                       cursor-fx.ts, galaxy-spiral.ts + все общие CSS
+templates/atlas-shell.html общая разметка sector/minimal (варианты — src/atlas/atlas-variants.ts)
+src/atlas/             модульный TypeScript атласа; app.ts публикуется как shared/app-<hash>.js
 vite.config.mts, tsconfig.json строгая TS-конфигурация и сборщик публикации .publish/
 src/contracts/planet-generation-contract.json единый контракт planet_generation для Python и TS
 
@@ -336,11 +337,11 @@ docs/, tools/, .github/ — служебное
 
 | Файл | Что там |
 |---|---|
-| `site/shared/focus-fx.js` | анимация: в начале файла — этапы, подключение и договорённость о камере; `T` — длительности, `G` — геометрия. API: `select({stage, target, frame, mapFrame, onLock, onContract})`, `release(done)`, `start({stage, target, frame, camera, contour, mapFrame, timing, zooms, ending, preview, onLock, onZoom, onCenter, onDeny, onEnd})`, `active()`, `refresh()`, `stop()`. Слои (затемнение, холст, превью) ставит сам |
-| `site/shared/lag-fx.js` | «лаги» картинки: `LagFx.attach(img, {busy, …})` → `burst()`, `sweep()`, `pause()`, `resume()`, `destroy()`; настройки — `LagFx.defaults` |
-| `site/shared/galaxy-spiral.js` | спираль: `create` (ядро: `resize`/`view`/`populate`/`frame`/`set`), `mount` (демо `/spiral-test/`), `overlay` (слой на карте: холст в % слоя, узор `patternFromImage`, 30 кадров в покое, без слоя при «уменьшении движения») |
-| `site/galaxy.js` | `CONFIG`: тайминг первого клика (`focusMs`, `focusZoomDelay`, `focusZoomMs` — приближение после центрирования, `focusZoomOutMs`), `focusZoom`, `framePad`, `frameMinVisible`, переход (`diveCenterMs`, `diveZoomDelay`, `diveZoomMs`, `diveZooms: [20]`), спираль поверх карты (`CONFIG.spiral` → `GalaxySpiral.overlay`), `camera` (get / set вида для модуля), `boxOf` / `frameData` / `frameOf`, `selectArea`, `hidePanel` / `closePanel` / `clearAreas`, `focusArea`, `runTransition` / `runZerusTransition` / `runOdzTransition`, сброс при возврате «Назад» (bfcache); `LagFx.attach` молчит на время перехода; `sharpenMap` — чёткость карты при приближении |
-| `site/shared/app.js` и вариант `sector` в `templates/atlas-shell.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. Shift+клик копирует X и Y через табуляцию для вставки в два столбца; в minimal-скине кнопки readout нет, обработчик копирования работает условно на секторной карте |
+| `site/shared/focus-fx.ts` | анимация: в начале файла — этапы, подключение и договорённость о камере; `T` — длительности, `G` — геометрия. API: `select({stage, target, frame, mapFrame, onLock, onContract})`, `release(done)`, `start({stage, target, frame, camera, contour, mapFrame, timing, zooms, ending, preview, onLock, onZoom, onCenter, onDeny, onEnd})`, `active()`, `refresh()`, `stop()`. Слои (затемнение, холст, превью) ставит сам |
+| `site/shared/lag-fx.ts` | «лаги» картинки: `LagFx.attach(img, {busy, …})` → `burst()`, `sweep()`, `pause()`, `resume()`, `destroy()`; настройки — `LagFx.defaults` |
+| `site/shared/galaxy-spiral.ts` | спираль: `create` (ядро: `resize`/`view`/`populate`/`frame`/`set`), `mount` (демо `/spiral-test/`), `overlay` (слой на карте: холст в % слоя, узор `patternFromImage`, 30 кадров в покое, без слоя при «уменьшении движения») |
+| `site/galaxy.ts` | `CONFIG`: тайминг первого клика (`focusMs`, `focusZoomDelay`, `focusZoomMs` — приближение после центрирования, `focusZoomOutMs`), `focusZoom`, `framePad`, `frameMinVisible`, переход (`diveCenterMs`, `diveZoomDelay`, `diveZoomMs`, `diveZooms: [20]`), спираль поверх карты (`CONFIG.spiral` → `GalaxySpiral.overlay`), `camera` (get / set вида для модуля), `boxOf` / `frameData` / `frameOf`, `selectArea`, `hidePanel` / `closePanel` / `clearAreas`, `focusArea`, `runTransition` / `runZerusTransition` / `runOdzTransition`, сброс при возврате «Назад» (bfcache); `LagFx.attach` молчит на время перехода; `sharpenMap` — чёткость карты при приближении |
+| `src/atlas/coords-readout.ts` и вариант `sector` в `templates/atlas-shell.html` | отключаемый readout координат курсора только на карте сектора; использует `toWorld()` и `mapSize()`, по умолчанию выключен и скрывается вне карты. Shift+клик копирует X и Y через табуляцию для вставки в два столбца; в minimal-скине кнопки readout нет, обработчик копирования работает условно на секторной карте |
 | `site/sector/sector.css` | оформление секторного readout координат, подключается только на карте сектора |
 | `site/index.html` | у квадратов `data-frame="л в п н"` — блок области в % карты (с полем ≈ 0.9 %); когда картинки и надписи станут отдельными элементами сайта, рамку можно считать от них |
 | `site/galaxy.css` | цвета прицела CSS-переменными `--focus-core/-light/-shadow/-glow` и `--focus-dim` на `.galaxy-stage`, `.is-red-target`, `.is-odz-ping` |

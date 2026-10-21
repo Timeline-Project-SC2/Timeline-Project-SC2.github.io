@@ -117,11 +117,214 @@
    prefers-reduced-motion: прицел сразу на цели, без мигания и раскрытий; камера при
    переходе не двигается (ни центрирования, ни приближения), финал 'reveal' — уход
    в темноту. */
-(function (global) {
+
+export type FocusFxMode = 'select' | 'go' | 'release';
+export type FocusFxEnding = 'reveal' | 'fade' | 'error' | 'deny';
+export type FocusFxColorTriplet = readonly [number, number, number];
+
+export interface FocusFxPalette {
+  readonly core: FocusFxColorTriplet;
+  readonly light: FocusFxColorTriplet;
+  readonly shadow: FocusFxColorTriplet;
+  readonly glow: FocusFxColorTriplet;
+}
+
+export interface FocusFxTimings {
+  appear: number; trackMin: number; trackMax: number; trackPerPx: number;
+  lock: number; relock: number; relocate: number; mapOutline: number;
+  contract: number; expand: number; snap: number; narrow: number;
+  centerMin: number; centerMax: number; centerPerPx: number; zoom: number;
+  zoomDelay: number; focusCenter: number; focusZoom: number; reset: number;
+  reveal: number; still: number; fade: number; error: number; deny: number;
+  collapse: number; release: number; color: number;
+}
+
+export interface FocusFxGeometry {
+  stroke: number; strokeMin: number; strokeMax: number; boxW: number;
+  boxH: number; fit: number; fitMin: number; fitMax: number; loose: number;
+  overshoot: number; overshootPx: number; frameOver: number; lag: number;
+  lagMin: number; glintSpeed: number; glintCount: number;
+  veil: FocusFxColorTriplet; revealVeil: number; lockScreen: boolean; zIndex: number;
+}
+
+export interface FocusFxTargetRect {
+  readonly l: number; readonly t: number; readonly r: number; readonly b: number;
+  readonly cx: number; readonly cy: number; readonly w: number;
+}
+
+export interface FocusFxFrameRect {
+  readonly l: number; readonly t: number; readonly r: number; readonly b: number;
+}
+
+export interface FocusFxPoint { readonly x: number; readonly y: number; }
+export interface FocusFxCameraView { readonly s: number; readonly tx: number; readonly ty: number; }
+
+export interface FocusFxCamera {
+  get(): FocusFxCameraView;
+  set(view: FocusFxCameraView): void;
+}
+
+export interface FocusFxSelectOptions {
+  readonly stage: HTMLElement;
+  readonly target: () => FocusFxTargetRect;
+  readonly frame?: () => FocusFxFrameRect | null | undefined;
+  readonly mapFrame?: () => FocusFxFrameRect | null | undefined;
+  readonly onLock?: ((step?: number) => void) | null;
+  readonly onContract?: (() => void) | null;
+  readonly instant?: boolean;
+}
+
+export interface FocusFxStartOptions {
+  readonly stage: HTMLElement;
+  readonly target: () => FocusFxTargetRect;
+  readonly frame?: () => FocusFxFrameRect | null | undefined;
+  readonly mapFrame?: () => FocusFxFrameRect | null | undefined;
+  readonly camera?: FocusFxCamera | null;
+  readonly contour?: boolean;
+  readonly timing?: Partial<{ center: number; pause: number; zoom: number }>;
+  readonly lockScreen?: boolean;
+  readonly zooms?: readonly number[];
+  readonly ending?: string;
+  readonly preview?: string;
+  readonly onCenter?: ((ms: number) => void) | null;
+  readonly onLock?: ((step?: number) => void) | null;
+  readonly onZoom?: ((step: number | undefined, ms: number, level: number | undefined, to: FocusFxPoint) => void) | null;
+  readonly onDeny?: ((ms: number) => void) | null;
+  readonly onEnd?: (() => void) | null;
+}
+
+export interface FocusFxApi {
+  select(opts: FocusFxSelectOptions): void;
+  release(done?: (() => void) | null): void;
+  start(opts: FocusFxStartOptions): void;
+  active(): FocusFxMode | 'idle' | null;
+  refresh(): void;
+  stop(): void;
+  readonly T: FocusFxTimings;
+  readonly G: FocusFxGeometry;
+}
+
+declare global {
+  interface Window {
+    FocusFx: FocusFxApi;
+  }
+}
+
+type FocusPublicOptions = FocusFxSelectOptions | FocusFxStartOptions;
+
+interface FocusSize { readonly w: number; readonly h: number; }
+interface FocusFrameCenter { readonly x: number; readonly y: number; readonly w: number; readonly h: number; }
+interface FocusMetrics { readonly m: number; readonly sw: number; readonly rest: FocusSize; }
+interface FocusCameraStyle { readonly ease: (t: number) => number; readonly linear?: boolean; }
+type FocusCameraPlan =
+  | { readonly kind: 'pan'; readonly c0: FocusFxCameraView; readonly dx: number; readonly dy: number; readonly style: FocusCameraStyle | null }
+  | { readonly kind: 'zoom'; readonly c0: FocusFxCameraView; readonly s1: number; readonly style: FocusCameraStyle | null; readonly p0: FocusFxPoint; readonly to: FocusFxPoint; readonly wx: number; readonly wy: number };
+
+interface FocusRunOptions {
+  readonly target: () => FocusFxTargetRect;
+  readonly frame: (() => FocusFxFrameRect | null | undefined) | null;
+  readonly mapFrame: (() => FocusFxFrameRect | null | undefined) | null;
+  readonly camera: FocusFxCamera | null;
+  readonly contour: boolean;
+  readonly timing: { readonly center: number; readonly pause: number; readonly zoom: number };
+  readonly lockScreen: boolean | null;
+  readonly zooms: number[];
+  readonly ending: FocusFxEnding;
+  readonly preview: string;
+  readonly onCenter: ((ms: number) => void) | null;
+  readonly onLock: ((step?: number) => void) | null;
+  readonly onContract: (() => void) | null;
+  readonly onZoom: ((step: number | undefined, ms: number, level: number | undefined, to: FocusFxPoint) => void) | null;
+  readonly onDeny: ((ms: number) => void) | null;
+  onEnd: (() => void) | null;
+}
+
+interface FocusSnapshot {
+  readonly x: number; readonly y: number; readonly w: number; readonly h: number;
+  readonly ax: number; readonly ay: number; readonly alpha: number; readonly reach: number;
+  readonly frameProgress: number; readonly rayBuild?: number | undefined; readonly channelAlpha?: number | undefined;
+  readonly veil: number; readonly reveal: number;
+}
+
+interface FocusPhase {
+  readonly kind: string;
+  ms: number;
+  readonly step?: number;
+  readonly last?: boolean;
+  readonly follow?: boolean;
+  readonly loosen?: boolean;
+  from?: FocusSnapshot;
+  ov?: number;
+  off?: FocusFxPoint;
+  offA?: FocusFxPoint;
+  cam?: FocusCameraPlan;
+}
+
+interface FocusState {
+  x: number; y: number; w: number; h: number; ax: number; ay: number;
+  frameProgress: number; rayBuild?: number | undefined; channelAlpha: number; reach: number;
+  alpha: number; vis: number; fill: number; hot: number;
+  veil: number; reveal: number; flowDirection?: number;
+}
+
+interface FocusRunFrom {
+  readonly pos: FocusFxPoint;
+  readonly box: FocusSize;
+  readonly aim: FocusFxPoint;
+  readonly alpha: number;
+  readonly reach: number;
+  readonly frameProgress?: number | undefined;
+  readonly rayBuild?: number | undefined;
+  readonly channelAlpha?: number | undefined;
+}
+
+interface FocusRun {
+  readonly o: FocusRunOptions;
+  readonly mode: FocusFxMode;
+  readonly phases: FocusPhase[];
+  i: number;
+  t0: number;
+  pos: FocusFxPoint;
+  box: FocusSize;
+  aim: FocusFxPoint;
+  alpha: number;
+  reach: number;
+  frameProgress: number;
+  rayBuild?: number | undefined;
+  channelAlpha?: number | undefined;
+  veil: number;
+  reveal: number;
+  fixed: FocusSize | null;
+  raf: number;
+}
+
+interface FocusShapeRect {
+  readonly x: number; readonly y: number; readonly w: number; readonly h: number;
+  readonly v: boolean; alpha?: number;
+  ex?: number; ey?: number; dx?: number; dy?: number; len?: number; flow?: number;
+}
+
+interface FocusLineShape extends FocusShapeRect {
+  ex: number; ey: number; dx: number; dy: number; len: number; flow: number;
+}
+
+interface FocusTrack {
+  readonly ex: number; readonly ey: number; readonly dx: number; readonly dy: number;
+  readonly len: number; readonly v: boolean; readonly flow: number; readonly alpha?: number;
+}
+
+interface FocusShapes {
+  readonly lines: FocusLineShape[];
+  readonly box: FocusShapeRect[];
+  readonly tracks: FocusTrack[];
+  readonly l: number; readonly t: number; readonly w: number; readonly h: number;
+}
+
+(function (global: Window) {
   'use strict';
 
   // Длительности этапов, мс
-  var T = {
+  var T: FocusFxTimings = {
     appear: 190,      // появление: мигание рамки, линии к краям
     trackMin: 380,    // наведение: не короче…
     trackMax: 700,    // …и не длиннее
@@ -153,7 +356,7 @@
   };
 
   // Геометрия — доли меньшей стороны сцены (в брифинге — доли высоты кадра)
-  var G = {
+  var G: FocusFxGeometry = {
     stroke: 0.0115,   // толщина линий и рамки (в брифинге ≈ 1.2 % высоты кадра)
     strokeMin: 3,     // px
     strokeMax: 11,    // px
@@ -178,7 +381,7 @@
     zIndex: 3         // слой затемнения, прицела и превью внутри сцены
   };
 
-  var DEFAULT_PALETTE = {
+  var DEFAULT_PALETTE: FocusFxPalette = {
     core: [34, 150, 58],
     light: [176, 255, 186],
     shadow: [0, 30, 6],
@@ -187,30 +390,33 @@
 
   var reduceMotion = !!(global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-  var run = null;          // текущий сценарий: mode 'select' | 'go' | 'release'
-  var stageEl = null;
-  var dimEl = null;
-  var canvas = null;
-  var previewEl = null;
-  var ctx = null;
+  var run: FocusRun | null = null;
+  var stageEl: HTMLElement | null = null;
+  var dimEl: HTMLDivElement | null = null;
+  var canvas: HTMLCanvasElement | null = null;
+  var previewEl: HTMLImageElement | null = null;
+  var ctx: CanvasRenderingContext2D | null = null;
   var cw = 0, ch = 0, dpr = 1;
-  var palFrom = null, palTo = null, palT0 = 0, palClass = null;
+  var palFrom: FocusFxPalette | null = null;
+  var palTo: FocusFxPalette | null = null;
+  var palT0 = 0;
+  var palClass: string | null = null;
 
   /* ---------- математика ---------- */
-  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
-  function lerp(a, b, k) { return a + (b - a) * k; }
-  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
-  function easeInCubic(t) { return t * t * t; }
-  function easeInOutCubic(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
-  function easeInOutSine(t) { return -(Math.cos(Math.PI * t) - 1) / 2; }
-  function smoothstep(a, b, x) { var t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
-  function pulse(u, a, b) { return u > a && u < b ? Math.sin(Math.PI * (u - a) / (b - a)) : 0; }
-  function mod(v, m) { return ((v % m) + m) % m; }
+  function clamp(v: number, lo: number, hi: number): number { return Math.min(hi, Math.max(lo, v)); }
+  function lerp(a: number, b: number, k: number): number { return a + (b - a) * k; }
+  function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
+  function easeInCubic(t: number): number { return t * t * t; }
+  function easeInOutCubic(t: number): number { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+  function easeInOutSine(t: number): number { return -(Math.cos(Math.PI * t) - 1) / 2; }
+  function smoothstep(a: number, b: number, x: number): number { var t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+  function pulse(u: number, a: number, b: number): number { return u > a && u < b ? Math.sin(Math.PI * (u - a) / (b - a)) : 0; }
+  function mod(v: number, m: number): number { return ((v % m) + m) % m; }
   // Псевдослучайное 0..1 от целого: одно и то же на каждом кадре (срыв, разброс бликов)
-  function hash(n) { var x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+  function hash(n: number): number { var x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
   // Наведение «как сервопривод»: плавный разгон, перелёт на ov, мягкий возврат
-  function servo(u, ov) {
+  function servo(u: number, ov: number): number {
     if (u <= 0) return 0;
     if (u >= 1) return 1;
     if (u < 0.78) return (1 + ov) * easeInOutCubic(u / 0.78);
@@ -218,7 +424,7 @@
   }
 
   // Мигание при появлении: вспыхнула — пропала — горит
-  function flicker(u) {
+  function flicker(u: number): number {
     if (reduceMotion) return 1;
     if (u < 0.2) return 0.85;
     if (u < 0.4) return 0;
@@ -226,15 +432,15 @@
   }
 
   /* ---------- цвета из CSS ---------- */
-  function readTriplet(cs, name, fallback) {
+  function readTriplet(cs: CSSStyleDeclaration, name: string, fallback: FocusFxColorTriplet): FocusFxColorTriplet {
     var v = String(cs.getPropertyValue(name) || '').split(',').map(parseFloat);
     if (v.length !== 3) return fallback;
-    for (var i = 0; i < 3; i++) if (!isFinite(v[i])) return fallback;
-    return v;
+    for (var i = 0; i < 3; i++) if (!isFinite(v[i]!)) return fallback;
+    return v as unknown as FocusFxColorTriplet;
   }
 
   function readPalette() {
-    var cs = global.getComputedStyle(canvas);
+    var cs = global.getComputedStyle(canvas!);
     return {
       core: readTriplet(cs, '--focus-core', DEFAULT_PALETTE.core),
       light: readTriplet(cs, '--focus-light', DEFAULT_PALETTE.light),
@@ -243,33 +449,33 @@
     };
   }
 
-  function mix(a, b, k) { return [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
-  function rgba(c, a) {
+  function mix(a: FocusFxColorTriplet, b: FocusFxColorTriplet, k: number): FocusFxColorTriplet { return [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
+  function rgba(c: FocusFxColorTriplet, a: number): string {
     return 'rgba(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ',' + clamp(a, 0, 1).toFixed(3) + ')';
   }
 
-  function currentPalette(now) {
+  function currentPalette(now: number): FocusFxPalette {
     var k = palFrom === palTo ? 1 : easeInOutSine(clamp((now - palT0) / T.color, 0, 1));
-    if (k >= 1) return palTo;
+    if (k >= 1) return palTo!;
     return {
-      core: mix(palFrom.core, palTo.core, k),
-      light: mix(palFrom.light, palTo.light, k),
-      shadow: mix(palFrom.shadow, palTo.shadow, k),
-      glow: mix(palFrom.glow, palTo.glow, k)
+      core: mix(palFrom!.core, palTo!.core, k),
+      light: mix(palFrom!.light, palTo!.light, k),
+      shadow: mix(palFrom!.shadow, palTo!.shadow, k),
+      glow: mix(palFrom!.glow, palTo!.glow, k)
     };
   }
 
   // Класс сцены сменился (например, отказ — прицел краснеет): цвет перетекает
-  function syncPalette(now) {
-    if (stageEl.className === palClass) return;
-    palClass = stageEl.className;
+  function syncPalette(now: number): void {
+    if (stageEl!.className === palClass) return;
+    palClass = stageEl!.className;
     palFrom = currentPalette(now);
     palTo = readPalette();
     palT0 = now;
   }
 
   /* ---------- слои в сцене ---------- */
-  function layerStyle(el) {
+  function layerStyle(el: HTMLElement): void {
     el.style.position = 'absolute';
     el.style.left = '0';
     el.style.top = '0';
@@ -280,15 +486,15 @@
   }
 
   function fitCanvas() {
-    var w = stageEl.clientWidth, h = stageEl.clientHeight;
+    var w = stageEl!.clientWidth, h = stageEl!.clientHeight;
     var d = Math.min(2, global.devicePixelRatio || 1);
     if (w === cw && h === ch && d === dpr) return;
     cw = w; ch = h; dpr = d;
-    canvas.width = Math.max(1, Math.round(w * d));
-    canvas.height = Math.max(1, Math.round(h * d));
+    canvas!.width = Math.max(1, Math.round(w * d));
+    canvas!.height = Math.max(1, Math.round(h * d));
   }
 
-  function attach(stage) {
+  function attach(stage: HTMLElement): void {
     stageEl = stage;
     canvas = document.createElement('canvas');
     canvas.className = 'focus-fx-canvas';
@@ -320,7 +526,7 @@
   // Превью для финала 'reveal': над холстом (темнота его не накрывает).
   // framed — превью лежит внутри рамки прицела («по контуру»): своя обводка и свечение
   // не нужны, обводка — сама рамка.
-  function previewOn(src, pal, framed) {
+  function previewOn(src: string, pal: FocusFxPalette, framed?: boolean): void {
     if (previewEl || !stageEl || !src) return;
     previewEl = document.createElement('img');
     previewEl.className = 'focus-fx-preview';
@@ -345,7 +551,7 @@
     stageEl.appendChild(previewEl);
   }
 
-  function placePreview(box, k) {
+  function placePreview(box: { readonly l: number; readonly t: number; readonly w: number }, k: number): void {
     if (!previewEl) return;
     previewEl.style.width = Math.max(1, box.w) + 'px';
     previewEl.style.height = Math.max(1, box.w) + 'px';
@@ -363,7 +569,7 @@
   }
 
   /* ---------- размеры ---------- */
-  function metrics() {
+  function metrics(): FocusMetrics {
     var m = Math.max(1, Math.min(cw, ch));
     return {
       m: m,
@@ -373,26 +579,26 @@
   }
 
   // Рамка захвата вокруг цели: пропорции как у рамки в покое
-  function fitBox(targetW, m) {
+  function fitBox(targetW: number, m: number): FocusSize {
     var w = clamp(targetW * G.fit, G.fitMin * m, G.fitMax * m);
     return { w: w, h: w * G.boxH / G.boxW };
   }
 
   // На время перехода рамка захвата зафиксирована (привязана к экрану), при выборе —
   // следует за размером цели
-  function lockBox(r, tg, mt) {
+  function lockBox(r: FocusRun, tg: FocusFxTargetRect, mt: FocusMetrics): FocusSize {
     return r.fixed || fitBox(tg.w, mt.m);
   }
 
   // Область фокуса: центр и размер; null — области нет
-  function frameOf(r) {
+  function frameOf(r: FocusRun): FocusFrameCenter | null {
     var f = r.o.frame ? r.o.frame() : null;
     if (!f || !(f.r > f.l) || !(f.b > f.t)) return null;
     return { x: (f.l + f.r) / 2, y: (f.t + f.b) / 2, w: f.r - f.l, h: f.b - f.t };
   }
 
   // Видимое пересечение карты и viewport в координатах текущего вида, для первого борда.
-  function mapFrameOf(r) {
+  function mapFrameOf(r: FocusRun): FocusFrameCenter | null {
     var f = r.o.mapFrame ? r.o.mapFrame() : null;
     if (!f || !(f.r > f.l) || !(f.b > f.t)) return null;
     return { x: (f.l + f.r) / 2, y: (f.t + f.b) / 2, w: f.r - f.l, h: f.b - f.t };
@@ -401,9 +607,9 @@
   /* ---------- сценарии ----------
      fresh — прицела на экране ещё нет: начинаем с появления. Иначе сценарий
      продолжает с того места, где прицел сейчас (смена цели, переход с удержания). */
-  function planSelect(o, fresh) {
-    var p = fresh ? [{ kind: 'appear', ms: T.appear }] : [];
-    p.push({ kind: 'track' });
+  function planSelect(o: FocusRunOptions, fresh: boolean): FocusPhase[] {
+    var p: FocusPhase[] = fresh ? [{ kind: 'appear', ms: T.appear }] : [];
+    p.push({ kind: 'track', ms: 0 });
     p.push({ kind: 'lock', step: 0, ms: fresh ? T.lock : T.relock });
     if (o.frame) p.push({ kind: 'expand', ms: T.expand });
     p.push({ kind: 'hold', ms: Infinity });
@@ -414,12 +620,12 @@
      сжатие (как борд → область) → центрирование → пауза → приближение. Рамка не
      раскрывается к краям, не сбрасывается и не захватывает цель заново: она садится на
      контур квадрата и держится за него, пока камера центрирует и приближает. */
-  function planContour(o, fresh) {
-    var p = [];
+  function planContour(o: FocusRunOptions, fresh: boolean): FocusPhase[] {
+    var p: FocusPhase[] = [];
     if (fresh && o.mapFrame) p.push({ kind: 'outline', ms: reduceMotion ? 0 : T.mapOutline });
     p.push({ kind: 'shrink', ms: reduceMotion ? 0 : T.contract });
     p.push({ kind: 'lock', step: 0, ms: 0 });     // сел на контур → onLock
-    p.push({ kind: 'center' });
+    p.push({ kind: 'center', ms: 0 });
     for (var i = 0; i < o.zooms.length; i++) {
       p.push({ kind: 'pause', ms: o.timing.pause });
       p.push({ kind: 'zoom', step: i, ms: o.timing.zoom, last: i === o.zooms.length - 1 });
@@ -429,17 +635,17 @@
     return p;
   }
 
-  function planGo(o, fresh) {
+  function planGo(o: FocusRunOptions, fresh: boolean): FocusPhase[] {
     if (o.contour) return planContour(o, fresh);
-    var p = [];
+    var p: FocusPhase[] = [];
     if (fresh) {
       p.push({ kind: 'appear', ms: T.appear });
-      p.push({ kind: 'center', loosen: true });
+      p.push({ kind: 'center', ms: 0, loosen: true });
       p.push({ kind: 'lock', step: 0, ms: T.lock });
     } else {
       p.push({ kind: 'narrow', ms: T.narrow });
       p.push({ kind: 'lock', step: 0, ms: T.relock });
-      p.push({ kind: 'center' });
+      p.push({ kind: 'center', ms: 0 });
     }
     if (o.ending === 'deny') {
       p.push({ kind: 'deny', ms: T.deny });
@@ -452,7 +658,7 @@
       p.push({ kind: 'zoom', step: i, ms: T.zoom, last: i === n - 1 });
       if (i < n - 1) {
         p.push({ kind: 'reset', ms: T.reset });
-        p.push({ kind: 'track' });
+        p.push({ kind: 'track', ms: 0 });
         p.push({ kind: 'lock', step: i + 1, ms: T.relock });
       }
     }
@@ -477,14 +683,14 @@
      Обычный переход: easeInOutCubic, масштаб растёт геометрически.
      «По контуру» (PAGE_CAMERA): как камера выбора на странице (galaxy.js → animateTo) —
      easeOutCubic, масштаб линейно; точка в центре сцены остаётся на месте. */
-  var PAGE_CAMERA = { ease: easeOutCubic, linear: true };
+  var PAGE_CAMERA: FocusCameraStyle = { ease: easeOutCubic, linear: true };
 
-  function cameraPan(cam, tg, to, style) {
+  function cameraPan(cam: FocusFxCamera, tg: FocusFxTargetRect, to: FocusFxPoint, style: FocusCameraStyle | null): FocusCameraPlan {
     var c0 = cam.get();
     return { kind: 'pan', c0: c0, dx: to.x - tg.cx, dy: to.y - tg.cy, style: style || null };
   }
 
-  function cameraZoom(cam, tg, level, to, style) {
+  function cameraZoom(cam: FocusFxCamera, tg: FocusFxTargetRect, level: number, to: FocusFxPoint, style: FocusCameraStyle | null): FocusCameraPlan {
     var c0 = cam.get();
     var s1 = Math.max(c0.s, level);
     return {
@@ -494,7 +700,7 @@
     };
   }
 
-  function applyCamera(r, ph, u) {
+  function applyCamera(r: FocusRun, ph: FocusPhase, u: number): void {
     var k = ph.cam;
     if (!k || !r.o.camera) return;
     var e = (k.style ? k.style.ease : easeInOutCubic)(clamp(u, 0, 1));
@@ -510,7 +716,7 @@
 
   // Куда приезжает цель после шага приближения: последний шаг — точно в центр,
   // промежуточный — чуть не доезжая (как в брифинге: прицелу есть куда довестись)
-  function zoomDest(tg, mt, last) {
+  function zoomDest(tg: FocusFxTargetRect, mt: FocusMetrics, last?: boolean): FocusFxPoint {
     var C = center();
     if (last) return C;
     var ox = (tg.cx - C.x) * G.lag, oy = (tg.cy - C.y) * G.lag;
@@ -521,7 +727,7 @@
   }
 
   // Начало этапа: снимок состояния и колбэки. false — сценарий остановлен из колбэка.
-  function enter(r, ph) {
+  function enter(r: FocusRun, ph: FocusPhase): boolean {
     var mt = metrics();
     var tg = r.o.target();
     var C = center();
@@ -541,7 +747,7 @@
     };
     var contour = r.mode === 'go' && r.o.contour;
     var camStyle = contour ? PAGE_CAMERA : null;
-    var cb = null;
+    var cb: (() => void) | null = null;
     switch (ph.kind) {
       case 'track':
         var dist = Math.hypot(tg.cx - r.pos.x, tg.cy - r.pos.y);
@@ -564,28 +770,28 @@
         ph.offA = { x: r.aim.x - tg.cx, y: r.aim.y - tg.cy };
         if (ph.ms > 0) {
           if (r.o.camera) ph.cam = cameraPan(r.o.camera, tg, C, camStyle);
-          else if (r.o.onCenter) cb = function () { r.o.onCenter(ph.ms); };
+          else if (r.o.onCenter) cb = function () { r.o.onCenter!(ph.ms); };
         }
         break;
       case 'lock':
-        if (r.o.onLock) cb = function () { r.o.onLock(ph.step); };
+        if (r.o.onLock) cb = function () { r.o.onLock!(ph.step); };
         break;
       case 'hold':
-        if (r.i > 0 && ['contract', 'relocate'].indexOf(r.phases[r.i - 1].kind) >= 0 && r.o.onContract) {
-          cb = function () { r.o.onContract(); };
+        if (r.i > 0 && ['contract', 'relocate'].indexOf(r.phases[r.i - 1]!.kind) >= 0 && r.o.onContract) {
+          cb = function () { r.o.onContract!(); };
         }
         break;
       case 'zoom':
-        var level = r.o.zooms[Math.min(ph.step, r.o.zooms.length - 1)];
+        var level = r.o.zooms[Math.min(ph.step!, r.o.zooms.length - 1)]!;
         var to = zoomDest(tg, mt, ph.last);
         if (ph.last && r.o.ending === 'reveal') {
           previewOn(r.o.preview, currentPalette(global.performance.now()), contour);
         }
         if (r.o.camera) ph.cam = cameraZoom(r.o.camera, tg, level, to, camStyle);
-        if (r.o.onZoom) cb = function () { r.o.onZoom(ph.step, ph.ms, level, to); };
+        if (r.o.onZoom) cb = function () { r.o.onZoom!(ph.step, ph.ms, level, to); };
         break;
       case 'deny':
-        if (r.o.onDeny) cb = function () { r.o.onDeny(T.deny + T.collapse); };
+        if (r.o.onDeny) cb = function () { r.o.onDeny!(T.deny + T.collapse); };
         break;
       case 'reveal':
         previewOn(r.o.preview, currentPalette(global.performance.now()));
@@ -603,16 +809,16 @@
      каналы от краёв сцены к серединам сторон (rayBuild 1) и блики. Рамка — квадрат
      target(): внешний край линии на его контуре; каждый кадр перечитывается, поэтому
      рамка держится за квадрат при центрировании и растёт вместе с картой при приближении. */
-  function contourState(r, ph, u) {
+  function contourState(r: FocusRun, ph: FocusPhase, u: number): FocusState {
     var tg = r.o.target();
-    var f = ph.from;
+    var f = ph.from!;
     var w = tg.r - tg.l, h = tg.b - tg.t;
-    var st = {
+    var st: FocusState = {
       x: tg.cx, y: tg.cy, w: w, h: h, ax: tg.cx, ay: tg.cy,
       frameProgress: 1, rayBuild: 1, channelAlpha: 1, reach: 0,
-      alpha: 1, vis: 1, fill: 0, hot: 0
+      alpha: 1, vis: 1, fill: 0, hot: 0, veil: 0, reveal: 0
     };
-    var e;
+    var e = 0;
     switch (ph.kind) {
       case 'shrink':
         // Как сжатие борда до области при выборе: стороны рамки плавно идут от текущей
@@ -655,22 +861,25 @@
   }
 
   // Состояние прицела на этапе ph при прогрессе u (0..1)
-  function stateAt(r, ph, u) {
+  function stateAt(r: FocusRun, ph: FocusPhase, u: number): FocusState {
     // «по контуру» борд карты (если прицела не было) рисуется как при выборе, дальше — своё
     if (r.mode === 'go' && r.o.contour && ph.kind !== 'outline') return contourState(r, ph, u);
     var mt = metrics();
     var tg = r.o.target();
-    var f = ph.from;
+    var f = ph.from!;
     var C = center();
-    var st = {
+    var st: FocusState = {
       x: f.x, y: f.y, w: f.w, h: f.h, ax: f.ax, ay: f.ay,
       frameProgress: f.frameProgress == null ? 1 : f.frameProgress,
       rayBuild: f.rayBuild,
       channelAlpha: f.channelAlpha == null ? 1 : f.channelAlpha,
       reach: f.reach == null ? 1 : f.reach,
-      alpha: 1, vis: 1, fill: 0, hot: 0
+      alpha: 1, vis: 1, fill: 0, hot: 0, veil: 0, reveal: 0
     };
-    var lb, fr, e, k;
+    var lb: FocusSize = { w: 0, h: 0 };
+    var fr: FocusFrameCenter | null = null;
+    var e = 0;
+    var k = 0;
     switch (ph.kind) {
       case 'appear':
       case 'reset':
@@ -680,8 +889,8 @@
 
       case 'track':
         // оси идут чуть вразнобой: вертикаль догоняет горизонталь
-        var kx = servo(clamp(u * 1.12, 0, 1), ph.ov);
-        var ky = servo(clamp(u * 1.12 - 0.12, 0, 1), ph.ov);
+        var kx = servo(clamp(u * 1.12, 0, 1), ph.ov!);
+        var ky = servo(clamp(u * 1.12 - 0.12, 0, 1), ph.ov!);
         st.x = lerp(f.x, tg.cx, kx);
         st.y = lerp(f.y, tg.cy, ky);
         st.ax = lerp(f.ax, tg.cx, kx);
@@ -816,10 +1025,10 @@
         // плавно садится на неё
         lb = lockBox(r, tg, mt);
         e = easeInOutCubic(u);
-        st.x = tg.cx + ph.off.x * (1 - e);
-        st.y = tg.cy + ph.off.y * (1 - e);
-        st.ax = tg.cx + ph.offA.x * (1 - e);
-        st.ay = tg.cy + ph.offA.y * (1 - e);
+        st.x = tg.cx + ph.off!.x * (1 - e);
+        st.y = tg.cy + ph.off!.y * (1 - e);
+        st.ax = tg.cx + ph.offA!.x * (1 - e);
+        st.ay = tg.cy + ph.offA!.y * (1 - e);
         k = ph.loosen ? G.loose : 1;
         st.w = lerp(f.w, lb.w * k, e);
         st.h = lerp(f.h, lb.h * k, e);
@@ -897,8 +1106,8 @@
         // линии втягиваются в рамку, рамка сжимается и гаснет
         e = easeInCubic(clamp(u / 0.75, 0, 1));
         if (ph.follow) {
-          st.x = tg.cx + ph.off.x; st.y = tg.cy + ph.off.y;
-          st.ax = tg.cx + ph.offA.x; st.ay = tg.cy + ph.offA.y;
+          st.x = tg.cx + ph.off!.x; st.y = tg.cy + ph.off!.y;
+          st.ax = tg.cx + ph.offA!.x; st.ay = tg.cy + ph.offA!.y;
         }
         st.w = f.w * (1 - 0.25 * e);
         st.h = f.h * (1 - 0.25 * e);
@@ -926,19 +1135,19 @@
   /* ---------- рисование ---------- */
   // Геометрия четырёх каналов. Каждый луч с края сцены входит в середину стороны,
   // проходит по часовой стрелке половину стороны, угол и половину следующей стороны.
-  function shapes(st, sw) {
+  function shapes(st: FocusState, sw: number): FocusShapes {
     var l = st.x - st.w / 2, r = st.x + st.w / 2, t = st.y - st.h / 2, b = st.y + st.h / 2;
     var hs = sw / 2;
     var bw = Math.max(sw, st.w), bh = Math.max(sw, st.h);
     var p = st.frameProgress == null ? 1 : clamp(st.frameProgress, 0, 1);
-    var lines = [];
-    var box = [];
-    var tracks = [];
+    var lines: FocusLineShape[] = [];
+    var box: FocusShapeRect[] = [];
+    var tracks: FocusTrack[] = [];
     var rayBuild = st.rayBuild;
 
-    function addSegment(target, x, y, dx, dy, length, alpha) {
+    function addSegment(target: FocusShapeRect[], x: number, y: number, dx: number, dy: number, length: number, alpha?: number): void {
       if (length <= 0.01) return;
-      var shape;
+      var shape: FocusShapeRect;
       if (dx > 0) shape = { x: x - hs, y: y - hs, w: length + sw, h: sw, v: false };
       else if (dx < 0) shape = { x: x - length - hs, y: y - hs, w: length + sw, h: sw, v: false };
       else if (dy > 0) shape = { x: x - hs, y: y - hs, w: sw, h: length + sw, v: true };
@@ -947,7 +1156,7 @@
       if (target === lines) {
         shape.ex = x; shape.ey = y; shape.dx = dx; shape.dy = dy;
         shape.len = length; shape.flow = 1;
-        lines.push(shape);
+        lines.push(shape as FocusLineShape);
       } else {
         box.push(shape);
         tracks.push({ ex: x, ey: y, dx: dx, dy: dy, len: length, v: !!dy, flow: 1 });
@@ -963,7 +1172,7 @@
       var halfH = Math.max(0, (bh - sw) / 2);
       var alpha = Math.max(0.32, 1 - 0.68 * p) * (st.channelAlpha == null ? 1 : clamp(st.channelAlpha, 0, 1));
 
-      function traceRoute(x, y, rayDx, rayDy, rayLen, dx1, dy1, len1, dx2, dy2, len2) {
+      function traceRoute(x: number, y: number, rayDx: number, rayDy: number, rayLen: number, dx1: number, dy1: number, len1: number, dx2: number, dy2: number, len2: number): void {
         var distance = p * (rayLen + len1 + len2);
         var amount = Math.min(rayLen, distance);
         addSegment(lines, x, y, rayDx, rayDy, amount, alpha);
@@ -996,7 +1205,7 @@
 
       var perimeterHalfW = Math.max(0, (bw - sw) / 2);
       var perimeterHalfH = Math.max(0, (bh - sw) / 2);
-      function addArc(x, y, dx1, dy1, len1, dx2, dy2, len2) {
+      function addArc(x: number, y: number, dx1: number, dy1: number, len1: number, dx2: number, dy2: number, len2: number): void {
         var remaining = p * (2 * (perimeterHalfW + perimeterHalfH));
         var first = Math.min(len1, remaining);
         addSegment(box, x, y, dx1, dy1, first);
@@ -1014,10 +1223,11 @@
     return { lines: lines, box: box, tracks: tracks, l: l, t: t, w: bw, h: bh };
   }
 
-  function fillRects(list, dx, dy) {
+  function fillRects(list: readonly FocusShapeRect[], dx: number, dy: number): void {
+    if (!ctx) return;
     var baseAlpha = ctx.globalAlpha;
     for (var i = 0; i < list.length; i++) {
-      var s = list[i];
+      var s = list[i]!;
       ctx.globalAlpha = baseAlpha * (s.alpha == null ? 1 : s.alpha);
       if (ctx.globalAlpha > 0.003) ctx.fillRect(s.x + dx, s.y + dy, s.w, s.h);
     }
@@ -1026,7 +1236,8 @@
 
   // Энергетические импульсы непрерывно бегут по внешним каналам и периметру.
   // Слоты распределяются по длине дорожек: одновременно на экране около 600 импульсов.
-  function drawGlints(paths, sw, a, pal, now, flowDirection) {
+  function drawGlints(paths: readonly (FocusLineShape | FocusTrack)[], sw: number, a: number, pal: FocusFxPalette, now: number, flowDirection?: number): void {
+    if (!ctx) return;
     var active = paths.filter(function (path) { return path.len > sw * 2 && (path.alpha == null || path.alpha > 0.003); });
     var total = active.reduce(function (sum, path) { return sum + path.len; }, 0);
     if (!total) return;
@@ -1035,14 +1246,17 @@
     var slots = active.map(function (path) { return Math.floor(count * path.len / total); });
     var used = slots.reduce(function (sum, value) { return sum + value; }, 0);
     var fractions = active.map(function (path, i) {
-      return { index: i, remainder: count * path.len / total - slots[i] };
+      return { index: i, remainder: count * path.len / total - slots[i]! };
     }).sort(function (x, y) { return y.remainder - x.remainder; });
-    for (var extra = 0; extra < count - used; extra++) slots[fractions[extra].index]++;
+    for (var extra = 0; extra < count - used; extra++) {
+      var slotIndex = fractions[extra]!.index;
+      slots[slotIndex] = slots[slotIndex]! + 1;
+    }
 
     var M = Math.max(cw, ch);
     for (var j = 0; j < active.length; j++) {
-      var path = active[j];
-      var n = slots[j];
+      var path = active[j]!;
+      var n = slots[j]!;
       for (var k = 0; k < n; k++) {
         var seed = (j + 1) * 1009 + k * 37;
         var phase = hash(seed + 3) * path.len;
@@ -1058,7 +1272,7 @@
         var flicker = reduceMotion ? 1 : 0.46 + 0.54 * (0.5 + 0.5 * Math.sin(now * 0.0025 * (0.7 + hash(seed + 17)) + hash(seed + 19) * Math.PI * 2));
         var pathAlpha = path.alpha == null ? 1 : path.alpha;
         var intensity = (0.28 + 0.72 * hash(seed + 23)) * flicker * fade * pathAlpha;
-        var gradient;
+        var gradient: CanvasGradient;
         if (path.v) gradient = ctx.createLinearGradient(0, cy - length / 2, 0, cy + length / 2);
         else gradient = ctx.createLinearGradient(cx - length / 2, 0, cx + length / 2, 0);
         gradient.addColorStop(0, rgba(pal.light, 0));
@@ -1071,7 +1285,7 @@
     }
   }
 
-  function draw(r, st, now) {
+  function draw(r: FocusRun, st: FocusState, now: number): void {
     if (!ctx) return;
     var mt = metrics();
     var sw = mt.sw;
@@ -1085,7 +1299,7 @@
       var pal = currentPalette(now);
       var core = mix(pal.core, pal.light, clamp(st.hot, 0, 1) * 0.72);
       var sh = shapes(st, sw);
-      var all = sh.lines.concat(sh.box);
+      var all: FocusShapeRect[] = [...sh.lines, ...sh.box];
       var edge = Math.max(1, sw * 0.16);
 
       // 1. свечение
@@ -1106,7 +1320,7 @@
       // 4. светлая фаска по верхнему / левому краю; у рамки ярче, как в брифинге
       var hl = Math.max(1, sw * 0.2);
       for (var i = 0; i < all.length; i++) {
-        var s = all[i];
+        var s = all[i]!;
         ctx.globalAlpha = s.alpha == null ? 1 : s.alpha;
         ctx.fillStyle = rgba(pal.light, (i < sh.lines.length ? 0.28 : 0.48) * a);
         if (s.v) ctx.fillRect(s.x, s.y, hl, s.h);
@@ -1114,7 +1328,7 @@
       }
       ctx.globalAlpha = 1;
       // 5. непрерывные импульсы идут по лучам и уже собранным сторонам рамки
-      drawGlints(sh.lines.concat(sh.tracks), sw, a, pal, now, st.flowDirection);
+      drawGlints([...sh.lines, ...sh.tracks], sw, a, pal, now, st.flowDirection);
       // 6. вспышка захвата внутри рамки (только у рамки размером с захват:
       //    большую область фокуса заливка залила бы целиком)
       if (st.fill > 0.003) {
@@ -1141,16 +1355,16 @@
     }
   }
 
-  function drawVeil(st) {
-    if (!(st.veil > 0.003)) return;
+  function drawVeil(st: FocusState): void {
+    if (!ctx || !(st.veil > 0.003)) return;
     ctx.fillStyle = rgba(G.veil, st.veil);
     ctx.fillRect(0, 0, cw, ch);
   }
 
   /* ---------- цикл ---------- */
-  function progress(r, ph, now) { return ph.ms > 0 ? (now - r.t0) / ph.ms : 1; }
+  function progress(r: FocusRun, ph: FocusPhase, now: number): number { return ph.ms > 0 ? (now - r.t0) / ph.ms : 1; }
 
-  function remember(r, st) {
+  function remember(r: FocusRun, st: FocusState): void {
     r.pos = { x: st.x, y: st.y };
     r.box = { w: st.w, h: st.h };
     r.aim = { x: st.ax, y: st.ay };
@@ -1161,13 +1375,13 @@
     r.channelAlpha = st.channelAlpha;
   }
 
-  function loop(now) {
+  function loop(now: number): void {
     var r = run;
     if (!r) return;
     r.raf = 0;
     fitCanvas();
     syncPalette(now);
-    var ph = r.phases[r.i];
+    var ph = r.phases[r.i]!;
     var u = progress(r, ph, now);
     // этап закончился — фиксируем его последнее состояние и входим в следующий
     while (u >= 1) {
@@ -1183,7 +1397,7 @@
       }
       r.t0 += ph.ms;
       r.i += 1;
-      ph = r.phases[r.i];
+      ph = r.phases[r.i]!;
       if (!enter(r, ph)) return;           // остановлено из колбэка
       u = progress(r, ph, now);
     }
@@ -1195,8 +1409,8 @@
   }
 
   // Новый сценарий: первый кадр сразу, без пустого мига
-  function begin(o, mode, phases, from) {
-    var r = {
+  function begin(o: FocusRunOptions, mode: FocusFxMode, phases: FocusPhase[], from: FocusRunFrom): void {
+    var r: FocusRun = {
       o: o,
       mode: mode,
       phases: phases,
@@ -1218,15 +1432,15 @@
     var lockScreen = typeof o.lockScreen === 'boolean' ? o.lockScreen : G.lockScreen;
     if (mode === 'go' && lockScreen) r.fixed = fitBox(o.target().w, metrics().m);   // фиксируем размер только если этого просит сценарий
     run = r;
-    if (!enter(r, r.phases[0])) return;
-    applyCamera(r, r.phases[0], 0);
-    draw(r, stateAt(r, r.phases[0], 0), r.t0);
+    if (!enter(r, r.phases[0]!)) return;
+    applyCamera(r, r.phases[0]!, 0);
+    draw(r, stateAt(r, r.phases[0]!, 0), r.t0);
     r.raf = global.requestAnimationFrame(loop);
   }
 
   // Прицел уже на экране (выбор или его угасание): забираем его текущее состояние,
   // чтобы новый сценарий продолжил с того же места, без скачка. null — прицела нет.
-  function takeOver(stage) {
+  function takeOver(stage: HTMLElement | null): FocusRunFrom | null {
     var r = run;
     if (!r || r.mode === 'go' || !canvas || stageEl !== stage) return null;
     if (r.raf) global.cancelAnimationFrame(r.raf);
@@ -1239,7 +1453,7 @@
   }
 
   // Прицел с нуля: маленькая рамка в центре сцены
-  function fresh(stage) {
+  function fresh(stage: HTMLElement): FocusRunFrom {
     stop();
     attach(stage);
     var mt = metrics();
@@ -1247,19 +1461,33 @@
     return { pos: c, box: { w: mt.rest.w, h: mt.rest.h }, aim: { x: c.x, y: c.y }, alpha: 1, reach: 0, frameProgress: 1 };
   }
 
-  function valid(opts) { return !!(opts && opts.stage && typeof opts.target === 'function'); }
+  function valid(opts: FocusFxSelectOptions | null | undefined): opts is FocusFxSelectOptions;
+  function valid(opts: FocusFxStartOptions | null | undefined): opts is FocusFxStartOptions;
+  function valid(opts: FocusPublicOptions | null | undefined): boolean {
+    return !!(opts && opts.stage && typeof opts.target === 'function');
+  }
 
-  function select(opts) {
+  function select(opts?: FocusFxSelectOptions | null): void {
     if (!valid(opts) || (run && run.mode === 'go')) return;   // переход не прерываем
     var from = takeOver(opts.stage);
     var isNew = !from;
-    if (isNew) from = fresh(opts.stage);
-    var o = {
+    if (!from) from = fresh(opts.stage);
+    var o: FocusRunOptions = {
       target: opts.target,
       frame: typeof opts.frame === 'function' ? opts.frame : null,
       mapFrame: typeof opts.mapFrame === 'function' ? opts.mapFrame : null,
+      camera: null,
+      contour: false,
+      timing: { center: T.focusCenter, pause: T.zoomDelay, zoom: T.focusZoom },
+      lockScreen: null,
+      zooms: [],
+      ending: 'fade',
+      preview: '',
+      onCenter: null,
       onLock: opts.onLock || null,
       onContract: opts.onContract || null,
+      onZoom: null,
+      onDeny: null,
       onEnd: null
     };
     if (opts.instant) {
@@ -1286,24 +1514,41 @@
     begin(o, 'select', planSelect(o, isNew), from);
   }
 
-  function release(done) {
+  function release(done?: (() => void) | null): void {
     var r = run;
     if (r && r.mode === 'go') return;                          // переход доиграет сам
     if (r && r.mode === 'release') { r.o.onEnd = done || null; return; }
     if (!r) { stop(); if (done) done(); return; }
     var from = takeOver(stageEl);
-    var o = { target: r.o.target, frame: null, onEnd: done || null };
-    begin(o, 'release', [{ kind: 'unload', ms: reduceMotion ? 0 : T.release }], from);
+    var o: FocusRunOptions = {
+      target: r.o.target,
+      frame: null,
+      mapFrame: null,
+      camera: null,
+      contour: false,
+      timing: { center: T.focusCenter, pause: T.zoomDelay, zoom: T.focusZoom },
+      lockScreen: null,
+      zooms: [],
+      ending: 'fade',
+      preview: '',
+      onCenter: null,
+      onLock: null,
+      onContract: null,
+      onZoom: null,
+      onDeny: null,
+      onEnd: done || null
+    };
+    begin(o, 'release', [{ kind: 'unload', ms: reduceMotion ? 0 : T.release }], from!);
   }
 
-  function start(opts) {
+  function start(opts?: FocusFxStartOptions | null): void {
     if (!valid(opts)) return;
     var from = takeOver(opts.stage);
     var isNew = !from;
-    if (isNew) from = fresh(opts.stage);
+    if (!from) from = fresh(opts.stage);
     var cam = opts.camera && typeof opts.camera.get === 'function' && typeof opts.camera.set === 'function' ? opts.camera : null;
-    var zooms = Array.isArray(opts.zooms) ? opts.zooms.filter(function (z) { return z > 0; }) : [];
-    var ending = ['reveal', 'fade', 'error', 'deny'].indexOf(opts.ending) >= 0 ? opts.ending : 'fade';
+    var zooms: number[] = Array.isArray(opts.zooms) ? opts.zooms.filter(function (z) { return z > 0; }) : [];
+    var ending: FocusFxEnding = ['reveal', 'fade', 'error', 'deny'].indexOf(opts.ending as string) >= 0 ? opts.ending as FocusFxEnding : 'fade';
     // «по контуру» — только с финалом-переходом ('reveal' / 'fade'); срыв и отказ — обычный
     var contour = !!opts.contour && (ending === 'reveal' || ending === 'fade');
     if (reduceMotion) zooms = [];
@@ -1312,8 +1557,8 @@
     // «по контуру» карта, как при выборе, не темнеет до самого финала
     if (!contour) dimOn();
     var tm = opts.timing || {};
-    function ms(v, fallback) { return typeof v === 'number' && v >= 0 ? v : fallback; }
-    var o = {
+    function ms(v: number | undefined, fallback: number): number { return typeof v === 'number' && v >= 0 ? v : fallback; }
+    var o: FocusRunOptions = {
       target: opts.target,
       frame: typeof opts.frame === 'function' ? opts.frame : null,
       mapFrame: typeof opts.mapFrame === 'function' ? opts.mapFrame : null,
@@ -1330,6 +1575,7 @@
       preview: opts.preview || '',
       onCenter: opts.onCenter || null,
       onLock: opts.onLock || null,
+      onContract: null,
       onZoom: opts.onZoom || null,
       onDeny: opts.onDeny || null,
       onEnd: opts.onEnd || null

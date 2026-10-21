@@ -57,11 +57,160 @@
      var l = GalaxySpiral.overlay(o);        // слой поверх карты
      GalaxySpiral.patternFromImage(img, cx, cy, r, size, gamma) // узор из рисунка
    В Node ядро можно гонять с opts.createCanvas (тесты, покадровый рендер). */
-(function (root, factory) {
-  /* global module */
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.GalaxySpiral = factory();
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+
+export type GalaxySpiralColor = readonly [number, number, number];
+
+export interface GalaxySpiralCanvasLike {
+  width: number;
+  height: number;
+  getContext(contextId: '2d', options?: CanvasRenderingContext2DSettings): CanvasRenderingContext2D | null;
+}
+
+export type GalaxySpiralCanvasFactory = (width: number, height: number) => GalaxySpiralCanvasLike;
+
+export interface GalaxySpiralPattern {
+  readonly data: Float32Array;
+  readonly size: number;
+}
+
+export interface GalaxySpiralOptions {
+  seed: number;
+  arms: number;
+  pitch: number;
+  psi0: number;
+  flat: number;
+  pa: number;
+  rIn: number;
+  rOut: number;
+  fadeIn: number;
+  ecc: number;
+  misalign: number;
+  diskK: number;
+  bulge: number;
+  bulgeR: number;
+  bar: number;
+  barAngle: number;
+  halo: number;
+  diffuse: number;
+  exposure: number;
+  count: number;
+  countDiv: number;
+  speed: number;
+  shear: number;
+  bright: number;
+  armGain: number;
+  dustAmp: number;
+  dustShift: number;
+  dustW: number;
+  twinkle: number;
+  trail: number;
+  lane: number;
+  glow: number;
+  flares: number;
+  hii: number;
+  patternSpeed: number;
+  pattern: GalaxySpiralPattern | null;
+  tint: GalaxySpiralColor | null;
+  tintAmt: number;
+  palette: string;
+  createCanvas: GalaxySpiralCanvasFactory | null;
+}
+
+export interface GalaxySpiralState {
+  readonly o: GalaxySpiralOptions;
+  w: number; h: number; dpr: number; cx: number; cy: number; R: number;
+  n: number; t: number;
+  M: Float32Array | null; om: Float32Array | null; ax: Float32Array | null;
+  b: Float32Array | null; cp: Float32Array | null; sp: Float32Array | null;
+  sz: Float32Array | null; al: Float32Array | null; ci: Uint8Array | null;
+  twp: Float32Array | null; twr: Float32Array | null; fl: Uint8Array | null;
+  pal: GalaxySpiralColor[] | null;
+  palKey?: string;
+  atlas: GalaxySpiralCanvasLike | null;
+  flare: GalaxySpiralCanvasLike | null;
+  pA: number; pB: number; pC: number; pD: number;
+  ox: number; oy: number; sc: number; starPx: number; cw: number; ch: number;
+  fresh: boolean;
+}
+
+export interface GalaxySpiralEngine {
+  readonly state: GalaxySpiralState;
+  readonly opts: GalaxySpiralOptions;
+  resize(width: number, height: number, dpr?: number): void;
+  view(ox: number, oy: number, scale: number, starPx: number, canvasWidth: number, canvasHeight: number): void;
+  frame(ctx: CanvasRenderingContext2D, dt: number): number;
+  nebula(ctx: CanvasRenderingContext2D): void;
+  debug(ctx: CanvasRenderingContext2D, mode?: string): void;
+  populate(): void;
+  set(patch: Partial<GalaxySpiralOptions>): void;
+}
+
+export interface GalaxySpiralMountHandle {
+  readonly el: HTMLDivElement;
+  readonly engine: GalaxySpiralEngine;
+  set(patch: Partial<GalaxySpiralOptions>): void;
+  debug(on: boolean): void;
+  play(): void;
+  stop(): void;
+  destroy(): void;
+}
+
+export interface GalaxySpiralOverlayView {
+  readonly s: number; readonly tx: number; readonly ty: number;
+  readonly base: number; readonly w: number; readonly h: number;
+}
+
+export interface GalaxySpiralOverlayOptions {
+  readonly layer: HTMLElement;
+  readonly image: HTMLImageElement;
+  readonly before?: Node | null;
+  readonly center: readonly [number, number];
+  readonly radius: number;
+  readonly view?: () => GalaxySpiralOverlayView | null | undefined;
+  readonly engine?: Partial<GalaxySpiralOptions>;
+  readonly fps?: number;
+  readonly starSize?: number;
+  readonly starZoom?: number;
+  readonly patternSize?: number;
+  readonly patternGamma?: number;
+  readonly opacity?: number;
+  readonly maxDpr?: number;
+  readonly margin?: number;
+  readonly className?: string;
+}
+
+export interface GalaxySpiralOverlayHandle {
+  readonly el: HTMLCanvasElement;
+  engine(): GalaxySpiralEngine | null;
+  play(): void;
+  stop(): void;
+  destroy(): void;
+}
+
+export interface GalaxySpiralApi {
+  readonly VERSION: string;
+  create(userOpts?: Partial<GalaxySpiralOptions> | null): GalaxySpiralEngine;
+  mount(host: HTMLElement, userOpts?: Partial<GalaxySpiralOptions> | null): GalaxySpiralMountHandle | null;
+  overlay(options: GalaxySpiralOverlayOptions): GalaxySpiralOverlayHandle | null;
+  patternFromImage(
+    img: HTMLImageElement | null | undefined,
+    cx: number,
+    cy: number,
+    r: number,
+    size?: number,
+    gamma?: number | null,
+  ): GalaxySpiralPattern | null;
+  defaults(): GalaxySpiralOptions;
+  readonly PALETTES: Record<string, readonly GalaxySpiralColor[]>;
+}
+
+declare global {
+  interface Window {
+    GalaxySpiral: GalaxySpiralApi;
+  }
+}
+
+const galaxySpiralApi: GalaxySpiralApi = (function (): GalaxySpiralApi {
   'use strict';
 
   var TAU = Math.PI * 2;
@@ -70,7 +219,7 @@
   var FLR = 128;              // размер спрайта вспышки (дифракционные лучи)
   var NB_SCALE = 0.28;        // масштаб слоя дымки (он тянется CSS-ом вверх)
 
-  var PALETTES = {
+  var PALETTES: Record<string, readonly GalaxySpiralColor[]> = {
     // [r,g,b] — холодный диск + тёплый балдж, как у реальных S0/sc
     classic: [
       [255, 222, 168],  // 0 балдж: тёплое старое население
@@ -97,7 +246,7 @@
   };
 
   /* ---------- утилиты ---------- */
-  function mulberry32(seed) {
+  function mulberry32(seed: number): () => number {
     var s = seed >>> 0;
     return function () {
       s = (s + 0x6d2b79f5) | 0;
@@ -106,14 +255,14 @@
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
-  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function clamp(v: number, a: number, b: number): number { return v < a ? a : v > b ? b : v; }
   // ~гауссиана через сумму равномерных: дёшево и без Math.sqrt/Math.log
-  function gauss(r) { return (r() + r() + r() + r() - 2) * 0.5; }
-  function smoothstep(e0, e1, x) {
+  function gauss(r: () => number): number { return (r() + r() + r() + r() - 2) * 0.5; }
+  function smoothstep(e0: number, e1: number, x: number): number {
     var t = clamp((x - e0) / (e1 - e0 || 1e-6), 0, 1);
     return t * t * (3 - 2 * t);
   }
-  function makeCanvas(w, h) {
+  function makeCanvas(w: number, h: number): HTMLCanvasElement {
     if (typeof document !== 'undefined' && document.createElement) {
       var c = document.createElement('canvas');
       c.width = w; c.height = h;
@@ -123,7 +272,7 @@
   }
 
   /* ---------- атлас спрайтов: мягкая звезда + лучи ---------- */
-  function radialSprite(g, size, color, coreAlpha) {
+  function radialSprite(g: CanvasRenderingContext2D, size: number, color: GalaxySpiralColor, coreAlpha: number): void {
     var half = size * 0.5;
     var grd = g.createRadialGradient(half, half, 0, half, half, half);
     // ядро почти белое, дальше цветное, к краю — 0. Профиль близок к r^-2,
@@ -136,7 +285,7 @@
     g.fillStyle = grd;
     g.fillRect(0, 0, size, size);
   }
-  function flareSprite(g, size, color) {
+  function flareSprite(g: CanvasRenderingContext2D, size: number, color: GalaxySpiralColor): void {
     var half = size * 0.5;
     g.save();
     g.translate(half, half);
@@ -163,26 +312,26 @@
     g.fillRect(-size * 0.1, -size * 0.1, size * 0.2, size * 0.2);
     g.restore();
   }
-  function buildAtlas(colors, mk) {
+  function buildAtlas(colors: readonly GalaxySpiralColor[], mk?: GalaxySpiralCanvasFactory): GalaxySpiralCanvasLike {
     var n = colors.length;
     var cv = (mk || makeCanvas)(SPR * n, SPR);
-    var g = cv.getContext('2d');
+    var g = cv.getContext('2d')!;
     for (var i = 0; i < n; i++) {
       g.save();
       g.setTransform(1, 0, 0, 1, i * SPR, 0);
-      radialSprite(g, SPR, colors[i], 1);
+      radialSprite(g, SPR, colors[i]!, 1);
       g.restore();
     }
     return cv;
   }
-  function buildFlare(colors, mk) {
+  function buildFlare(colors: readonly GalaxySpiralColor[], mk?: GalaxySpiralCanvasFactory): GalaxySpiralCanvasLike {
     var cv = (mk || makeCanvas)(FLR, FLR);
-    flareSprite(cv.getContext('2d'), FLR, colors[3]);
+    flareSprite(cv.getContext('2d')!, FLR, colors[3]!);
     return cv;
   }
 
   /* ---------- настройки ---------- */
-  function defaults() {
+  function defaults(): GalaxySpiralOptions {
     return {
       seed: 20261017,
       arms: 2,            // кратность спирали
@@ -234,12 +383,16 @@
   }
 
   /* ---------- ядро ---------- */
-  function create(userOpts) {
-    var o = defaults();
-    if (userOpts) for (var k2 in userOpts) if (k2 in o) o[k2] = userOpts[k2];
-    var mkCanvas = o.createCanvas || makeCanvas;
+  function create(userOpts?: Partial<GalaxySpiralOptions> | null): GalaxySpiralEngine {
+    var o: GalaxySpiralOptions = defaults();
+    if (userOpts) {
+      var optionTarget = o as unknown as Record<string, unknown>;
+      var optionSource = userOpts as unknown as Record<string, unknown>;
+      for (var k2 in optionSource) if (k2 in optionTarget) optionTarget[k2] = optionSource[k2];
+    }
+    var mkCanvas: GalaxySpiralCanvasFactory = o.createCanvas || makeCanvas;
 
-    var S = {
+    var S: GalaxySpiralState = {
       o: o, w: 0, h: 0, dpr: 1, cx: 0, cy: 0, R: 0,
       n: 0, t: 0,
       M: null, om: null, ax: null, b: null, cp: null, sp: null,
@@ -262,14 +415,15 @@
       var cPA = Math.cos(o.pa), sPA = Math.sin(o.pa);
       // узор = [ [cPA, -sPA*flat], [sPA, cPA*flat] ] * (X, Y)
       S.pA = cPA; S.pB = sPA; S.pC = -sPA * o.flat; S.pD = cPA * o.flat;
-      var pal = (PALETTES[o.palette] || PALETTES.classic).map(function (c) {
+      var pal: GalaxySpiralColor[] = (PALETTES[o.palette] || PALETTES.classic!).map(function (c) {
         if (!o.tint || o.tintAmt <= 0) return c;
         var t = o.tintAmt;
+        var tint = o.tint;
         return [
-          Math.round(c[0] * (1 - t) + o.tint[0] * t),
-          Math.round(c[1] * (1 - t) + o.tint[1] * t),
-          Math.round(c[2] * (1 - t) + o.tint[2] * t)
-        ];
+          Math.round(c[0] * (1 - t) + tint[0] * t),
+          Math.round(c[1] * (1 - t) + tint[1] * t),
+          Math.round(c[2] * (1 - t) + tint[2] * t)
+        ] as const;
       });
       var key = JSON.stringify(pal);
       if (S.palKey !== key) {
@@ -282,7 +436,7 @@
     derive();
 
     /* --- генерация населения: сид фиксирован, вызывается на resize / populate / set --- */
-    function populate(w, h) {
+    function populate(w?: number, h?: number): void {
       var area = (w || 0) * (h || 0);
       var n = o.count > 0 ? Math.round(o.count) : clamp(Math.round(area / o.countDiv), 5000, 22000);
       var rand = mulberry32(o.seed);
@@ -375,13 +529,13 @@
 
     // вид: центр диска (ox, oy) и его радиус scale — в px холста; starPx — px холста на
     // единицу размера звезды (0 — от радиуса, как в демо); cw × ch — размер холста
-    function view(ox, oy, scale, starPx, cw, ch) {
+    function view(ox: number, oy: number, scale: number, starPx: number, cw: number, ch: number): void {
       if (ox !== S.ox || oy !== S.oy || scale !== S.sc || cw !== S.cw || ch !== S.ch) S.fresh = true;
       S.ox = ox; S.oy = oy; S.sc = scale; S.starPx = starPx || 0; S.cw = cw; S.ch = ch;
     }
 
     // демо: галактика вписана в холст w×h (CSS px), плотность dpr
-    function resize(w, h, dpr) {
+    function resize(w: number, h: number, dpr?: number): void {
       dpr = Math.min(dpr || 1, 2);   // на 3x-телефонах 26k спрайтов x 3 = гарантированный дроп
       S.w = w; S.h = h; S.dpr = dpr;
       S.R = Math.min(w, h * 0.62) * 0.5 * 2.05;   // R: широкая спираль, влезает по высоте
@@ -392,7 +546,7 @@
     }
 
     /* --- кадр: только звёзды. Никаких глобальных трансформаций! --- */
-    function frame(ctx, dt) {
+    function frame(ctx: CanvasRenderingContext2D, dt: number): number {
       var o2 = S.o;
       S.t += dt;
       var cw = S.cw, ch = S.ch;
@@ -415,14 +569,16 @@
 
       ctx.globalCompositeOperation = 'lighter';   // аддитивная сборка: ядро само раздуется
       var pA = S.pA, pB = S.pB, pC = S.pC, pD = S.pD, ox = S.ox, oy = S.oy, sc = S.sc;
-      var n = S.n, M = S.M, om = S.om, ax = S.ax, b = S.b, cp = S.cp, sp = S.sp;
-      var sz = S.sz, ci = S.ci, twp = S.twp, twr = S.twr, fl = S.fl;
+      var n = S.n, M = S.M!, om = S.om!, ax = S.ax!, b = S.b!, cp = S.cp!, sp = S.sp!;
+      var sz = S.sz!, ci = S.ci!, twp = S.twp!, twr = S.twr!, fl = S.fl!;
       var gain = o2.armGain, damp = o2.dustAmp, dw = o2.dustW, sh = o2.dustShift;
       var invArm = o2.arms / TAU, bright = o2.bright * o2.exposure;
       var twa = o2.twinkle, ps = o2.patternSpeed, tnow = t;
       var rEdge = o2.rOut, rFade = o2.rOut * o2.fadeIn;
       var k1 = 1 / (2 * 0.14 * 0.14), k2 = 1 / (2 * dw * dw);
-      var atlas = S.atlas, flar = S.flare, SPRc = SPR, FLRc = FLR;
+      var atlas = S.atlas as unknown as CanvasImageSource;
+      var flar = S.flare as unknown as CanvasImageSource;
+      var SPRc = SPR, FLRc = FLR;
       var drift = ps * t;   // сдвиг поля яркости (pattern speed). 0 => поле стоит.
       var pat = o2.pattern, pd = pat ? pat.data : null, pn = pat ? pat.size : 0, ph = pn * 0.5;
       // размер звезды: px холста на единицу sz (демо — от радиуса диска, как было)
@@ -431,22 +587,22 @@
       var cull = 48, cL = -cull, cT = -cull, cR = cw + cull, cB = ch + cull;
 
       for (var i = 0; i < n; i++) {
-        var m = M[i] + om[i] * dt;
+        var m = M[i]! + om[i]! * dt;
         if (m > TAU) m -= TAU;
         else if (m < 0) m += TAU;
         M[i] = m;
 
         var sM = Math.sin(m), cM = Math.cos(m);
-        var e = 1 - b[i] / ax[i];
+        var e = 1 - b[i]! / ax[i]!;
         // E = M + e sin M — одна итерация Кеплера: замедление у одного конца орбиты,
         // то есть естественное загущение именно там, где огибающая.
         var dd = e * sM;
         var cd = 1 - dd * dd * 0.5, sd = dd * (1 - dd * dd / 6);
         var ex = cM * cd - sM * sd;          // cos E
         var ey = sM * cd + cM * sd;          // sin E
-        var x = ax[i] * ex, y = b[i] * ey;
-        var X = x * cp[i] - y * sp[i];
-        var Y = x * sp[i] + y * cp[i];
+        var x = ax[i]! * ex, y = b[i]! * ey;
+        var X = x * cp[i]! - y * sp[i]!;
+        var Y = x * sp[i]! + y * cp[i]!;
 
         var r2 = X * X + Y * Y;
         var rho = Math.sqrt(r2);
@@ -463,7 +619,7 @@
         if (pd) {
           // яркость рисунка в точке, где звезда сейчас
           if (PX <= -1 || PX >= 1 || PY <= -1 || PY >= 1) continue;
-          arm = pd[((PY + 1) * ph | 0) * pn + ((PX + 1) * ph | 0)];
+          arm = pd[((PY + 1) * ph | 0) * pn + ((PX + 1) * ph | 0)]!;
           if (arm <= 0.004) continue;
           lum = arm * bright * edge;
         } else {
@@ -479,13 +635,13 @@
           lum = (1 + gain * arm) * (1 - damp * dust) * bright * edge;
         }
         if (lum <= 0.004) continue;
-        lum *= 1 + twa * Math.sin(tnow * twr[i] + twp[i]);
+        lum *= 1 + twa * Math.sin(tnow * twr[i]! + twp[i]!);
         if (lum <= 0.004) continue;
 
-        var s = sz[i] * unit * (1 + 0.45 * arm);
+        var s = sz[i]! * unit * (1 + 0.45 * arm);
         if (s < 0.6) s = 0.6;
         ctx.globalAlpha = lum < 1 ? lum : 1;
-        ctx.drawImage(atlas, ci[i] * SPRc, 0, SPRc, SPRc, px - s * 0.5, py - s * 0.5, s, s);
+        ctx.drawImage(atlas, ci[i]! * SPRc, 0, SPRc, SPRc, px - s * 0.5, py - s * 0.5, s, s);
         if (fl[i]) {
           var fs = s * 3.4;
           ctx.globalAlpha = clamp(lum * 0.16, 0, 1);
@@ -497,7 +653,7 @@
     }
 
     /* --- слой дымки (демо): рисуется ОДИН РАЗ. Статичен, как и положено шаблону. --- */
-    function nebula(ctx) {
+    function nebula(ctx: CanvasRenderingContext2D): void {
       var w = S.w * NB_SCALE, h = S.h * NB_SCALE;
       if (!w || !h) return;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -580,12 +736,12 @@
     /* --- диагностика: доказательство, что узор стоит ---
        Рисует (1) эллипсы-орбиты, повёрнутые по A·ln r, и (2) саму огибающую —
        логоспираль. Проекция вручную, чтобы линия осталась 1 px. */
-    function debug(ctx, mode) {
+    function debug(ctx: CanvasRenderingContext2D, mode?: string): void {
       var w = S.w, h = S.h;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, w, h);
       var k = 1 / S.dpr;
-      function pt(X, Y) {
+      function pt(X: number, Y: number): [number, number] {
         return [(S.ox + S.sc * (S.pA * X + S.pC * Y)) * k, (S.oy + S.sc * (S.pB * X + S.pD * Y)) * k];
       }
       var STEPS = 64;
@@ -594,7 +750,7 @@
       // орбиты: 40 эллипсов, повёрнутых по закону A·ln r
       for (var i = 0; i < 40; i++) {
         var idx = Math.floor(i / 40 * S.n) % S.n;
-        var Aa = S.ax[idx], Bb = S.b[idx], c = S.cp[idx], d = S.sp[idx];
+        var Aa = S.ax![idx]!, Bb = S.b![idx]!, c = S.cp![idx]!, d = S.sp![idx]!;
         ctx.beginPath();
         for (var s2 = 0; s2 <= STEPS; s2++) {
           var th = s2 / STEPS * TAU;
@@ -622,7 +778,7 @@
       // точки сборки — куда стекаются звёзды: та же кривая
       ctx.fillStyle = 'rgba(255,220,140,.85)';
       for (var j = 0; j < S.n; j += 7) {
-        var c4 = S.cp[j], d4 = S.sp[j], b4 = S.b[j];
+        var c4 = S.cp![j]!, d4 = S.sp![j]!, b4 = S.b![j]!;
         var p4 = pt(b4 * c4, b4 * d4);
         ctx.fillRect(p4[0] - 1, p4[1] - 1, 2, 2);
       }
@@ -632,10 +788,12 @@
       state: S, opts: o,
       resize: resize, view: view, frame: frame, nebula: nebula, debug: debug,
       populate: function () { derive(); populate(S.w, S.h); },
-      set: function (patch) {
-        for (var kk in patch) {
-          if (!(kk in o)) continue;
-          o[kk] = patch[kk];
+      set: function (patch: Partial<GalaxySpiralOptions>): void {
+        var optionTarget = o as unknown as Record<string, unknown>;
+        var optionSource = patch as unknown as Record<string, unknown>;
+        for (var kk in optionSource) {
+          if (!(kk in optionTarget)) continue;
+          optionTarget[kk] = optionSource[kk];
         }
         derive();                       // pitch, проекция и палитра — сразу, без перезапуска
         if (S.n) populate(S.w, S.h);
@@ -654,22 +812,22 @@
         Контраст 0.8…1.3 переводится в 0…1 и возводится в gamma (больше — уже рукава).
      3) Огибающая по радиусу: за краем диска, где кольца тёмные, узор гаснет.
      Картинка должна быть с того же домена (getImageData). */
-  function patternFromImage(img, cx, cy, r, size, gamma) {
+  function patternFromImage(img: HTMLImageElement | null | undefined, cx: number, cy: number, r: number, size?: number, gamma?: number | null): GalaxySpiralPattern | null {
     var n = size || 256;
     var gm = gamma == null ? 1 : gamma;
     var LO = 0.8, HI = 1.3;               // контраст «промежуток … рукав»
     var iw = img && img.naturalWidth, ih = img && img.naturalHeight;
     if (!iw || !ih) return null;
     var cv = makeCanvas(n, n);
-    var g = cv.getContext('2d', { willReadFrequently: true });
+    var g = cv.getContext('2d', { willReadFrequently: true })!;
     g.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
-    g.drawImage(img, (cx - r) * iw, (cy - r) * ih, 2 * r * iw, 2 * r * ih, 0, 0, n, n);
+    g.drawImage(img!, (cx - r) * iw, (cy - r) * ih, 2 * r * iw, 2 * r * ih, 0, 0, n, n);
     var px = g.getImageData(0, 0, n, n).data;
     var N2 = n * n, lum = new Float32Array(N2), hud = new Uint8Array(N2);
     var i, j, x, y, dx, dy, xx, yy;
     for (i = 0; i < N2; i++) {
-      var R = px[i * 4], G = px[i * 4 + 1], B = px[i * 4 + 2];
+      var R = px[i * 4]!, G = px[i * 4 + 1]!, B = px[i * 4 + 2]!;
       lum[i] = 0.3 * R + 0.59 * G + 0.11 * B;
       hud[i] = (G > R * 1.04 && G > 40) ? 1 : 0;
     }
@@ -698,10 +856,10 @@
     }
     // замкнутое рамкой: заливка от края текстуры по свободным текселям; куда не дошла — внутри
     var seen = new Uint8Array(N2), queue = new Int32Array(N2), qh = 0, qt = 0;
-    function push(k) { if (!mask[k] && !seen[k]) { seen[k] = 1; queue[qt++] = k; } }
+    function push(k: number): void { if (!mask[k] && !seen[k]) { seen[k] = 1; queue[qt++] = k; } }
     for (i = 0; i < n; i++) { push(i); push((n - 1) * n + i); push(i * n); push(i * n + n - 1); }
     while (qh < qt) {
-      var k = queue[qh++], kx = k % n, ky = (k - kx) / n;
+      var k = queue[qh++]!, kx = k % n, ky = (k - kx) / n;
       if (kx > 0) push(k - 1);
       if (kx < n - 1) push(k + 1);
       if (ky > 0) push(k - n);
@@ -723,7 +881,7 @@
             if (xx < 0 || xx >= n) continue;
             j = yy * n + xx;
             if (mask[j]) continue;
-            sum += lum[j]; w++;
+            sum += lum[j]!; w++;
           }
         }
         sm[i] = w ? sum / w : 0;
@@ -738,29 +896,29 @@
         var rr = Math.sqrt((x + 0.5 - half) * (x + 0.5 - half) + (y + 0.5 - half) * (y + 0.5 - half)) / half;
         var rb = Math.min(NR - 1, (rr * NB) | 0);
         ring[i] = rb;
-        if (!mask[i]) { ringSum[rb] += sm[i]; ringCnt[rb]++; }
+        if (!mask[i]) { ringSum[rb] = ringSum[rb]! + sm[i]!; ringCnt[rb] = ringCnt[rb]! + 1; }
       }
     }
     var prof = new Float64Array(NR), maxDisk = 0;
-    for (j = 0; j < NR; j++) prof[j] = ringCnt[j] ? ringSum[j] / ringCnt[j] : 0;
+    for (j = 0; j < NR; j++) prof[j] = ringCnt[j] ? ringSum[j]! / ringCnt[j]! : 0;
     var kern = [1, 2, 3, 2, 1], ps = new Float64Array(NR);
     for (j = 0; j < NR; j++) {
       var a = 0, ww = 0;
       for (var t = -2; t <= 2; t++) {
         var jj = j + t;
         if (jj < 0 || jj >= NR || !ringCnt[jj]) continue;
-        a += prof[jj] * kern[t + 2]; ww += kern[t + 2];
+        a += prof[jj]! * kern[t + 2]!; ww += kern[t + 2]!;
       }
       ps[j] = ww ? a / ww : 0;
-      if (j < NB && ps[j] > maxDisk) maxDisk = ps[j];
+      if (j < NB && ps[j]! > maxDisk) maxDisk = ps[j]!;
     }
     if (!maxDisk) return null;
     var out = new Float32Array(N2);
     for (i = 0; i < N2; i++) {
       if (mask[i]) continue;
-      var mr = ps[ring[i]];
+      var mr = ps[ring[i]!]!;
       if (mr <= 1) continue;
-      var v = clamp((sm[i] / mr - LO) / (HI - LO), 0, 1);
+      var v = clamp((sm[i]! / mr - LO) / (HI - LO), 0, 1);
       var env = clamp((mr / maxDisk - 0.08) / 0.5, 0, 1);
       out[i] = Math.pow(v, gm) * Math.pow(env, 0.6);
     }
@@ -768,7 +926,7 @@
   }
 
   /* ---------- DOM-обвязка демо ---------- */
-  function mount(host, userOpts) {
+  function mount(host: HTMLElement, userOpts?: Partial<GalaxySpiralOptions> | null): GalaxySpiralMountHandle | null {
     if (!host) return null;
     var g = create(userOpts);
 
@@ -784,9 +942,9 @@
     rootEl.appendChild(grain); rootEl.appendChild(core);
     host.appendChild(rootEl);
 
-    var nctx = neb.getContext('2d');
-    var sctx = stars.getContext('2d');
-    var dctx = dbg.getContext('2d');
+    var nctx = neb.getContext('2d')!;
+    var sctx = stars.getContext('2d')!;
+    var dctx = dbg.getContext('2d')!;
     var raf = 0, last = 0, visible = true, debugOn = false;
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -807,7 +965,7 @@
       if (reduce) g.frame(sctx, 0.016);   // один кадр вместо анимации
     }
 
-    function loop(now) {
+    function loop(now: number): void {
       raf = 0;
       if (!visible || document.hidden) return;
       if (!last) last = now;
@@ -824,7 +982,7 @@
       if (visible) play(); else stop();
     }
 
-    var ro = null;
+    var ro: ResizeObserver | null = null;
     if (window.ResizeObserver) { ro = new ResizeObserver(layout); ro.observe(host); }
     window.addEventListener('resize', layout);
     document.addEventListener('visibilitychange', onVisibility);
@@ -834,8 +992,8 @@
 
     return {
       el: rootEl, engine: g,
-      set: function (patch) { g.set(patch); g.nebula(nctx); if (debugOn) g.debug(dctx, 'both'); },
-      debug: function (on) { debugOn = !!on; dbg.hidden = !debugOn; if (debugOn) g.debug(dctx, 'both'); else dctx.clearRect(0, 0, dbg.width, dbg.height); },
+      set: function (patch: Partial<GalaxySpiralOptions>): void { g.set(patch); g.nebula(nctx); if (debugOn) g.debug(dctx, 'both'); },
+      debug: function (on: boolean): void { debugOn = !!on; dbg.hidden = !debugOn; if (debugOn) g.debug(dctx, 'both'); else dctx.clearRect(0, 0, dbg.width, dbg.height); },
       play: play, stop: stop,
       destroy: function () {
         stop();
@@ -869,38 +1027,42 @@
      кадре, поэтому звёзды не отстают от рисунка. Каждый кадр холст заново накрывает
      видимую часть сцены и рисуется в её разрешении — чётко на любом зуме, а звёзды
      вне сцены не рисуются. При prefers-reduced-motion слой не создаётся (null). */
-  function overlay(o) {
+  function overlay(o: GalaxySpiralOverlayOptions | null | undefined): GalaxySpiralOverlayHandle | null {
     if (!o || !o.layer || !o.image || typeof document === 'undefined') return null;
+    var options: GalaxySpiralOverlayOptions = o;
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
 
     var cv = document.createElement('canvas');
-    cv.className = o.className || 'galaxy-spiral';
+    cv.className = options.className || 'galaxy-spiral';
     cv.setAttribute('aria-hidden', 'true');
-    if (o.opacity != null) cv.style.opacity = String(o.opacity);
-    var anchor = o.before && o.before.parentNode === o.layer ? o.before : o.image.nextSibling;
-    o.layer.insertBefore(cv, anchor);
-    var ctx = cv.getContext('2d');
+    if (options.opacity != null) cv.style.opacity = String(options.opacity);
+    var anchor = options.before && options.before.parentNode === options.layer ? options.before : options.image.nextSibling;
+    options.layer.insertBefore(cv, anchor);
+    var ctx = cv.getContext('2d')!;
 
-    var cx = o.center[0], cy = o.center[1], rad = o.radius;
-    var fps = o.fps > 0 ? o.fps : 30;
-    var margin = o.margin == null ? 0.08 : o.margin;
-    var maxDpr = o.maxDpr || 1.5;
-    var starSize = o.starSize || 3;
-    var starZoom = o.starZoom == null ? 0.4 : o.starZoom;
-    var eng = null, raf = 0, last = 0, lastDraw = 0, key = '', alive = true;
+    var cx = options.center[0], cy = options.center[1], rad = options.radius;
+    var fps = options.fps != null && options.fps > 0 ? options.fps : 30;
+    var margin = options.margin == null ? 0.08 : options.margin;
+    var maxDpr = options.maxDpr || 1.5;
+    var starSize = options.starSize || 3;
+    var starZoom = options.starZoom == null ? 0.4 : options.starZoom;
+    var eng: GalaxySpiralEngine | null = null;
+    var raf = 0, last = 0, lastDraw = 0, key = '', alive = true;
 
     function start() {
       if (!alive || eng) return;
-      var pattern = null;
+      var pattern: GalaxySpiralPattern | null = null;
       try {
-        pattern = patternFromImage(o.image, cx, cy, rad, o.patternSize, o.patternGamma);
+        pattern = patternFromImage(options.image, cx, cy, rad, options.patternSize, options.patternGamma);
       } catch (err) {
         pattern = null;                 // рисунок не прочитать (чужой домен) — слоя не будет
       }
       if (!pattern) { destroy(); return; }
-      var opts = {};
-      var src = o.engine || {};
-      for (var k in src) opts[k] = src[k];
+      var opts: Partial<GalaxySpiralOptions> = {};
+      var src = options.engine || {};
+      var optionTarget = opts as unknown as Record<string, unknown>;
+      var optionSource = src as unknown as Record<string, unknown>;
+      for (var k in optionSource) optionTarget[k] = optionSource[k];
       opts.pattern = pattern;
       eng = create(opts);
       eng.populate();
@@ -909,7 +1071,7 @@
 
     // накрыть видимую часть сцены и передать ядру вид; true — вид сменился
     function place() {
-      var v = o.view && o.view();
+      var v = options.view && options.view();
       if (!v || !v.base || !v.w || !v.h) return false;
       var side = v.s * v.base;
       var x0 = -v.tx - v.w * margin, y0 = -v.ty - v.h * margin;
@@ -927,12 +1089,12 @@
       }
       var kx = bw / cssW, ky = bh / cssH;          // px холста на CSS px (≈ dpr)
       var baseK = clamp(Math.sqrt(v.base / 1000), 0.55, 1.25);
-      eng.view((cx * side - x0) * kx, (cy * side - y0) * ky, rad * side * kx,
+      eng!.view((cx * side - x0) * kx, (cy * side - y0) * ky, rad * side * kx,
         starSize * Math.pow(v.s, starZoom) * baseK * kx, bw, bh);
       return key !== prev;
     }
 
-    function loop(now) {
+    function loop(now: number): void {
       raf = 0;
       if (!alive || !eng || document.hidden) return;
       var moved = place();
@@ -951,13 +1113,13 @@
       alive = false;
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
-      o.image.removeEventListener('load', start);
+      options.image.removeEventListener('load', start);
       if (cv.parentNode) cv.parentNode.removeChild(cv);
     }
 
     document.addEventListener('visibilitychange', onVisibility);
-    if (o.image.complete && o.image.naturalWidth) start();
-    else o.image.addEventListener('load', start);
+    if (options.image.complete && options.image.naturalWidth) start();
+    else options.image.addEventListener('load', start);
 
     return {
       el: cv,
@@ -972,4 +1134,9 @@
     patternFromImage: patternFromImage,
     defaults: defaults, PALETTES: PALETTES
   };
-});
+})();
+
+export const GalaxySpiral: GalaxySpiralApi = galaxySpiralApi;
+(globalThis as typeof globalThis & { GalaxySpiral: GalaxySpiralApi }).GalaxySpiral = galaxySpiralApi;
+
+export default galaxySpiralApi;

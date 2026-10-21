@@ -3,10 +3,22 @@
 // к необъявленной переменной. Так сломалось перетаскивание карты сектора: после
 // чистки кода в обработчике осталась ссылка на удалённую переменную point.
 //
-// Локально:
-//   npm install --no-save --no-package-lock eslint@10 globals@17
-//   npx eslint site
+// Локально (typescript@6 нужен только парсеру: typescript-eslint пока не
+// поддерживает TypeScript 7 из package.json; после lint npm ci вернёт TS 7):
+//   npm install --no-save --no-package-lock --legacy-peer-deps eslint@10 globals@17 @typescript-eslint/parser@8 typescript@6
+//   npx eslint site src/atlas
 import globals from 'globals';
+import tsParser from '@typescript-eslint/parser';
+
+const siteGlobals = {
+  ...globals.browser,
+  // общие объекты между файлами сайта
+  CursorFx: 'readonly',     // shared/cursor-fx.ts → страница /cursor-test/
+  FocusFx: 'readonly',      // shared/focus-fx.ts → galaxy.ts
+  GalaxySpiral: 'readonly', // shared/galaxy-spiral.ts → galaxy.ts, /spiral-test/
+  LagFx: 'readonly',        // shared/lag-fx.ts → galaxy.ts
+  SITE_LINKS: 'readonly'    // shared/links.ts → остальные
+};
 
 export default [
   {
@@ -14,14 +26,25 @@ export default [
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'script',
+      globals: siteGlobals
+    },
+    rules: {
+      'no-undef': 'error'
+    }
+  },
+  {
+    files: ['site/**/*.ts', 'src/atlas/**/*.ts'],
+    languageOptions: {
+      parser: tsParser,
+      ecmaVersion: 'latest',
+      sourceType: 'module',
       globals: {
-        ...globals.browser,
-        // общие объекты между файлами сайта
-        CursorFx: 'readonly',     // shared/cursor-fx.js → страница /cursor-test/
-        FocusFx: 'readonly',      // shared/focus-fx.js → galaxy.js
-        GalaxySpiral: 'readonly', // shared/galaxy-spiral.js → galaxy.js, /spiral-test/
-        LagFx: 'readonly',        // shared/lag-fx.js → galaxy.js
-        SITE_LINKS: 'readonly'    // shared/links.js → остальные
+        ...siteGlobals,
+        // Имена только из TS DOM-типов: runtime-глобалов с такими именами нет,
+        // а no-undef у парсера видит их как обычные идентификаторы.
+        CanvasImageSource: 'readonly',
+        CanvasRenderingContext2DSettings: 'readonly',
+        ParentNode: 'readonly'
       }
     },
     rules: {

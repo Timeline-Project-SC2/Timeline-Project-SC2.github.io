@@ -80,6 +80,30 @@ if (!existsSync(manifestPath)) {
       fail(`ассет без контент-хэша в имени: ${source} -> ${output}`);
     }
   }
+  // Модули с собственным window/globalThis API нельзя публиковать через
+  // esbuild globalName: внешний var выполнится после IIFE и перезапишет API
+  // ESM-namespace (так у GalaxySpiral терялся .overlay()). Контракт PG1,
+  // наоборот, именно namespace и публикует под своим глобалом.
+  const publishedAssetText = (source) => {
+    const output = manifest.assets?.[source];
+    const path = output ? resolve(publishRoot, output) : '';
+    return path && existsSync(path) ? readFileSync(path, 'utf8') : '';
+  };
+  for (const [source, globalName] of Object.entries({
+    'shared/galaxy-spiral.ts': 'GalaxySpiral',
+    'shared/travel-planner.ts': 'TravelPlanner',
+  })) {
+    const text = publishedAssetText(source);
+    if (!text.includes(`globalThis.${globalName} =`)) {
+      fail(`опубликованный модуль потерял собственный глобал ${globalName}: ${source}`);
+    }
+    if (new RegExp(`^var ${globalName} =`, 'm').test(text)) {
+      fail(`esbuild globalName перезаписывает собственный глобал ${globalName}: ${source}`);
+    }
+  }
+  if (!/^var PlanetGenerationContract =/m.test(publishedAssetText('shared/planet-generation-contract.ts'))) {
+    fail('контракт PG1 опубликован без глобала PlanetGenerationContract');
+  }
 }
 
 const assetTagPattern = /<(?:link|script)\b[^>]*\b(?:href|src)\s*=\s*(['"])([^'"]+)\1/gi;

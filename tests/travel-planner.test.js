@@ -1,7 +1,9 @@
 'use strict';
 
 var assert = require('node:assert/strict');
-var planner = require('../site/shared/travel-planner.js');
+(async function () {
+var plannerModule = await import('../site/shared/travel-planner.ts');
+var planner = plannerModule.default;
 
 assert.equal(planner.LIGHT_YEARS_PER_MAP_UNIT, 1);
 assert.equal(planner.parseSpeed('100,5'), 100.5);
@@ -65,3 +67,4 @@ assert.match(preciseLog, /\(1\.234567, 0\)/, 'coordinates must not be rounded');
 assert.match(preciseLog, /Произвольная точка/);
 
 console.log('travel-planner tests passed');
+})().catch(function (error) { console.error(error); process.exit(1); });
