@@ -48,7 +48,7 @@ interface WorkerScopeLike {
 const workerScope = globalThis as unknown as WorkerScopeLike;
 const idbFactory = (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB;
 
-interface GenerateMessage {
+export interface GenerateMessage {
   type: 'generate';
   token?: string;
   requestId?: string | number;
@@ -59,14 +59,14 @@ interface GenerateMessage {
   fallbackPreview?: boolean;
 }
 
-interface ColorModeMessage {
+export interface ColorModeMessage {
   type: 'color-mode';
   token?: string;
   requestId?: string | number;
   mode?: string;
 }
 
-interface PickMessage {
+export interface PickMessage {
   type: 'pick';
   token?: string;
   requestId?: string | number;
@@ -74,13 +74,190 @@ interface PickMessage {
   purpose?: string;
 }
 
-interface ClearCacheMessage {
+export interface ClearCacheMessage {
   type: 'clear-grid-cache';
   token?: string;
   requestId?: string | number;
 }
 
-type WorkerMessage = GenerateMessage | ColorModeMessage | PickMessage | ClearCacheMessage;
+export type WorkerMessage = GenerateMessage | ColorModeMessage | PickMessage | ClearCacheMessage;
+
+/** Геометрия на проводе: без vertexCellId/cellIndexStart (pick живёт в воркере). */
+export type GlobeWireGeometry = Omit<GlobeGeometry, 'vertexCellId' | 'cellIndexStart'>;
+
+export interface GlobeBiomeDefinition {
+  key: string;
+  nameRu?: string;
+  [field: string]: unknown;
+}
+
+export interface GlobeSummary {
+  planetId: string;
+  presetId: string;
+  surfaceClass: string;
+  masterSeedHex: string;
+  generationKey: string;
+  generationKeyVerification?: GenerationKeyVerification;
+  radiusKm: number;
+  canonicalV: number;
+  renderV: number;
+  renderRatio: number;
+  cellCount: number;
+  renderCellCount: number;
+  triangleCount: number;
+  vertexCount: number;
+  geometryBytes: number;
+  gridVersion: string;
+  gridSource?: string;
+  noiseVersion: string;
+  geographyVersion: string;
+  surfaceVersion: string;
+  hydrologyVersion: string;
+  biomeVersion: string;
+  seaLevel: number;
+  thresholds: Record<string, number>;
+  stats: Record<string, unknown>;
+  biomeDefinitions: GlobeBiomeDefinition[];
+  counts: Record<string, number>;
+  renderProfileCells: Record<string, number>;
+  timingsMs: Record<string, number>;
+}
+
+export interface GlobePickContinent {
+  top1Id: number;
+  top1Weight: number;
+  top2Id: number;
+  top2Weight: number;
+  entropy: number;
+  effectiveAreaKm2: number;
+}
+
+export interface GlobePickInfo {
+  cell: number;
+  address: string;
+  pickMs: number;
+  latitudeDeg: number;
+  longitudeDeg: number;
+  areaKm2: number;
+  centerDirection: number[];
+  polygon: unknown;
+  hardClass: string;
+  elevation: number;
+  seaLevel: number;
+  elevationRelative: number;
+  filledElevation: number;
+  depressionDepth: number;
+  slope: number;
+  temperature: number;
+  moisture: number;
+  volcanism: number;
+  mu: { land: number; shelf: number; ocean: number };
+  coastDistanceCells: number;
+  plateId: number;
+  plateBoundary: number;
+  continent: GlobePickContinent | null;
+  oceanBasinId: number;
+  oceanBasinWeight: number;
+  physicalLandmassId: number;
+  flow: {
+    receiver: number;
+    accumulationKm2: number;
+    streamWeight: number;
+    riverInfluence: number;
+    deltaWeight: number;
+    lakeWeight: number;
+    terminalType: number;
+  };
+  catchment: {
+    id: number;
+    terminalType: string;
+    cellCount: number;
+    areaKm2: number;
+    maxFlowKm2: number;
+  } | null;
+  drainageRegion: {
+    id: number;
+    terminalType: string;
+    cellCount: number;
+    areaKm2: number;
+    catchmentCount: number;
+  } | null;
+  lake: {
+    id: number;
+    cellCount: number;
+    areaKm2: number;
+    terminal: boolean;
+  } | null;
+  mountains: {
+    weight: number;
+    seamWeight: number;
+    rangeId: number;
+  };
+  biome: {
+    top1Id: number;
+    top1Key: string;
+    top1Weight: number;
+    top2Id: number;
+    top2Key: string;
+    top2Weight: number;
+    entropy: number;
+  };
+}
+
+export interface WorkerProgressResponse {
+  type: 'progress';
+  token?: string;
+  requestId?: string | number;
+  fraction: number;
+  stage: string;
+  label: string;
+}
+
+export interface WorkerReadyResponse {
+  type: 'ready';
+  token?: string;
+  requestId?: string | number;
+  geometry: GlobeWireGeometry;
+  summary: GlobeSummary;
+  colorMode?: string;
+  preview?: { width: number; height: number; data: Uint8ClampedArray } | null;
+}
+
+export interface WorkerColorsResponse {
+  type: 'colors';
+  token?: string;
+  requestId?: string | number;
+  mode?: string;
+  colors: Uint8Array;
+}
+
+export interface WorkerPickResultResponse {
+  type: 'pick-result';
+  token?: string;
+  requestId?: string | number;
+  purpose?: string;
+  info: GlobePickInfo | null;
+}
+
+export interface WorkerCacheClearedResponse {
+  type: 'cache-cleared';
+  token?: string;
+  requestId?: string | number;
+}
+
+export interface WorkerErrorResponse {
+  type: 'error';
+  token?: string;
+  requestId?: string | number;
+  message: string;
+  code?: string;
+  stack?: string;
+  generationKeyVerification?: GenerationKeyVerification;
+}
+
+export type WorkerResponse = WorkerProgressResponse | WorkerReadyResponse | WorkerColorsResponse
+  | WorkerPickResultResponse | WorkerCacheClearedResponse | WorkerErrorResponse
+  | { type: 'worker-ready'; token?: string; requestId?: string | number };
 
 interface CodedError extends Error {
   code?: string;

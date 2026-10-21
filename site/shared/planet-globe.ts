@@ -78,12 +78,25 @@ export interface GlobeStats {
   distance: number;
 }
 
+/** Опциональный FX-плагин рендера (CR-01 PR 5): экспериментальные режимы
+ *  из planet-globe-fx (взрыв осколков Шакураса uSep, диагностические палитры)
+ *  подключаются только через это поле — без hooks глобус рисуется как раньше. */
+export interface PlanetGlobeFxHooks {
+  /** Декорирование исходников surface-шейдеров перед компиляцией. */
+  decorateSurfaceShaders?: (src: { vs: string; fs: string }) => { vs: string; fs: string };
+  /** После линковки surface-программы (найти uniform-локации плагина). */
+  onSurfaceProgram?: (gl: WebGL2RenderingContext, program: WebGLProgram) => void;
+  /** Перед отрисовкой поверхности каждого кадра (uniform-ы плагина). */
+  onSurfaceDraw?: (gl: WebGL2RenderingContext, program: WebGLProgram) => void;
+}
+
 export interface PlanetGlobeOptions {
   antialias?: boolean;
   autoRotate?: boolean;
   borders?: boolean;
   atmosphere?: boolean;
   maxPixelRatio?: number;
+  fx?: PlanetGlobeFxHooks | null;
   onGeometryUploadProgress?: (info: { geometry: GlobeGeometry; fraction: number }) => void;
   onGeometryReady?: (geometry: GlobeGeometry) => void;
   onStats?: (stats: GlobeStats) => void;
@@ -705,7 +718,13 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     return out;
   }
   function initPrograms(): void {
-    surfaceProgram = makeProgram(SURFACE_VS, SURFACE_FS);
+    const surfaceSrc = (opts.fx && opts.fx.decorateSurfaceShaders)
+      ? opts.fx.decorateSurfaceShaders({ vs: SURFACE_VS, fs: SURFACE_FS })
+      : { vs: SURFACE_VS, fs: SURFACE_FS };
+    surfaceProgram = makeProgram(surfaceSrc.vs, surfaceSrc.fs);
+    if (opts.fx && opts.fx.onSurfaceProgram && surfaceProgram) {
+      opts.fx.onSurfaceProgram(GL, surfaceProgram);
+    }
     atmoProgram = makeProgram(ATMO_VS, ATMO_FS);
     simpleProgram = makeProgram(SIMPLE_VS, SIMPLE_FS);
     U = locations(surfaceProgram, ['uMvp', 'uModel', 'uSunDir', 'uCamPos', 'uBorder']);
@@ -999,6 +1018,9 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       GL.uniform3f(U.uSunDir as WebGLUniformLocation | null, sunDir[0] as number, sunDir[1] as number, sunDir[2] as number);
       GL.uniform3f(U.uCamPos as WebGLUniformLocation | null, camPos[0] as number, camPos[1] as number, camPos[2] as number);
       GL.uniform1f(U.uBorder as WebGLUniformLocation | null, bordersEnabled ? 1 : 0);
+      if (opts.fx && opts.fx.onSurfaceDraw && surfaceProgram) {
+        opts.fx.onSurfaceDraw(GL, surfaceProgram);
+      }
       GL.bindVertexArray(vao);
       const ranges = visibleRanges(model);
       for (let i = 0; i < ranges.length; i++) {
