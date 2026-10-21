@@ -22,6 +22,12 @@ const siteGlobals = {
 
 export default [
   {
+    // AssemblyScript-исходники ядра planet-core: компилируются своим
+    // компилятором (tools/build_planet_core.mjs), декораторы @inline/@fastMath
+    // не парсятся TS-парсером ESLint — их проверяет tsc и --check сборки ядра.
+    ignores: ['src/planet/assembly/**']
+  },
+  {
     files: ['site/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
@@ -33,7 +39,7 @@ export default [
     }
   },
   {
-    files: ['site/**/*.ts', 'src/atlas/**/*.ts'],
+    files: ['site/**/*.ts', 'src/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       ecmaVersion: 'latest',
@@ -47,23 +53,6 @@ export default [
         CanvasRenderingContext2DSettings: 'readonly',
         ParentNode: 'readonly',
         Transferable: 'readonly'
-      }
-    },
-    rules: {
-      'no-undef': 'error'
-    }
-  },
-  {
-    // Временный агрегат будущих ESM/worker-модулей Этапов 8/9 из PR #119.
-    // Он не подключён к страницам и позже должен быть разрезан на отдельные
-    // модули; до этого ему нужен module-парсинг и оба набора глобалов.
-    files: ['site/shared/temp_code_structures.js'],
-    languageOptions: {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      globals: {
-        ...globals.browser,
-        ...globals.worker
       }
     },
     rules: {

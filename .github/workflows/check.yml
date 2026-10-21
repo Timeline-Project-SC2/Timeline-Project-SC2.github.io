@@ -86,7 +86,7 @@ jobs:
           # typescript@6 — только API для typescript-eslint: он пока не поддерживает TS 7.
           # Typecheck выше уже выполнен TypeScript 7 из npm ci.
           npm install --no-save --no-package-lock --no-audit --no-fund --legacy-peer-deps eslint@10 globals@17 @typescript-eslint/parser@8 typescript@6
-          npx eslint site src/atlas
+          npx eslint site src
 
   planet-perf:
     name: Planet CPU performance
