@@ -163,6 +163,9 @@ test('c100-soft-v1: генерация валидна, повторяема и �
   assert.ok(first.oceanBasins.length > 0);
   assert.equal(first.plates.length, PlanetGeography.PLATE_COUNT);
   assert.ok(first.plates.every((plate) => plate.cellCount > 0));
+  assert.ok(first.plates.every((plate) => Number.isFinite(plate.supportAreaKm2) && plate.supportAreaKm2 > 0));
+  const plateAreaKm2 = first.plates.reduce((sum, plate) => sum + plate.supportAreaKm2, 0);
+  assert.ok(Math.abs(plateAreaKm2 - 4 * Math.PI * 6371 * 6371) / (4 * Math.PI * 6371 * 6371) < 1e-8);
   assert.ok(first.continents.every((record) => record.effectiveMassCells > 0));
   assert.ok(first.oceanBasins.every((record) => record.effectiveMassCells > 0));
   assert.ok(first.continents.every((record) => record.hardCellCount > 0));

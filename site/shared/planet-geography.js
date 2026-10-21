@@ -1390,7 +1390,7 @@
     result.plates = computePlates(grid, arrays, master);
     var plateAreaScale = profile.radiusKm * profile.radiusKm;
     for (c = 0; c < grid.cellCount; c++) {
-      result.plates[arrays.plateId[c]].areaKm2 += grid.areas[c] * plateAreaScale;
+      result.plates[arrays.plateId[c]].supportAreaKm2 += grid.areas[c] * plateAreaScale;
     }
 
     progress('continents', 0.65);
