@@ -10,6 +10,8 @@
 - `site/shared/galaxy-spiral.ts` — спираль поверх карты галактики («вращение» без прокрутки): ядро, демо-сцена (`/spiral-test/`) и слой для карты (`GalaxySpiral.overlay`); настройки на галактике — `CONFIG.spiral` в `galaxy.ts`.
 - `src/atlas/` — модульный строгий TypeScript атласа сектора: `app.ts` собирает общий kernel и публикуется как `shared/app-<hash>.js`; рядом лежат `config.ts`, `data-loader.ts`, `tile-pyramid.ts`, `canvas-renderer.ts`, `catalog-panel.ts`, `dossier-card.ts`, `coords-readout.ts` и варианты разметки `atlas-variants.ts`. Старого `site/shared/app.js` нет.
 - `src/contracts/planet-generation-contract.json` — единый источник истины контракта профилей планет: схема из 37 колонок, 8 пресетов, версии и точность чисел. `tools/planet_generation.py` читает этот JSON и остаётся валидатором против `places`/синка; браузерный и Node-контракт — `site/shared/planet-generation-contract.ts` (эффективный манифест, `PG1`, `verifyGenerationKey`). Источник `planet_generation` в `data/sources.json` не включать без реального опубликованного CSV-URL вкладки.
+- `site/shared/planet-globe.ts` — боевой WebGL2-глобус `planet-globe-v1` (вершина 24 Б); страница `/planet-globe/` (`site/planet-globe/planet-globe.ts`) и воркер `planet-globe-worker.ts` — строгий TypeScript с типизированным протоколом (`WorkerMessage`/`WorkerResponse`). Экспериментальные режимы стенда (взрыв осколков Шакураса `uSep`, шейдерные диагностические палитры) — в опциональном модуле `src/planet/planet-globe-fx.ts`: подключаются только через необязательный сокет `fx` (`PlanetGlobeFxHooks`) в опциях глобуса, без плагина рендер не меняется. `/planet-test/` — тонкая обёртка над тем же боевым ядром + FX (`site/planet-test/planet-test.ts`); дублей-монолитов (`planet-test.js`, `planet-worker.js`) нет (И-5).
+- `src/local-map/` — модули локальной карты (результат распила `temp_code_structures.js`, И-5): `local-map-mesh.ts` (М1, mesh-библиотека), `local-map-worker.ts` (М2 + wire-протокол), `local-map-renderer.ts` (М3, StructureRenderer), `local-map-shaders.ts` (М4, GLSL) и контракт сшивки патча из 7 канонических ячеек глобуса `local-map-contract.ts` (И-3, `local-map-patch-v1`, единый 3D-сэмплер полей). Проверка — `tests/local-map.test.mjs` в `check.yml`.
 - `assets/src/` — исходные изображения. Производные тайлы и WebP строит `tools/build_assets.py`; готовые файлы исключены из Git.
 - `.github/workflows/pages.yml` — сборка и публикация Pages; `check.yml` — PR-проверки.
 - Тексты интерфейса и комментарии в существующем русском коде пишите по-русски.
@@ -76,7 +78,7 @@ npm run verify:publish
 npm run verify:contract
 find site -type f -name '*.js' -print0 | sort -z | while IFS= read -r -d '' f; do node --check "$f"; done
 npm install --no-save --no-package-lock --legacy-peer-deps eslint@10 globals@17 @typescript-eslint/parser@8 typescript@6
-npx eslint site src/atlas
+npx eslint site src
 python3 -m py_compile tools/build_assets.py tools/sync.py tools/planet_generation.py
 python3 tools/planet_generation.py validate
 python3 -m unittest discover -s tests -p 'test_*.py'
