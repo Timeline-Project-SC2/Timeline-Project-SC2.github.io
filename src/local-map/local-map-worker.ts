@@ -13,6 +13,8 @@
    только через `import type` — у модуля есть побочный эффект регистрации
    onmessage, и value-импорт из него тащил бы его в главный поток. */
 
+import { buildBuildingSpawnMask, verifyPatchInvariants } from './local-map-contract.ts';
+import type { BuildingSpawnRule, LocalMapPatch } from './local-map-contract.ts';
 import type { MeshModuleId } from './local-map-mesh.ts';
 
 // ---- Константы контракта ----
@@ -47,11 +49,15 @@ export interface LocalMapMeta {
 }
 
 export interface LocalMapWorkerRequest {
+  /** Канонический срез 7 ячеек глобуса v=128 (И-3): обязателен для воркера. */
+  readonly patch: LocalMapPatch;
   readonly seed: number;
   readonly placeId: number;
   readonly radiusM: number;
   readonly centerLat?: number;
   readonly centerLon?: number;
+  /** Правило маски спавна (И-3.4); по умолчанию DEFAULT_BUILDING_SPAWN_RULE. */
+  readonly spawnRule?: BuildingSpawnRule;
 }
 
 export interface LocalMapWorkerResponse {
@@ -290,6 +296,7 @@ export function scatterInstances(
   radiusM: number,
   seed: number,
   placeId: number,
+  spawnMask?: Uint8Array | null,
 ): ScatterInstance[] {
   const instances: ScatterInstance[] = [];              // будет max 4096
   const hfRes = HEIGHTFIELD_RES;
@@ -313,6 +320,10 @@ export function scatterInstances(
 
       const pxi = Math.floor(px), pyi = Math.floor(py);
       if (pxi < 0 || pxi >= hfRes || pyi < 0 || pyi >= hfRes) continue;
+
+      // И-3.4: buildingSpawnMask — спавн 3D-структур запрещён над водой,
+      // озёрами, руслами рек и крутыми склонами (см. local-map-contract.ts).
+      if (spawnMask && spawnMask[pyi * hfRes + pxi] === 0) continue;
 
       // Сэмплируем зону (64×64 → перемасштабируем координаты)
       const zx = Math.floor((px / hfRes) * zRes);
@@ -412,9 +423,15 @@ export function packInstancesByModule(instances: readonly ScatterInstance[]): In
 
 // ---- Main Entry Point ----
 export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorkerResponse {
-  const { seed, placeId, radiusM } = request;
+  const { patch, seed, placeId, radiusM } = request;
   const hfRes = HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / hfRes;
+
+  // И-3: вход воркера — только валидный канонический срез 7 ячеек глобуса.
+  const report = verifyPatchInvariants(patch);
+  if (!report.ok) {
+    throw new Error('LocalMapWorker: патч 7 ячеек нарушил инварианты И-3: ' + JSON.stringify(report.checks));
+  }
 
   // 1. Heightfield (h_natural)
   const heightfield = new Float32Array(hfRes * hfRes);
@@ -444,8 +461,9 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   // 5. Zone map
   const zoneMap = generateZoneMap(seed, placeId);
 
-  // 6. Scatter
-  const instances = scatterInstances(zoneMap, heightfield, radiusM, seed, placeId);
+  // 6. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
+  const spawnMask = buildBuildingSpawnMask(patch, hfRes, request.spawnRule);
+  const instances = scatterInstances(zoneMap, heightfield, radiusM, seed, placeId, spawnMask);
   const instanceBuffers = packInstancesByModule(instances);
 
   return {

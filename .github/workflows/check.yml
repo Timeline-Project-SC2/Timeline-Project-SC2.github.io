@@ -77,7 +77,7 @@ jobs:
           npm run typecheck
           find site -type f -name '*.js' -print0 | sort -z | while IFS= read -r -d '' f; do node --check "$f"; done
           node tests/travel-planner.test.js
-          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-generation-contract.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs tests/planet-globe.test.mjs
+          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-generation-contract.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs tests/planet-globe.test.mjs tests/local-map.test.mjs
           # Wasm-ядра planet-core (CR-01 PR 4): закоммиченные байты в
           # src/planet/planet-core-bytes.ts обязаны совпадать с пересборкой
           # AssemblyScript-исходников, иначе ускорение молча расходится с кодом.
