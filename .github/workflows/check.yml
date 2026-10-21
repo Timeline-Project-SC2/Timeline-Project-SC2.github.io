@@ -51,7 +51,8 @@ jobs:
           # страницы и то, на что они ссылаются, на месте
           for f in index.html sector/sector.html minimal/minimal.html galaxy.js shared/app.js \
                    shared/focus-fx.js shared/lag-fx.js shared/cursor-fx.js cursor-test/index.html \
-                   assets/tiles.json assets/galaxy-map-3000.webp data/systems.csv data/places.csv \
+                   planet-globe/index.html planet-globe/planet-globe.js planet-globe/planet-globe-worker.js \
+                   shared/planet-globe.js assets/tiles.json assets/galaxy-map-3000.webp data/systems.csv data/places.csv \
                    data/planet-generation.csv; do
             test -s ".publish/$f" || { echo "нет файла: $f"; exit 1; }
           done
@@ -71,7 +72,7 @@ jobs:
         run: |
           for f in site/*.js site/shared/*.js; do node --check "$f"; done
           node tests/travel-planner.test.js
-          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs
+          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs tests/planet-globe.test.mjs
           npm install --no-save --no-package-lock --no-audit --no-fund eslint@10 globals@17
           npx eslint site
 
@@ -98,3 +99,5 @@ jobs:
         run: node tools/bench_planet_stage4.mjs --seeds=5
       - name: Stage 5 v128 hydrology / biomes G3 bench
         run: node tools/bench_planet_stage5.mjs --seeds=5
+      - name: Stage 6 v128 globe geometry / color layers / pick bench
+        run: node tools/bench_planet_stage6.mjs --seeds=3
