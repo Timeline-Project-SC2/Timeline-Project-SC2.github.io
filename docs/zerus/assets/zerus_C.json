@@ -1,0 +1,83 @@
+{
+  "key": "C",
+  "seed": "18ea7f3f8c99152d",
+  "note": "крупнейший речной бассейн и большое озеро",
+  "v": 96,
+  "cells": 92162,
+  "canonicalV": 125,
+  "landFraction": 0.5011,
+  "waterFraction": 0.4989,
+  "mountainRanges": 15,
+  "lakes": 490,
+  "drainageRegions": 1300,
+  "biomes": {
+    "deep_ocean": 0.4708,
+    "boreal_forest": 0.045,
+    "shelf": 0.0313,
+    "lake": 0.0204,
+    "temperate_forest": 0.1211,
+    "grassland": 0.059,
+    "barren": 0.0009,
+    "alpine": 0.0596,
+    "tundra": 0.0056,
+    "hot_desert": 0.0375,
+    "rainforest": 0.1147,
+    "wetland": 0.0039,
+    "shrubland": 0.0257,
+    "volcanic": 0.0003,
+    "sea_ice": 0,
+    "polar_ice": 0.0042
+  },
+  "anchors": {
+    "fulmic_highlands": {
+      "cell": 41656,
+      "address": "goldberg-gp-v1/w0/v96/f08/a75/b4",
+      "lat": -69.1,
+      "lon": 6.37,
+      "elevation": 0.7367
+    },
+    "sundered_valley": {
+      "cell": 38599,
+      "address": "goldberg-gp-v1/w0/v96/f08/a13/b38",
+      "lat": -62.27,
+      "lon": 117.49,
+      "filledElevation": -0.7048
+    },
+    "volatile_cleft": {
+      "cell": 26928,
+      "address": "goldberg-gp-v1/w0/v96/f05/a34/b47",
+      "lat": 23.08,
+      "lon": 48.25,
+      "volcanism": 0.9995
+    },
+    "untamed_spire": {
+      "cell": 6949,
+      "address": "goldberg-gp-v1/w0/v96/f01/a5/b90",
+      "lat": 34.39,
+      "lon": -88.43,
+      "mountainWeight": 1
+    },
+    "first_spawning_pool": {
+      "cell": 29875,
+      "address": "goldberg-gp-v1/w0/v96/f06/a30/b50",
+      "lat": 30.6,
+      "lon": -59.8,
+      "lakeCells": 148
+    },
+    "eternal_scar": {
+      "cell": 77731,
+      "address": "goldberg-gp-v1/w0/v96/f16/a34/b52",
+      "lat": 16.14,
+      "lon": 67.73,
+      "rangeCells": 41,
+      "rangeId": 13
+    },
+    "great_river": {
+      "cell": 30270,
+      "address": "goldberg-gp-v1/w0/v96/f06/a14/b75",
+      "lat": 31.92,
+      "lon": -77.64,
+      "regionCells": 76
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "key": "A",
+  "seed": "fd51abcae100d5b1",
+  "note": "самый влажный: максимум джунглей",
+  "v": 96,
+  "cells": 92162,
+  "canonicalV": 125,
+  "landFraction": 0.5009,
+  "waterFraction": 0.4991,
+  "mountainRanges": 17,
+  "lakes": 454,
+  "drainageRegions": 1293,
+  "biomes": {
+    "boreal_forest": 0.0591,
+    "grassland": 0.0507,
+    "alpine": 0.06,
+    "deep_ocean": 0.4698,
+    "shelf": 0.0308,
+    "tundra": 0.0114,
+    "barren": 0.001,
+    "volcanic": 0.0012,
+    "polar_ice": 0.0019,
+    "lake": 0.0132,
+    "wetland": 0.006,
+    "sea_ice": 0.001,
+    "temperate_forest": 0.1099,
+    "hot_desert": 0.0414,
+    "shrubland": 0.0268,
+    "rainforest": 0.1159
+  },
+  "anchors": {
+    "fulmic_highlands": {
+      "cell": 91946,
+      "address": "goldberg-gp-v1/w0/v96/f19/a74/b16",
+      "lat": 3.53,
+      "lon": -137.53,
+      "elevation": 0.6602
+    },
+    "sundered_valley": {
+      "cell": 24073,
+      "address": "goldberg-gp-v1/w0/v96/f05/a25/b18",
+      "lat": 47.69,
+      "lon": 35.44,
+      "filledElevation": -0.7061
+    },
+    "volatile_cleft": {
+      "cell": 13875,
+      "address": "goldberg-gp-v1/w0/v96/f02/a78/b1",
+      "lat": 9.87,
+      "lon": 150.93,
+      "volcanism": 0.8948
+    },
+    "untamed_spire": {
+      "cell": 138,
+      "address": "goldberg-gp-v1/w0/v96/f00/a4/b10",
+      "lat": 64.69,
+      "lon": 174.86,
+      "mountainWeight": 1
+    },
+    "first_spawning_pool": {
+      "cell": 19428,
+      "address": "goldberg-gp-v1/w0/v96/f04/a23/b26",
+      "lat": 31.05,
+      "lon": 178.64,
+      "lakeCells": 63
+    },
+    "eternal_scar": {
+      "cell": 32803,
+      "address": "goldberg-gp-v1/w0/v96/f07/a7/b25",
+      "lat": 41.47,
+      "lon": -8.84,
+      "rangeCells": 62,
+      "rangeId": 8
+    },
+    "great_river": {
+      "cell": 22074,
+      "address": "goldberg-gp-v1/w0/v96/f04/a60/b6",
+      "lat": 18.27,
+      "lon": -158.46,
+      "regionCells": 70
+    }
+  }
+}
