@@ -12,7 +12,6 @@
 (function () {
   'use strict';
 
-  var VERSION = 'planet-stage-6-2';
   var $ = function (id) { return document.getElementById(id); };
   var els = {
     canvas: $('globe'),
@@ -335,7 +334,7 @@
   function ensureWorker() {
     if (worker) return worker;
     workerToken = 'stage6-' + (++workerSeq) + '-' + Date.now();
-    worker = new Worker('planet-globe-worker.js?v=' + VERSION);
+    worker = new Worker('planet-globe-worker.js');
     worker.onmessage = onWorkerMessage;
     worker.onerror = function (event) {
       activeRequest = null;
@@ -764,9 +763,9 @@
   renderHistory();
   renderSelection(null);
   fetchFirst([
-    '../data/planet-archetypes-template.csv?v=' + VERSION,
-    '../../data/planet-archetypes-template.csv?v=' + VERSION,
-    '/data/planet-archetypes-template.csv?v=' + VERSION
+    '../data/planet-archetypes-template.csv',
+    '../../data/planet-archetypes-template.csv',
+    '/data/planet-archetypes-template.csv'
   ]).then(function (text) {
     installPresets(parseCsv(text));
     ensureWorker();

@@ -11,7 +11,7 @@
 */
 window.SITE_LINKS = {
   // Картинка карты галактики: локальный файл или внешняя ссылка (например, на GitHub)
-  galaxyMapImage: '/assets/galaxy-map-2000.webp?v=0f419d0e',
+  galaxyMapImage: '/assets/galaxy-map-2000.webp',
   sectorPage: '/sector/sector.html',
   galaxyPage: '/index.html',
   sectorMapPreview: ''

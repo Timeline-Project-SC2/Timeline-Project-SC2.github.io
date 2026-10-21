@@ -47,13 +47,17 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: tools/requirements.txt
-      # Публикуется содержимое site/ — это корень сайта.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # Публикуется собранная Vite папка .publish — это корень сайта.
       # В Settings → Pages → Source должен стоять «GitHub Actions», иначе воркфлоу
       # не публикует: Pages будет отдавать корень репозитория через Jekyll.
       # Картинки собираются здесь из assets/src/: в Git лежат только исходники,
       # производные пиксели попадают сразу в артефакт.
-      # data/ и assets/ живут в корне репозитория (data/ пишет sync.py), поэтому
-      # перед загрузкой копируются рядом с содержимым site/.
+      # data/ и assets/ живут в корне репозитория (data/ пишет sync.py); Vite
+      # включает их в .publish на шаге сборки публикации, assets/src исключает.
       - name: Собрать картинки
         run: |
           python -m pip install --quiet --disable-pip-version-check -r tools/requirements.txt
@@ -79,14 +83,10 @@ jobs:
           key: pages-images-${{ runner.os }}-${{ hashFiles('assets/src/**', 'tools/build_assets.py', 'tools/requirements.txt') }}
       - name: Собрать публикацию
         run: |
-          rm -rf .publish
-          mkdir -p .publish
-          cp -R site/. .publish/
-          for dir in data assets; do
-            if [ -d "$dir" ]; then cp -R "$dir" .publish/; fi
-          done
-          # исходники картинок в веб не отдаются: только собранные тайлы и webp
-          rm -rf .publish/assets/src
+          npm ci
+          npm run build
+          npm run verify:publish
+          test ! -e .publish/assets/src
           du -sh .publish/* | sort -h
       - uses: actions/upload-pages-artifact@v5
         with:

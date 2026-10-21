@@ -1,0 +1,14 @@
+{
+  "name": "timeline-project-sc2-site",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "verify:publish": "node tools/verify_feature_parity.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

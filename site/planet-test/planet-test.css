@@ -1,5 +1,7 @@
 /* Planet spike (Этап 1) — только тестовая страница /planet-test/.
    Боевые страницы этот файл не подключают. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: #02050a;

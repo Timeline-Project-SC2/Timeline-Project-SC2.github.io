@@ -18,9 +18,9 @@
 'use strict';
 
 importScripts(
-  '../shared/geodesic-grid.js?v=planet-stage-3',
-  '../shared/planet-noise.js?v=planet-spike-1',
-  '../shared/planet-geometry.js?v=planet-spike-1'
+  '../shared/geodesic-grid.js',
+  '../shared/planet-noise.js',
+  '../shared/planet-geometry.js'
 );
 
 var GeodesicGrid = self.GeodesicGrid;
