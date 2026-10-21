@@ -1,0 +1,128 @@
+{
+ "key": "C",
+ "title": "C · Glaciale",
+ "note": "ледниковый максимум: лёд 0.30, лес 0.32, стена Хелкемара спускается к 55-й параллели",
+ "seed": "fd51abcae100d5b1",
+ "v": 256,
+ "cells": 655362,
+ "profile": {
+  "presetId": "earthlike_balanced",
+  "surfaceClass": "terrestrial",
+  "coldPctl": 36,
+  "wetLandPctl": 62,
+  "aridLandPctl": 14,
+  "mountainLandPctl": 88
+ },
+ "frame": {
+  "lon0": -75.7,
+  "lat0": 45.2,
+  "rotDeg": 0,
+  "maxDeg": 75,
+  "fill": 2,
+  "width": 1500,
+  "height": 960
+ },
+ "metrics": {
+  "landFraction": 0.5024,
+  "waterFraction": 0.4976,
+  "landmasses": 3,
+  "biggestShare": 0.927,
+  "forestOnLand": 0.346,
+  "mountainsOnLand": 0.172,
+  "tundraFraction": 0.04,
+  "iceFraction": 0.243,
+  "mountainRanges": 24,
+  "lakes": 776,
+  "biomeCells": {
+   "0": 240348,
+   "1": 20984,
+   "2": 60892,
+   "3": 4564,
+   "4": 98250,
+   "5": 26102,
+   "6": 34872,
+   "7": 34319,
+   "8": 41033,
+   "9": 18126,
+   "10": 22910,
+   "11": 27438,
+   "12": 148,
+   "13": 21791,
+   "14": 3,
+   "15": 3582
+  }
+ },
+ "anchors": {
+  "helcenar": {
+   "x": 756.6,
+   "y": 134.5,
+   "lon": -74.64,
+   "lat": 67.16,
+   "name": "Helcenar"
+  },
+  "laurietia": {
+   "x": 605.2,
+   "y": 543.7,
+   "lon": -87.78,
+   "lat": 40.5,
+   "name": "Laurietia",
+   "cells": 504,
+   "maxElev": 0.509
+  },
+  "hisilome": {
+   "x": 405.9,
+   "y": 821.8,
+   "lon": -98.7,
+   "lat": 20.62,
+   "name": "Hisilomë",
+   "cells": 3,
+   "maxElev": 0.305
+  },
+  "firinetele": {
+   "x": 1319.9,
+   "y": 769.7,
+   "lon": -37.29,
+   "lat": 18.83,
+   "name": "Firinetële"
+  },
+  "noralya": {
+   "x": 662.8,
+   "y": 769.4,
+   "lon": -81.79,
+   "lat": 26.64,
+   "name": "Noralya",
+   "cells": 219
+  },
+  "valitindo": {
+   "x": 857.4,
+   "y": 135,
+   "lon": -58.9,
+   "lat": 66.34,
+   "name": "Valitindò",
+   "elev": 0.438
+  },
+  "hives": [
+   {
+    "x": 524.5,
+    "y": 529.4,
+    "lon": -94.61,
+    "lat": 40.43,
+    "name": "Ulaia I"
+   },
+   {
+    "x": 1319.3,
+    "y": 225.8,
+    "lon": -16.5,
+    "lat": 46.66,
+    "name": "Ulaia II"
+   },
+   {
+    "x": 472.1,
+    "y": 134.6,
+    "lon": -115.36,
+    "lat": 62.25,
+    "name": "Ulaia III"
+   }
+  ]
+ }
+}
