@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
-const PlanetSurface = require('../site/shared/planet-surface.js');
-const PlanetGlobe = require('../site/shared/planet-globe.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
+const PlanetSurface = require('../site/shared/planet-surface.ts').default;
+const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
 
 const V = 16;
 const grid = GeodesicGrid.build(V);
@@ -34,14 +34,32 @@ test('planet-globe-v1: геометрия ячеек индексированн�
   assert.equal(geometry.triangleCount, expectedSides);
   assert.equal(geometry.vertexCount, expectedCells + expectedSides);
   assert.equal(geometry.positions.length, geometry.vertexCount * 3);
+  // CR-01 PR 4 (6.1): нормали рельефа i16x4 — вершина 24 Б (12+8+4).
+  assert.equal(geometry.normals.length, geometry.vertexCount * 4);
   assert.equal(geometry.colors.length, geometry.vertexCount * 4);
   assert.equal(geometry.indices.length, expectedSides * 3);
   assert.equal(geometry.cellIndexStart.length, expectedCells + 1);
   assert.equal(geometry.cellIndexStart[expectedCells], geometry.indices.length);
   assert.equal(
     geometry.typedBytes,
-    geometry.positions.byteLength + geometry.colors.byteLength + geometry.indices.byteLength,
+    geometry.positions.byteLength + geometry.normals.byteLength +
+      geometry.colors.byteLength + geometry.indices.byteLength,
   );
+  // Нормали: 4-й компонент 0, вектор единичный в пределах квантования i16
+  // и смотрит наружу (положительная проекция на радиус вершины).
+  for (let i = 0; i < geometry.vertexCount; i++) {
+    assert.equal(geometry.normals[i * 4 + 3], 0);
+    const nx = geometry.normals[i * 4] / 32767;
+    const ny = geometry.normals[i * 4 + 1] / 32767;
+    const nz = geometry.normals[i * 4 + 2] / 32767;
+    const len = Math.hypot(nx, ny, nz);
+    assert.ok(len > 0.98 && len < 1.001, `normal length ${len} at ${i}`);
+    const px = geometry.positions[i * 3];
+    const py = geometry.positions[i * 3 + 1];
+    const pz = geometry.positions[i * 3 + 2];
+    const pLen = Math.hypot(px, py, pz) || 1;
+    assert.ok((nx * px + ny * py + nz * pz) / pLen > 0.9, `normal outward at ${i}`);
+  }
 
   for (let c = 0; c < expectedCells; c++) {
     const sides = grid.cellCornerStart[c + 1] - grid.cellCornerStart[c];
@@ -76,8 +94,11 @@ test('planet-globe-v1: геометрия и цвета детерминиров
   assert.deepEqual(first.colors, second.colors);
   assert.deepEqual(first.indices, second.indices);
 
+  assert.deepEqual(first.normals, second.normals);
+
   const transferables = PlanetGlobe.listGeometryTransferables(first, false);
-  assert.equal(transferables.length, 3);
+  assert.equal(transferables.length, 4);
+  assert.ok(transferables.includes(first.normals.buffer));
   assert.ok(!transferables.includes(first.vertexCellId.buffer));
 });
 

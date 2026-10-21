@@ -39,7 +39,7 @@ function mulberry32(seed) {
 }
 
 if (process.argv.includes('--child')) {
-  const GeodesicGrid = require('../site/shared/geodesic-grid.js');
+  const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
   const v = Number(argValue('v', '64'));
   const reps = Number(argValue('reps', '5'));
   GeodesicGrid.build(16);

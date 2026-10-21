@@ -5,8 +5,8 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
-const PlanetNoise = require('../site/shared/planet-noise.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
+const PlanetNoise = require('../site/shared/planet-noise.ts').default;
 const PlanetGeometry = require('../site/shared/planet-geometry.js');
 
 let failures = 0;

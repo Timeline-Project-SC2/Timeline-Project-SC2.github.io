@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 
 function parseArgs(argv) {
   const result = { v: 128, reps: 3, picks: 1000 };

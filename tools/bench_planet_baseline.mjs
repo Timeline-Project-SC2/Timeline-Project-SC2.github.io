@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const siteDir = path.join(rootDir, 'site');
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
-const PlanetNoise = require('../site/shared/planet-noise.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
+const PlanetNoise = require('../site/shared/planet-noise.ts').default;
 
 const args = new Map();
 for (let i = 2; i < process.argv.length; i++) {
