@@ -86,6 +86,7 @@ jobs:
           npm ci
           npm run build
           npm run verify:publish
+          npm run verify:contract
           test ! -e .publish/assets/src
           du -sh .publish/* | sort -h
       - uses: actions/upload-pages-artifact@v5

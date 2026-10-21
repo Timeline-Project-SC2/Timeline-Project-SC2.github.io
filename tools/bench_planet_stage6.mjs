@@ -14,11 +14,12 @@
  *   node tools/bench_planet_stage6.mjs
  *   node tools/bench_planet_stage6.mjs --mode=switches --switches=14 --v=48
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
+
+import { PRESETS as CONTRACT_PRESETS, getPresetGeographyValues } from '../site/shared/planet-generation-contract.ts';
 
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.js');
@@ -70,13 +71,15 @@ function parseArgs(argv) {
 }
 
 function loadPresets() {
-  const python = process.env.PYTHON || 'python3';
-  const stdout = execFileSync(python, ['tools/planet_generation.py', 'presets', '--json'], {
-    cwd: new URL('..', import.meta.url),
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return JSON.parse(stdout);
+  return Object.fromEntries(Object.entries(CONTRACT_PRESETS).map(([presetId, preset]) => [
+    presetId,
+    {
+      description: preset.description,
+      palette_id: preset.palette_id,
+      expected_surface_classes: [...preset.expected_surface_classes],
+      values: getPresetGeographyValues(presetId),
+    },
+  ]));
 }
 
 function seedFor(tag, index) {

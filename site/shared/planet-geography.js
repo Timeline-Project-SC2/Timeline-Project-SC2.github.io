@@ -45,8 +45,10 @@
      PlanetGeography.packGeographyForTransfer(geography)
 
    Профиль принимает camelCase и snake_case имена колонок planet_generation.
-   В браузере модуль вешает window.PlanetGeography и требует PlanetNoise
-   перед собой; в Node сам подтягивает ./planet-noise.js. */
+   В браузере модуль вешает window.PlanetGeography и требует PlanetNoise и
+   PlanetGenerationContract перед собой; в Node сам подтягивает ./planet-noise.js
+   и тот же канонический JSON контракта. Числа дефолтного профиля здесь не
+   продублированы: они раскрываются из пресета earthlike_balanced контракта. */
 (function (root) {
   'use strict';
   /* global module, require */
@@ -55,12 +57,48 @@
     (typeof module !== 'undefined' && module.exports ? require('./planet-noise.js') : null);
   if (!PlanetNoise) throw new Error('PlanetGeography: PlanetNoise должен быть подключён раньше');
 
-  var GRID_VERSION = 'goldberg-gp-v1';
-  var NOISE_VERSION = 'planet-noise-simplex3d-v1';
+  var PlanetGenerationContract = root.PlanetGenerationContract || null;
+  var GENERATION_CONTRACT = (PlanetGenerationContract && PlanetGenerationContract.CONTRACT) ||
+    (typeof module !== 'undefined' && module.exports
+      ? require('../../src/contracts/planet-generation-contract.json')
+      : null);
+  if (!GENERATION_CONTRACT) {
+    throw new Error('PlanetGeography: PlanetGenerationContract должен быть подключён раньше');
+  }
+
+  function camelCaseField(field) {
+    return String(field).replace(/_([a-z0-9])/g, function (_match, letter) {
+      return letter.toUpperCase();
+    });
+  }
+  function presetRuntimeValues(presetId) {
+    if (PlanetGenerationContract &&
+        typeof PlanetGenerationContract.getPresetRuntimeValues === 'function') {
+      return PlanetGenerationContract.getPresetRuntimeValues(presetId);
+    }
+    var preset = GENERATION_CONTRACT.presets && GENERATION_CONTRACT.presets[presetId];
+    if (!preset) throw new Error('PlanetGeography: неизвестный preset_id ' + presetId);
+    var values = {};
+    GENERATION_CONTRACT.geography_number_fields.forEach(function (field) {
+      if (!Object.prototype.hasOwnProperty.call(preset.values, field)) {
+        throw new Error('PlanetGeography: пресет ' + presetId + ' не содержит поле ' + field);
+      }
+      values[camelCaseField(field)] = Number(preset.values[field]);
+    });
+    return values;
+  }
+
+  var GRID_VERSION = GENERATION_CONTRACT.default_versions.grid_version;
+  var NOISE_VERSION = GENERATION_CONTRACT.default_versions.noise_version;
+  // Этот модуль реализует именно legacy-поля/C100 v1; полный v2 собирается
+  // PlanetSurface поверх него. Версия обязана оставаться в supported_versions
+  // канонического контракта, а не молча становиться его дефолтной v2.
   var GEOGRAPHY_VERSION = 'c100-soft-v1';
-  var PRESET_VERSION = 'planet-presets-v1';
-  var SURFACE_CLASSES = ['terrestrial', 'ocean', 'desert', 'ice', 'volcanic',
-    'barren', 'gas_giant', 'no_surface'];
+  if (GENERATION_CONTRACT.supported_versions.geography_version.indexOf(GEOGRAPHY_VERSION) < 0) {
+    throw new Error('PlanetGeography: контракт не поддерживает ' + GEOGRAPHY_VERSION);
+  }
+  var PRESET_VERSION = GENERATION_CONTRACT.default_versions.preset_version;
+  var SURFACE_CLASSES = GENERATION_CONTRACT.surface_classes.slice();
   var EARTH_RADIUS_KM = 6371;
   var EARTH_CANONICAL_V = 128;
   var PLATE_COUNT = 7;
@@ -90,7 +128,7 @@
     'oceanSupport', 'oceanBasinId', 'oceanBasinWeight', 'physicalLandmassId'
   ];
 
-  var DEFAULT_PROFILE = {
+  var DEFAULT_PROFILE = Object.assign({
     masterSeedHex: '0123456789abcdef',
     radiusKm: EARTH_RADIUS_KM,
     surfaceClass: 'terrestrial',
@@ -98,27 +136,8 @@
     gridVersion: GRID_VERSION,
     noiseVersion: NOISE_VERSION,
     geographyVersion: GEOGRAPHY_VERSION,
-    presetVersion: PRESET_VERSION,
-    continentMeanCells: 400,
-    continentVariation: 0.8,
-    oceanBasinMeanCells: 6000,
-    drainageMeanCells: 72,
-    oceanPctl: 70,
-    shelfBelowPctl: 67,
-    shelfAbovePctl: 73,
-    highlandLandPctl: 75,
-    mountainLandPctl: 92,
-    aridLandPctl: 25,
-    wetLandPctl: 75,
-    coldPctl: 20,
-    hotPctl: 80,
-    streamFlowPctl: 90,
-    majorRiverFlowPctl: 99,
-    coastSoftWidthCells: 3,
-    continentSoftWidthCells: 4,
-    biomeSoftWidthCells: 2,
-    transitionEntropyPctl: 90
-  };
+    presetVersion: PRESET_VERSION
+  }, presetRuntimeValues('earthlike_balanced'));
 
   function clamp(x, lo, hi) {
     return x < lo ? lo : (x > hi ? hi : x);
@@ -1549,6 +1568,8 @@
     SURFACE_CLASSES: SURFACE_CLASSES.slice(),
     FIELD_INDEX: FIELD_INDEX,
     ARRAY_FIELDS: ARRAY_FIELDS.slice(),
+    GENERATION_CONTRACT: GENERATION_CONTRACT,
+    getPresetRuntimeValues: presetRuntimeValues,
     DEFAULT_PROFILE: Object.assign({}, DEFAULT_PROFILE),
     xxHash32: xxHash32,
     parseMasterSeedHex: parseMasterSeedHex,

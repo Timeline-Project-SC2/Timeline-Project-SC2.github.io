@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, transformWithEsbuild, type Plugin } from 'vite';
 
 const repoRoot = fileURLToPath(new URL('.', import.meta.url));
 const siteRoot = resolve(repoRoot, 'site');
+const srcRoot = resolve(repoRoot, 'src');
 const defaultPublishRoot = resolve(repoRoot, '.publish');
 const atlasTemplatePath = resolve(repoRoot, 'templates/atlas-shell.html');
 const tokenOrigin = 'https://timeline-asset.invalid';
@@ -35,6 +36,11 @@ interface LegacyAsset {
   readonly sourceRelative: string;
 }
 
+interface PublishSource {
+  readonly sourcePath: string;
+  readonly sourceRelative: string;
+}
+
 interface MetaAssets {
   readonly imageVersion?: unknown;
 }
@@ -55,6 +61,14 @@ function walkFiles(dir: string): string[] {
 
 function siteRelative(fullPath: string): string {
   return relative(siteRoot, fullPath).split('\\').join('/');
+}
+
+function repoRelative(fullPath: string): string {
+  return relative(repoRoot, fullPath).split('\\').join('/');
+}
+
+function isTypeScriptSource(path: string): boolean {
+  return path.endsWith('.ts') || path.endsWith('.mts');
 }
 
 function readImageVersion(): string {
@@ -103,25 +117,62 @@ function logicalSourcePath(rawRef: string, fromSourceRelative: string): string |
 
 function hashedOutputRelative(sourceRelative: string, content: Buffer): string {
   const hash = createHash('sha256').update(content).digest('hex').slice(0, 10);
-  const extension = extname(sourceRelative);
-  const base = basename(sourceRelative, extension);
+  const sourceExtension = extname(sourceRelative);
+  const outputExtension = isTypeScriptSource(sourceRelative) ? '.js' : sourceExtension;
+  const base = basename(sourceRelative, sourceExtension);
   const dir = dirname(sourceRelative).split('\\').join('/');
-  const fileName = `${base}-${hash}${extension}`;
+  const fileName = `${base}-${hash}${outputExtension}`;
   return dir === '.' ? fileName : `${dir}/${fileName}`;
 }
 
-const legacySourceFiles = walkFiles(siteRoot)
-  .filter((fullPath) => ['.css', '.js'].includes(extname(fullPath)))
-  .map(siteRelative)
-  .sort();
-const legacySourceFileSet = new Set(legacySourceFiles);
+const publishSources = new Map<string, PublishSource>();
+
+function addPublishSource(sourceRelative: string, sourcePath: string): void {
+  const existing = publishSources.get(sourceRelative);
+  if (existing && existing.sourcePath !== sourcePath) {
+    throw new Error(`Дублирующийся логический путь публикации: ${sourceRelative}`);
+  }
+  publishSources.set(sourceRelative, { sourcePath, sourceRelative });
+}
+
+for (const fullPath of walkFiles(siteRoot)) {
+  if (['.css', '.js', '.ts', '.mts'].includes(extname(fullPath))) {
+    addPublishSource(siteRelative(fullPath), fullPath);
+  }
+}
+if (existsSync(srcRoot)) {
+  for (const fullPath of walkFiles(srcRoot)) {
+    if (isTypeScriptSource(fullPath)) addPublishSource(repoRelative(fullPath), fullPath);
+  }
+}
+
+const legacySourceFiles = [...publishSources.keys()].sort();
 const finalizedAssets = new Map<string, LegacyAsset>();
 const finalizingAssets = new Set<string>();
+let finalizedAssetsPromise: Promise<void> | null = null;
+
+function resolvePublishSource(logical: string | null): string | null {
+  if (!logical) return null;
+  if (publishSources.has(logical)) return logical;
+  if (logical.endsWith('.js')) {
+    const stem = logical.slice(0, -'.js'.length);
+    for (const candidate of [`${stem}.ts`, `${stem}.mts`]) {
+      if (publishSources.has(candidate)) return candidate;
+    }
+  }
+  if (logical.endsWith('.mjs')) {
+    const candidate = `${logical.slice(0, -'.mjs'.length)}.mts`;
+    if (publishSources.has(candidate)) return candidate;
+  }
+  return null;
+}
 
 function hashedReference(rawRef: string, fromSourceRelative: string): string {
   const logical = logicalSourcePath(rawRef, fromSourceRelative);
-  if (!logical || !legacySourceFileSet.has(logical)) return rawRef;
-  const asset = finalizeLegacyAsset(logical);
+  const sourceRelative = resolvePublishSource(logical);
+  if (!sourceRelative) return rawRef;
+  const asset = finalizedAssets.get(sourceRelative);
+  if (!asset) throw new Error(`Ассет ещё не финализирован при переписывании ссылки: ${sourceRelative}`);
   const cleanRef = stripQueryAndHash(rawRef);
   const slashIndex = cleanRef.lastIndexOf('/');
   const prefix = slashIndex >= 0 ? cleanRef.slice(0, slashIndex + 1) : '';
@@ -130,32 +181,138 @@ function hashedReference(rawRef: string, fromSourceRelative: string): string {
 
 function rewriteScriptReferences(source: string, sourceRelative: string): string {
   let output = source.replace(/importScripts\(([^)]*)\)/gs, (_match: string, args: string) => {
-    const rewrittenArgs = args.replace(/(['"])([^'"]+\.js)(?:\?[^'"]*)?\1/g, (_refMatch: string, quote: string, ref: string) => {
+    const rewrittenArgs = args.replace(/(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1/g, (_refMatch: string, quote: string, ref: string) => {
       return `${quote}${hashedReference(ref, sourceRelative)}${quote}`;
     });
     return `importScripts(${rewrittenArgs})`;
   });
 
   output = output.replace(
-    /new\s+Worker\(\s*(['"])([^'"]+\.js)(?:\?[^'"]*)?\1/g,
+    /new\s+Worker\(\s*(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1/g,
     (_match: string, quote: string, ref: string) => `new Worker(${quote}${hashedReference(ref, sourceRelative)}${quote}`,
   );
 
   return output;
 }
 
-function finalizeLegacyAsset(sourceRelative: string): LegacyAsset {
+function collectScriptDependencies(source: string, sourceRelative: string): string[] {
+  const dependencies = new Set<string>();
+  const addReference = (ref: string): void => {
+    const dependency = resolvePublishSource(logicalSourcePath(ref, sourceRelative));
+    if (dependency && dependency !== sourceRelative) dependencies.add(dependency);
+  };
+
+  for (const match of source.matchAll(/importScripts\(([^)]*)\)/gs)) {
+    const args = match[1] ?? '';
+    for (const refMatch of args.matchAll(/(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1/g)) {
+      if (refMatch[2]) addReference(refMatch[2]);
+    }
+  }
+  for (const match of source.matchAll(/new\s+Worker\(\s*(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1/g)) {
+    if (match[2]) addReference(match[2]);
+  }
+  return [...dependencies];
+}
+
+function browserGlobalName(sourceRelative: string): string {
+  const stem = basename(sourceRelative, extname(sourceRelative));
+  const name = stem
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join('');
+  if (!name || /^[0-9]/.test(name)) {
+    throw new Error(`Нельзя вывести browser-global имя для TypeScript-модуля: ${sourceRelative}`);
+  }
+  return name;
+}
+
+async function compileTypeScriptAsset(
+  sourceRelative: string,
+  sourcePath: string,
+  source: string,
+): Promise<string> {
+  // CR-01 PR 2: публикуемые TS-модули пока остаются standalone classic-script
+  // глобалами, как соседний legacy JS. Поэтому Vite/esbuild честно
+  // транслирует каждый TS-файл, JSON-импорты инлайнятся из репозитория, а
+  // ESM-граф между TS-файлами здесь запрещён до отдельного PR 3: молча
+  // оставить import в браузере было бы публикацией битого модуля.
+  const jsonImportPattern = /^\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+(['"])(\.{1,2}\/[^'"]+\.json)\2\s*(?:with\s*\{[^}]*\})?\s*;?\s*$/gm;
+  const prepared = source.replace(jsonImportPattern, (_match: string, name: string, _quote: string, specifier: string) => {
+    const jsonPath = resolve(dirname(sourcePath), specifier);
+    const jsonRelative = repoRelative(jsonPath);
+    if (jsonRelative.startsWith('../')) {
+      throw new Error(`JSON-импорт выходит за пределы репозитория: ${sourceRelative} -> ${specifier}`);
+    }
+    const jsonText = readFileSync(jsonPath, 'utf8');
+    JSON.parse(jsonText) as unknown;
+    return `const ${name} = (${jsonText.trim()});`;
+  });
+  if (/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]/m.test(prepared)) {
+    throw new Error(`Неподдержанный import в публикуемом TypeScript-модуле ${sourceRelative}: разрешены только относительные JSON-импорты`);
+  }
+
+  const transformed = await transformWithEsbuild(prepared, sourcePath, {
+    charset: 'utf8',
+    format: 'esm',
+    loader: 'ts',
+    sourcemap: false,
+    target: 'es2022',
+  });
+
+  const exported: Array<readonly [string, string]> = [];
+  const withoutExports = transformed.code.replace(/\bexport\s*\{([\s\S]*?)\}\s*;?/g, (_match: string, list: string) => {
+    for (const rawPart of list.split(',')) {
+      const part = rawPart.trim();
+      if (!part) continue;
+      const alias = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(part);
+      if (!alias?.[1]) throw new Error(`Неподдержанный export в ${sourceRelative}: ${part}`);
+      exported.push([alias[2] ?? alias[1], alias[1]]);
+    }
+    return '';
+  });
+  if (/(^|\n)\s*export\b/.test(withoutExports)) {
+    throw new Error(`Неподдержанная форма export в публикуемом TypeScript-модуле: ${sourceRelative}`);
+  }
+  if (!exported.length) {
+    throw new Error(`Публикуемый TypeScript-модуль должен экспортировать browser API: ${sourceRelative}`);
+  }
+
+  const globalName = browserGlobalName(sourceRelative);
+  const apiEntries = exported
+    .map(([exportedName, localName]) => (exportedName === localName ? exportedName : `${exportedName}: ${localName}`))
+    .join(', ');
+  return [
+    '(function (root) {',
+    "'use strict';",
+    withoutExports.trimEnd(),
+    `root.${globalName} = { ${apiEntries} };`,
+    "})(typeof window !== 'undefined' ? window : globalThis);",
+    '',
+  ].join('\n');
+}
+
+async function finalizeLegacyAsset(sourceRelative: string): Promise<LegacyAsset> {
   const existing = finalizedAssets.get(sourceRelative);
   if (existing) return existing;
   if (finalizingAssets.has(sourceRelative)) {
     throw new Error(`Цикл ссылок legacy-ассетов: ${sourceRelative}`);
   }
+  const publishSource = publishSources.get(sourceRelative);
+  if (!publishSource) throw new Error(`Неизвестный публикуемый исходник: ${sourceRelative}`);
 
   finalizingAssets.add(sourceRelative);
   try {
-    const sourcePath = resolve(siteRoot, sourceRelative);
-    let text = readFileSync(sourcePath, 'utf8');
-    if (sourceRelative.endsWith('.js')) text = rewriteScriptReferences(text, sourceRelative);
+    let text = readFileSync(publishSource.sourcePath, 'utf8');
+    if (isTypeScriptSource(sourceRelative)) {
+      text = await compileTypeScriptAsset(sourceRelative, publishSource.sourcePath, text);
+    }
+    if (sourceRelative.endsWith('.js') || isTypeScriptSource(sourceRelative)) {
+      for (const dependency of collectScriptDependencies(text, sourceRelative)) {
+        await finalizeLegacyAsset(dependency);
+      }
+      text = rewriteScriptReferences(text, sourceRelative);
+    }
     text = addImageVersion(text);
     const content = Buffer.from(text, 'utf8');
     const asset: LegacyAsset = {
@@ -170,7 +327,12 @@ function finalizeLegacyAsset(sourceRelative: string): LegacyAsset {
   }
 }
 
-for (const sourceRelative of legacySourceFiles) finalizeLegacyAsset(sourceRelative);
+function ensureFinalizedAssets(): Promise<void> {
+  finalizedAssetsPromise ??= (async () => {
+    for (const sourceRelative of legacySourceFiles) await finalizeLegacyAsset(sourceRelative);
+  })();
+  return finalizedAssetsPromise;
+}
 
 type AtlasVariantName = 'minimal' | 'sector';
 
@@ -318,12 +480,13 @@ function tokenizeAssetTag(tag: string, attrName: 'href' | 'src', filename: strin
   const rawRef = match[2];
   if (!quote || !rawRef) return tag;
   const logical = logicalSourcePath(rawRef, sourceRelative);
-  if (!logical || !finalizedAssets.has(logical)) return tag;
-  const key = tokenQueueKey(filename, logical);
+  const publishSource = resolvePublishSource(logical);
+  if (!publishSource || !finalizedAssets.has(publishSource)) return tag;
+  const key = tokenQueueKey(filename, publishSource);
   const queue = tokenReferenceQueues.get(key) ?? [];
   queue.push(rawRef);
   tokenReferenceQueues.set(key, queue);
-  return tag.replace(attrPattern, `${attrName}=${quote}${tokenOrigin}/${logical}${quote}`);
+  return tag.replace(attrPattern, `${attrName}=${quote}${tokenOrigin}/${publishSource}${quote}`);
 }
 
 function tokenizeLegacyAssets(html: string, filename: string, sourceRelative: string): string {
@@ -359,7 +522,7 @@ function writePublishExtras(): void {
 
   for (const fullPath of walkFiles(siteRoot)) {
     const extension = extname(fullPath);
-    if (['.css', '.html', '.js'].includes(extension)) continue;
+    if (['.css', '.html', '.js', '.mts', '.ts'].includes(extension)) continue;
     const relativePath = siteRelative(fullPath);
     const outputPath = resolve(resolvedPublishRoot, relativePath);
     mkdirSync(dirname(outputPath), { recursive: true });
@@ -391,6 +554,9 @@ function timelinePublishPlugins(): Plugin[] {
   return [
     {
       name: 'timeline-atlas-and-legacy-assets-pre',
+      async buildStart() {
+        await ensureFinalizedAssets();
+      },
       transformIndexHtml: {
         order: 'pre',
         handler(html, ctx) {

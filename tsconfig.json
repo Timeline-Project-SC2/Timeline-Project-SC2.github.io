@@ -20,5 +20,5 @@
     "target": "ES2022",
     "types": ["node", "vite/client"]
   },
-  "include": ["vite.config.mts", "src/**/*.ts", "tools/*.ts"]
+  "include": ["vite.config.mts", "src/**/*.ts", "site/**/*.ts", "tools/*.ts"]
 }

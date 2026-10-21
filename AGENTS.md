@@ -8,7 +8,7 @@
 - `site/galaxy.js` / `site/galaxy.css` — карта галактики: положение и масштаб карты, маркеры, панель и рамки.
 - `site/shared/focus-fx.js` — общий canvas-эффект выбора и перехода; не дублируйте его логику в `galaxy.js` или CSS.
 - `site/shared/galaxy-spiral.js` — спираль поверх карты галактики («вращение» без прокрутки): ядро, демо-сцена (`/spiral-test/`) и слой для карты (`GalaxySpiral.overlay`); настройки на галактике — `CONFIG.spiral` в `galaxy.js`.
-- `tools/planet_generation.py` — единый контракт профилей планет Этапа 2: схема из 37 колонок, пресеты, валидатор против `places`, эффективный манифест и `generation_key`. Источник `planet_generation` в `data/sources.json` не включать без реального опубликованного CSV-URL вкладки.
+- `src/contracts/planet-generation-contract.json` — единый источник истины контракта профилей планет: схема из 37 колонок, 8 пресетов, версии и точность чисел. `tools/planet_generation.py` читает этот JSON и остаётся валидатором против `places`/синка; браузерный и Node-контракт — `site/shared/planet-generation-contract.ts` (эффективный манифест, `PG1`, `verifyGenerationKey`). Источник `planet_generation` в `data/sources.json` не включать без реального опубликованного CSV-URL вкладки.
 - `assets/src/` — исходные изображения. Производные тайлы и WebP строит `tools/build_assets.py`; готовые файлы исключены из Git.
 - `.github/workflows/pages.yml` — сборка и публикация Pages; `check.yml` — PR-проверки.
 - Тексты интерфейса и комментарии в существующем русском коде пишите по-русски.
@@ -64,6 +64,7 @@
 npm ci
 npm run build
 npm run verify:publish
+npm run verify:contract
 for f in site/*.js site/shared/*.js; do node --check "$f"; done
 npm install --no-save --no-package-lock eslint@10 globals@17
 npx eslint site

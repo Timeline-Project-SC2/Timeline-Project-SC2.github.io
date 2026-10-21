@@ -1,3 +1,9 @@
+## CR-01 PR 2 — единый контракт `planet_generation` и PG1 в рантайме
+
+- Схема из 37 колонок, версии, правила точности и значения восьми пресетов `planet-presets-v1` вынесены в единственный `src/contracts/planet-generation-contract.json`. Python-валидатор/синк читает тот же JSON и восстанавливает `Decimal`; новый строгий TypeScript-модуль `site/shared/planet-generation-contract.ts` раскрывает эффективный профиль, строит байт-в-байт канонический географический манифест, считает `PG1` и экспортирует `verifyGenerationKey(profile)`. Worker боевого глобуса проверяет frozen-ключ до LOD-масштабирования; golden `PG1-5NKT36OZBP4QPXE32CKQ5V3ANI` не изменился.
+- Vite-сборка компилирует TypeScript из `site/**/*.ts` и `src/**/*.ts` через `transformWithEsbuild`, инлайнит относительные JSON-импорты и публикует результат как hashed classic-script JS; сырой TS в `.publish` не копируется. Ручной дубль чисел `earthlike_balanced` удалён из `planet-geography.js`, а bench Этапов 4–6 больше не вызывают Python через `child_process` ради пресетов.
+- Добавлены Node-тесты контракта и `tools/verify_planet_contract_cross.mjs`: Python и TypeScript сверяют поля, пресеты, Decimal `ROUND_HALF_UP`, канонический JSON и PG1 на наборе профилей. Feature-parity дополнительно проверяет каждый `new Worker()`/`importScripts()` внутри опубликованных JS на hashed-имя и существование файла.
+
 ## CR-01 PR 1 — модульный фундамент TypeScript + Vite
 
 - Добавлены строгий `tsconfig.json`, `package.json`/`package-lock.json` и `vite.config.mts`: `npm run build` проверяет типы и собирает статическую публикацию `.publish/` со всеми маршрутами (`/`, `/sector/sector.html`, `/minimal/minimal.html`, `/cursor-test/`, `/spiral-test/`, `/planet-test/`, `/planet-globe/`), данными и собранными картинками без `assets/src`.

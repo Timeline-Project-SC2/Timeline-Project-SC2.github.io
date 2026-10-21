@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Контракт данных генерации планет: профили, пресеты, ключ и валидатор.
 
-Модуль является единственным источником истины для листа Google Sheets
+Единственный источник истины для схемы, версий, точности чисел и пресетов —
+``src/contracts/planet-generation-contract.json``. Этот модуль читает его и
+остаётся Python-валидатором/CLI для листа Google Sheets
 ``planet_generation`` и его снимка ``data/planet-generation.csv``:
 
 * канонический заголовок из 37 колонок;
@@ -38,8 +40,29 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILES = ROOT / "data" / "planet-generation.csv"
 DEFAULT_PLACES = ROOT / "data" / "places.csv"
 
-MANIFEST_FORMAT = "PG1"
-SCHEMA_VERSION = "planet-generation-schema-v1"
+CONTRACT_PATH = ROOT / "src" / "contracts" / "planet-generation-contract.json"
+
+
+def _load_contract() -> dict[str, Any]:
+    """Загрузить канонический контракт, общий для Python и TypeScript."""
+
+    try:
+        loaded = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Не удалось загрузить контракт {CONTRACT_PATH}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"Контракт {CONTRACT_PATH} должен быть JSON-объектом")
+    return loaded
+
+
+# CR-01 PR 2 (И-4/И-6): схема, версии, правила точности и значения восьми
+# пресетов живут только в этом JSON. Python ниже лишь восстанавливает свои
+# Decimal/set-типы, а TypeScript читает тот же файл напрямую. Ручной второй
+# копии чисел в этом модуле быть не должно.
+CONTRACT = _load_contract()
+
+MANIFEST_FORMAT = str(CONTRACT["manifest_format"])
+SCHEMA_VERSION = str(CONTRACT["schema_version"])
 
 # Этапы 3–4 перевели сетку, шум, поля/C100 и пресеты на боевые v1.
 # Этап 5 завершил полный поверхностный рецепт: новые draft/freeze по
@@ -51,119 +74,43 @@ SCHEMA_VERSION = "planet-generation-schema-v1"
 # черновиков, а прототипные версии шума, C100 и пресетов v0 не
 # поддерживаются боевым генератором и валидатором. Старые ключи не
 # пересчитываются: смена версии требует новой ревизии профиля.
+VERSION_FIELDS = tuple(str(name) for name in CONTRACT["version_fields"])
 DEFAULT_VERSIONS = {
-    "grid_version": "goldberg-gp-v1",
-    "noise_version": "planet-noise-simplex3d-v1",
-    "geography_version": "c100-soft-v2",
-    "preset_version": "planet-presets-v1",
+    name: str(CONTRACT["default_versions"][name]) for name in VERSION_FIELDS
 }
 SUPPORTED_VERSIONS = {
-    "grid_version": {"goldberg-gp-v0", DEFAULT_VERSIONS["grid_version"]},
-    "noise_version": {DEFAULT_VERSIONS["noise_version"]},
-    "geography_version": {"c100-soft-v1", DEFAULT_VERSIONS["geography_version"]},
-    "preset_version": {DEFAULT_VERSIONS["preset_version"]},
+    name: {str(version) for version in CONTRACT["supported_versions"][name]}
+    for name in VERSION_FIELDS
 }
-VERSION_FIELDS = tuple(DEFAULT_VERSIONS)
 
-FIELDS = [
-    "place_id",
-    "profile_status",
-    "profile_revision",
-    "preset_id",
-    "surface_class",
-    "radius_km",
-    "axial_tilt_deg",
-    "rotation_period_hours",
-    "palette_id",
-    "master_seed_hex",
-    "grid_version",
-    "noise_version",
-    "geography_version",
-    "preset_version",
-    "generation_key",
-    "approved_by",
-    "approved_at",
-    "continent_mean_cells",
-    "continent_variation",
-    "ocean_basin_mean_cells",
-    "drainage_mean_cells",
-    "ocean_pctl",
-    "shelf_below_pctl",
-    "shelf_above_pctl",
-    "highland_land_pctl",
-    "mountain_land_pctl",
-    "arid_land_pctl",
-    "wet_land_pctl",
-    "cold_pctl",
-    "hot_pctl",
-    "stream_flow_pctl",
-    "major_river_flow_pctl",
-    "coast_soft_width_cells",
-    "continent_soft_width_cells",
-    "biome_soft_width_cells",
-    "transition_entropy_pctl",
-    "notes_admin",
-]
+FIELDS = [str(name) for name in CONTRACT["fields"]]
 
-PROFILE_STATUSES = {"draft", "review", "frozen", "disabled"}
-SURFACE_CLASSES = {
-    "terrestrial",
-    "ocean",
-    "desert",
-    "ice",
-    "volcanic",
-    "barren",
-    "gas_giant",
-    "no_surface",
-}
-KNOWN_PLACE_TYPES = {"planet", "moon", "asteroid", "station", "platform", "other"}
+PROFILE_STATUSES = {str(value) for value in CONTRACT["profile_statuses"]}
+SURFACE_CLASSES = {str(value) for value in CONTRACT["surface_classes"]}
+KNOWN_PLACE_TYPES = {str(value) for value in CONTRACT["known_place_types"]}
 
-TARGET_SCALE_FIELDS = [
-    "continent_mean_cells",
-    "continent_variation",
-    "ocean_basin_mean_cells",
-    "drainage_mean_cells",
-]
-PERCENTILE_FIELDS = [
-    "ocean_pctl",
-    "shelf_below_pctl",
-    "shelf_above_pctl",
-    "highland_land_pctl",
-    "mountain_land_pctl",
-    "arid_land_pctl",
-    "wet_land_pctl",
-    "cold_pctl",
-    "hot_pctl",
-    "stream_flow_pctl",
-    "major_river_flow_pctl",
-]
-SOFT_WIDTH_FIELDS = [
-    "coast_soft_width_cells",
-    "continent_soft_width_cells",
-    "biome_soft_width_cells",
-]
-GEOGRAPHY_NUMBER_FIELDS = (
-    TARGET_SCALE_FIELDS + PERCENTILE_FIELDS + SOFT_WIDTH_FIELDS + ["transition_entropy_pctl"]
+_GEOGRAPHY_GROUPS = CONTRACT["geography_number_field_groups"]
+TARGET_SCALE_FIELDS = [str(name) for name in _GEOGRAPHY_GROUPS["target_scale"]]
+PERCENTILE_FIELDS = [str(name) for name in _GEOGRAPHY_GROUPS["percentile"]]
+SOFT_WIDTH_FIELDS = [str(name) for name in _GEOGRAPHY_GROUPS["soft_width"]]
+GEOGRAPHY_NUMBER_FIELDS = tuple(
+    str(name) for name in CONTRACT["geography_number_fields"]
 )
 
 NUMBER_PRECISION = {
-    "radius_km": 3,
-    "axial_tilt_deg": 6,
-    "rotation_period_hours": 6,
-    "continent_mean_cells": 3,
-    "continent_variation": 6,
-    "ocean_basin_mean_cells": 3,
-    "drainage_mean_cells": 3,
-    **{name: 3 for name in PERCENTILE_FIELDS},
-    **{name: 6 for name in SOFT_WIDTH_FIELDS},
-    "transition_entropy_pctl": 3,
+    str(name): int(precision)
+    for name, precision in CONTRACT["number_precision"].items()
 }
 
-MAX_RADIUS_KM = Decimal("1000000000")
-MAX_ROTATION_PERIOD_HOURS = Decimal("1000000000")
-MAX_CELL_TARGET = Decimal("1000000000")
-MAX_CONTINENT_VARIATION = Decimal("1000000")
-MAX_SOFT_WIDTH_CELLS = Decimal("1000000")
+MAX_RADIUS_KM = Decimal(str(CONTRACT["limits"]["radius_km_max"]))
+MAX_ROTATION_PERIOD_HOURS = Decimal(
+    str(CONTRACT["limits"]["rotation_period_hours_max"])
+)
+MAX_CELL_TARGET = Decimal(str(CONTRACT["limits"]["cell_target_max"]))
+MAX_CONTINENT_VARIATION = Decimal(
+    str(CONTRACT["limits"]["continent_variation_max"])
+)
+MAX_SOFT_WIDTH_CELLS = Decimal(str(CONTRACT["limits"]["soft_width_cells_max"]))
 
 NUMBER_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 SEED_RE = re.compile(r"^[0-9a-fA-F]{16}$")
@@ -176,224 +123,61 @@ def D(value: str) -> Decimal:
     return Decimal(value)
 
 
-BASE_GEOGRAPHY: dict[str, Decimal] = {
-    "continent_mean_cells": D("400"),
-    "continent_variation": D("0.8"),
-    "ocean_basin_mean_cells": D("6000"),
-    "drainage_mean_cells": D("72"),
-    "ocean_pctl": D("70"),
-    "shelf_below_pctl": D("67"),
-    "shelf_above_pctl": D("73"),
-    "highland_land_pctl": D("75"),
-    "mountain_land_pctl": D("92"),
-    "arid_land_pctl": D("25"),
-    "wet_land_pctl": D("75"),
-    "cold_pctl": D("20"),
-    "hot_pctl": D("80"),
-    "stream_flow_pctl": D("90"),
-    "major_river_flow_pctl": D("99"),
-    "coast_soft_width_cells": D("3.0"),
-    "continent_soft_width_cells": D("4.0"),
-    "biome_soft_width_cells": D("2.0"),
-    "transition_entropy_pctl": D("90"),
-}
+def _decimal_geography(values: Mapping[str, Any]) -> dict[str, Decimal]:
+    return {name: D(str(values[name])) for name in GEOGRAPHY_NUMBER_FIELDS}
 
 
-def _preset(
-    description: str,
-    palette_id: str,
-    expected_surface_classes: set[str],
-    **overrides: Decimal,
-) -> dict[str, Any]:
-    values = dict(BASE_GEOGRAPHY)
-    values.update(overrides)
-    return {
-        "description": description,
-        "palette_id": palette_id,
-        "expected_surface_classes": set(expected_surface_classes),
-        "values": values,
-    }
-
+BASE_GEOGRAPHY: dict[str, Decimal] = _decimal_geography(
+    CONTRACT["presets"]["earthlike_balanced"]["values"]
+)
 
 PRESETS: dict[str, dict[str, Any]] = {
-    "earthlike_balanced": _preset(
-        "Сбалансированный землеподобный мир",
-        "earthlike",
-        {"terrestrial"},
-    ),
-    "earthlike_archipelago": _preset(
-        "Землеподобный мир с фрагментированной сушей и архипелагами",
-        "archipelago",
-        {"terrestrial", "ocean"},
-        continent_mean_cells=D("180"),
-        continent_variation=D("1.0"),
-        ocean_basin_mean_cells=D("4400"),
-        drainage_mean_cells=D("48"),
-        ocean_pctl=D("76"),
-        shelf_below_pctl=D("72"),
-        shelf_above_pctl=D("80"),
-        highland_land_pctl=D("78"),
-        mountain_land_pctl=D("94"),
-        arid_land_pctl=D("22"),
-        wet_land_pctl=D("72"),
-        hot_pctl=D("78"),
-        stream_flow_pctl=D("88"),
-        major_river_flow_pctl=D("98.5"),
-        coast_soft_width_cells=D("2.4"),
-        continent_soft_width_cells=D("2.8"),
-        biome_soft_width_cells=D("1.6"),
-        transition_entropy_pctl=D("88"),
-    ),
-    "ocean_world": _preset(
-        "Мир с преобладанием океана",
-        "ocean",
-        {"ocean", "terrestrial"},
-        continent_mean_cells=D("100"),
-        continent_variation=D("1.1"),
-        ocean_basin_mean_cells=D("10000"),
-        drainage_mean_cells=D("32"),
-        ocean_pctl=D("90"),
-        shelf_below_pctl=D("87"),
-        shelf_above_pctl=D("93"),
-        highland_land_pctl=D("80"),
-        mountain_land_pctl=D("96"),
-        arid_land_pctl=D("10"),
-        wet_land_pctl=D("55"),
-        cold_pctl=D("25"),
-        hot_pctl=D("75"),
-        stream_flow_pctl=D("92"),
-        coast_soft_width_cells=D("4.0"),
-        continent_soft_width_cells=D("2.0"),
-        biome_soft_width_cells=D("2.4"),
-    ),
-    "desert_dry": _preset(
-        "Сухой пустынный мир",
-        "desert",
-        {"desert", "barren"},
-        continent_mean_cells=D("560"),
-        continent_variation=D("0.5"),
-        ocean_basin_mean_cells=D("2000"),
-        drainage_mean_cells=D("120"),
-        ocean_pctl=D("25"),
-        shelf_below_pctl=D("22"),
-        shelf_above_pctl=D("28"),
-        highland_land_pctl=D("70"),
-        mountain_land_pctl=D("90"),
-        arid_land_pctl=D("70"),
-        wet_land_pctl=D("92"),
-        cold_pctl=D("15"),
-        hot_pctl=D("55"),
-        stream_flow_pctl=D("97"),
-        major_river_flow_pctl=D("99.5"),
-        coast_soft_width_cells=D("1.6"),
-        continent_soft_width_cells=D("5.0"),
-        biome_soft_width_cells=D("1.4"),
-        transition_entropy_pctl=D("85"),
-    ),
-    "ice_world": _preset(
-        "Холодный ледяной мир",
-        "ice",
-        {"ice", "barren"},
-        continent_mean_cells=D("480"),
-        continent_variation=D("0.6"),
-        ocean_basin_mean_cells=D("4800"),
-        drainage_mean_cells=D("80"),
-        ocean_pctl=D("55"),
-        shelf_below_pctl=D("51"),
-        shelf_above_pctl=D("59"),
-        highland_land_pctl=D("70"),
-        mountain_land_pctl=D("90"),
-        arid_land_pctl=D("35"),
-        wet_land_pctl=D("80"),
-        cold_pctl=D("70"),
-        hot_pctl=D("95"),
-        stream_flow_pctl=D("94"),
-        coast_soft_width_cells=D("2.4"),
-        biome_soft_width_cells=D("1.6"),
-        transition_entropy_pctl=D("88"),
-    ),
-    "volcanic_active": _preset(
-        "Активный вулканический мир",
-        "volcanic",
-        {"volcanic", "barren"},
-        continent_mean_cells=D("280"),
-        continent_variation=D("1.2"),
-        ocean_basin_mean_cells=D("3600"),
-        drainage_mean_cells=D("56"),
-        ocean_pctl=D("45"),
-        shelf_below_pctl=D("41"),
-        shelf_above_pctl=D("49"),
-        highland_land_pctl=D("60"),
-        mountain_land_pctl=D("82"),
-        arid_land_pctl=D("35"),
-        wet_land_pctl=D("80"),
-        cold_pctl=D("10"),
-        hot_pctl=D("55"),
-        stream_flow_pctl=D("94"),
-        coast_soft_width_cells=D("1.4"),
-        continent_soft_width_cells=D("2.4"),
-        biome_soft_width_cells=D("1.4"),
-        transition_entropy_pctl=D("92"),
-    ),
-    "barren_moon": _preset(
-        "Безводная луна или мёртвый мир",
-        "barren",
-        {"barren"},
-        continent_mean_cells=D("720"),
-        continent_variation=D("0.4"),
-        drainage_mean_cells=D("200"),
-        ocean_pctl=D("0"),
-        shelf_below_pctl=D("0"),
-        shelf_above_pctl=D("0"),
-        highland_land_pctl=D("65"),
-        mountain_land_pctl=D("88"),
-        arid_land_pctl=D("90"),
-        wet_land_pctl=D("99"),
-        cold_pctl=D("50"),
-        hot_pctl=D("50"),
-        stream_flow_pctl=D("100"),
-        major_river_flow_pctl=D("100"),
-        coast_soft_width_cells=D("0"),
-        continent_soft_width_cells=D("2.0"),
-        biome_soft_width_cells=D("1.0"),
-        transition_entropy_pctl=D("80"),
-    ),
-    "gas_giant_bands": _preset(
-        "Газовый гигант: только внешний облачный слой, без поверхности",
-        "gas_giant",
-        {"gas_giant"},
-        continent_mean_cells=D("1"),
-        continent_variation=D("0"),
-        ocean_basin_mean_cells=D("1"),
-        drainage_mean_cells=D("1"),
-        ocean_pctl=D("0"),
-        shelf_below_pctl=D("0"),
-        shelf_above_pctl=D("0"),
-        highland_land_pctl=D("100"),
-        mountain_land_pctl=D("100"),
-        arid_land_pctl=D("0"),
-        wet_land_pctl=D("100"),
-        cold_pctl=D("0"),
-        hot_pctl=D("100"),
-        stream_flow_pctl=D("100"),
-        major_river_flow_pctl=D("100"),
-        coast_soft_width_cells=D("0"),
-        continent_soft_width_cells=D("0"),
-        biome_soft_width_cells=D("0"),
-        transition_entropy_pctl=D("0"),
-    ),
+    str(preset_id): {
+        "description": str(preset["description"]),
+        "palette_id": str(preset["palette_id"]),
+        "expected_surface_classes": {
+            str(value) for value in preset["expected_surface_classes"]
+        },
+        "values": _decimal_geography(preset["values"]),
+    }
+    for preset_id, preset in CONTRACT["presets"].items()
 }
 
-DEFAULT_AXIAL_TILT_DEG = D("23.44")
-DEFAULT_ROTATION_PERIOD_HOURS = D("24")
+DEFAULT_AXIAL_TILT_DEG = D(str(CONTRACT["default_render"]["axial_tilt_deg"]))
+DEFAULT_ROTATION_PERIOD_HOURS = D(
+    str(CONTRACT["default_render"]["rotation_period_hours"])
+)
 
 
 def _assert_contract() -> None:
+    if CONTRACT.get("contract_id") != "planet-generation-contract-v1":
+        raise RuntimeError("Неизвестный contract_id контракта planet_generation")
     if len(FIELDS) != 37 or len(set(FIELDS)) != 37:
         raise RuntimeError("Схема planet_generation должна содержать ровно 37 уникальных колонок")
+    grouped_fields = (
+        TARGET_SCALE_FIELDS
+        + PERCENTILE_FIELDS
+        + SOFT_WIDTH_FIELDS
+        + [str(name) for name in _GEOGRAPHY_GROUPS["transition_entropy"]]
+    )
+    if tuple(grouped_fields) != GEOGRAPHY_NUMBER_FIELDS:
+        raise RuntimeError("Группы географических чисел не образуют canonical geography_number_fields")
+    expected_precision = {
+        "radius_km",
+        "axial_tilt_deg",
+        "rotation_period_hours",
+        *GEOGRAPHY_NUMBER_FIELDS,
+    }
+    if set(NUMBER_PRECISION) != expected_precision:
+        raise RuntimeError("number_precision не покрывает все канонические числа контракта")
+    for name in VERSION_FIELDS:
+        if DEFAULT_VERSIONS[name] not in SUPPORTED_VERSIONS[name]:
+            raise RuntimeError(f"Дефолтная версия {name} отсутствует в supported_versions")
     expected = set(GEOGRAPHY_NUMBER_FIELDS)
     if set(BASE_GEOGRAPHY) != expected:
         raise RuntimeError("Базовый пресет не покрывает все географические числа")
+    if len(PRESETS) != 8:
+        raise RuntimeError("Контракт planet-presets-v1 должен содержать ровно 8 пресетов")
     for preset_id, preset in PRESETS.items():
         if set(preset["values"]) != expected:
             raise RuntimeError(f"Пресет {preset_id} не покрывает все географические числа")
