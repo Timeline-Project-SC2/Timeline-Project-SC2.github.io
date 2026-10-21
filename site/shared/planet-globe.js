@@ -386,6 +386,15 @@
 
   /* ---------------------------------------------------------- WebGL2 */
 
+  var BASE_FOVY = 42 * Math.PI / 180;
+  function fieldOfViewYForAspect(aspect) {
+    // В портрете фиксированный вертикальный FOV обрезал планету по бокам
+    // и заставлял GPU растеризовать огромную внеэкранную часть диска.
+    // Сохраняем горизонтальный угол ландшафтного вида, расширяя
+    // вертикальный FOV ровно настолько, чтобы сфера помещалась по ширине.
+    if (!Number.isFinite(aspect) || aspect >= 1) return BASE_FOVY;
+    return 2 * Math.atan(Math.tan(BASE_FOVY / 2) / Math.max(0.35, aspect));
+  }
   function mat4Perspective(fovy, aspect, near, far) {
     var f = 1 / Math.tan(fovy / 2);
     var out = new Float32Array(16);
@@ -415,13 +424,6 @@
       sy, -sp * cy, cp * cy, 0,
       0, 0, 0, 1
     ]);
-  }
-  function transformPoint(m, p) {
-    return [
-      m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
-      m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
-      m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]
-    ];
   }
   function transformDirectionTranspose(m, p) {
     // Для чистой вращательной матрицы обратная равна транспонированной.
@@ -549,7 +551,7 @@
     options = options || {};
     if (!canvas || !canvas.getContext) return null;
     var gl = canvas.getContext('webgl2', {
-      antialias: true,
+      antialias: options.antialias !== false,
       alpha: false,
       powerPreference: 'high-performance'
     });
@@ -577,6 +579,8 @@
     var downInfo = null;
     var hoverQueued = false;
     var renderScale = 1;
+    var maxPixelRatio = Math.max(0.5, Math.min(2, Number(options.maxPixelRatio) || 2));
+    var adaptiveQualityHold = false;
     var lastStatsAt = 0;
     var frameTimes = [];
     var lastFrameAt = performance.now();
@@ -656,6 +660,8 @@
         geometry: nextGeometry,
         stage: 0,
         offset: 0,
+        uploadedBytes: 0,
+        totalBytes: nextGeometry.positions.byteLength + nextGeometry.colors.byteLength + nextGeometry.indices.byteLength,
         vao: gl.createVertexArray(),
         positionBuffer: gl.createBuffer(),
         colorBuffer: gl.createBuffer(),
@@ -693,6 +699,12 @@
         gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
       }
+      if (typeof options.onGeometryUploadProgress === 'function') {
+        try { options.onGeometryUploadProgress({ geometry: geometry, fraction: 1 }); } catch (_) { /* HUD не ломает рендер */ }
+      }
+      if (typeof options.onGeometryReady === 'function') {
+        try { options.onGeometryReady(geometry); } catch (_) { /* вызывающий код не ломает рендер */ }
+      }
     }
     function processPendingUpload() {
       if (!pendingUpload) return;
@@ -700,13 +712,16 @@
       var arrays = [pending.geometry.positions, pending.geometry.colors, pending.geometry.indices];
       var targets = [gl.ARRAY_BUFFER, gl.ARRAY_BUFFER, gl.ELEMENT_ARRAY_BUFFER];
       var buffers = [pending.positionBuffer, pending.colorBuffer, pending.indexBuffer];
-      var deadline = performance.now() + 6;
+      // Телефонная приёмка показала, что 2,5 МиБ одним bufferSubData для
+      // мобильного драйвера слишком грубо. 384 КиБ и бюджет 3 мс дают
+      // больше кадров на заливку, но каждый кадр заметно легче.
+      var deadline = performance.now() + 3;
       gl.bindVertexArray(pending.vao);
       while (pendingUpload === pending && pending.stage < arrays.length && performance.now() < deadline) {
         var array = arrays[pending.stage];
         // Цвет мог смениться, пока позиции ещё заливались.
         if (pending.stage === 1) array = pending.geometry.colors;
-        var maxElements = Math.max(4096, Math.floor(2621440 / array.BYTES_PER_ELEMENT));
+        var maxElements = Math.max(4096, Math.floor(393216 / array.BYTES_PER_ELEMENT));
         var count = Math.min(array.length - pending.offset, maxElements);
         if (count <= 0) {
           pending.stage++;
@@ -720,9 +735,18 @@
           array.subarray(pending.offset, pending.offset + count)
         );
         pending.offset += count;
+        pending.uploadedBytes += count * array.BYTES_PER_ELEMENT;
         if (pending.offset >= array.length) {
           pending.stage++;
           pending.offset = 0;
+        }
+        if (typeof options.onGeometryUploadProgress === 'function') {
+          try {
+            options.onGeometryUploadProgress({
+              geometry: pending.geometry,
+              fraction: pending.totalBytes ? pending.uploadedBytes / pending.totalBytes : 1
+            });
+          } catch (_) { /* HUD не ломает рендер */ }
         }
       }
       gl.bindVertexArray(null);
@@ -758,7 +782,7 @@
       gl.bindVertexArray(null);
     }
     function resizeIfNeeded() {
-      var dpr = Math.min(2, (root.devicePixelRatio || 1)) * renderScale;
+      var dpr = Math.min(maxPixelRatio, (root.devicePixelRatio || 1)) * renderScale;
       var w = Math.max(1, Math.round(canvas.clientWidth * dpr));
       var h = Math.max(1, Math.round(canvas.clientHeight * dpr));
       if (canvas.width !== w || canvas.height !== h) {
@@ -777,8 +801,10 @@
       var current = null;
       for (var i = 0; i < geometry.chunkRanges.length; i++) {
         var range = geometry.chunkRanges[i];
-        var center = transformPoint(model, range.center);
-        var cz = clamp(center[2], -1, 1);
+        // Нужна только z-координата центра в мировом пространстве;
+        // без временного массива на каждый chunk в каждом кадре.
+        var czRaw = model[2] * range.center[0] + model[6] * range.center[1] + model[10] * range.center[2];
+        var cz = clamp(czRaw, -1, 1);
         var maxZ = cz * range.cosAngularRadius + Math.sqrt(Math.max(0, 1 - cz * cz)) * Math.abs(range.sinAngularRadius || 0);
         if (maxZ < threshold) { current = null; continue; }
         if (current && current.indexStart + current.indexCount === range.indexStart) {
@@ -810,7 +836,17 @@
         distance: distance
       };
     }
+    function resetStats() {
+      var now = performance.now();
+      frameTimes = [];
+      lastFrameAt = now;
+      lastStatsAt = 0;
+      adaptCooldownUntil = now + 3000;
+    }
     function adaptQuality(now) {
+      // Генерация в worker и GPU-заливка не должны навсегда уронить
+      // масштаб рендера: это не steady-сценарий гейта.
+      if (adaptiveQualityHold || pendingUpload) return;
       if (now < adaptCooldownUntil || frameTimes.length < 70) return;
       var stats = collectStats(now);
       if (stats.p95 > 21 && renderScale > 0.55) {
@@ -841,7 +877,7 @@
       distance += (targetDistance - distance) * Math.min(1, dt * 9);
       var model = mat4RotationYawPitch(yaw, pitch);
       var view = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-distance,1]);
-      var proj = mat4Perspective(42 * Math.PI / 180, aspect, 0.05, 30);
+      var proj = mat4Perspective(fieldOfViewYForAspect(aspect), aspect, 0.05, 30);
       var mvp = mat4Multiply(proj, mat4Multiply(view, model));
       var camPos = [0, 0, distance];
 
@@ -921,7 +957,7 @@
       var ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
       var ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
       var aspect = rect.width / rect.height;
-      var tanHalf = Math.tan(42 * Math.PI / 180 / 2);
+      var tanHalf = Math.tan(fieldOfViewYForAspect(aspect) / 2);
       var ray = normalize3([ndcX * aspect * tanHalf, ndcY * tanHalf, -1]);
       var origin = [0, 0, distance];
       var b = origin[0] * ray[0] + origin[1] * ray[1] + origin[2] * ray[2];
@@ -1077,6 +1113,9 @@
         targetDistance = 3.05;
       },
       pickDirection: pickDirection,
+      setAdaptiveQualityHold: function (enabled) { adaptiveQualityHold = !!enabled; },
+      isGeometryUploading: function () { return !!pendingUpload; },
+      resetStats: resetStats,
       getStats: function () { return collectStats(performance.now()); },
       dispose: function () {
         disposed = true;
@@ -1106,6 +1145,7 @@
     listGeometryTransferables: listGeometryTransferables,
     cellPolygon: cellPolygon,
     buildEquirectPreview: buildEquirectPreview,
+    fieldOfViewYForAspect: fieldOfViewYForAspect,
     createPlanetGlobe: createPlanetGlobe
   };
 

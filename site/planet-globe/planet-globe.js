@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  var VERSION = 'planet-stage-6';
+  var VERSION = 'planet-stage-6-2';
   var $ = function (id) { return document.getElementById(id); };
   var els = {
     canvas: $('globe'),
@@ -84,6 +84,7 @@
   var displayedToken = '';
   var requestSeq = 0;
   var activeRequest = null;
+  var pendingGpuReady = null;
   var displayedSummary = null;
   var displayedProfileKey = '';
   var currentSelection = null;
@@ -99,10 +100,24 @@
   var webglAvailable = true;
 
   try {
+    var coarseScreen = isCoarseOrSmallScreen();
     globe = window.PlanetGlobe.createPlanetGlobe(els.canvas, {
       autoRotate: true,
       borders: true,
       atmosphere: true,
+      maxPixelRatio: coarseScreen ? 1.5 : 2,
+      onGeometryUploadProgress: function (info) {
+        if (!pendingGpuReady || info.geometry !== pendingGpuReady.msg.geometry) return;
+        var labelPhase = pendingGpuReady.msg.summary.renderV >= pendingGpuReady.request.targetV ? 'Финал' : 'Прокси';
+        setProgress(0.84 + 0.16 * Math.max(0, Math.min(1, info.fraction || 0)),
+          labelPhase + ' v=' + pendingGpuReady.msg.summary.renderV + ': GPU-заливка геометрии');
+      },
+      onGeometryReady: function (geometry) {
+        if (!pendingGpuReady || geometry !== pendingGpuReady.msg.geometry) return;
+        var pending = pendingGpuReady;
+        pendingGpuReady = null;
+        finalizeReady(pending.msg, pending.request);
+      },
       onPickDirection: function (direction) { sendPick(direction, 'select'); },
       onHoverDirection: function (direction) {
         var now = performance.now();
@@ -240,14 +255,16 @@
   function targetRenderV(canonicalV) {
     var q = els.quality.value;
     var factor = 1;
-    if (q === 'auto') factor = isCoarseOrSmallScreen() ? 0.625 : 1;
+    // Телефонная приёмка Redmi: v=80 на Земле давал лишнюю плотность,
+    // которую экран телефона всё равно не различает после fit по ширине.
+    if (q === 'auto') factor = isCoarseOrSmallScreen() ? 0.5 : 1;
     else if (q === 'balanced') factor = 0.75;
     else if (q === 'performance') factor = 0.5;
     else if (q === 'proxy') factor = 0.375;
     return Math.max(16, Math.min(256, Math.round(canonicalV * factor)));
   }
   function proxyRenderV(targetV) {
-    if (!els.autoProxy.checked || targetV <= 64) return targetV;
+    if (!els.autoProxy.checked || targetV <= 40) return targetV;
     return Math.max(16, Math.min(48, Math.round(targetV * 0.375)));
   }
   function updateEstimates() {
@@ -322,6 +339,8 @@
     worker.onmessage = onWorkerMessage;
     worker.onerror = function (event) {
       activeRequest = null;
+      pendingGpuReady = null;
+      if (globe) globe.setAdaptiveQualityHold(false);
       showLoading(false);
       setStatus('Ошибка worker: ' + (event.message || 'неизвестная ошибка'), 'error');
     };
@@ -347,6 +366,8 @@
 
   function requestRender(profile, key, renderV, targetV, phase) {
     ensureWorker();
+    pendingGpuReady = null;
+    if (globe) globe.setAdaptiveQualityHold(true);
     var id = ++requestSeq;
     activeRequest = {
       id: id,
@@ -444,6 +465,8 @@
       if (activeRequest && msg.requestId && msg.requestId !== activeRequest.id) return;
       if (msg.requestId === latestPickRequest || msg.requestId === latestHoverRequest) return;
       activeRequest = null;
+      pendingGpuReady = null;
+      if (globe) globe.setAdaptiveQualityHold(false);
       showLoading(false);
       setStatus('Ошибка: ' + (msg.message || msg.code || 'генерация не удалась'), 'error');
       els.stats.textContent = 'Генерация не удалась.\n' + (msg.message || '') + (msg.stack ? '\n\n' + msg.stack : '');
@@ -452,16 +475,29 @@
 
   function handleReady(msg) {
     var request = activeRequest;
+    if (globe) {
+      // Worker закончил CPU-часть, но видимым глобус станет только после
+      // порционной GPU-заливки и атомарной подмены VAO. До этого момента
+      // не объявляем планету готовой и не сбрасываем steady-статистику.
+      pendingGpuReady = { msg: msg, request: request };
+      currentSelection = null;
+      globe.clearSelection();
+      renderSelection(null);
+      setProgress(0.84, (msg.summary.renderV >= request.targetV ? 'Финал' : 'Прокси') +
+        ' v=' + msg.summary.renderV + ': GPU-заливка геометрии');
+      setStatus('CPU-часть готова: заливаю геометрию на GPU…');
+      globe.setGeometry(msg.geometry);
+      return;
+    }
+    finalizeReady(msg, request);
+  }
+
+  function finalizeReady(msg, request) {
     displayedToken = msg.token;
     displayedSummary = msg.summary;
     displayedProfileKey = request.profileKey;
     setProgress(1, 'Готово');
-    if (globe) {
-      globe.setGeometry(msg.geometry);
-      globe.clearSelection();
-    } else if (msg.preview) {
-      drawFallback(msg.preview);
-    }
+    if (!globe && msg.preview) drawFallback(msg.preview);
     currentSelection = null;
     renderSelection(null);
     renderSummary(msg.summary);
@@ -482,8 +518,12 @@
       generationHistory = generationHistory.slice(0, 8);
       renderHistory();
       activeRequest = null;
+      if (globe) {
+        globe.setAdaptiveQualityHold(false);
+        globe.resetStats();
+      }
       showLoading(false);
-      setStatus('Готово: ' + msg.summary.planetId + ', финал v=' + msg.summary.renderV + ' за ' + fmtMs(msg.summary.timingsMs.total) + '. Клик по глобусу выбирает ячейку.', 'ok');
+      setStatus('Готово: ' + msg.summary.planetId + ', финал v=' + msg.summary.renderV + ', CPU за ' + fmtMs(msg.summary.timingsMs.total) + ', GPU-бандл подменён. Статистика кадров сброшена — для steady-замера покрутите глобус 10 секунд.', 'ok');
       if (els.colorMode.value !== msg.colorMode) sendColorMode();
       if (cycleActive) scheduleNextCycle();
     } else {
@@ -506,7 +546,7 @@
     return opt ? opt.textContent : els.colorMode.value;
   }
   function sendColorMode() {
-    if (!worker || !displayedToken || activeRequest) return;
+    if (!worker || !displayedToken || activeRequest || pendingGpuReady) return;
     var id = ++requestSeq;
     worker.postMessage({
       type: 'color-mode',
@@ -516,7 +556,7 @@
     });
   }
   function sendPick(direction, purpose) {
-    if (!worker || !displayedToken || !displayedSummary) return;
+    if (!worker || !displayedToken || !displayedSummary || pendingGpuReady) return;
     var id = ++requestSeq;
     if (purpose === 'hover') latestHoverRequest = id; else latestPickRequest = id;
     worker.postMessage({

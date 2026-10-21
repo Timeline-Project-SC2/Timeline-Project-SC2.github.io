@@ -14,6 +14,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -165,6 +166,7 @@ button[aria-pressed="true"] { background: rgba(0, 105, 145, .78); border-color: 
   background: rgba(1, 4, 12, .28);
   pointer-events: none;
 }
+.loading[hidden] { display: none; }
 .loading-card {
   width: min(520px, calc(100vw - 32px));
   padding: 18px;

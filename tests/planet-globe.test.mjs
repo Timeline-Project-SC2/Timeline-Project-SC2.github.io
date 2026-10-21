@@ -134,6 +134,22 @@ test('planet-globe-v1: рельеф поднимает сушу и опуска�
   assert.equal(PlanetGlobe.cellPolygon(grid, surface, -1), null);
 });
 
+test('planet-globe-v1: портретный FOV сохраняет горизонтальный угол и помещает планету по ширине', () => {
+  const landscape = PlanetGlobe.fieldOfViewYForAspect(16 / 9);
+  assert.ok(Math.abs(landscape - 42 * Math.PI / 180) < 1e-12);
+
+  const portraitAspect = 9 / 19.5;
+  const portrait = PlanetGlobe.fieldOfViewYForAspect(portraitAspect);
+  const horizontalHalfTan = Math.tan(portrait / 2) * portraitAspect;
+  assert.ok(Math.abs(horizontalHalfTan - Math.tan(landscape / 2)) < 1e-12);
+  assert.ok(portrait > 1.25 && portrait < 1.45);
+
+  // При стартовой дистанции 3.05 диск должен занимать меньше ширины,
+  // а не ~170% кадра, как при фиксированном FOV 42° в портрете.
+  const projectedRadiusNdc = 1 / (3.05 * horizontalHalfTan);
+  assert.ok(projectedRadiusNdc > 0.8 && projectedRadiusNdc < 0.9);
+});
+
 test('planet-globe-v1: fallback-развёртка заполнена и сохраняет размер/альфу', () => {
   const preview = PlanetGlobe.buildEquirectPreview(grid, surface, 180, 90, 'biome');
   assert.equal(preview.width, 180);

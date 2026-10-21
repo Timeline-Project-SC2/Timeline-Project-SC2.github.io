@@ -19,11 +19,11 @@
 /* global importScripts */
 'use strict';
 importScripts(
-  '../shared/geodesic-grid.js?v=planet-stage-6',
-  '../shared/planet-noise.js?v=planet-stage-6',
-  '../shared/planet-geography.js?v=planet-stage-6',
-  '../shared/planet-surface.js?v=planet-stage-6',
-  '../shared/planet-globe.js?v=planet-stage-6'
+  '../shared/geodesic-grid.js?v=planet-stage-6-2',
+  '../shared/planet-noise.js?v=planet-stage-6-2',
+  '../shared/planet-geography.js?v=planet-stage-6-2',
+  '../shared/planet-surface.js?v=planet-stage-6-2',
+  '../shared/planet-globe.js?v=planet-stage-6-2'
 );
 
 var GeodesicGrid = self.GeodesicGrid;
@@ -273,7 +273,8 @@ async function runGenerate(message) {
       total: round(performance.now() - started, 1)
     });
     summary.gridSource = gridResult.source;
-    progress(token, requestId, 'ready', 1, 'Готово');
+    // 100% страница покажет только после GPU-подмены; worker завершил CPU-часть.
+    progress(token, requestId, 'ready', 0.84, 'CPU-часть готова');
     post('ready', {
       token: token, requestId: requestId,
       geometry: payloadGeometry,
