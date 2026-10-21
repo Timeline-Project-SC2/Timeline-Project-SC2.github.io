@@ -1,153 +1,57 @@
 <!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Planet test — гексагональный глобус (ядро v1)</title>
-<link rel="stylesheet" href="planet-test.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Стенд глобуса · FX-режимы Шакураса · TIMELINE PROJECT</title>
+  <meta name="description" content="Экспериментальные режимы боевого глобуса TIMELINE PROJECT: взрыв осколков Шакураса (uSep) и шейдерные диагностические палитры на общем ядре planet-globe.">
+  <link rel="stylesheet" href="planet-test.css">
 </head>
 <body>
-  <div class="stage">
-    <canvas id="globe" role="img" aria-label="Тестовый 3D-глобус планеты с гексагональной сеткой. Перетаскивайте для вращения, колесо — масштаб камеры."></canvas>
-    <div class="glow" aria-hidden="true"></div>
-  </div>
+  <div class="stage"><canvas id="globe"></canvas></div>
 
-  <aside class="panel" aria-label="Параметры спайка">
-    <div class="panel-head">
-      <h1>PLANET TEST · ЯДРО V1</h1>
-      <button id="panelToggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panelBody" title="Свернуть панель параметров" aria-label="Свернуть панель параметров">−</button>
-    </div>
+  <div class="panel" id="panel">
+    <div class="panel-head"><h1>Стенд глобуса · FX</h1></div>
     <div id="panelBody">
+      <div class="row"><label for="planetSel">Планета</label><select id="planetSel"></select></div>
+      <div class="row"><label for="seedText">Сид</label><input type="text" id="seedText" value="shakuras" spellcheck="false"></div>
+      <div class="row"><label for="radiusKm">Радиус, км</label><input type="number" id="radiusKm" value="5860" min="300" step="1"></div>
+      <div class="row"><label for="qualitySel">Качество</label>
+        <select id="qualitySel">
+          <option value="auto">Авто</option>
+          <option value="balanced">Сбалансированное</option>
+          <option value="performance">Производительное</option>
+        </select>
+      </div>
+      <div class="btns"><button id="generateBtn" type="button">Собрать планету</button></div>
 
-    <div class="row"><label for="seedText">seed</label><input id="seedText" type="text" value="korhal-iv" autocomplete="off" spellcheck="false"><button id="seedBtn" type="button">⟳</button></div>
-    <div class="row"><label for="vSel">макс. частота v</label><select id="vSel">
-      <option value="16">16 · 2 562 ячеек</option>
-      <option value="24">24 · 5 762</option>
-      <option value="34">34 · 11 562 (≈Луна)</option>
-      <option value="48">48 · 23 042</option>
-      <option value="64" selected>64 · 40 962 (грубый LOD Земли)</option>
-      <option value="80">80 · 64 002</option>
-      <option value="100">100 · 100 002 (суперземля)</option>
-      <option value="128">128 · 163 842 (Земля, каноническая)</option>
-      <option value="160">160 · 256 002</option>
-      <option value="192">192 · 368 642 (сверхплотная проверка)</option>
-    </select><output id="vV"></output></div>
-    <div class="row"><label for="lodSel">детализация</label><select id="lodSel">
-      <option value="auto" selected>авто LOD по зуму</option>
-      <option value="fixed">фиксированная v</option>
-    </select><output id="lodV"></output></div>
-    <div class="row"><label for="noiseSel">шум</label><select id="noiseSel">
-      <option value="simplex" selected>simplex (градиентный)</option>
-      <option value="value">value (собственный)</option>
-    </select><output></output></div>
-    <div class="row"><label for="freq">частота полей</label><input id="freq" type="range" min="0.8" max="4" step="0.05" value="2.2"><output id="freqV"></output></div>
-    <div class="row"><label for="oct">октавы fBm</label><input id="oct" type="range" min="1" max="8" step="1" value="5"><output id="octV"></output></div>
-    <div class="row"><label for="gain">gain</label><input id="gain" type="range" min="0.3" max="0.7" step="0.01" value="0.5"><output id="gainV"></output></div>
-    <div class="row"><label for="warp">domain warp</label><input id="warp" type="range" min="0" max="1" step="0.05" value="0.35"><output id="warpV"></output></div>
-    <div class="row"><label for="ocean">океан, %</label><input id="ocean" type="range" min="30" max="90" step="1" value="70"><output id="oceanV"></output></div>
-    <div class="row"><label for="paletteSel">палитра</label><select id="paletteSel">
-      <option value="0" selected>текущая спайковая</option>
-      <option value="1">пустынная</option>
-      <option value="2">ледяная</option>
-      <option value="3">вулканическая</option>
-      <option value="4">океан и острова</option>
-      <option value="5">чужая</option>
-      <option value="6">голограмма</option>
-    </select><output></output></div>
-    <div class="row"><label for="textureSel">текстура</label><select id="textureSel">
-      <option value="0">нет (плоские гексы)</option>
-      <option value="1" selected>рельефное зерно</option>
-      <option value="2">дюны и волны</option>
-      <option value="3">трещины</option>
-      <option value="4">пятна и кристаллы</option>
-      <option value="5">голографическая сетка</option>
-    </select><output></output></div>
-    <div class="row"><label for="texAmt">сила текстуры</label><input id="texAmt" type="range" min="0" max="1" step="0.01" value="0.35"><output id="texAmtV"></output></div>
-    <div class="row"><label for="texScale">масштаб текст.</label><input id="texScale" type="range" min="4" max="64" step="1" value="24"><output id="texScaleV"></output></div>
-    <div class="row"><label for="hueShift">сдвиг оттенка</label><input id="hueShift" type="range" min="-180" max="180" step="1" value="0"><output id="hueShiftV"></output></div>
-    <div class="row"><label for="buildSec">сборка, сек</label><input id="buildSec" type="range" min="0.5" max="6" step="0.1" value="2.4"><output id="buildSecV"></output></div>
-    <div class="row"><label for="shards">осколки</label><input id="shards" type="range" min="1" max="50" step="1" value="10"><output id="shardsV"></output></div>
-    <div class="row"><label for="shardDist">размеры осколков</label><select id="shardDist">
-      <option value="equal">равные (Фибоначчи)</option>
-      <option value="power" selected>степенная (дробление)</option>
-      <option value="lognormal">логнормальная</option>
-    </select><output></output></div>
-    <div class="row"><label for="shardSep">разлёт осколков</label><input id="shardSep" type="range" min="0" max="2.5" step="0.01" value="0.3"><output id="shardSepV"></output></div>
-    <div class="row"><label for="shardThick">толщина осколков</label><input id="shardThick" type="range" min="0.03" max="0.35" step="0.01" value="0.14"><output id="shardThickV"></output></div>
-    <div class="row"><label for="shardJag">рваность разлома</label><input id="shardJag" type="range" min="0" max="1" step="0.05" value="0.5"><output id="shardJagV"></output></div>
-    <div class="row"><label for="shardLoss">потери (невозврат)</label><input id="shardLoss" type="range" min="0" max="1" step="0.05" value="0"><output id="shardLossV"></output></div>
-    <div class="row"><label for="coreScale">ядро, доля радиуса</label><input id="coreScale" type="range" min="0.35" max="0.85" step="0.01" value="0.55"><output id="coreScaleV"></output></div>
-    <div class="row"><button id="shardBoom" type="button" title="Анимированный взрыв: разлёт и рваность вверх, толщина вниз">💥 взрыв</button></div>
+      <h2>Взрыв осколков Шакураса · uSep</h2>
+      <div class="row"><label for="sepRange">Разлёт</label><input type="range" id="sepRange" min="0" max="2.5" step="0.01" value="0.3"><output id="sepOut">0.30</output></div>
+      <div class="row"><label for="shardModeChk">Режим осколков</label><input type="checkbox" id="shardModeChk" checked></div>
+      <div class="row"><label for="shardCountRange">Осколков</label><input type="range" id="shardCountRange" min="2" max="32" step="1" value="12"><output id="shardCountOut">12</output></div>
+      <div class="btns"><button id="boomBtn" type="button">💥 Взрыв</button></div>
 
-    <div class="btns">
-      <button id="regenBtn" type="button">перегенерировать</button>
-      <button id="bordersBtn" type="button" aria-pressed="true">границы ячеек</button>
-      <button id="themeSeedBtn" type="button" title="Детерминированно подобрать палитру и текстуру из текущего seed">тема из seed</button>
-      <button id="spinBtn" type="button" aria-pressed="true" title="Пауза вращения — пробел">автоповорот (пробел)</button>
-      <button id="buildBtn" type="button" title="Повторить каскадную сборку без перегенерации">собрать заново</button>
-      <button id="buildAnimBtn" type="button" aria-pressed="true">анимация сборки</button>
+      <h2>Диагностические палитры</h2>
+      <div class="row"><label for="paletteSel">Палитра</label><select id="paletteSel"></select></div>
+      <div class="row"><label for="texModeSel">Фактура</label><select id="texModeSel"></select></div>
+      <div class="row"><label for="texAmountRange">Сила фактуры</label><input type="range" id="texAmountRange" min="0" max="1" step="0.01" value="0.45"></div>
+      <div class="row"><label for="texScaleRange">Масштаб фактуры</label><input type="range" id="texScaleRange" min="4" max="64" step="1" value="24"></div>
+      <div class="row"><label for="hueRange">Поворот hue</label><input type="range" id="hueRange" min="-35" max="35" step="1" value="0"></div>
+      <div class="btns"><button id="themeBtn" type="button">Случайная тема</button></div>
+
+      <div class="stats" id="statsBox"></div>
+      <div class="note"><b>Стенд на общем боевом ядре.</b> Рендер и генерация — те же <code>planet-globe</code> и
+        <code>planet-globe-worker</code>, что на /planet-globe/. Экспериментальные режимы вынесены в
+        <code>src/planet/planet-globe-fx.ts</code> и подключены необязательным плагином: без FX глобус
+        рисуется как обычно. Разлёт осколков двигает только юниформ <code>uSep</code> — геометрия не
+        пересобирается. Палитры и фактуры — рендер-кастомизация, не источник географии.</div>
     </div>
-
-    <pre class="stats" id="statsBox">генерация…</pre>
-
-    <p class="note">
-      <b>Что это:</b> тестовый стенд планетного глобуса — боевое ядро сетки
-      Голдберга GP(v,0) версии goldberg-gp-v1, поля планеты на CPU-шуме и
-      WebGL2-рендер спайка. Не боевая страница: здесь проверяются плотность,
-      шум, chunk-ядро и производительность.<br><br>
-      Клик по глобусу выбирает ячейку и показывает её канонический адрес v1.
-      Палитры и процедурные текстуры — только render-кастомизация поверх тех
-      же полей: seed, берег, биомы и адреса не меняются; фактура уникальна
-      от seed и полей ячейки, а кнопка «тема из seed» собирает тему
-      детерминированно. При каждой генерации планета собирается каскадом шестиугольников от
-      северного полюса к южному (анимация целиком в вершинном шейдере);
-      кнопка «собрать заново» повторяет её без перегенерации.
-      Осколки — тест разломанной планеты: ячейки делятся сферическим Вороным
-      на шарды и разносятся трансформом при заливке геометрии (поля и адреса
-      ячеек не меняются); «осколки = 1» или «разлёт = 0» — целая планета.
-      Осколки объёмные: стены разлома и низ строятся по исходным
-      координатам, поэтому разлёт 0 собирает планету обратно точно;
-      «потери» оставляют мелкие осколки невозвратными — шрамы на сборке.
-      Остаток ядра — доля радиуса планеты (Земля ~0.55); кнопка «взрыв»
-      анимирует разлёт/рваность вверх и толщину вниз.
-      Первая загрузка: мгновенный прокси низкого v на главном потоке,
-      полная плотность досчитывается воркером и бесшовно
-      выходит из центра планеты сквозь прокси той же широтной волной; сетки
-      кэшируются в IndexedDB бинарным форматом v1 с CRC — повторные визиты без перестроения, битый кэш сам пересоздаётся.
-      Воркер готовит не только поля, но и массивы поверхности/объёма;
-      главный поток порциями заливает их в скрытый GPU-бандл поверх текущего
-      кадра и показывает результат только после полной готовности. Готовые
-      бандлы последних планет и уровней остаются в маленьком GPU-кэше,
-      поэтому частые переходы туда-сюда не пересобирают одни и те же вершины.
-      Авто-LOD — пирамида детализации поверх тех же непрерывных полей:
-      вдали рисуется крупная сетка, при приближении воркер подготавливает
-      более мелкую и мгновенно подменяет уже готовый слой без повторной
-      анимации сборки; уровни полей кэшируются. Колесо мыши плавно ведёт
-      камеру в лог-масштабе, pinch остаётся прямым, а следующий уровень
-      предиктивно готовится ещё во время подлёта по целевой дистанции;
-      второй глобус при этом не рисуется.
-      На телефоне дополнительно адаптивно снижается внутренний масштаб
-      рендера при просадке FPS. Фиксированный режим отключает обе
-      оптимизации и всегда рисует выбранную максимальную v. В авто-режиме
-      клик показывает канонический адрес v1 текущего рендер-уровня; при смене
-      LOD частота в адресе меняется вместе с фактически нарисованной сеткой.
-      Массивы суши в статистике — физические связные области, а не будущие
-      идентичности C100 (они появятся на Этапе 4).
-    </p>
-    </div>
-  </aside>
-
-  <div class="hud">
-    <div>fps <i id="fps">—</i> · ячеек <i id="cells">—</i> · треугольников <i id="tris">—</i> · LOD <i id="lodHud">—</i> · рендер <i id="renderScale">—</i></div>
-    <div>frame 10s: p50 <i id="frameP50">—</i> · p95 <i id="frameP95">—</i> · p99 <i id="frameP99">—</i> · &gt;50ms <i id="frameOver50">0</i> · &gt;100ms <i id="frameOver100">0</i></div>
-    <div>worst5 <i id="frameWorst">—</i> · GPU <i id="gpuTime">n/a</i></div>
-    <div id="cellInfo">ячейка не выбрана — кликните по глобусу</div>
-    <div id="statusLine" role="status"></div>
   </div>
 
-  <script src="../shared/geodesic-grid.js"></script>
-  <script src="../shared/planet-noise.js"></script>
-  <script src="../shared/planet-geometry.js"></script>
+  <footer class="hud" aria-label="Статус стенда">
+    <div id="statusLine" role="status"></div>
+  </footer>
+
   <script src="planet-test.js"></script>
 </body>
 </html>
