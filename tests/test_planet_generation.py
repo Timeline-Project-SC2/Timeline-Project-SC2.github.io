@@ -29,7 +29,7 @@ PLACES = [
     {"ID": "odd-1", "name": "Особое тело", "type": "other"},
 ]
 
-GOLDEN_KEY = "PG1-D6CASVACAK3WKXTHZKSFX5HLCA"
+GOLDEN_KEY = "PG1-5NKT36OZBP4QPXE32CKQ5V3ANI"
 
 
 def draft_row(**overrides):
@@ -95,12 +95,12 @@ class SchemaAndPresetsTest(unittest.TestCase):
                 for name in pg.GEOGRAPHY_NUMBER_FIELDS:
                     self.assertIsNotNone(profile[name], name)
 
-    def test_stage4_v1_defaults_and_canonical_earth_scale(self):
+    def test_stage5_v2_defaults_and_canonical_earth_scale(self):
         self.assertEqual(
             {
                 "grid_version": "goldberg-gp-v1",
                 "noise_version": "planet-noise-simplex3d-v1",
-                "geography_version": "c100-soft-v1",
+                "geography_version": "c100-soft-v2",
                 "preset_version": "planet-presets-v1",
             },
             pg.DEFAULT_VERSIONS,
@@ -249,6 +249,9 @@ class ValidationTest(unittest.TestCase):
         self.assertEqual("goldberg-gp-v1", effective_for(draft_row())["grid_version"])
         legacy = effective_for(draft_row(grid_version="goldberg-gp-v0"))
         self.assertEqual("goldberg-gp-v0", legacy["grid_version"])
+        self.assertEqual("c100-soft-v2", effective_for(draft_row())["geography_version"])
+        legacy_geography = effective_for(draft_row(geography_version="c100-soft-v1"))
+        self.assertEqual("c100-soft-v1", legacy_geography["geography_version"])
         self.assert_has_error(
             [draft_row(grid_version="goldberg-gp-v99")],
             "неподдерживаемая grid_version",

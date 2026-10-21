@@ -41,22 +41,26 @@ DEFAULT_PLACES = ROOT / "data" / "places.csv"
 MANIFEST_FORMAT = "PG1"
 SCHEMA_VERSION = "planet-generation-schema-v1"
 
-# Этапы 3–4 перевели сетку, шум, географию и пресеты на боевые v1.
-# Старая grid v0 поддерживается валидатором для исторических черновиков,
-# но новые draft/freeze по умолчанию получают v1. Прототипные версии шума,
-# C100 и пресетов v0 не поддерживаются боевым генератором и валидатором:
-# их нельзя молча трактовать как v1. Старые ключи не пересчитываются:
-# смена версии требует новой ревизии профиля.
+# Этапы 3–4 перевели сетку, шум, поля/C100 и пресеты на боевые v1.
+# Этап 5 завершил полный поверхностный рецепт: новые draft/freeze по
+# умолчанию получают geography_version=c100-soft-v2 (поля и C100 v1 +
+# planet-hydrology-v1 + planet-biomes-v1). Явная c100-soft-v1 остаётся
+# поддерживаемой валидатором как legacy-рецепт только полей/C100 Этапа 4:
+# её нельзя молча трактовать как v2, для гидрологии и биомов нужна новая
+# ревизия профиля. Старая grid v0 поддерживается для исторических
+# черновиков, а прототипные версии шума, C100 и пресетов v0 не
+# поддерживаются боевым генератором и валидатором. Старые ключи не
+# пересчитываются: смена версии требует новой ревизии профиля.
 DEFAULT_VERSIONS = {
     "grid_version": "goldberg-gp-v1",
     "noise_version": "planet-noise-simplex3d-v1",
-    "geography_version": "c100-soft-v1",
+    "geography_version": "c100-soft-v2",
     "preset_version": "planet-presets-v1",
 }
 SUPPORTED_VERSIONS = {
     "grid_version": {"goldberg-gp-v0", DEFAULT_VERSIONS["grid_version"]},
     "noise_version": {DEFAULT_VERSIONS["noise_version"]},
-    "geography_version": {DEFAULT_VERSIONS["geography_version"]},
+    "geography_version": {"c100-soft-v1", DEFAULT_VERSIONS["geography_version"]},
     "preset_version": {DEFAULT_VERSIONS["preset_version"]},
 }
 VERSION_FIELDS = tuple(DEFAULT_VERSIONS)

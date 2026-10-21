@@ -71,7 +71,7 @@ jobs:
         run: |
           for f in site/*.js site/shared/*.js; do node --check "$f"; done
           node tests/travel-planner.test.js
-          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-geography.test.mjs
+          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs
           npm install --no-save --no-package-lock --no-audit --no-fund eslint@10 globals@17
           npx eslint site
 
@@ -96,3 +96,5 @@ jobs:
         run: node tools/bench_planet_stage3.mjs --v=128 --reps=1 --picks=200
       - name: Stage 4 v128 fields / C100-soft G2 bench
         run: node tools/bench_planet_stage4.mjs --seeds=5
+      - name: Stage 5 v128 hydrology / biomes G3 bench
+        run: node tools/bench_planet_stage5.mjs --seeds=5
