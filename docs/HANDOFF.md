@@ -1,9 +1,12 @@
 # Конспект для следующего агента
 
 Дата: 21 октября 2026. Обновлено в ветке `arena/37e6e1a9-timeline-project-sc2-github-io`
-(CR-01 PR 5: консолидация глобусов и модули локальной карты — И-3, И-5, И-6; в работе).
+(CR-01 PR 5: консолидация глобусов и модули локальной карты — И-3, И-5, И-6;
+все 5 шагов выполнены, [PR #138](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/138)
+проверен, **стоп перед merge — сливать только по отдельной команде владельца**).
 До этого — PR #137 (CR-01 PR 4 — Wasm-ядро planet-core, строгие TS-порты планетных модулей
-и И-1; работа восстановлена после утраты незакоммиченной сессии, см. §1 и §7). До этого — PR #115 ( спайк Этапа 1 планет и кодовая часть Этапа 2 — профили
+и И-1; **слит в `main` 21.10**; работа восстановлена после утраты незакоммиченной сессии,
+см. §1 и §7). До этого — PR #115 ( спайк Этапа 1 планет и кодовая часть Этапа 2 — профили
 `planet_generation`, валидатор/ключ и двухфазный синк; отчёты —
 `docs/stages/stage-1-spike-report.md` и
 `docs/stages/stage-2-data-and-sync.md`). До этого — PR #111: спираль поверх карты
@@ -18,7 +21,7 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 
 | | |
 |---|---|
-| Последняя работа | CR-01 PR 5 (ветка `arena/37e6e1a9-…`, **в работе, WIP-PR; merge только по отдельной команде владельца**): финальный PR миграции по `docs/CHANGE_REQUEST_PLAN.md` (И-3, И-5, И-6 и раздел 6.2). Шаги: (1) распил `site/shared/temp_code_structures.js` (1 176 строк) на 4 типизированных модуля `src/local-map/*` с удалением свалки (И-5); (2) контракт сшивки патча из 7 канонических ячеек глобуса + `tests/local-map.test.mjs` в `check.yml` (И-3); (3) `site/planet-globe/planet-globe.js` → строгий `planet-globe.ts`, экспериментальные режимы `/planet-test/` (uSep-взрыв Шакураса, диагностические палитры) → опциональный `src/planet/planet-globe-fx.ts`; (4) `/planet-test/` на общем боевом ядре с удалением `planet-test.js` (2 929 строк) и `planet-worker.js` (И-5), маршрут сохраняется для `verify:publish`; (5) документация + полный прогон проверок, стоп перед merge |
+| Последняя работа | CR-01 PR 5 (ветка `arena/37e6e1a9-…`, [PR #138](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/138), **все 5 шагов выполнены, проверки зелёные; merge только по отдельной команде владельца**): финальный PR миграции по `docs/CHANGE_REQUEST_PLAN.md` (И-3, И-5, И-6 и раздел 6.2). Шаги: (1) распил `site/shared/temp_code_structures.js` (1 176 строк) на 4 типизированных модуля `src/local-map/*` с удалением свалки (И-5, `a9dc170`); (2) контракт сшивки патча из 7 канонических ячеек глобуса + `tests/local-map.test.mjs` в `check.yml` (И-3, `cf20f9c`); (3) `site/planet-globe/planet-globe.js` (778 строк) → строгий `planet-globe.ts`, экспериментальные режимы `/planet-test/` (uSep-взрыв Шакураса, диагностические палитры) → опциональный `src/planet/planet-globe-fx.ts` (`c1cd5dc`); (4) `/planet-test/` на общем боевом ядре (planet-globe + planet-globe-fx) с удалением `planet-test.js` (2 929 строк) и `planet-worker.js` (И-5, `63c9990`), маршрут сохранён для `verify:publish`; (5) документация + полный прогон проверок, стоп перед merge |
 | Предыдущая работа | CR-01 PR 4 ([PR #137](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/137), ветка `arena/07852140-…`, **слит в `main` 21.10**): Wasm-ядро planet-core (AssemblyScript, 24 613/2 690 Б), строгие TS-порты `geodesic-grid`/`planet-noise`/`planet-geography`/`planet-surface`/`planet-globe` и воркера глобуса с побитовой эквивалентностью JS (FULL EQ), закрыта И-1, честные нормали рельефа (вершина 24 Б), старые `.js` удалены. Генерация v=128: 2 564,7 → 1 630,8 мс (1,57×); гейт плана 3–4× не взят — ждёт решения владельца: добивка отдельным PR или продолжение оптимизации. Восстановлено после утраты незакоммиченной сессии (§7). После merge — телефонная проверка глобуса владельцем (скрины Redmi Note 10 от 21.10: генерация и финал v=64 проходят, см. заметки PR 5) |
 | До этого | Этап 2 планет (PR #115): контракт `planet_generation` из 37 колонок, пресеты/валидатор/ключ `PG1` в `tools/planet_generation.py`, начальный снимок и шаблон CSV, источник в `data/sources.json` включён для вкладки `planet_generation` (`gid=1183479406`; живой Sync применит его после merge PR), двухфазный атомарный синк и 26 Python-тестов. Отчёт — `docs/stages/stage-2-data-and-sync.md`; сайт новый CSV пока не читает |
 | Ещё раньше | Спайк Этапа 1 планет (та же ветка): сетка Голдберга GP(v,0) (`site/shared/geodesic-grid.js`), детерминированные поля (`site/shared/planet-noise.js`: simplex vs value), WebGL2-глобус на тестовой странице `/planet-test/`, проверка `tools/check_planet_spike.mjs`. Отчёт и замеры — `docs/stages/stage-1-spike-report.md`; визуальная часть гейта G1 — за пользователем |
@@ -29,20 +32,56 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 | PR сектора | [PR #103](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/103) слит в `main`; публикация Pages прошла успешно |
 | Инструкции к таблице | [PR #105](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/105) слит в `main` |
 | История курсора | [PR #99](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/99) и [#104](https://github.com/TimelineProjectSC2/TimelineProjectSC2.github.io/pull/104) слиты в `main` 18.10; пользователь проверяет курсор на сайте и пишет замечания |
-| Как показать | сам сайт; страница проверки курсора — `/cursor-test/`; демо и настройка ядра спирали — `/spiral-test/`; спайк гексагонального глобуса — `/planet-test/` |
+| Как показать | сам сайт; страница проверки курсора — `/cursor-test/`; демо и настройка ядра спирали — `/spiral-test/`; стенд FX-режимов Шакураса на боевом ядре — `/planet-test/`; боевой глобус — `/planet-globe/` |
 
 Что изменено (подробно — в `CHANGELOG.md`, правила — в `AGENTS.md`, разделы «Прицел» и «Курсор»):
 
-- CR-01 PR 4 (21.10, PR #137; merge запрещён до отдельной команды владельца —
-  это исключение из общего «создайте PR и слейте сразу» в AGENTS.md задано
-  владельцем прямо для этого PR). Реализация старой сессии погибла
+- CR-01 PR 5 (21.10, ветка `arena/37e6e1a9-…`, PR #138; стоп перед merge —
+  сливать только по отдельной команде владельца). Финальный PR миграции по
+  `docs/CHANGE_REQUEST_PLAN.md` (И-3, И-5, И-6, раздел 6.2), 5 шагов, коммит
+  после каждого (`a9dc170`, `cf20f9c`, `c1cd5dc`, `63c9990` + документация):
+  1. `site/shared/temp_code_structures.js` (1 176 строк) распилен на 4 строго
+     типизированных модуля `src/local-map/` (М1 mesh-библиотека 12 инстансных
+     модулей и ролей, М2 генерация+wire-протокол, М3 StructureRenderer с
+     подсветкой опорных точек, М4 GLSL-шейдеры); свалка удалена (И-5).
+  2. Контракт сшивки патча из 7 канонических ячеек глобуса (И-3):
+     `src/local-map/local-map-contract.ts` (`local-map-patch-v1`), единый
+     3D-сэмплер полей, filledElevation c100-soft-v2, реки через общие рёбра
+     (flowReceiver + streamWeight/flowAccumulationKm2), buildingSpawnMask;
+     `tests/local-map.test.mjs` (6 тестов) подключён в `check.yml`.
+  3. `site/planet-globe/planet-globe.js` (778 строк) → строгий
+     `site/planet-globe/planet-globe.ts` (пресеты CSV, прокси→финал, 2D
+     fallback, сводка/выбор ячейки — поведение сохранено); уникальные
+     экспериментальные режимы стенда вынесены в опциональный модуль
+     `src/planet/planet-globe-fx.ts` (взрыв осколков Шакураса uSep —
+     shardTransform по текстуре 64×4 RGBA32F с «потерянными» a=1.35/b=0.75,
+     анимация только юниформом 2400/1500 мс; диагностические палитры
+     uPalette 0…6, декоративные фактуры uTexMode 1…5, hueRotate,
+     randomFxTheme). В `planet-globe.ts` — необязательный сокет
+     `PlanetGlobeFxHooks` (поле `fx`): без плагина рендер не меняется.
+     Протокол воркера типизирован (`WorkerMessage`/`WorkerResponse`).
+  4. `/planet-test/` переведён на общее боевое ядро тонкой обёрткой
+     `site/planet-test/planet-test.ts` (planet-globe + planet-globe-fx +
+     общий `planet-globe-worker`); удалены дубли `planet-test.js`
+     (2 929 строк) и `planet-worker.js` (И-5). Маршрут `/planet-test/`
+     жив и публикуется (`verify:publish` OK). Всего за PR удалено ≈5,2 тыс.
+     строк легаси-JS, параллельных реализаций не осталось (И-5), экспорт
+     и контрактные поля сверены (И-6).
+  5. Документация (AGENTS.md, HANDOFF.md, CHANGELOG.md) и полный прогон:
+     tsc strict, ESLint site+src, `node --test` (42/42, включая
+     `tests/local-map.test.mjs`), `npm run build`, `verify:publish`,
+     `verify:contract`, `build_planet_core.mjs --check`, `check.yml` 4/4.
+- CR-01 PR 4 (21.10, [PR #137](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/137);
+  **слит в `main` 21.10**; владелец перед этим держал merge запрещённым до
+  отдельной команды — исключение из общего «создайте PR и слейте сразу» в
+  AGENTS.md). Реализация старой сессии погибла
   незакоммиченной вместе с песочницей (казус и протокол — §7 и AGENTS.md
   «Сохранность работы»); восстановлена на ветке `arena/07852140-…` по логам
   владельца (`commands.txt`, `dialog (6).txt`) цепочкой коммитов с FULL EQ
   после каждого модуля. Итоги и цифры — в `CHANGELOG.md` (запись CR-01 PR 4)
-  и в комментарии PR #137. Открытые хвосты: решение владельца по гейту 3×;
-  после merge — телефонная проверка глобуса владельцем (WebGL2 в песочнице
-  недоступен, нормали и И-1 глазами не проверялись).
+  и в комментарии PR #137. После merge — телефонная проверка глобуса
+  владельцем пройдена (скрины Redmi Note 10 от 21.10: генерация и финал
+  v=64 проходят). Открытый хвост: решение владельца по гейту 3×.
 - Этап 2 планет: данные и синхронизация (19.10, та же ветка/PR #115; владелец
   направил работу на Этап 2 до закрытия Этапа 1.5 и визуальной части G1).
   `tools/planet_generation.py` задаёт схему будущего листа `planet_generation`
