@@ -740,8 +740,9 @@
   /* LOD-пирамида детализации: выбранная в панели v — потолок, а фактический
      рендер выбирается по экранному размеру гекса. Поля планеты непрерывны и
      от v не зависят, поэтому уровни — одна и та же планета на разной сетке.
-     Это оптимизация рендера спайка, а не будущая каноническая плотность:
-     её зафиксирует Этап 3/выбор владельца, адреса ниже — адреса текущего
+     Это оптимизация рендера тестового стенда. Каноническая плотность ядра
+     v1 уже зафиксирована (Земля — v=128), но выбранный здесь потолок v
+     остаётся тестовым; адреса ниже — канонические адреса текущего
      рендер-уровня. */
   var LOD_LEVELS = [16, 24, 34, 48, 64, 80, 100, 128, 160, 192];
   var lodSel = document.getElementById('lodSel');
@@ -759,7 +760,7 @@
   var fieldCacheCells = 0;
   var FIELD_CACHE_MAX_CELLS = 1200000;
   try {
-    worker = new Worker('planet-worker.js?v=planet-spike-23');
+    worker = new Worker('planet-worker.js?v=planet-stage-3');
     worker.onmessage = onWorkerMessage;
     worker.onerror = function () {
       worker = null;
@@ -903,11 +904,13 @@
     if (renderScaleEl && renderScaleEl.textContent !== scaleText) renderScaleEl.textContent = scaleText;
   }
 
-  /* IndexedDB-кэш сеток: сетка зависит только от v, поэтому повторные
-     визиты не перестраивают её (v=192 — минус ~2.2 с). Та же база и префикс
-     формата, что в воркере; воркер — основной читатель, здесь кэш греет
-     прокси/синхронный путь и флаг haveGrid (не гонять сетку postMessage'м). */
-  var GRID_CACHE_PREFIX = 'gp-v0:';
+  /* IndexedDB-кэш сеток: сетка зависит только от v и версии ядра, поэтому
+     повторные визиты не перестраивают её. В базе лежит бинарный формат
+     GeodesicGrid cache v1, а не structured clone объекта: CRC/версия/hash
+     проверяются при чтении, битый или старый кэш просто игнорируется. Та же
+     база и префикс, что в воркере; воркер — основной читатель, здесь кэш
+     греет прокси/синхронный путь и флаг haveGrid. */
+  var GRID_CACHE_PREFIX = 'gp-v1-bin:';
   var idbPromise = null;
   function openGridDb() {
     if (idbPromise) return idbPromise;
@@ -925,8 +928,14 @@
       return new Promise(function (resolve) {
         var req = db.transaction('grids', 'readonly').objectStore('grids').get(GRID_CACHE_PREFIX + v);
         req.onsuccess = function () {
-          var g = req.result;
-          resolve(g && g.v === v && g.cellCount === 10 * v * v + 2 && g.centers ? g : null);
+          try {
+            var parsed = GeodesicGrid.deserializeGridCache(
+              req.result, GeodesicGrid.gridCacheMeta(v)
+            );
+            resolve(parsed.ok ? parsed.grid : null);
+          } catch (err) {
+            resolve(null);
+          }
         };
         req.onerror = function () { resolve(null); };
       });
@@ -935,7 +944,8 @@
   function idbPutGrid(v, grid) {
     openGridDb().then(function (db) {
       try {
-        db.transaction('grids', 'readwrite').objectStore('grids').put(grid, GRID_CACHE_PREFIX + v);
+        var bytes = GeodesicGrid.serializeGridCache(grid, GeodesicGrid.gridCacheMeta(v));
+        db.transaction('grids', 'readwrite').objectStore('grids').put(bytes, GRID_CACHE_PREFIX + v);
       } catch (err) { /* квота/приватный режим — работаем без кэша */ }
     }).catch(function () {});
   }

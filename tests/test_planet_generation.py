@@ -29,7 +29,7 @@ PLACES = [
     {"ID": "odd-1", "name": "Особое тело", "type": "other"},
 ]
 
-GOLDEN_KEY = "PG1-YMXJZFKO73QBCK35LIYZ7DQAQU"
+GOLDEN_KEY = "PG1-Y6MQHGY72BADEFMKSV5KRH5B44"
 
 
 def draft_row(**overrides):
@@ -204,6 +204,15 @@ class ValidationTest(unittest.TestCase):
         self.assert_has_error(
             [draft_row(noise_version="future-noise-v99")],
             "неподдерживаемая noise_version",
+        )
+
+    def test_grid_v1_is_default_and_legacy_v0_remains_supported(self):
+        self.assertEqual("goldberg-gp-v1", effective_for(draft_row())["grid_version"])
+        legacy = effective_for(draft_row(grid_version="goldberg-gp-v0"))
+        self.assertEqual("goldberg-gp-v0", legacy["grid_version"])
+        self.assert_has_error(
+            [draft_row(grid_version="goldberg-gp-v99")],
+            "неподдерживаемая grid_version",
         )
 
     def test_stale_key_in_draft_is_rejected(self):

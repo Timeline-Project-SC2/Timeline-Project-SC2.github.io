@@ -71,6 +71,7 @@ jobs:
         run: |
           for f in site/*.js site/shared/*.js; do node --check "$f"; done
           node tests/travel-planner.test.js
+          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs
           npm install --no-save --no-package-lock --no-audit --no-fund eslint@10 globals@17
           npx eslint site
 
@@ -88,3 +89,5 @@ jobs:
       # deterministic typed-array memory and pick on Node.js.
       - name: Mesh build / memory / pick regression bench
         run: node tools/bench_planet_ci.mjs --baseline=baseline-2026-10-20.json
+      - name: Stage 3 v128 topology / chunk / binary-cache bench
+        run: node tools/bench_planet_stage3.mjs --v=128 --reps=1 --picks=200

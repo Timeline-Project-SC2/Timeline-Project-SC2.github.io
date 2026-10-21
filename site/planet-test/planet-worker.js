@@ -10,14 +10,15 @@
    только от v, поэтому повторные визиты не перестраивают её (при v=192 это
    минус ~2.2 с). Поля держит маленький LRU-кэш воркера, поэтому частые
    переходы между планетами и LOD-уровнями не пересчитывают одни значения.
-   Ключ IndexedDB с префиксом формата: при смене формата сетки префикс
-   бампится и старый кэш игнорируется; дополнительно проверяется форма
-   объекта (v, cellCount, centers). */
+   В IndexedDB лежит бинарный GeodesicGrid cache v1. Ключ с префиксом
+   формата отделяет его от structured-clone кэша спайка; при чтении ядро
+   проверяет magic, версию, paramsHash, CRC32C и всю топологию. Битый или
+   старый кэш даёт cache miss и обычное перестроение, а не падение. */
 /* global importScripts */
 'use strict';
 
 importScripts(
-  '../shared/geodesic-grid.js?v=planet-spike-6',
+  '../shared/geodesic-grid.js?v=planet-stage-3',
   '../shared/planet-noise.js?v=planet-spike-1',
   '../shared/planet-geometry.js?v=planet-spike-1'
 );
@@ -29,7 +30,7 @@ var gridCache = new Map();
 var fieldCache = new Map();
 var fieldCacheCells = 0;
 var FIELD_CACHE_MAX_CELLS = 1200000;
-var GRID_CACHE_PREFIX = 'gp-v0:';
+var GRID_CACHE_PREFIX = 'gp-v1-bin:';
 
 function perfMark(name) {
   try { performance.mark(name); } catch (_) { /* диагностика не ломает воркер */ }
@@ -55,8 +56,14 @@ function idbGetGrid(v, cb) {
     try {
       var req = db.transaction('grids', 'readonly').objectStore('grids').get(GRID_CACHE_PREFIX + v);
       req.onsuccess = function () {
-        var g = req.result;
-        cb(g && g.v === v && g.cellCount === 10 * v * v + 2 && g.centers ? g : null);
+        try {
+          var parsed = GeodesicGrid.deserializeGridCache(
+            req.result, GeodesicGrid.gridCacheMeta(v)
+          );
+          cb(parsed.ok ? parsed.grid : null);
+        } catch (err) {
+          cb(null);
+        }
       };
       req.onerror = function () { cb(null); };
     } catch (err) {
@@ -69,7 +76,8 @@ function idbPutGrid(v, grid) {
   idbOpen(function (db) {
     if (!db) return;
     try {
-      db.transaction('grids', 'readwrite').objectStore('grids').put(grid, GRID_CACHE_PREFIX + v);
+      var bytes = GeodesicGrid.serializeGridCache(grid, GeodesicGrid.gridCacheMeta(v));
+      db.transaction('grids', 'readwrite').objectStore('grids').put(bytes, GRID_CACHE_PREFIX + v);
     } catch (err) { /* квота/приватный режим — просто без кэша */ }
   });
 }

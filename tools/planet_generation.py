@@ -41,18 +41,19 @@ DEFAULT_PLACES = ROOT / "data" / "places.csv"
 MANIFEST_FORMAT = "PG1"
 SCHEMA_VERSION = "planet-generation-schema-v1"
 
-# Текущие прототипные версии генератора. Они честно отражают состояние после
-# спайка Этапа 1: адреса ячеек ещё v0, шум — planet-noise-spike-1, а контракт
-# C100 пока v0. Боевые v1 появятся на Этапах 3–4; старые ключи при этом не
-# пересчитываются молча, а потребуют новой ревизии профиля.
+# Сетка и канонические адреса переведены на боевое ядро Этапа 3
+# (goldberg-gp-v1). Шум, география C100 и пресеты пока остаются прототипными
+# v0 до Этапа 4. Старая grid v0 поддерживается валидатором для исторических
+# черновиков, но новые draft/freeze по умолчанию получают v1. Старые ключи
+# молча не пересчитываются: смена версии требует новой ревизии профиля.
 DEFAULT_VERSIONS = {
-    "grid_version": "goldberg-gp-v0",
+    "grid_version": "goldberg-gp-v1",
     "noise_version": "planet-noise-spike-1",
     "geography_version": "c100-soft-v0",
     "preset_version": "planet-presets-v0",
 }
 SUPPORTED_VERSIONS = {
-    "grid_version": {DEFAULT_VERSIONS["grid_version"]},
+    "grid_version": {"goldberg-gp-v0", DEFAULT_VERSIONS["grid_version"]},
     "noise_version": {DEFAULT_VERSIONS["noise_version"]},
     "geography_version": {DEFAULT_VERSIONS["geography_version"]},
     "preset_version": {DEFAULT_VERSIONS["preset_version"]},
