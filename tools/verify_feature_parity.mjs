@@ -92,6 +92,11 @@ if (!existsSync(manifestPath)) {
   for (const [source, globalName] of Object.entries({
     'shared/galaxy-spiral.ts': 'GalaxySpiral',
     'shared/travel-planner.ts': 'TravelPlanner',
+    'shared/geodesic-grid.ts': 'GeodesicGrid',
+    'shared/planet-noise.ts': 'PlanetNoise',
+    'shared/planet-geography.ts': 'PlanetGeography',
+    'shared/planet-surface.ts': 'PlanetSurface',
+    'shared/planet-globe.ts': 'PlanetGlobe',
   })) {
     const text = publishedAssetText(source);
     if (!text.includes(`globalThis.${globalName} =`)) {

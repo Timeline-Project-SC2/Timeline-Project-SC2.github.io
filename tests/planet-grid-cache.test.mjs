@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 
 const grid = GeodesicGrid.build(8);
 const meta = GeodesicGrid.gridCacheMeta(grid);

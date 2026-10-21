@@ -5,8 +5,8 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
-const PlanetNoise = require('../site/shared/planet-noise.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
+const PlanetNoise = require('../site/shared/planet-noise.ts').default;
 
 const EARTH_R = 6371;
 const EARTH_AREA = 4 * Math.PI * EARTH_R * EARTH_R; // км²

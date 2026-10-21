@@ -5,7 +5,7 @@ import * as PlanetGenerationContract from '../site/shared/planet-generation-cont
 import contractJson from '../src/contracts/planet-generation-contract.json' with { type: 'json' };
 
 const require = createRequire(import.meta.url);
-const PlanetGeography = require('../site/shared/planet-geography.js');
+const PlanetGeography = require('../site/shared/planet-geography.ts').default;
 
 const GOLDEN_KEY = 'PG1-5NKT36OZBP4QPXE32CKQ5V3ANI';
 const RAW_EARTH = {

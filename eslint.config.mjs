@@ -42,9 +42,11 @@ export default [
         ...siteGlobals,
         // Имена только из TS DOM-типов: runtime-глобалов с такими именами нет,
         // а no-undef у парсера видит их как обычные идентификаторы.
+        BufferSource: 'readonly',
         CanvasImageSource: 'readonly',
         CanvasRenderingContext2DSettings: 'readonly',
-        ParentNode: 'readonly'
+        ParentNode: 'readonly',
+        Transferable: 'readonly'
       }
     },
     rules: {

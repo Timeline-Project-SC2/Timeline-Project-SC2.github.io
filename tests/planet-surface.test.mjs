@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
-const PlanetGeography = require('../site/shared/planet-geography.js');
-const PlanetSurface = require('../site/shared/planet-surface.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
+const PlanetGeography = require('../site/shared/planet-geography.ts').default;
+const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 
 const EARTH_SEED = '0123456789abcdef';
 const SMALL_INPUT = {

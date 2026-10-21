@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const GeodesicGrid = require('../site/shared/geodesic-grid.js');
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 
 function deterministicRandom(seed) {
   let state = seed >>> 0;
