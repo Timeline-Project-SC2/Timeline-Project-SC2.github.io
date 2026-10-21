@@ -29,7 +29,7 @@ PLACES = [
     {"ID": "odd-1", "name": "Особое тело", "type": "other"},
 ]
 
-GOLDEN_KEY = "PG1-Y6MQHGY72BADEFMKSV5KRH5B44"
+GOLDEN_KEY = "PG1-D6CASVACAK3WKXTHZKSFX5HLCA"
 
 
 def draft_row(**overrides):
@@ -94,6 +94,33 @@ class SchemaAndPresetsTest(unittest.TestCase):
                 profile = result.profiles[0]
                 for name in pg.GEOGRAPHY_NUMBER_FIELDS:
                     self.assertIsNotNone(profile[name], name)
+
+    def test_stage4_v1_defaults_and_canonical_earth_scale(self):
+        self.assertEqual(
+            {
+                "grid_version": "goldberg-gp-v1",
+                "noise_version": "planet-noise-simplex3d-v1",
+                "geography_version": "c100-soft-v1",
+                "preset_version": "planet-presets-v1",
+            },
+            pg.DEFAULT_VERSIONS,
+        )
+        earthlike = pg.PRESETS["earthlike_balanced"]["values"]
+        self.assertEqual(pg.D("400"), earthlike["continent_mean_cells"])
+        self.assertEqual(pg.D("6000"), earthlike["ocean_basin_mean_cells"])
+        self.assertEqual(pg.D("72"), earthlike["drainage_mean_cells"])
+        self.assertEqual(pg.D("3.0"), earthlike["coast_soft_width_cells"])
+        self.assertEqual(pg.D("4.0"), earthlike["continent_soft_width_cells"])
+        self.assertEqual(pg.D("2.0"), earthlike["biome_soft_width_cells"])
+        self.assertEqual(
+            pg.D("0.5"), pg.PRESETS["desert_dry"]["values"]["continent_variation"]
+        )
+        self.assertEqual(
+            pg.D("0.6"), pg.PRESETS["ice_world"]["values"]["continent_variation"]
+        )
+        self.assertEqual(
+            pg.D("0.4"), pg.PRESETS["barren_moon"]["values"]["continent_variation"]
+        )
 
     def test_repository_snapshot_and_template_validate(self):
         for name in ("planet-generation.csv", "planet-generation-template.csv"):
@@ -204,6 +231,18 @@ class ValidationTest(unittest.TestCase):
         self.assert_has_error(
             [draft_row(noise_version="future-noise-v99")],
             "неподдерживаемая noise_version",
+        )
+        self.assert_has_error(
+            [draft_row(noise_version="planet-noise-spike-1")],
+            "неподдерживаемая noise_version",
+        )
+        self.assert_has_error(
+            [draft_row(geography_version="c100-soft-v0")],
+            "неподдерживаемая geography_version",
+        )
+        self.assert_has_error(
+            [draft_row(preset_version="planet-presets-v0")],
+            "неподдерживаемая preset_version",
         )
 
     def test_grid_v1_is_default_and_legacy_v0_remains_supported(self):

@@ -112,7 +112,7 @@
 
 Чтобы изменить замороженную планету: верните статус в `draft` или `review`, увеличьте `profile_revision`, измените параметры, снова проверьте результат и получите новый ключ. Нельзя менять географию и оставлять старый `generation_key`.
 
-После Этапа 3 сетка по умолчанию имеет боевую версию `goldberg-gp-v1`; явная историческая `goldberg-gp-v0` валидатором ещё поддерживается. Шум, география и пресеты пока остаются `planet-noise-spike-1`, `c100-soft-v0` и `planet-presets-v0`. Контур можно проверять draft-строками, но массово замораживать боевые планеты следует после географии и перекалибровки пресетов v1 на Этапе 4.
+После Этапов 3–4 инструмент по умолчанию выдаёт боевые версии `grid_version=goldberg-gp-v1`, `noise_version=planet-noise-simplex3d-v1`, `geography_version=c100-soft-v1` и `preset_version=planet-presets-v1`. Явная историческая `goldberg-gp-v0` для сетки валидатором ещё поддерживается как legacy, но прототипные шум/география/пресеты v0 больше не принимаются и не считаются синонимами v1. Пресеты v1 перекалиброваны под каноническую Землю v=128; например, у `earthlike_balanced` теперь `continent_mean_cells=400`, `ocean_basin_mean_cells=6000`, `drainage_mean_cells=72`. Вручную эти версии и ключ по-прежнему не заполняют. Боевой страницы планеты пока нет, поэтому массовую заморозку профилей всё равно не начинают до визуальной проверки на следующих этапах.
 
 ### Если синхронизация упала на профиле
 
@@ -176,4 +176,6 @@
 - Валидатор и инструмент ключей: [`tools/planet_generation.py`](../tools/planet_generation.py)
 - Скрипт синхронизации: [`tools/sync.py`](../tools/sync.py)
 - Отчёт Этапа 2: [`docs/stages/stage-2-data-and-sync.md`](stages/stage-2-data-and-sync.md)
+- Отчёт Этапа 3: [`docs/stages/stage-3-geodesic-core.md`](stages/stage-3-geodesic-core.md)
+- Отчёт Этапа 4: [`docs/stages/stage-4-fields-c100-soft.md`](stages/stage-4-fields-c100-soft.md)
 - Workflow: [`.github/workflows/sync.yml`](../.github/workflows/sync.yml)

@@ -71,7 +71,7 @@ jobs:
         run: |
           for f in site/*.js site/shared/*.js; do node --check "$f"; done
           node tests/travel-planner.test.js
-          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs
+          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-geography.test.mjs
           npm install --no-save --no-package-lock --no-audit --no-fund eslint@10 globals@17
           npx eslint site
 
@@ -83,6 +83,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
       # CPU-only regression gate. Frame time is intentionally not measured
       # in CI: hosted runners have no representative GPU, and SwiftShader
       # pacing would create false failures. The bench covers mesh build,
@@ -91,3 +94,5 @@ jobs:
         run: node tools/bench_planet_ci.mjs --baseline=baseline-2026-10-20.json
       - name: Stage 3 v128 topology / chunk / binary-cache bench
         run: node tools/bench_planet_stage3.mjs --v=128 --reps=1 --picks=200
+      - name: Stage 4 v128 fields / C100-soft G2 bench
+        run: node tools/bench_planet_stage4.mjs --seeds=5
