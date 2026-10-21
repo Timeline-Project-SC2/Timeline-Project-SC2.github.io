@@ -5,6 +5,8 @@
  *   - все маршруты на месте и непустые;
  *   - build-manifest.json согласован с файлами;
  *   - HTML ссылается только на существующие локальные JS/CSS;
+ *   - все new Worker()/importScripts() внутри опубликованных JS ведут на
+ *     существующие hashed JS-файлы публикации;
  *   - в публикации не осталось build-token/placeholder;
  *   - в исходных HTML и worker-подключениях нет ручных статических ?v=.
  */
@@ -131,6 +133,51 @@ if (minimalHtml.includes('id="coordinateToggle"') || minimalHtml.includes('id="g
 }
 if (!minimalHtml.includes('<body class="minimal-mode">')) fail('minimal потерял body class варианта');
 
+function publishRelative(fullPath) {
+  return relative(publishRoot, fullPath).split('\\').join('/');
+}
+
+function checkPublishedScriptReference(ref, fromPublishPath, kind) {
+  const label = `${kind} ${ref} в ${fromPublishPath}`;
+  if (isExternal(ref)) {
+    fail(`не локальная worker-ссылка: ${label}`);
+    return;
+  }
+  const clean = stripQuery(ref);
+  if (!clean.endsWith('.js')) {
+    fail(`worker-ссылка не на JS: ${label}`);
+    return;
+  }
+  if (!/-[0-9a-f]{10}\.js$/.test(clean)) fail(`worker-ссылка без контент-хэша: ${label}`);
+  const target = publishPathForRef(ref, fromPublishPath).split('\\').join('/');
+  if (target === '..' || target.startsWith('../')) {
+    fail(`worker-ссылка выходит за пределы публикации: ${label}`);
+    return;
+  }
+  if (!existsSync(resolve(publishRoot, target))) {
+    fail(`битая worker-ссылка: ${label} -> ${target}`);
+  }
+}
+
+for (const fullPath of walk(publishRoot)) {
+  if (/\.(?:mts|ts)$/.test(fullPath)) {
+    fail(`сырой TypeScript в публикации вместо собранного JS: ${publishRelative(fullPath)}`);
+    continue;
+  }
+  if (!fullPath.endsWith('.js')) continue;
+  const publishPath = publishRelative(fullPath);
+  const text = readFileSync(fullPath, 'utf8');
+
+  for (const match of text.matchAll(/\bnew\s+Worker\s*\(\s*(['"])([^'"]+)\1/g)) {
+    checkPublishedScriptReference(match[2], publishPath, 'new Worker()');
+  }
+  for (const match of text.matchAll(/\bimportScripts\s*\(([^)]*)\)/gs)) {
+    for (const argMatch of (match[1] || '').matchAll(/(['"])([^'"]+)\1/g)) {
+      checkPublishedScriptReference(argMatch[2], publishPath, 'importScripts()');
+    }
+  }
+}
+
 for (const fullPath of walk(publishRoot)) {
   if (!/\.(?:css|html|js|json)$/.test(fullPath)) continue;
   const text = readFileSync(fullPath, 'utf8');
@@ -145,10 +192,10 @@ for (const fullPath of walk(siteRoot)) {
     const text = readFileSync(fullPath, 'utf8');
     if (text.includes('?v=')) fail(`ручной ?v= в HTML: ${relative(root, fullPath)}`);
   }
-  if (extension === '.js') {
+  if (extension === '.js' || extension === '.ts' || extension === '.mts') {
     const text = readFileSync(fullPath, 'utf8');
-    if (/\.js\?v=/.test(text) || /new\s+Worker\([^)]*\?v=/.test(text) || /importScripts\([^)]*\?v=/s.test(text)) {
-      fail(`ручной ?v= в JS/worker-подключении: ${relative(root, fullPath)}`);
+    if (/\.(?:js|mts|ts)\?v=/.test(text) || /new\s+Worker\([^)]*\?v=/.test(text) || /importScripts\([^)]*\?v=/s.test(text)) {
+      fail(`ручной ?v= в JS/TS worker-подключении: ${relative(root, fullPath)}`);
     }
   }
 }

@@ -47,6 +47,7 @@ jobs:
           npm ci
           npm run build
           npm run verify:publish
+          npm run verify:contract
           test ! -e .publish/assets/src
           du -sh .publish/* | sort -h
           # Маршруты и данные на месте; hashed JS/CSS/worker проверяет
@@ -76,7 +77,7 @@ jobs:
           npm run typecheck
           for f in site/*.js site/shared/*.js; do node --check "$f"; done
           node tests/travel-planner.test.js
-          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs tests/planet-globe.test.mjs
+          node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-generation-contract.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs tests/planet-globe.test.mjs
           npm install --no-save --no-package-lock --no-audit --no-fund eslint@10 globals@17
           npx eslint site
 

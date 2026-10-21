@@ -187,6 +187,7 @@ site/                  ← вход Vite-сборки; публикуется с
                        galaxy-spiral.js + все общие CSS
 templates/atlas-shell.html общая разметка sector/minimal (варианты задаёт vite.config.mts)
 vite.config.mts, tsconfig.json строгая TS-конфигурация и сборщик публикации .publish/
+src/contracts/planet-generation-contract.json единый контракт planet_generation для Python и TS
 
 data/                  CSV и JSON; пишут tools/sync.py и tools/build_assets.py;
                        planet-generation.csv — пока пустой снимок профилей Этапа 2
@@ -199,7 +200,7 @@ docs/, tools/, .github/ — служебное
 - Деплой: `pages.yml` → `setup-python` (3.12) → Pillow из `tools/requirements.txt` → `tools/build_assets.py` →
   `setup-node` → `npm ci` → `npm run build` (Vite собирает маршруты, hashed JS/CSS/worker, `data/` и
   `assets/` минус `assets/src` в `.publish`, пишет `build-manifest.json`) → `npm run verify:publish`
-  → `upload-pages-artifact`.
+  → `npm run verify:contract` → `upload-pages-artifact`.
 - Проверка PR: `check.yml` — те же шаги сборки на `ubuntu-24.04` и `ubuntu-26.04` плюс
   `node --check` и ESLint (`no-undef`), без публикации.
 - **Pages настроен как GitHub Actions** (пользователь переключил в Settings). Если вернуть
@@ -403,6 +404,7 @@ JS/CSS/worker файлу публикации имя с контент-хэше�
 npm ci                                          # Vite + TypeScript (node_modules/ в .gitignore)
 npm run build                                   # tsc --noEmit + Vite -> .publish/
 npm run verify:publish                          # маршруты, manifest и hashed-ассеты
+npm run verify:contract                         # Python ↔ TypeScript: пресеты, манифест и PG1
 for f in site/*.js site/shared/*.js; do node --check "$f"; done   # синтаксис JS
 npm install --no-save --no-package-lock eslint@10 globals@17
 npx eslint site                                 # необъявленные переменные (eslint.config.mjs)

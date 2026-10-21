@@ -21,12 +21,14 @@
 importScripts(
   '../shared/geodesic-grid.js',
   '../shared/planet-noise.js',
+  '../shared/planet-generation-contract.js',
   '../shared/planet-geography.js',
   '../shared/planet-surface.js',
   '../shared/planet-globe.js'
 );
 
 var GeodesicGrid = self.GeodesicGrid;
+var PlanetGenerationContract = self.PlanetGenerationContract;
 var PlanetGeography = self.PlanetGeography;
 var PlanetSurface = self.PlanetSurface;
 var PlanetGlobe = self.PlanetGlobe;
@@ -89,7 +91,29 @@ function progress(token, requestId, stage, fraction, label) {
   });
 }
 
+function assertGenerationKey(inputProfile) {
+  if (!PlanetGenerationContract ||
+      typeof PlanetGenerationContract.verifyGenerationKey !== 'function') {
+    throw new Error('PlanetGenerationContract.verifyGenerationKey недоступна в worker');
+  }
+  var verification = PlanetGenerationContract.verifyGenerationKey(inputProfile || {});
+  if (!verification.ok) {
+    var err = new Error(
+      'Проверка generation_key не пройдена: ' +
+      (verification.reason || 'PG1 не совпал') +
+      (verification.expectedKey ? '; ожидался ' + verification.expectedKey : '')
+    );
+    err.code = 'GENERATION_KEY_MISMATCH';
+    err.generationKeyVerification = verification;
+    throw err;
+  }
+  return verification;
+}
+
 function scaledRenderProfile(inputProfile, renderV) {
+  // Frozen-ключ проверяется по исходному каноническому профилю до
+  // нормализации и LOD-масштабирования «ячеечных» норм под renderV.
+  var generationKeyVerification = assertGenerationKey(inputProfile || {});
   var profile = PlanetSurface.normalizeSurfaceProfile(inputProfile || {});
   var canonicalV = PlanetGeography.expectedFrequency(profile.radiusKm);
   var ratio = renderV / canonicalV;
@@ -107,6 +131,7 @@ function scaledRenderProfile(inputProfile, renderV) {
     requestProfile: inputProfile || {},
     canonical: profile,
     render: scaled,
+    generationKeyVerification: generationKeyVerification,
     canonicalV: canonicalV,
     renderV: renderV,
     ratio: ratio,
@@ -150,6 +175,9 @@ function surfaceSummary(scaledInfo, surface, geometry, timings) {
     presetId: surface.profile.presetId,
     surfaceClass: surface.profile.surfaceClass,
     masterSeedHex: surface.profile.masterSeedHex,
+    generationKey: scaledInfo.requestProfile.generationKey ||
+      scaledInfo.requestProfile.generation_key || null,
+    generationKeyVerification: scaledInfo.generationKeyVerification,
     radiusKm: surface.profile.radiusKm,
     canonicalV: scaledInfo.canonicalV,
     renderV: scaledInfo.renderV,

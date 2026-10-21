@@ -4,10 +4,12 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "verify:contract": "node tools/verify_planet_contract_cross.mjs",
     "verify:publish": "node tools/verify_feature_parity.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
   }

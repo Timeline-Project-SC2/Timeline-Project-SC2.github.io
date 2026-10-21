@@ -8,16 +8,17 @@
  *   node tools/bench_planet_stage5.mjs --mode=ensemble --seeds=30 \
  *     --preset=earthlike_balanced --output=/tmp/stage5-earthlike.json
  *
- * Пресеты читаются из tools/planet_generation.py через его CLI — того же
- * единственного источника значений, что и в Этапе 4. Отдельные поля можно
- * переопределить для калибровки:
+ * Пресеты импортируются из TypeScript-модуля контракта — того же канонического
+ * JSON, что читают Python-контракт и JS-генератор; Python-child_process здесь
+ * больше нет. Отдельные поля можно переопределить для калибровки:
  *   --set=drainage_mean_cells=72 --set=biome_soft_width_cells=2
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
+
+import { PRESETS as CONTRACT_PRESETS, getPresetGeographyValues } from '../site/shared/planet-generation-contract.ts';
 
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.js');
@@ -81,13 +82,15 @@ function parseArgs(argv) {
 }
 
 function loadPresets() {
-  const python = process.env.PYTHON || 'python3';
-  const stdout = execFileSync(python, ['tools/planet_generation.py', 'presets', '--json'], {
-    cwd: new URL('..', import.meta.url),
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return JSON.parse(stdout);
+  return Object.fromEntries(Object.entries(CONTRACT_PRESETS).map(([presetId, preset]) => [
+    presetId,
+    {
+      description: preset.description,
+      palette_id: preset.palette_id,
+      expected_surface_classes: [...preset.expected_surface_classes],
+      values: getPresetGeographyValues(presetId),
+    },
+  ]));
 }
 
 function seedFor(presetId, index) {

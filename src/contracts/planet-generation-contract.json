@@ -1,0 +1,412 @@
+{
+  "contract_id": "planet-generation-contract-v1",
+  "manifest_format": "PG1",
+  "schema_version": "planet-generation-schema-v1",
+  "fields": [
+    "place_id",
+    "profile_status",
+    "profile_revision",
+    "preset_id",
+    "surface_class",
+    "radius_km",
+    "axial_tilt_deg",
+    "rotation_period_hours",
+    "palette_id",
+    "master_seed_hex",
+    "grid_version",
+    "noise_version",
+    "geography_version",
+    "preset_version",
+    "generation_key",
+    "approved_by",
+    "approved_at",
+    "continent_mean_cells",
+    "continent_variation",
+    "ocean_basin_mean_cells",
+    "drainage_mean_cells",
+    "ocean_pctl",
+    "shelf_below_pctl",
+    "shelf_above_pctl",
+    "highland_land_pctl",
+    "mountain_land_pctl",
+    "arid_land_pctl",
+    "wet_land_pctl",
+    "cold_pctl",
+    "hot_pctl",
+    "stream_flow_pctl",
+    "major_river_flow_pctl",
+    "coast_soft_width_cells",
+    "continent_soft_width_cells",
+    "biome_soft_width_cells",
+    "transition_entropy_pctl",
+    "notes_admin"
+  ],
+  "profile_statuses": [
+    "draft",
+    "review",
+    "frozen",
+    "disabled"
+  ],
+  "surface_classes": [
+    "terrestrial",
+    "ocean",
+    "desert",
+    "ice",
+    "volcanic",
+    "barren",
+    "gas_giant",
+    "no_surface"
+  ],
+  "known_place_types": [
+    "planet",
+    "moon",
+    "asteroid",
+    "station",
+    "platform",
+    "other"
+  ],
+  "default_versions": {
+    "grid_version": "goldberg-gp-v1",
+    "noise_version": "planet-noise-simplex3d-v1",
+    "geography_version": "c100-soft-v2",
+    "preset_version": "planet-presets-v1"
+  },
+  "supported_versions": {
+    "grid_version": [
+      "goldberg-gp-v0",
+      "goldberg-gp-v1"
+    ],
+    "noise_version": [
+      "planet-noise-simplex3d-v1"
+    ],
+    "geography_version": [
+      "c100-soft-v1",
+      "c100-soft-v2"
+    ],
+    "preset_version": [
+      "planet-presets-v1"
+    ]
+  },
+  "version_fields": [
+    "grid_version",
+    "noise_version",
+    "geography_version",
+    "preset_version"
+  ],
+  "geography_number_fields": [
+    "continent_mean_cells",
+    "continent_variation",
+    "ocean_basin_mean_cells",
+    "drainage_mean_cells",
+    "ocean_pctl",
+    "shelf_below_pctl",
+    "shelf_above_pctl",
+    "highland_land_pctl",
+    "mountain_land_pctl",
+    "arid_land_pctl",
+    "wet_land_pctl",
+    "cold_pctl",
+    "hot_pctl",
+    "stream_flow_pctl",
+    "major_river_flow_pctl",
+    "coast_soft_width_cells",
+    "continent_soft_width_cells",
+    "biome_soft_width_cells",
+    "transition_entropy_pctl"
+  ],
+  "geography_number_field_groups": {
+    "target_scale": [
+      "continent_mean_cells",
+      "continent_variation",
+      "ocean_basin_mean_cells",
+      "drainage_mean_cells"
+    ],
+    "percentile": [
+      "ocean_pctl",
+      "shelf_below_pctl",
+      "shelf_above_pctl",
+      "highland_land_pctl",
+      "mountain_land_pctl",
+      "arid_land_pctl",
+      "wet_land_pctl",
+      "cold_pctl",
+      "hot_pctl",
+      "stream_flow_pctl",
+      "major_river_flow_pctl"
+    ],
+    "soft_width": [
+      "coast_soft_width_cells",
+      "continent_soft_width_cells",
+      "biome_soft_width_cells"
+    ],
+    "transition_entropy": [
+      "transition_entropy_pctl"
+    ]
+  },
+  "number_precision": {
+    "radius_km": 3,
+    "axial_tilt_deg": 6,
+    "rotation_period_hours": 6,
+    "continent_mean_cells": 3,
+    "continent_variation": 6,
+    "ocean_basin_mean_cells": 3,
+    "drainage_mean_cells": 3,
+    "ocean_pctl": 3,
+    "shelf_below_pctl": 3,
+    "shelf_above_pctl": 3,
+    "highland_land_pctl": 3,
+    "mountain_land_pctl": 3,
+    "arid_land_pctl": 3,
+    "wet_land_pctl": 3,
+    "cold_pctl": 3,
+    "hot_pctl": 3,
+    "stream_flow_pctl": 3,
+    "major_river_flow_pctl": 3,
+    "coast_soft_width_cells": 6,
+    "continent_soft_width_cells": 6,
+    "biome_soft_width_cells": 6,
+    "transition_entropy_pctl": 3
+  },
+  "limits": {
+    "radius_km_max": "1000000000",
+    "rotation_period_hours_max": "1000000000",
+    "cell_target_max": "1000000000",
+    "continent_variation_max": "1000000",
+    "soft_width_cells_max": "1000000"
+  },
+  "default_render": {
+    "axial_tilt_deg": "23.44",
+    "rotation_period_hours": "24"
+  },
+  "presets": {
+    "earthlike_balanced": {
+      "description": "Сбалансированный землеподобный мир",
+      "palette_id": "earthlike",
+      "expected_surface_classes": [
+        "terrestrial"
+      ],
+      "values": {
+        "continent_mean_cells": "400",
+        "continent_variation": "0.8",
+        "ocean_basin_mean_cells": "6000",
+        "drainage_mean_cells": "72",
+        "ocean_pctl": "70",
+        "shelf_below_pctl": "67",
+        "shelf_above_pctl": "73",
+        "highland_land_pctl": "75",
+        "mountain_land_pctl": "92",
+        "arid_land_pctl": "25",
+        "wet_land_pctl": "75",
+        "cold_pctl": "20",
+        "hot_pctl": "80",
+        "stream_flow_pctl": "90",
+        "major_river_flow_pctl": "99",
+        "coast_soft_width_cells": "3.0",
+        "continent_soft_width_cells": "4.0",
+        "biome_soft_width_cells": "2.0",
+        "transition_entropy_pctl": "90"
+      }
+    },
+    "earthlike_archipelago": {
+      "description": "Землеподобный мир с фрагментированной сушей и архипелагами",
+      "palette_id": "archipelago",
+      "expected_surface_classes": [
+        "ocean",
+        "terrestrial"
+      ],
+      "values": {
+        "continent_mean_cells": "180",
+        "continent_variation": "1.0",
+        "ocean_basin_mean_cells": "4400",
+        "drainage_mean_cells": "48",
+        "ocean_pctl": "76",
+        "shelf_below_pctl": "72",
+        "shelf_above_pctl": "80",
+        "highland_land_pctl": "78",
+        "mountain_land_pctl": "94",
+        "arid_land_pctl": "22",
+        "wet_land_pctl": "72",
+        "cold_pctl": "20",
+        "hot_pctl": "78",
+        "stream_flow_pctl": "88",
+        "major_river_flow_pctl": "98.5",
+        "coast_soft_width_cells": "2.4",
+        "continent_soft_width_cells": "2.8",
+        "biome_soft_width_cells": "1.6",
+        "transition_entropy_pctl": "88"
+      }
+    },
+    "ocean_world": {
+      "description": "Мир с преобладанием океана",
+      "palette_id": "ocean",
+      "expected_surface_classes": [
+        "ocean",
+        "terrestrial"
+      ],
+      "values": {
+        "continent_mean_cells": "100",
+        "continent_variation": "1.1",
+        "ocean_basin_mean_cells": "10000",
+        "drainage_mean_cells": "32",
+        "ocean_pctl": "90",
+        "shelf_below_pctl": "87",
+        "shelf_above_pctl": "93",
+        "highland_land_pctl": "80",
+        "mountain_land_pctl": "96",
+        "arid_land_pctl": "10",
+        "wet_land_pctl": "55",
+        "cold_pctl": "25",
+        "hot_pctl": "75",
+        "stream_flow_pctl": "92",
+        "major_river_flow_pctl": "99",
+        "coast_soft_width_cells": "4.0",
+        "continent_soft_width_cells": "2.0",
+        "biome_soft_width_cells": "2.4",
+        "transition_entropy_pctl": "90"
+      }
+    },
+    "desert_dry": {
+      "description": "Сухой пустынный мир",
+      "palette_id": "desert",
+      "expected_surface_classes": [
+        "barren",
+        "desert"
+      ],
+      "values": {
+        "continent_mean_cells": "560",
+        "continent_variation": "0.5",
+        "ocean_basin_mean_cells": "2000",
+        "drainage_mean_cells": "120",
+        "ocean_pctl": "25",
+        "shelf_below_pctl": "22",
+        "shelf_above_pctl": "28",
+        "highland_land_pctl": "70",
+        "mountain_land_pctl": "90",
+        "arid_land_pctl": "70",
+        "wet_land_pctl": "92",
+        "cold_pctl": "15",
+        "hot_pctl": "55",
+        "stream_flow_pctl": "97",
+        "major_river_flow_pctl": "99.5",
+        "coast_soft_width_cells": "1.6",
+        "continent_soft_width_cells": "5.0",
+        "biome_soft_width_cells": "1.4",
+        "transition_entropy_pctl": "85"
+      }
+    },
+    "ice_world": {
+      "description": "Холодный ледяной мир",
+      "palette_id": "ice",
+      "expected_surface_classes": [
+        "barren",
+        "ice"
+      ],
+      "values": {
+        "continent_mean_cells": "480",
+        "continent_variation": "0.6",
+        "ocean_basin_mean_cells": "4800",
+        "drainage_mean_cells": "80",
+        "ocean_pctl": "55",
+        "shelf_below_pctl": "51",
+        "shelf_above_pctl": "59",
+        "highland_land_pctl": "70",
+        "mountain_land_pctl": "90",
+        "arid_land_pctl": "35",
+        "wet_land_pctl": "80",
+        "cold_pctl": "70",
+        "hot_pctl": "95",
+        "stream_flow_pctl": "94",
+        "major_river_flow_pctl": "99",
+        "coast_soft_width_cells": "2.4",
+        "continent_soft_width_cells": "4.0",
+        "biome_soft_width_cells": "1.6",
+        "transition_entropy_pctl": "88"
+      }
+    },
+    "volcanic_active": {
+      "description": "Активный вулканический мир",
+      "palette_id": "volcanic",
+      "expected_surface_classes": [
+        "barren",
+        "volcanic"
+      ],
+      "values": {
+        "continent_mean_cells": "280",
+        "continent_variation": "1.2",
+        "ocean_basin_mean_cells": "3600",
+        "drainage_mean_cells": "56",
+        "ocean_pctl": "45",
+        "shelf_below_pctl": "41",
+        "shelf_above_pctl": "49",
+        "highland_land_pctl": "60",
+        "mountain_land_pctl": "82",
+        "arid_land_pctl": "35",
+        "wet_land_pctl": "80",
+        "cold_pctl": "10",
+        "hot_pctl": "55",
+        "stream_flow_pctl": "94",
+        "major_river_flow_pctl": "99",
+        "coast_soft_width_cells": "1.4",
+        "continent_soft_width_cells": "2.4",
+        "biome_soft_width_cells": "1.4",
+        "transition_entropy_pctl": "92"
+      }
+    },
+    "barren_moon": {
+      "description": "Безводная луна или мёртвый мир",
+      "palette_id": "barren",
+      "expected_surface_classes": [
+        "barren"
+      ],
+      "values": {
+        "continent_mean_cells": "720",
+        "continent_variation": "0.4",
+        "ocean_basin_mean_cells": "6000",
+        "drainage_mean_cells": "200",
+        "ocean_pctl": "0",
+        "shelf_below_pctl": "0",
+        "shelf_above_pctl": "0",
+        "highland_land_pctl": "65",
+        "mountain_land_pctl": "88",
+        "arid_land_pctl": "90",
+        "wet_land_pctl": "99",
+        "cold_pctl": "50",
+        "hot_pctl": "50",
+        "stream_flow_pctl": "100",
+        "major_river_flow_pctl": "100",
+        "coast_soft_width_cells": "0",
+        "continent_soft_width_cells": "2.0",
+        "biome_soft_width_cells": "1.0",
+        "transition_entropy_pctl": "80"
+      }
+    },
+    "gas_giant_bands": {
+      "description": "Газовый гигант: только внешний облачный слой, без поверхности",
+      "palette_id": "gas_giant",
+      "expected_surface_classes": [
+        "gas_giant"
+      ],
+      "values": {
+        "continent_mean_cells": "1",
+        "continent_variation": "0",
+        "ocean_basin_mean_cells": "1",
+        "drainage_mean_cells": "1",
+        "ocean_pctl": "0",
+        "shelf_below_pctl": "0",
+        "shelf_above_pctl": "0",
+        "highland_land_pctl": "100",
+        "mountain_land_pctl": "100",
+        "arid_land_pctl": "0",
+        "wet_land_pctl": "100",
+        "cold_pctl": "0",
+        "hot_pctl": "100",
+        "stream_flow_pctl": "100",
+        "major_river_flow_pctl": "100",
+        "coast_soft_width_cells": "0",
+        "continent_soft_width_cells": "0",
+        "biome_soft_width_cells": "0",
+        "transition_entropy_pctl": "0"
+      }
+    }
+  }
+}
