@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Боевой глобус планеты — TIMELINE PROJECT</title>
+<meta name="description" content="WebGL2-глобус TIMELINE PROJECT: настоящие биомы, реки, озёра и континенты c100-soft-v2 на гексагональной сетке Голдберга.">
+<link rel="stylesheet" href="planet-globe.css?v=planet-stage-6">
+</head>
+<body>
+  <main class="stage" aria-label="Глобус планеты">
+    <canvas id="globe" tabindex="0" role="img" aria-label="3D-глобус планеты с гексагональными ячейками. Перетаскивайте для вращения, колесо или pinch — масштаб, клик выбирает ячейку."></canvas>
+    <div id="fallbackWrap" class="fallback" hidden>
+      <h2>WebGL2 недоступен — 2D-развёртка планеты</h2>
+      <canvas id="fallbackCanvas" width="720" height="360" aria-label="2D-развёртка планеты"></canvas>
+      <p>Генерация и статистика работают; 3D, вращение и клик по ячейке в fallback-режиме недоступны.</p>
+    </div>
+    <div class="stars" aria-hidden="true"></div>
+  </main>
+
+  <aside class="panel" aria-label="Параметры планеты">
+    <div class="panel-head">
+      <div>
+        <p class="kicker">TIMELINE PROJECT · ЭТАП 6</p>
+        <h1>Боевой глобус планеты</h1>
+      </div>
+      <button id="panelToggle" class="icon-btn" type="button" aria-expanded="true" aria-controls="panelBody" title="Свернуть панель">−</button>
+    </div>
+
+    <div id="panelBody" class="panel-body">
+      <p class="lead">Первая живая планета полной цепочки: сетка Голдберга, поля, C100-континенты, реки, озёра и мягкие биомы — всё настоящее, не картинка-заглушка.</p>
+
+      <div class="field">
+        <label for="presetSel">Тип мира</label>
+        <select id="presetSel"><option>загрузка пресетов…</option></select>
+        <p id="presetInfo" class="hint"></p>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="planetId">ID планеты</label>
+          <input id="planetId" type="text" value="korhal-iv" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="surfaceClassSel">Класс поверхности</label>
+          <select id="surfaceClassSel">
+            <option value="terrestrial">terrestrial</option>
+            <option value="ocean">ocean</option>
+            <option value="desert">desert</option>
+            <option value="ice">ice</option>
+            <option value="volcanic">volcanic</option>
+            <option value="barren">barren</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field seed-field">
+        <label for="seedText">seed планеты</label>
+        <div class="seed-line">
+          <input id="seedText" type="text" value="korhal-iv" autocomplete="off" spellcheck="false">
+          <button id="randomSeedBtn" type="button" title="Случайный 64-битный seed">🎲</button>
+        </div>
+        <p class="hint">Можно текст или ровно 16 hex-цифр. Итоговый master seed показывается в статистике.</p>
+      </div>
+
+      <div class="field">
+        <label for="radiusKm">Радиус, км</label>
+        <input id="radiusKm" type="number" min="300" max="30000" step="10" value="6371">
+        <output id="radiusOut" class="hint"></output>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="qualitySel">Детализация</label>
+          <select id="qualitySel">
+            <option value="auto" selected>авто (телефон легче)</option>
+            <option value="final">финал 100%</option>
+            <option value="balanced">75%</option>
+            <option value="performance">50%</option>
+            <option value="proxy">только быстрый прокси</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="colorModeSel">Слой карты</label>
+          <select id="colorModeSel">
+            <option value="biome" selected>Биомы</option>
+            <option value="rivers">Реки и озёра</option>
+            <option value="elevation">Высота</option>
+            <option value="moisture">Влажность</option>
+            <option value="temperature">Температура</option>
+            <option value="continents">Континенты C100</option>
+            <option value="drainage">Дренажные регионы</option>
+            <option value="mountains">Горы и швы</option>
+          </select>
+        </div>
+      </div>
+      <output id="qualityOut" class="hint block"></output>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="reliefSel">Рельеф</label>
+          <select id="reliefSel">
+            <option value="0">плоская сфера</option>
+            <option value="0.5">половинный</option>
+            <option value="1" selected>обычный</option>
+            <option value="1.6">усиленный</option>
+          </select>
+        </div>
+        <label class="check"><input id="autoProxy" type="checkbox" checked> сначала быстрый прокси, потом финал</label>
+      </div>
+
+      <div class="actions">
+        <button id="generateBtn" class="primary" type="button">Сгенерировать планету</button>
+        <button id="nextPlanetBtn" type="button">Следующая планета →</button>
+        <button id="cycleBtn" type="button" aria-pressed="false">автосмена планет (стресс)</button>
+      </div>
+      <div class="actions small-actions">
+        <button id="bordersBtn" type="button" aria-pressed="true">границы</button>
+        <button id="spinBtn" type="button" aria-pressed="true">вращение</button>
+        <button id="atmosphereBtn" type="button" aria-pressed="true">атмосфера</button>
+        <button id="resetViewBtn" type="button">сброс вида</button>
+        <button id="clearCacheBtn" type="button" title="Очистить IndexedDB-кэш сеток">кэш сеток</button>
+      </div>
+
+      <h2>Выбранная ячейка</h2>
+      <div id="selectionBox" class="selection"></div>
+
+      <h2>Сводка планеты</h2>
+      <pre id="statsBox" class="stats">Загрузка пресетов…</pre>
+
+      <h2>Смены планет в сессии</h2>
+      <pre id="switchHistory" class="stats compact"></pre>
+
+      <p class="note">
+        <b>Как смотреть:</b> дождитесь прокси, покрутите планету, затем дождитесь финала.
+        Клик/касание выбирает гекс. Слой «Реки и озёра» показывает гидрологию Этапа 5,
+        «Континенты» — идентичности C100, «Дренажные регионы» — целевые бассейны стока.
+        Это ещё не страница планеты из цепочки галактика → сектор → система: интеграция
+        с картой и профилями из таблицы — следующий этап.
+      </p>
+    </div>
+  </aside>
+
+  <div id="loading" class="loading" role="status" aria-live="polite" hidden>
+    <div class="loading-card">
+      <div class="loading-top"><b id="loadingTitle">Генерация планеты</b><span id="loadingPct">0%</span></div>
+      <div class="progress"><span id="loadingBar"></span></div>
+      <p id="loadingLabel">Подготовка…</p>
+    </div>
+  </div>
+
+  <footer class="hud" aria-label="Производительность">
+    <div>fps <i id="fps">—</i> · ячеек <i id="cells">—</i> · треугольников <i id="tris">—</i> · LOD <i id="lodHud">—</i> · рендер <i id="renderScale">—</i> · heap <i id="heap">n/a</i></div>
+    <div>frame 10s, мс: p50 <i id="frameP50">—</i> · p95 <i id="frameP95">—</i> · p99 <i id="frameP99">—</i> · &gt;50 <i id="frameOver50">0</i> · &gt;100 <i id="frameOver100">0</i></div>
+    <div id="hoverLine"></div>
+    <div id="statusLine" role="status"></div>
+  </footer>
+
+  <script src="../shared/planet-globe.js?v=planet-stage-6"></script>
+  <script src="planet-globe.js?v=planet-stage-6"></script>
+</body>
+</html>
