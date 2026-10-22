@@ -507,7 +507,7 @@ export class StructureRenderer {
     const gl = this.gl;
     const shader = gl.createShader(type);
     if (!shader) throw new Error(`LocalMapRenderer: не удалось создать шейдер ${label}`);
-    gl.shaderSource(shader, source);
+    gl.shaderSource(shader, source.trimStart());
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
       const log = gl.getShaderInfoLog(shader);

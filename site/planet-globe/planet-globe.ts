@@ -331,7 +331,7 @@ function multiplyLocalMat4(a: Float32Array, b: Float32Array): Float32Array {
 function createLocalShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
   if (!shader) throw new Error('WebGL2 не создал шейдер локальной карты.');
-  gl.shaderSource(shader, source);
+  gl.shaderSource(shader, source.trimStart());
   gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
     const log = gl.getShaderInfoLog(shader) || 'неизвестная ошибка компиляции';
@@ -381,6 +381,9 @@ function compileLocalMapPrograms(gl: WebGL2RenderingContext): LocalMapPrograms {
 function setLocalMapStatus(text: string, kind: string): void {
   els.localMapStatus.textContent = text;
   els.localMapStatus.dataset.kind = kind;
+  if (kind === 'error' || !localMapActive) {
+    setStatus(text, kind);
+  }
 }
 
 function initializeLocalMapRenderer(): boolean {
@@ -449,7 +452,10 @@ function resizeLocalMapCanvas(): void {
 function resetLocalCamera(): void {
   localCameraYaw = -0.65;
   localCameraPitch = 0.82;
-  localCameraTarget = [0, 0, 20];
+  const hf = localMapData?.heightfield;
+  const res = Math.round(Math.sqrt(hf?.length || 0));
+  const centerZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
+  localCameraTarget = [0, 0, Number.isFinite(centerZ) ? centerZ + 12 : 20];
   const rect = els.localMapCanvas.getBoundingClientRect();
   const aspect = rect.height > 0 ? rect.width / rect.height : 1;
   const fit = Math.max(0.45, Math.min(1, aspect || 1));
@@ -808,6 +814,7 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
     updateLocalMapUrl(patchReady, scale);
     document.body.classList.add('local-map-active');
     els.localMapStage.hidden = false;
+    resizeLocalMapCanvas();
     resetLocalCamera();
     els.localMapStage.classList.remove('is-active');
     void els.localMapStage.offsetWidth;
@@ -1225,6 +1232,12 @@ function onWorkerMessage(event: MessageEvent): void {
 
 function handleReady(msg: WorkerReadyResponse): void {
   const request = activeRequest;
+  if (request && request.phase === 'upgrade' && !pendingInitialCell) {
+    pendingInitialCell = lastPatchReady?.canonicalAddress || new URLSearchParams(window.location.search).get('cell');
+  }
+  lastPatchReady = null;
+  els.diveLocalMap.disabled = true;
+  updateLocalNeighborButtons(null);
   if (globe) {
     // Worker закончил CPU-часть, но видимым глобус станет только после
     // порционной GPU-заливки и атомарной подмены VAO. До этого момента

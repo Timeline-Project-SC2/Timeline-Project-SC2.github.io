@@ -12,9 +12,9 @@
 // ============================================================
 //  structure.vert — Instanced structures vertex shader
 // ============================================================
-export const STRUCTURE_VERTEX_SHADER = `
-#version 300 es
+export const STRUCTURE_VERTEX_SHADER = `#version 300 es
 precision highp float;
+precision highp int;
 
 // Per-vertex (из VAO модуля)
 layout(location = 0) in vec3 a_position;
@@ -82,9 +82,9 @@ void main() {
 // ============================================================
 //  structure.frag — Instanced structures fragment shader
 // ============================================================
-export const STRUCTURE_FRAGMENT_SHADER = `
-#version 300 es
+export const STRUCTURE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
+precision highp int;
 
 in vec3  v_normal;
 in vec3  v_worldPos;
@@ -118,9 +118,9 @@ void main() {
 // ============================================================
 //  terrain.vert — Terrain vertex shader
 // ============================================================
-export const TERRAIN_VERTEX_SHADER = `
-#version 300 es
+export const TERRAIN_VERTEX_SHADER = `#version 300 es
 precision highp float;
+precision highp int;
 
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
@@ -152,9 +152,10 @@ void main() {
 // ============================================================
 //  terrain.frag — Terrain fragment shader
 // ============================================================
-export const TERRAIN_FRAGMENT_SHADER = `
-#version 300 es
+export const TERRAIN_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
+precision highp int;
+precision highp usampler2D;
 
 in vec3  v_worldPos;
 in vec3  v_normal;
