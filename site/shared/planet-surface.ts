@@ -349,12 +349,20 @@ function allocateSurfaceArrays(cellCount: number): SurfaceArrays {
 function makeWeightedQuantiles(
   values: Float32Array | Float64Array, weights: Float64Array,
 ): (q: number) => number {
-  const order: number[] = [];
+  const rawOrder = new Uint32Array(values.length);
+  let count = 0;
   let i: number;
   for (i = 0; i < values.length; i++) {
-    if ((weights[i] as number) > 0 && Number.isFinite(values[i] as number)) order.push(i);
+    if ((weights[i] as number) > 0 && Number.isFinite(values[i] as number)) {
+      rawOrder[count++] = i;
+    }
   }
-  order.sort(function (a, b) { return (values[a] as number) - (values[b] as number) || a - b; });
+  // LSD radix sort стабилен на возрастающих индексах → строгий tie-break (a - b) (И-2).
+  const order = count > 0
+    ? (values instanceof Float32Array
+      ? getCore().radixOrderF32(values, rawOrder.subarray(0, count), false)
+      : getCore().radixOrderF64(values, rawOrder.subarray(0, count), false))
+    : new Uint32Array(0);
   const cumulative = new Float64Array(order.length);
   let total = 0;
   for (i = 0; i < order.length; i++) {
@@ -597,7 +605,10 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
   thresholds.slopeP70 = qSlope(0.70);
   thresholds.slopeP95 = qSlope(0.95);
 
-  const orderAsc = landCells.slice().sort(function (a, b) { return (elevation[a] as number) - (elevation[b] as number) || a - b; });
+  // LSD radix sort по возрастающему списку landCells сохраняет tie-break (a - b) (И-2).
+  const orderAsc = landCells.length > 0
+    ? getCore().radixOrderF32(elevation, Uint32Array.from(landCells), false)
+    : new Uint32Array(0);
   const rawRoot = new Int32Array(n).fill(-1);
   for (c = 0; c < orderAsc.length; c++) {
     const cell = orderAsc[c] as number;
