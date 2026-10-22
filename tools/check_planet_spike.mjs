@@ -7,7 +7,8 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetNoise = require('../site/shared/planet-noise.ts').default;
-const PlanetGeometry = require('../site/shared/planet-geometry.js');
+// И-5: логика спайка живёт в строгом TS-модуле плагина FX, легаси-JS удалён.
+const PlanetGeometry = require('../src/planet/planet-globe-fx.ts');
 
 let failures = 0;
 function check(name, ok, detail) {
