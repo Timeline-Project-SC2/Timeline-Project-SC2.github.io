@@ -1300,6 +1300,25 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       if (opts.fx && opts.fx.onAfterSurfaceDraw) {
         try { opts.fx.onAfterSurfaceDraw(GL, frameCtx); } catch (_) { /* плагин не ломает рендер */ }
       }
+    } else if (prevVao && prevIndexCount > 0 && prevGeometry) {
+      // Пока новый VAO ещё заливается порциями в transitionGeometry,
+      // удерживаем отрисовку предыдущего слоя без пустых кадров.
+      GL.useProgram(surfaceProgram);
+      GL.uniformMatrix4fv(U.uMvp as WebGLUniformLocation | null, false, mvp);
+      GL.uniformMatrix4fv(U.uModel as WebGLUniformLocation | null, false, model);
+      GL.uniform3f(U.uSunDir as WebGLUniformLocation | null, sunDir[0] as number, sunDir[1] as number, sunDir[2] as number);
+      GL.uniform3f(U.uCamPos as WebGLUniformLocation | null, camPos[0] as number, camPos[1] as number, camPos[2] as number);
+      GL.uniform1f(U.uBorder as WebGLUniformLocation | null, bordersEnabled ? 1 : 0);
+      GL.uniform3f(U.uViewDir as WebGLUniformLocation | null, viewDirObj[0] as number, viewDirObj[1] as number, viewDirObj[2] as number);
+      GL.uniform1f(U.uBuild as WebGLUniformLocation | null, 1.0);
+      GL.uniform1f(U.uHide as WebGLUniformLocation | null, 0.0);
+      GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, 1.0);
+      GL.bindVertexArray(prevVao);
+      const prevRanges = visibleRanges(model, prevGeometry);
+      for (let i = 0; i < prevRanges.length; i++) {
+        GL.drawElements(GL.TRIANGLES, (prevRanges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (prevRanges[i] as { indexStart: number }).indexStart * 4);
+      }
+      GL.bindVertexArray(null);
     }
 
     if (selectionVao && selectionIndexCount) {

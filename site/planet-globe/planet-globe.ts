@@ -14,13 +14,19 @@
 
 import PlanetGlobe from '../shared/planet-globe.ts';
 import type { CellPolygon, GlobeGeometry, GlobeStats, PlanetGlobeHandle } from '../shared/planet-globe.ts';
+import { verifyGenerationKey } from '../shared/planet-generation-contract.ts';
+import type { PlanetGenerationProfileInput } from '../shared/planet-generation-contract.ts';
 import type { GeographyProfileInput } from '../shared/planet-geography.ts';
 import type {
   ColorModeMessage,
+  ExtractPatchMessage,
   GenerateMessage,
   GlobePickInfo,
   GlobeSummary,
   PickMessage,
+  PrefetchMessage,
+  WorkerPatchReadyResponse,
+  WorkerPrefetchReadyResponse,
   WorkerReadyResponse,
   WorkerResponse,
 } from './planet-globe-worker.ts';
@@ -127,6 +133,8 @@ let pendingGpuReady: { msg: WorkerReadyResponse; request: ActiveRequest | null }
 let displayedSummary: GlobeSummary | null = null;
 let latestPickRequest = 0;
 let latestHoverRequest = 0;
+let latestPrefetchRequest = 0;
+let latestPatchRequest = 0;
 let lastHoverSentAt = 0;
 let upgradeTimer = 0;
 let cycleTimer = 0;
@@ -135,7 +143,9 @@ let completedPlanets = 0;
 let generationHistory: HistoryEntry[] = [];
 let placesCatalog: CsvRow[] = [];
 let systemsCatalog: CsvRow[] = [];
+let generationByPlaceId = new Map<string, CsvRow>();
 let selectedPlace: CsvRow | null = null;
+let pendingInitialCell: string | null = new URLSearchParams(window.location.search).get('cell');
 let globe: PlanetGlobeHandle | null = null;
 let webglAvailable = true;
 
@@ -489,6 +499,9 @@ function onWorkerMessage(event: MessageEvent): void {
       if (globe && msg.info && msg.info.polygon) globe.setSelection(msg.info.polygon as CellPolygon);
       renderSelection(msg.info);
       if (msg.info) {
+        if (globe && Array.isArray(msg.info.centerDirection)) {
+          globe.flyToDirection(msg.info.centerDirection, undefined, 650);
+        }
         const params = new URLSearchParams(window.location.search);
         params.set('place', selectedPlace ? (selectedPlace.ID || '') : String(els.planetId.value));
         params.set('cell', msg.info.address);
@@ -496,9 +509,20 @@ function onWorkerMessage(event: MessageEvent): void {
         const inspector = document.getElementById('patchInspector');
         if (inspector) inspector.dataset.cell = String(msg.info.cell);
         const prefetch = document.getElementById('prefetchStatus');
-        if (prefetch) prefetch.textContent = 'Каноническая ячейка ' + msg.info.address + ' выбрана; ожидается срез Patch7.';
+        if (prefetch) prefetch.textContent = 'Каноническая ячейка ' + msg.info.address + ' выбрана; запрашиваю срез Patch7…';
+        requestPatchExtract(msg.info.cell);
       }
     }
+    return;
+  }
+  if (msg.type === 'prefetch-ready') {
+    if (msg.token !== displayedToken || msg.requestId !== latestPrefetchRequest) return;
+    renderPrefetchReady(msg);
+    return;
+  }
+  if (msg.type === 'patch-ready') {
+    if (msg.token !== displayedToken || msg.requestId !== latestPatchRequest) return;
+    renderPatchReady(msg);
     return;
   }
   if (msg.type === 'cache-cleared') {
@@ -530,7 +554,12 @@ function handleReady(msg: WorkerReadyResponse): void {
       ' v=' + msg.summary.renderV + ': GPU-заливка геометрии');
     setStatus('CPU-часть готова: заливаю геометрию на GPU…', 'info');
     // wire-геометрия без vertexCellId/cellIndexStart — pick живёт в воркере.
-    globe.setGeometry(msg.geometry as unknown as GlobeGeometry);
+    if (request && request.phase === 'upgrade') {
+      globe.transitionGeometry(msg.geometry as unknown as GlobeGeometry, 0.45);
+    } else {
+      globe.setGeometry(msg.geometry as unknown as GlobeGeometry);
+      globe.animateBuild(1.1);
+    }
     return;
   }
   finalizeReady(msg, request);
@@ -539,6 +568,7 @@ function handleReady(msg: WorkerReadyResponse): void {
 function finalizeReady(msg: WorkerReadyResponse, request: ActiveRequest | null): void {
   displayedToken = String(msg.token || '');
   displayedSummary = msg.summary;
+  syncDossierSummary(msg.summary);
   setProgress(1, 'Готово');
   if (!globe && msg.preview) drawFallback(msg.preview);
   renderSelection(null);
@@ -546,6 +576,20 @@ function finalizeReady(msg: WorkerReadyResponse, request: ActiveRequest | null):
   els.cells.textContent = fmtInt(msg.summary.cellCount);
   els.tris.textContent = fmtInt(msg.summary.triangleCount);
   els.lod.textContent = 'v=' + msg.summary.renderV + ' / канон ' + msg.summary.canonicalV;
+
+  if (pendingInitialCell && worker && displayedToken) {
+    const requestedCell = pendingInitialCell;
+    pendingInitialCell = null;
+    const id = ++latestPickRequest;
+    const pickMsg: PickMessage = {
+      type: 'pick',
+      token: displayedToken,
+      requestId: id,
+      cell: requestedCell,
+      purpose: 'select',
+    };
+    worker.postMessage(pickMsg);
+  }
 
   const isFinal = request ? msg.summary.renderV >= request.targetV : true;
   if (isFinal) {
@@ -841,9 +885,13 @@ function initEvents(): void {
   void spinState;
 }
 
-function installPlaceCatalog(placesText: string, systemsText: string): void {
+function installPlaceCatalog(placesText: string, systemsText: string, generationText: string): void {
   placesCatalog = parseCsv(placesText).filter((row) => row.type === 'planet' || row.type === 'moon');
   systemsCatalog = parseCsv(systemsText);
+  generationByPlaceId = new Map<string, CsvRow>();
+  for (const row of parseCsv(generationText)) {
+    if (row.place_id) generationByPlaceId.set(row.place_id, row);
+  }
   const select = document.getElementById('catalogPlaceSel') as HTMLSelectElement | null;
   if (!select) return;
   const placeOptions = placesCatalog.map((row) => '<option value="' + escapeHtml(row.ID) + '">' +
@@ -867,20 +915,108 @@ function installPlaceCatalog(placesText: string, systemsText: string): void {
 }
 
 function applyPlace(place: CsvRow): void {
+  const genRow = place.ID ? generationByPlaceId.get(place.ID) : undefined;
   els.planetId.value = place.ID || place.name || 'world';
-  els.seed.value = 'place-' + (place.ID || '') + '-' + (place.name || 'world');
-  els.radius.value = place.type === 'moon' ? '1737' : '6371';
+  els.seed.value = (genRow && genRow.master_seed_hex) ? genRow.master_seed_hex : ('place-' + (place.ID || '') + '-' + (place.name || 'world'));
+  els.radius.value = (genRow && genRow.radius_km) ? genRow.radius_km : (place.type === 'moon' ? '1737' : '6371');
+  if (genRow && genRow.preset_id && presetsById.has(genRow.preset_id)) {
+    els.preset.value = genRow.preset_id;
+    syncSurfaceClassWithPreset();
+  } else if (place.type === 'moon' && presetsById.has('barren_moon')) {
+    els.preset.value = 'barren_moon';
+    syncSurfaceClassWithPreset();
+  }
   const system = systemsCatalog.find((row) => row.system_id === place.system_id);
   const name = document.getElementById('dossierName'); if (name) name.textContent = place.name || 'Мир';
   const meta = document.getElementById('dossierMeta'); if (meta) meta.textContent = (system ? system.name : 'Система не указана') + ' · ' + (place.faction || 'фракция неизвестна') + ' · ' + (place.type === 'moon' ? 'луна' : 'планета');
   const desc = document.getElementById('dossierDesc'); if (desc) desc.textContent = place.description && place.description !== 'none' ? place.description : 'Описание мира пока не внесено в каталог.';
-  const badge = document.getElementById('dossierProfileBadge'); if (badge) { badge.textContent = 'L0 Draft · черновик'; badge.className = 'profile-badge draft'; }
-  const key = document.getElementById('dossierGenKey'); if (key) key.textContent = 'Черновой профиль';
+  const badge = document.getElementById('dossierProfileBadge');
+  const key = document.getElementById('dossierGenKey');
+  if (genRow && genRow.profile_status === 'frozen') {
+    const verification = verifyGenerationKey(genRow as unknown as PlanetGenerationProfileInput);
+    if (badge) {
+      badge.textContent = verification.ok ? 'L1 Frozen · ключ подтверждён' : 'L1 Frozen · расхождение ключа';
+      badge.className = verification.ok ? 'profile-badge frozen' : 'profile-badge draft';
+    }
+    if (key) key.textContent = genRow.generation_key || verification.expectedKey || '—';
+  } else {
+    if (badge) { badge.textContent = 'L0 Draft · черновик'; badge.className = 'profile-badge draft'; }
+    if (key) key.textContent = (genRow && genRow.generation_key) ? genRow.generation_key : 'Вычисляется по манифесту…';
+  }
   const crumb = document.getElementById('breadcrumbPlanet'); if (crumb) crumb.textContent = place.name || 'Планета';
   const sysCrumb = document.getElementById('breadcrumbSystem') as HTMLAnchorElement | null;
   if (sysCrumb) { sysCrumb.textContent = system ? (system.name || 'Система') : 'Система'; sysCrumb.href = '../sector/#system=' + encodeURIComponent(place.system_id || ''); }
   const back = document.getElementById('backToSectorBtn') as HTMLAnchorElement | null;
-  if (back) back.href = '../sector/?place=' + encodeURIComponent(place.ID || '');
+  if (back) back.href = '../sector/#planet=' + encodeURIComponent(place.ID || '');
+}
+
+function syncDossierSummary(summary: GlobeSummary): void {
+  const keyEl = document.getElementById('dossierGenKey');
+  if (keyEl && summary.generationKey) keyEl.textContent = summary.generationKey;
+  const planetKeyOut = document.getElementById('planetKeyOut');
+  if (planetKeyOut && summary.generationKey) planetKeyOut.textContent = summary.generationKey;
+  const badge = document.getElementById('dossierProfileBadge');
+  if (badge && summary.generationKeyVerification) {
+    if (summary.generationKeyVerification.status === 'frozen' && summary.generationKeyVerification.ok) {
+      badge.textContent = 'L1 Frozen · ключ подтверждён';
+      badge.className = 'profile-badge frozen';
+    }
+  }
+}
+
+function requestPatchExtract(cell: number): void {
+  if (!worker || !displayedToken || !Number.isInteger(cell) || cell < 0) return;
+  const id = ++latestPatchRequest;
+  const msg: ExtractPatchMessage = {
+    type: 'extract-patch',
+    token: displayedToken,
+    requestId: id,
+    cell: cell,
+  };
+  worker.postMessage(msg);
+}
+
+function renderPrefetchReady(msg: WorkerPrefetchReadyResponse): void {
+  const el = document.getElementById('prefetchStatus');
+  if (!el) return;
+  if (!msg.patchReady || msg.hexCenterCell < 0) {
+    el.textContent = 'Предзагрузка v=' + msg.targetV + ': сетка прогрета (' + fmtNum(msg.timingsMs.totalMs, 1) + ' мс)';
+    return;
+  }
+  el.textContent = 'Предзагрузка v=' + msg.targetV + ': чанк #' + msg.chunkId +
+    ' (+' + msg.neighborChunks.length + ' соседей), срез Patch7 #' + msg.hexCenterCell +
+    ' готов за ' + fmtNum(msg.timingsMs.totalMs, 1) + ' мс';
+}
+
+function renderPatchReady(msg: WorkerPatchReadyResponse): void {
+  const planetKeyOut = document.getElementById('planetKeyOut');
+  const regionKeyOut = document.getElementById('regionKeyOut');
+  const cellKeyOut = document.getElementById('cellKeyOut');
+  const patchKeyOut = document.getElementById('patchKeyOut');
+  if (planetKeyOut) planetKeyOut.textContent = msg.keys.planetKey || '—';
+  if (regionKeyOut) regionKeyOut.textContent = msg.keys.regionKey || '—';
+  if (cellKeyOut) cellKeyOut.textContent = msg.keys.cellKey || '—';
+  if (patchKeyOut) patchKeyOut.textContent = msg.keys.patchKey || '—';
+  const prefetch = document.getElementById('prefetchStatus');
+  if (prefetch) {
+    prefetch.textContent = 'Срез Patch7 (' + msg.patch.version + ') для ' + msg.canonicalAddress + ' готов.';
+  }
+  const details = document.getElementById('patchDetails');
+  if (!details) return;
+  const riverInlets = msg.patch.river.inlets.length;
+  const riverOutlet = msg.patch.river.outlet
+    ? ('слот #' + msg.patch.river.outlet.slot + ' → ячейка ' + msg.patch.river.outlet.neighborCell)
+    : 'терминал / нет стока';
+  const checksCount = Object.values(msg.invariants.checks).filter(Boolean).length;
+  const totalChecks = Object.keys(msg.invariants.checks).length;
+  details.innerHTML =
+    '<div class="kv">' +
+      '<span>Центр Patch7 (v=' + escapeHtml(msg.patch.v) + ')</span><strong>#' + escapeHtml(msg.hexCenterCell) + ' (' + escapeHtml(msg.canonicalAddress) + ')</strong>' +
+      '<span>Охват кольца (7 ячеек)</span><strong>' + fmtNum(msg.spanMeters / 1000, 2) + ' км (' + fmtInt(msg.spanMeters) + ' м)</strong>' +
+      '<span>Площадка под базы (И-3.4)</span><strong>' + fmtPct(msg.buildableFraction, 1) + '</strong>' +
+      '<span>Речной граф кольца (И-3.3)</span><strong>входов: ' + riverInlets + ' · выход: ' + escapeHtml(riverOutlet) + '</strong>' +
+      '<span>Инварианты сшивки И-3</span><strong>' + (msg.invariants.ok ? 'OK' : 'ОШИБКА') + ' (' + checksCount + '/' + totalChecks + ')</strong>' +
+    '</div>';
 }
 
 /* --------------------------------------------------------------- запуск */
@@ -916,6 +1052,18 @@ function init(): void {
         if (globe) globe.clearSelection();
         renderSelection(null);
       },
+      onCameraIntent: function (intent) {
+        if (!worker || !displayedSummary || !displayedToken || intent.zoomRatio < 0.35) return;
+        const id = ++latestPrefetchRequest;
+        const msg: PrefetchMessage = {
+          type: 'prefetch',
+          token: displayedToken,
+          requestId: id,
+          targetV: displayedSummary.canonicalV,
+          focusDirection: intent.viewDirection,
+        };
+        worker.postMessage(msg);
+      },
       onStats: renderFrameStats,
       onContextLost: function () { setStatus('WebGL-контекст потерян; ждём восстановления…', 'warn'); },
       onContextRestored: function () { setStatus('WebGL-контекст восстановлен.', 'ok'); },
@@ -938,9 +1086,10 @@ function init(): void {
     fetchFirst(['../data/planet-archetypes-template.csv', '../../data/planet-archetypes-template.csv', '/data/planet-archetypes-template.csv']),
     fetchFirst(['/data/places.csv', '../data/places.csv']),
     fetchFirst(['/data/systems.csv', '../data/systems.csv']),
-  ]).then(([presetText, placeText, systemText]) => {
+    fetchFirst(['/data/planet-generation.csv', '../data/planet-generation.csv']).catch(() => ''),
+  ]).then(([presetText, placeText, systemText, generationText]) => {
     installPresets(parseCsv(presetText));
-    installPlaceCatalog(placeText, systemText);
+    installPlaceCatalog(placeText, systemText, generationText);
     ensureWorker();
     startGeneration(false, 'initial');
   }).catch((err: Error) => {
