@@ -17,7 +17,7 @@
    География и pick остаются авторитетно на CPU: рендер только
    сообщает направление луча, ячейку находит `GeodesicGrid.pick`. */
 
-import { PlanetCore } from '../../src/planet/planet-core-host.ts';
+import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
 import type { SurfaceResult } from './planet-surface.ts';
 
@@ -142,11 +142,8 @@ const COLOR_MODES: { key: string; label: string }[] = [
   { key: 'mountains', label: 'Горы и швы' },
 ];
 
-let sharedCore: PlanetCore | null = null;
-
 function getCore(): PlanetCore {
-  if (!sharedCore) sharedCore = new PlanetCore();
-  return sharedCore;
+  return getSharedPlanetCore();
 }
 
 function clamp(x: number, lo: number, hi: number): number { return x < lo ? lo : (x > hi ? hi : x); }

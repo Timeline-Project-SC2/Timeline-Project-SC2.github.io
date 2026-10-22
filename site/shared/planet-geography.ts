@@ -7,7 +7,7 @@
 
 import { CONTRACT, getPresetRuntimeValues } from './planet-generation-contract.ts';
 import PlanetNoise, { buildSimplexTable } from './planet-noise.ts';
-import { PlanetCore } from '../../src/planet/planet-core-host.ts';
+import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
 
 export interface GeographyProfile {
@@ -239,10 +239,8 @@ const DEFAULT_PROFILE = Object.assign({
   presetVersion: PRESET_VERSION,
 }, presetRuntimeValues('earthlike_balanced')) as unknown as GeographyProfile;
 
-let sharedCore: PlanetCore | null = null;
-
+const sharedCore = getSharedPlanetCore();
 function getCore(): PlanetCore {
-  if (!sharedCore) sharedCore = new PlanetCore();
   return sharedCore;
 }
 
@@ -469,13 +467,20 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
   const master = parseMasterSeedHex(profile.masterSeedHex);
   const ratio = profile.radiusKm / EARTH_RADIUS_KM;
   const climateRatio = Math.sqrt(ratio);
-  const elevNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'elevation'));
-  const moistNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'moisture'));
-  const tempNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'temperature'));
-  const plateNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'plates'));
-  const volcNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'volcanism'));
-  const detailNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'detail'));
-  const warpNoise = PlanetNoise.makeNoise('simplex', domainSeed(master, 'warp'));
+  const seedE = domainSeed(master, 'elevation');
+  const seedM = domainSeed(master, 'moisture');
+  const seedT = domainSeed(master, 'temperature');
+  const seedP = domainSeed(master, 'plates');
+  const seedV = domainSeed(master, 'volcanism');
+  const seedD = domainSeed(master, 'detail');
+  const seedW = domainSeed(master, 'warp');
+  let elevNoise: ((x: number, y: number, z: number) => number) | null = null;
+  let moistNoise: ((x: number, y: number, z: number) => number) | null = null;
+  let tempNoise: ((x: number, y: number, z: number) => number) | null = null;
+  let plateNoise: ((x: number, y: number, z: number) => number) | null = null;
+  let volcNoise: ((x: number, y: number, z: number) => number) | null = null;
+  let detailNoise: ((x: number, y: number, z: number) => number) | null = null;
+  let warpNoise: ((x: number, y: number, z: number) => number) | null = null;
   const offE = offsetVector(domainSeed(master, 'offset:elevation'));
   const offM = offsetVector(domainSeed(master, 'offset:moisture'));
   const offT = offsetVector(domainSeed(master, 'offset:temperature'));
@@ -487,13 +492,13 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
   // Пакетные таблицы/параметры для Wasm-сэмплера полей: порядок доменов
   // E/M/T/P/V/D/W совпадает с раскладкой ядра sampleFieldsBatch.
   const batchTables = new Uint8Array(7 * 1024);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'elevation')), 0);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'moisture')), 1024);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'temperature')), 2048);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'plates')), 3072);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'volcanism')), 4096);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'detail')), 5120);
-  batchTables.set(buildSimplexTable(domainSeed(master, 'warp')), 6144);
+  batchTables.set(buildSimplexTable(seedE), 0);
+  batchTables.set(buildSimplexTable(seedM), 1024);
+  batchTables.set(buildSimplexTable(seedT), 2048);
+  batchTables.set(buildSimplexTable(seedP), 3072);
+  batchTables.set(buildSimplexTable(seedV), 4096);
+  batchTables.set(buildSimplexTable(seedD), 5120);
+  batchTables.set(buildSimplexTable(seedW), 6144);
   const batchParams = new Float64Array(23);
   batchParams[0] = ratio;
   batchParams[1] = climateRatio;
@@ -508,13 +513,22 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
   function sampleFields(x: number, y: number, z: number, out?: Float32Array): Float32Array {
     const len = Math.sqrt(x * x + y * y + z * z);
     if (!(len > 0) || !Number.isFinite(len)) throw new Error('PlanetGeography.sampleFields: направление должно быть ненулевым');
+    if (!elevNoise) {
+      elevNoise = PlanetNoise.makeNoise('simplex', seedE);
+      moistNoise = PlanetNoise.makeNoise('simplex', seedM);
+      tempNoise = PlanetNoise.makeNoise('simplex', seedT);
+      plateNoise = PlanetNoise.makeNoise('simplex', seedP);
+      volcNoise = PlanetNoise.makeNoise('simplex', seedV);
+      detailNoise = PlanetNoise.makeNoise('simplex', seedD);
+      warpNoise = PlanetNoise.makeNoise('simplex', seedW);
+    }
     const nx = x / len, ny = y / len, nz = z / len;
     const target = out || new Float32Array(6);
 
     const warpFreq = 0.85 * ratio;
-    const wx = warpNoise(nx * warpFreq + offW[0], ny * warpFreq + offW[1], nz * warpFreq + offW[2]);
-    const wy = warpNoise(nx * warpFreq + offW[1], ny * warpFreq + offW[2], nz * warpFreq + offW[0]);
-    const wz = warpNoise(nx * warpFreq + offW[2], ny * warpFreq + offW[0], nz * warpFreq + offW[1]);
+    const wx = (warpNoise as (x: number, y: number, z: number) => number)(nx * warpFreq + offW[0], ny * warpFreq + offW[1], nz * warpFreq + offW[2]);
+    const wy = (warpNoise as (x: number, y: number, z: number) => number)(nx * warpFreq + offW[1], ny * warpFreq + offW[2], nz * warpFreq + offW[0]);
+    const wz = (warpNoise as (x: number, y: number, z: number) => number)(nx * warpFreq + offW[2], ny * warpFreq + offW[0], nz * warpFreq + offW[1]);
     const along = wx * nx + wy * ny + wz * nz;
     const warpAmp = 0.14 / Math.max(0.25, ratio);
     let dx = nx + (wx - along * nx) * warpAmp;
@@ -523,31 +537,31 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
     const dlen = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
     dx /= dlen; dy /= dlen; dz /= dlen;
 
-    const plate = PlanetNoise.fbm(plateNoise,
+    const plate = PlanetNoise.fbm(plateNoise as (x: number, y: number, z: number) => number,
       nx * 1.12 + offP[0], ny * 1.12 + offP[1], nz * 1.12 + offP[2], 3, 2.0, 0.52);
     const elevationFreq = 2.15 * ratio;
     const base = PlanetNoise.fbm(elevNoise,
       dx * elevationFreq + offE[0], dy * elevationFreq + offE[1], dz * elevationFreq + offE[2],
       5, 2.0, 0.5);
     const detailFreq = 9.0 * ratio;
-    const detail = PlanetNoise.fbm(detailNoise,
+    const detail = PlanetNoise.fbm(detailNoise as (x: number, y: number, z: number) => number,
       dx * detailFreq + offD[0], dy * detailFreq + offD[1], dz * detailFreq + offD[2],
       3, 2.0, 0.55);
     const elevation = clamp(0.74 * base + 0.30 * plate + 0.10 * detail, -1, 1);
 
     const moistureFreq = 2.9 * climateRatio;
-    const moistureRaw = PlanetNoise.fbm(moistNoise,
+    const moistureRaw = PlanetNoise.fbm(moistNoise as (x: number, y: number, z: number) => number,
       dx * moistureFreq + offM[0], dy * moistureFreq + offM[1], dz * moistureFreq + offM[2],
       4, 2.0, 0.5);
     const moisture = clamp01(0.5 + 0.5 * moistureRaw + 0.04 * plate);
 
     const tempFreq = 1.7 * climateRatio;
-    const tempAnomaly = tempNoise(nx * tempFreq + offT[0], ny * tempFreq + offT[1], nz * tempFreq + offT[2]);
+    const tempAnomaly = (tempNoise as (x: number, y: number, z: number) => number)(nx * tempFreq + offT[0], ny * tempFreq + offT[1], nz * tempFreq + offT[2]);
     const insolation = Math.sqrt(Math.max(0, 1 - ny * ny));
     const temperatureBase = clamp01(0.72 * insolation + 0.28 * (tempAnomaly * 0.5 + 0.5));
 
     const volcFreq = 3.6 * ratio;
-    const volcRaw = PlanetNoise.fbm(volcNoise,
+    const volcRaw = PlanetNoise.fbm(volcNoise as (x: number, y: number, z: number) => number,
       nx * volcFreq + offV[0], ny * volcFreq + offV[1], nz * volcFreq + offV[2],
       3, 2.0, 0.55);
     const volcanism = Math.pow(clamp01(volcRaw * 0.5 + 0.5), 1.5);
@@ -610,32 +624,46 @@ function sampleGridFields(
 ): void {
   const count = end - start;
   if (count <= 0) return;
-  const centers = new Float64Array(count * 3);
-  for (let i = 0; i < count * 3; i++) centers[i] = grid.centers[start * 3 + i] as number;
-  const batch = getCore().sampleFields(sampler.batchTables, sampler.batchParams, centers);
+  const batch = getCore().sampleFields(sampler.batchTables, sampler.batchParams, grid.centers, start, count);
   const fields = batch.fields;
   const volcPre = batch.volcPre;
+  const elevation = arrays.elevation;
+  const moisture = arrays.moisture;
+  const plateAffinity = arrays.plateAffinity;
+  const volcanism = arrays.volcanism;
+  const detail = arrays.detail;
   for (let c = start; c < end; c++) {
-    const o = (c - start) * 6;
-    arrays.elevation[c] = fields[o] as number;
-    arrays.moisture[c] = fields[o + 1] as number;
+    const idx = c - start;
+    const o = idx * 6;
+    elevation[c] = fields[o] as number;
+    moisture[c] = fields[o + 1] as number;
     temperatureBase[c] = fields[o + 2] as number;
-    arrays.plateAffinity[c] = fields[o + 3] as number;
+    plateAffinity[c] = fields[o + 3] as number;
     // Math.pow остаётся host-сторонним (платформенная трансцендентная
     // функция): ядро отдаёт clamp01(volcRaw/2+0.5) в f64.
-    arrays.volcanism[c] = Math.pow(volcPre[c - start] as number, 1.5);
-    arrays.detail[c] = fields[o + 5] as number;
+    const vp = volcPre[idx] as number;
+    volcanism[c] = vp === 0 ? 0 : Math.pow(vp, 1.5);
+    detail[c] = fields[o + 5] as number;
   }
 }
 
+let geoInitOrderBuf = new Uint32Array(163842);
+for (let k = 0; k < 163842; k++) geoInitOrderBuf[k] = k;
+let geoCumulativeBuf = new Float64Array(163842);
+
 function makeWeightedQuantiles(values: Float32Array, weights: Float32Array): (q: number) => number {
-  const initOrder = new Uint32Array(values.length);
+  const n = values.length;
+  if (geoInitOrderBuf.length < n) {
+    geoInitOrderBuf = new Uint32Array(n);
+    for (let k = 0; k < n; k++) geoInitOrderBuf[k] = k;
+    geoCumulativeBuf = new Float64Array(n);
+  }
+  const initOrder = geoInitOrderBuf.subarray(0, n);
   let i: number;
-  for (i = 0; i < initOrder.length; i++) initOrder[i] = i;
-  const order = initOrder.length > 0
-    ? getCore().radixOrderF32(values, initOrder, false)
+  const order = n > 0
+    ? getCore().radixOrderF32(values, initOrder, false, false)
     : initOrder;
-  const cumulative = new Float64Array(order.length);
+  const cumulative = geoCumulativeBuf.subarray(0, order.length);
   let total = 0;
   for (i = 0; i < order.length; i++) {
     total += weights[order[i] as number] as number;
@@ -688,26 +716,41 @@ function computeSoftMemberships(
   seaLevel: number, shelfBelowLevel: number, shelfAboveLevel: number, coast: CoastResult,
 ): void {
   const width = Math.max(0, profile.coastSoftWidthCells);
-  for (let c = 0; c < grid.cellCount; c++) {
-    const dist = coast.signedDistance[c] as number;
+  const inv2Width = width > 0 ? 1 / (2 * width) : 0;
+  const proxScale = Math.max(1, width * 2);
+  const hasShelfBand = shelfAboveLevel > shelfBelowLevel;
+  const depthSpan = Math.max(1e-12, seaLevel - shelfBelowLevel);
+  const landSpan = Math.max(1e-12, shelfAboveLevel - seaLevel);
+  const signedDistance = coast.signedDistance;
+  const hardLand = coast.hardLand;
+  const elevation = arrays.elevation;
+  const outMuLand = arrays.muLand;
+  const outMuShelf = arrays.muShelf;
+  const outMuOcean = arrays.muOcean;
+  const outSigned = arrays.signedCoastDistanceCells;
+  const outContSupport = arrays.continentSupport;
+  const outOceanSupport = arrays.oceanSupport;
+  const n = grid.cellCount;
+  for (let c = 0; c < n; c++) {
+    const dist = signedDistance[c] as number;
     let muLand: number;
-    if (width <= 0) muLand = coast.hardLand[c] ? 1 : 0;
-    else muLand = smoothstep01(0.5 + dist / (2 * width));
-    const elev = arrays.elevation[c] as number;
+    if (width <= 0) muLand = hardLand[c] ? 1 : 0;
+    else if (dist <= -width) muLand = 0;
+    else if (dist >= width) muLand = 1;
+    else muLand = smoothstep01(0.5 + dist * inv2Width);
+    const elev = elevation[c] as number;
     let shelfPotential = 0;
-    if (shelfAboveLevel > shelfBelowLevel) {
+    if (hasShelfBand && elev > shelfBelowLevel && elev < shelfAboveLevel) {
       if (elev <= seaLevel) {
-        const depthSpan = Math.max(1e-12, seaLevel - shelfBelowLevel);
         shelfPotential = clamp01(1 - (seaLevel - elev) / depthSpan);
       } else {
-        const landSpan = Math.max(1e-12, shelfAboveLevel - seaLevel);
         shelfPotential = clamp01(1 - (elev - seaLevel) / landSpan);
       }
-      const coastProximity = Math.exp(-Math.abs(dist) / Math.max(1, width * 2));
+      const coastProximity = Math.exp(-Math.abs(dist) / proxScale);
       shelfPotential *= 0.35 + 0.65 * coastProximity;
     }
     let muShelf = (1 - muLand) * clamp01(shelfPotential);
-    if (coast.hardLand[c]) {
+    if (hardLand[c]) {
       // Низкая суша в переходной зоне может иметь shelf-остаток, но не за
       // счёт уже вычисленной доли суши сверх её дополнения до единицы.
       muShelf = Math.max(muShelf, (1 - muLand) * clamp01(shelfPotential) * 0.5);
@@ -719,12 +762,12 @@ function computeSoftMemberships(
     } else {
       muOcean = 1;
     }
-    arrays.muLand[c] = muLand;
-    arrays.muShelf[c] = muShelf;
-    arrays.muOcean[c] = muOcean;
-    arrays.signedCoastDistanceCells[c] = dist;
-    arrays.continentSupport[c] = clamp01(muLand + 0.30 * muShelf);
-    arrays.oceanSupport[c] = clamp01(muOcean + 0.55 * muShelf);
+    outMuLand[c] = muLand;
+    outMuShelf[c] = muShelf;
+    outMuOcean[c] = muOcean;
+    outSigned[c] = dist;
+    outContSupport[c] = clamp01(muLand + 0.30 * muShelf);
+    outOceanSupport[c] = clamp01(muOcean + 0.55 * muShelf);
   }
 }
 
@@ -763,16 +806,30 @@ function computePlates(grid: PlanetGrid, arrays: GeographyArrays, master: Master
     selectedCandidate[best] = 1;
     seeds.push(candidates[best] as number[]);
   }
-  const records: PlateRecord[] = seeds.map(function (seed, id) {
-    return { id: id, seedDirection: seed, cellCount: 0, supportAreaKm2: 0 };
-  });
-  for (let c = 0; c < grid.cellCount; c++) {
+  const seedCount = seeds.length;
+  const seedX = new Float64Array(seedCount);
+  const seedY = new Float64Array(seedCount);
+  const seedZ = new Float64Array(seedCount);
+  const cellCounts = new Int32Array(seedCount);
+  for (j = 0; j < seedCount; j++) {
+    const s = seeds[j] as number[];
+    seedX[j] = s[0] as number;
+    seedY[j] = s[1] as number;
+    seedZ[j] = s[2] as number;
+  }
+  const centers = grid.centers;
+  const plateId = arrays.plateId;
+  const plateBoundary = arrays.plateBoundary;
+  const volcanism = arrays.volcanism;
+  const n = grid.cellCount;
+  for (let c = 0; c < n; c++) {
+    const c3 = c * 3;
+    const cx = centers[c3] as number;
+    const cy = centers[c3 + 1] as number;
+    const cz = centers[c3 + 2] as number;
     let bestId = 0, bestDot = -Infinity, secondDot = -Infinity;
-    for (j = 0; j < seeds.length; j++) {
-      const seed = seeds[j] as number[];
-      const d = (grid.centers[c * 3] as number) * (seed[0] as number) +
-        (grid.centers[c * 3 + 1] as number) * (seed[1] as number) +
-        (grid.centers[c * 3 + 2] as number) * (seed[2] as number);
+    for (j = 0; j < seedCount; j++) {
+      const d = cx * (seedX[j] as number) + cy * (seedY[j] as number) + cz * (seedZ[j] as number);
       if (d > bestDot) {
         secondDot = bestDot;
         bestDot = d;
@@ -781,45 +838,20 @@ function computePlates(grid: PlanetGrid, arrays: GeographyArrays, master: Master
         secondDot = d;
       }
     }
-    arrays.plateId[c] = bestId;
+    plateId[c] = bestId;
     const boundary = clamp01(1 - Math.max(0, bestDot - secondDot) / 0.08);
-    arrays.plateBoundary[c] = boundary;
-    arrays.volcanism[c] = clamp01((arrays.volcanism[c] as number) * 0.72 + boundary * (arrays.volcanism[c] as number) * 0.38 + boundary * 0.08);
-    (records[bestId] as PlateRecord).cellCount++;
+    plateBoundary[c] = boundary;
+    const volc = volcanism[c] as number;
+    volcanism[c] = clamp01(volc * 0.72 + boundary * volc * 0.38 + boundary * 0.08);
+    cellCounts[bestId] = (cellCounts[bestId] as number) + 1;
   }
+  const records: PlateRecord[] = seeds.map(function (seed, id) {
+    return { id: id, seedDirection: seed, cellCount: cellCounts[id] as number, supportAreaKm2: 0 };
+  });
   return records;
 }
 
 type RegionMode = 'continent' | 'ocean';
-
-function buildEdgeCosts(grid: PlanetGrid, arrays: GeographyArrays, mode: RegionMode): Float32Array {
-  const support = mode === 'continent' ? arrays.continentSupport : arrays.oceanSupport;
-  const plateCross = mode === 'continent' ? 0.75 : 0.25;
-  return getCore().edgeCosts(grid.neighbors, grid.neighborCount, arrays.elevation,
-    arrays.temperature, arrays.moisture, arrays.plateId, arrays.plateBoundary,
-    support, plateCross, grid.cellCount);
-}
-
-function runTopOne(
-  grid: PlanetGrid, seeds: number[], biases: Float64Array, edgeCosts: Float32Array,
-): Int32Array {
-  return getCore().dijkstraTopOne(grid.neighbors, grid.neighborCount, edgeCosts,
-    Int32Array.from(seeds), biases, grid.cellCount);
-}
-
-interface TopTwoResult {
-  label1: Int32Array;
-  label2: Int32Array;
-  dist1: Float64Array;
-  dist2: Float64Array;
-}
-
-function runTopTwo(
-  grid: PlanetGrid, seeds: number[], biases: Float64Array, edgeCosts: Float32Array,
-): TopTwoResult {
-  return getCore().dijkstraTopTwo(grid.neighbors, grid.neighborCount, edgeCosts,
-    Int32Array.from(seeds), biases, grid.cellCount);
-}
 
 function normal01(rng: () => number): number {
   let u = 0, v = 0;
@@ -908,78 +940,108 @@ interface AssignedRegions {
   hardCellCount: Uint32Array;
 }
 
+let compStackBuf = new Int32Array(163842);
+let compMaskBuf = new Uint8Array(163842);
+let compIdsBuf = new Int32Array(163842);
+let scoreBuf = new Float32Array(163842);
+let oceanTop2IdBuf = new Int32Array(163842);
+let oceanTop2WeightBuf = new Float32Array(163842);
+let oceanEntropyBuf = new Float32Array(0);
+
 function assignRegions(
   grid: PlanetGrid, arrays: GeographyArrays, seeds: number[], desired: Float64Array,
   support: Float32Array, mode: RegionMode, softWidthCells: number, targetMean: number,
+  outTop1Id: Int32Array, outTop1Weight: Float32Array,
+  outTop2Id: Int32Array, outTop2Weight: Float32Array, outEntropy: Float32Array,
 ): AssignedRegions {
   const count = grid.cellCount;
   const result: AssignedRegions = {
-    top1Id: new Int32Array(count).fill(-1),
-    top1Weight: new Float32Array(count),
-    top2Id: new Int32Array(count).fill(-1),
-    top2Weight: new Float32Array(count),
-    entropy: new Float32Array(count),
+    top1Id: outTop1Id,
+    top1Weight: outTop1Weight,
+    top2Id: outTop2Id,
+    top2Weight: outTop2Weight,
+    entropy: outEntropy,
     desiredMass: new Float64Array(seeds.length),
     effectiveMass: new Float64Array(seeds.length),
     effectiveAreaKm2: new Float64Array(seeds.length),
     hardCellCount: new Uint32Array(seeds.length),
   };
-  if (!seeds.length) return result;
+  if (!seeds.length) {
+    outTop1Id.fill(-1);
+    outTop1Weight.fill(0);
+    outTop2Id.fill(-1);
+    outTop2Weight.fill(0);
+    if (mode === 'continent') outEntropy.fill(0);
+    return result;
+  }
   const radiusScale = Math.sqrt(Math.max(1, targetMean) / Math.PI);
   const biases = new Float64Array(seeds.length);
   let i: number, c: number;
-  const edgeCosts = buildEdgeCosts(grid, arrays, mode);
   result.desiredMass.set(desired);
   for (i = 0; i < seeds.length; i++) {
     biases[i] = clamp(0.5 * radiusScale * Math.log(Math.max(1e-9, (result.desiredMass[i] as number) / Math.max(1, targetMean))),
       -1.5 * radiusScale, 1.5 * radiusScale);
   }
-  let top: TopTwoResult | null = null;
   const iterations = seeds.length > 1 ? 3 : 1;
-  for (let iteration = 0; iteration < iterations; iteration++) {
-    if (iteration === iterations - 1) {
-      top = runTopTwo(grid, seeds, biases, edgeCosts);
-      break;
-    }
-    const topOne = runTopOne(grid, seeds, biases, edgeCosts);
-    const actual = new Float64Array(seeds.length);
-    for (c = 0; c < count; c++) {
-      const label = topOne[c] as number;
-      if (label >= 0) actual[label] = (actual[label] as number) + (support[c] as number);
-    }
-    for (i = 0; i < seeds.length; i++) {
-      const ratio = ((result.desiredMass[i] as number) + 0.5) / ((actual[i] as number) + 0.5);
-      biases[i] = clamp((biases[i] as number) + 0.25 * radiusScale * Math.log(ratio),
-        -1.75 * radiusScale, 1.75 * radiusScale);
-    }
-  }
-  const finalTop = top as TopTwoResult;
+  const plateCross = mode === 'continent' ? 0.75 : 0.25;
+  const finalTop = getCore().balanceRegionsTopTwo(
+    grid.neighbors, grid.neighborCount,
+    arrays.elevation, arrays.temperature, arrays.moisture,
+    arrays.plateId, arrays.plateBoundary, support,
+    plateCross, Int32Array.from(seeds), biases,
+    result.desiredMass, radiusScale, iterations, count,
+  );
   const temperature = Math.max(0.35, softWidthCells || 0);
+  const needEntropy = mode === 'continent';
+  const label1 = finalTop.label1;
+  const label2 = finalTop.label2;
+  const dist1 = finalTop.dist1;
+  const dist2 = finalTop.dist2;
+  const areas = grid.areas;
+  const hardCellCount = result.hardCellCount;
+  const effectiveMass = result.effectiveMass;
+  const effectiveAreaKm2 = result.effectiveAreaKm2;
   for (c = 0; c < count; c++) {
-    const id1 = finalTop.label1[c] as number;
-    const id2 = finalTop.label2[c] as number;
-    result.top1Id[c] = id1;
-    result.top2Id[c] = id2;
-    if (id1 < 0) continue;
-    result.hardCellCount[id1] = (result.hardCellCount[id1] as number) + 1;
+    const id1 = label1[c] as number;
+    const id2 = label2[c] as number;
+    outTop1Id[c] = id1;
+    outTop2Id[c] = id2;
+    if (id1 < 0) {
+      outTop1Weight[c] = 0;
+      outTop2Weight[c] = 0;
+      if (needEntropy) outEntropy[c] = 0;
+      continue;
+    }
+    hardCellCount[id1] = (hardCellCount[id1] as number) + 1;
     let w1 = 1;
-    if (id2 >= 0 && Number.isFinite(finalTop.dist2[c] as number)) {
-      const delta = Math.max(0, (finalTop.dist2[c] as number) - (finalTop.dist1[c] as number));
-      w1 = 1 / (1 + Math.exp(-delta / temperature));
+    const d2 = dist2[c] as number;
+    if (id2 >= 0 && Number.isFinite(d2)) {
+      const delta = Math.max(0, d2 - (dist1[c] as number));
+      const x = delta / temperature;
+      if (x < 37) w1 = 1 / (1 + Math.exp(-x));
     }
     const w2 = id2 >= 0 ? 1 - w1 : 0;
-    result.top1Weight[c] = w1;
-    result.top2Weight[c] = w2;
-    let entropy = 0;
-    if (w1 > 0) entropy -= w1 * Math.log(w1);
-    if (w2 > 0) entropy -= w2 * Math.log(w2);
-    result.entropy[c] = entropy / Math.LN2;
-    const cellArea = grid.areas[c] as number;
-    result.effectiveMass[id1] = (result.effectiveMass[id1] as number) + (support[c] as number) * w1;
-    result.effectiveAreaKm2[id1] = (result.effectiveAreaKm2[id1] as number) + (support[c] as number) * w1 * cellArea;
+    outTop1Weight[c] = w1;
+    outTop2Weight[c] = w2;
+    if (needEntropy) {
+      if (w2 > 0) {
+        let entropy = 0;
+        if (w1 > 0 && w1 < 1) entropy -= w1 * Math.log(w1);
+        entropy -= w2 * Math.log(w2);
+        outEntropy[c] = entropy / Math.LN2;
+      } else {
+        outEntropy[c] = 0;
+      }
+    }
+    const cellArea = areas[c] as number;
+    const sup = support[c] as number;
+    const sw1 = sup * w1;
+    effectiveMass[id1] = (effectiveMass[id1] as number) + sw1;
+    effectiveAreaKm2[id1] = (effectiveAreaKm2[id1] as number) + sw1 * cellArea;
     if (id2 >= 0) {
-      result.effectiveMass[id2] = (result.effectiveMass[id2] as number) + (support[c] as number) * w2;
-      result.effectiveAreaKm2[id2] = (result.effectiveAreaKm2[id2] as number) + (support[c] as number) * w2 * cellArea;
+      const sw2 = sup * w2;
+      effectiveMass[id2] = (effectiveMass[id2] as number) + sw2;
+      effectiveAreaKm2[id2] = (effectiveAreaKm2[id2] as number) + sw2 * cellArea;
     }
   }
   return result;
@@ -1058,26 +1120,35 @@ function buildContinents(
   grid: PlanetGrid, arrays: GeographyArrays, profile: GeographyProfile,
   coast: CoastResult, radiusKm: number, rng: () => number,
 ): RegionBuildResult {
+  const n = grid.cellCount;
   const support = arrays.continentSupport;
+  const elevation = arrays.elevation;
+  if (scoreBuf.length < n) scoreBuf = new Float32Array(n);
+  if (compMaskBuf.length < n) compMaskBuf = new Uint8Array(n);
+  if (compIdsBuf.length < n) compIdsBuf = new Int32Array(n);
+  const score = scoreBuf.subarray(0, n);
+  const supportMask = compMaskBuf.subarray(0, n);
   let totalSupport = 0;
-  let c: number;
-  for (c = 0; c < grid.cellCount; c++) totalSupport += support[c] as number;
-  const countWant = Math.max(0, Math.round(totalSupport / profile.continentMeanCells));
-  const score = new Float32Array(grid.cellCount);
   let maxElev = -Infinity, minElev = Infinity;
-  for (c = 0; c < grid.cellCount; c++) {
-    if ((arrays.elevation[c] as number) > maxElev) maxElev = arrays.elevation[c] as number;
-    if ((arrays.elevation[c] as number) < minElev) minElev = arrays.elevation[c] as number;
+  let c: number;
+  for (c = 0; c < n; c++) {
+    const sup = support[c] as number;
+    totalSupport += sup;
+    supportMask[c] = sup >= 0.45 ? 1 : 0;
+    const el = elevation[c] as number;
+    if (el > maxElev) maxElev = el;
+    if (el < minElev) minElev = el;
   }
+  const countWant = Math.max(0, Math.round(totalSupport / profile.continentMeanCells));
   // Глубина берега и нормированная высота дают семенам внутренние,
   // а не береговые точки.
-  for (c = 0; c < grid.cellCount; c++) {
-    const elevNorm = maxElev > minElev ? ((arrays.elevation[c] as number) - minElev) / (maxElev - minElev) : 0;
-    score[c] = Math.min(25, Math.max(0, coast.signedDistance[c] as number)) + elevNorm * 8 + (arrays.plateAffinity[c] as number) * 2;
+  const signedDistance = coast.signedDistance;
+  const plateAffinity = arrays.plateAffinity;
+  for (c = 0; c < n; c++) {
+    const elevNorm = maxElev > minElev ? ((elevation[c] as number) - minElev) / (maxElev - minElev) : 0;
+    score[c] = Math.min(25, Math.max(0, signedDistance[c] as number)) + elevNorm * 8 + (plateAffinity[c] as number) * 2;
   }
-  const supportMask = new Uint8Array(grid.cellCount);
-  for (c = 0; c < grid.cellCount; c++) supportMask[c] = (support[c] as number) >= 0.45 ? 1 : 0;
-  const supportComponents = componentSizes(grid, supportMask);
+  const supportComponents = componentSizes(grid, supportMask, compIdsBuf.subarray(0, n));
   const desiredAll = desiredMasses(countWant, totalSupport, profile.continentMeanCells,
     profile.continentVariation * CONTINENT_DESIRED_VARIATION_GAIN, rng);
   const desiredSortedDesc = Array.from(desiredAll).sort(function (a, b) { return b - a; });
@@ -1085,16 +1156,13 @@ function buildContinents(
     supportComponents.sizes, Math.max(5, Math.round(profile.continentMeanCells * 0.01)), desiredSortedDesc);
   const desired = takeDesiredMasses(desiredSortedDesc, seeds.length, totalSupport);
   let assigned = assignRegions(grid, arrays, seeds, desired, support, 'continent',
-    profile.continentSoftWidthCells, profile.continentMeanCells);
+    profile.continentSoftWidthCells, profile.continentMeanCells,
+    arrays.continentTop1Id, arrays.continentTop1Weight,
+    arrays.continentTop2Id, arrays.continentTop2Weight, arrays.continentEntropy);
   const pruned = pruneEmptyRegions(grid, assigned, support);
   assigned = pruned.assigned;
   const keptSeeds = seeds;
   seeds = pruned.keptOldIds.map(function (oldId) { return keptSeeds[oldId] as number; });
-  arrays.continentTop1Id.set(assigned.top1Id);
-  arrays.continentTop1Weight.set(assigned.top1Weight);
-  arrays.continentTop2Id.set(assigned.top2Id);
-  arrays.continentTop2Weight.set(assigned.top2Weight);
-  arrays.continentEntropy.set(assigned.entropy);
   const areaScale = radiusKm * radiusKm;
   const finalAssigned = assigned;
   const records: RegionRecord[] = seeds.map(function (seedCell, id) {
@@ -1114,37 +1182,49 @@ function buildOceanBasins(
   grid: PlanetGrid, arrays: GeographyArrays, profile: GeographyProfile,
   coast: CoastResult, radiusKm: number, rng: () => number,
 ): RegionBuildResult {
+  const n = grid.cellCount;
   const support = arrays.oceanSupport;
+  const elevation = arrays.elevation;
+  if (scoreBuf.length < n) scoreBuf = new Float32Array(n);
+  if (compMaskBuf.length < n) compMaskBuf = new Uint8Array(n);
+  if (compIdsBuf.length < n) compIdsBuf = new Int32Array(n);
+  if (oceanTop2IdBuf.length < n) {
+    oceanTop2IdBuf = new Int32Array(n);
+    oceanTop2WeightBuf = new Float32Array(n);
+  }
+  const score = scoreBuf.subarray(0, n);
+  const supportMask = compMaskBuf.subarray(0, n);
   let totalSupport = 0;
-  let c: number;
-  for (c = 0; c < grid.cellCount; c++) totalSupport += support[c] as number;
-  const countWant = Math.max(0, Math.round(totalSupport / profile.oceanBasinMeanCells));
-  const score = new Float32Array(grid.cellCount);
   let maxElev = -Infinity, minElev = Infinity;
-  for (c = 0; c < grid.cellCount; c++) {
-    if ((arrays.elevation[c] as number) > maxElev) maxElev = arrays.elevation[c] as number;
-    if ((arrays.elevation[c] as number) < minElev) minElev = arrays.elevation[c] as number;
+  let c: number;
+  for (c = 0; c < n; c++) {
+    const sup = support[c] as number;
+    totalSupport += sup;
+    supportMask[c] = sup >= 0.45 ? 1 : 0;
+    const el = elevation[c] as number;
+    if (el > maxElev) maxElev = el;
+    if (el < minElev) minElev = el;
   }
-  for (c = 0; c < grid.cellCount; c++) {
-    const depthNorm = maxElev > minElev ? 1 - ((arrays.elevation[c] as number) - minElev) / (maxElev - minElev) : 0;
-    score[c] = Math.min(25, Math.max(0, -(coast.signedDistance[c] as number))) + depthNorm * 8;
+  const countWant = Math.max(0, Math.round(totalSupport / profile.oceanBasinMeanCells));
+  const signedDistance = coast.signedDistance;
+  for (c = 0; c < n; c++) {
+    const depthNorm = maxElev > minElev ? 1 - ((elevation[c] as number) - minElev) / (maxElev - minElev) : 0;
+    score[c] = Math.min(25, Math.max(0, -(signedDistance[c] as number))) + depthNorm * 8;
   }
-  const supportMask = new Uint8Array(grid.cellCount);
-  for (c = 0; c < grid.cellCount; c++) supportMask[c] = (support[c] as number) >= 0.45 ? 1 : 0;
-  const supportComponents = componentSizes(grid, supportMask);
+  const supportComponents = componentSizes(grid, supportMask, compIdsBuf.subarray(0, n));
   const desiredAll = desiredMasses(countWant, totalSupport, profile.oceanBasinMeanCells, 0.45, rng);
   const desiredSortedDesc = Array.from(desiredAll).sort(function (a, b) { return b - a; });
   let seeds = chooseSeeds(grid, support, score, countWant, supportComponents.ids,
     supportComponents.sizes, Math.max(50, Math.round(profile.oceanBasinMeanCells * 0.03)), desiredSortedDesc);
   const desired = takeDesiredMasses(desiredSortedDesc, seeds.length, totalSupport);
   let assigned = assignRegions(grid, arrays, seeds, desired, support, 'ocean',
-    Math.max(1, profile.continentSoftWidthCells), profile.oceanBasinMeanCells);
+    Math.max(1, profile.continentSoftWidthCells), profile.oceanBasinMeanCells,
+    arrays.oceanBasinId, arrays.oceanBasinWeight,
+    oceanTop2IdBuf.subarray(0, n), oceanTop2WeightBuf.subarray(0, n), oceanEntropyBuf.subarray(0, n));
   const pruned = pruneEmptyRegions(grid, assigned, support);
   assigned = pruned.assigned;
   const keptSeeds = seeds;
   seeds = pruned.keptOldIds.map(function (oldId) { return keptSeeds[oldId] as number; });
-  arrays.oceanBasinId.set(assigned.top1Id);
-  arrays.oceanBasinWeight.set(assigned.top1Weight);
   const areaScale = radiusKm * radiusKm;
   const finalAssigned = assigned;
   const records: RegionRecord[] = seeds.map(function (seedCell, id) {
@@ -1160,28 +1240,38 @@ function buildOceanBasins(
   return { records, totalSupport, assigned: finalAssigned };
 }
 
-function componentSizes(grid: PlanetGrid, mask: Uint8Array): { sizes: number[]; ids: Int32Array } {
-  const visited = new Uint8Array(grid.cellCount);
+function componentSizes(
+  grid: PlanetGrid, mask: Uint8Array, idsOut?: Int32Array | null,
+): { sizes: number[]; ids: Int32Array } {
+  const n = grid.cellCount;
+  if (compStackBuf.length < n) {
+    compStackBuf = new Int32Array(n);
+  }
+  const stack = compStackBuf;
   const sizes: number[] = [];
-  const stack: number[] = [];
-  const ids = new Int32Array(grid.cellCount).fill(-1);
-  for (let c = 0; c < grid.cellCount; c++) {
-    if (visited[c] || !mask[c]) continue;
+  const ids = idsOut !== undefined
+    ? (idsOut ? idsOut.fill(-1) : new Int32Array(0))
+    : new Int32Array(n).fill(-1);
+  const writeIds = ids.length > 0;
+  for (let c = 0; c < n; c++) {
+    if (!mask[c]) continue;
     const id = sizes.length;
     let size = 0;
-    stack.length = 0;
-    stack.push(c);
-    visited[c] = 1;
-    ids[c] = id;
-    while (stack.length) {
-      const cell = stack.pop() as number;
+    let sp = 0;
+    stack[sp++] = c;
+    mask[c] = 0;
+    if (writeIds) ids[c] = id;
+    while (sp > 0) {
+      const cell = stack[--sp] as number;
       size++;
-      for (let n = 0; n < (grid.neighborCount[cell] as number); n++) {
-        const nb = grid.neighbors[cell * 6 + n] as number;
-        if (!visited[nb] && mask[nb]) {
-          visited[nb] = 1;
-          ids[nb] = id;
-          stack.push(nb);
+      const nc = grid.neighborCount[cell] as number;
+      const base = cell * 6;
+      for (let k = 0; k < nc; k++) {
+        const nb = grid.neighbors[base + k] as number;
+        if (mask[nb]) {
+          mask[nb] = 0;
+          if (writeIds) ids[nb] = id;
+          stack[sp++] = nb;
         }
       }
     }
@@ -1212,14 +1302,19 @@ function distributionStats(values: ArrayLike<number>): DistributionStats {
   };
 }
 
-function landmassStats(grid: PlanetGrid, arrays: GeographyArrays, threshold: number): LandmassStatsEntry {
-  const mask = new Uint8Array(grid.cellCount);
+function landmassStats(
+  grid: PlanetGrid, arrays: GeographyArrays, threshold: number, idsOut?: Int32Array | null,
+): LandmassStatsEntry {
+  const n = grid.cellCount;
+  if (compMaskBuf.length < n) compMaskBuf = new Uint8Array(n);
+  const mask = compMaskBuf.subarray(0, n);
   let landCells = 0;
-  for (let c = 0; c < grid.cellCount; c++) {
-    mask[c] = (arrays.muLand[c] as number) >= threshold ? 1 : 0;
-    landCells += mask[c] as number;
+  for (let c = 0; c < n; c++) {
+    const bit = (arrays.muLand[c] as number) >= threshold ? 1 : 0;
+    mask[c] = bit;
+    landCells += bit;
   }
-  const components = componentSizes(grid, mask);
+  const components = componentSizes(grid, mask, idsOut);
   const stats = distributionStats(components.sizes);
   let tiny = 0;
   for (let i = 0; i < components.sizes.length; i++) if ((components.sizes[i] as number) < 5) tiny++;
@@ -1232,7 +1327,6 @@ function landmassStats(grid: PlanetGrid, arrays: GeographyArrays, threshold: num
     maxCells: stats.max,
     largestShare: landCells ? stats.max / landCells : 0,
     tinyIslandsUnder5: tiny,
-    ids: components.ids,
   };
 }
 
@@ -1246,21 +1340,39 @@ function computeStats(
   let softLandArea = 0, softShelfArea = 0, softOceanArea = 0;
   let equatorTempSum = 0, equatorWeight = 0, polarTempSum = 0, polarWeight = 0;
   let tempSum = 0, qSum = 0, tempQSum = 0, temp2Sum = 0, q2Sum = 0;
+  let coreSupport = 0, transitionSupport = 0, entropyWeighted = 0;
+  const areas = grid.areas;
+  const centers = grid.centers;
+  const hardLand = coast.hardLand;
+  const muLand = arrays.muLand;
+  const muShelf = arrays.muShelf;
+  const muOcean = arrays.muOcean;
+  const temperature = arrays.temperature;
+  const continentSupport = arrays.continentSupport;
+  const continentTop1Weight = arrays.continentTop1Weight;
+  const continentEntropy = arrays.continentEntropy;
+  const n = grid.cellCount;
   let c: number;
-  for (c = 0; c < grid.cellCount; c++) {
-    const area = grid.areas[c] as number;
+  for (c = 0; c < n; c++) {
+    const area = areas[c] as number;
     areaTotal += area;
-    if (!coast.hardLand[c]) hardOceanArea += area;
-    softLandArea += (arrays.muLand[c] as number) * area;
-    softShelfArea += (arrays.muShelf[c] as number) * area;
-    softOceanArea += (arrays.muOcean[c] as number) * area;
-    const y = grid.centers[c * 3 + 1] as number;
+    if (!hardLand[c]) hardOceanArea += area;
+    softLandArea += (muLand[c] as number) * area;
+    softShelfArea += (muShelf[c] as number) * area;
+    softOceanArea += (muOcean[c] as number) * area;
+    const y = centers[c * 3 + 1] as number;
     const q = Math.sqrt(Math.max(0, 1 - y * y));
-    const temp = arrays.temperature[c] as number;
+    const temp = temperature[c] as number;
     tempSum += temp * area; qSum += q * area; tempQSum += temp * q * area;
     temp2Sum += temp * temp * area; q2Sum += q * q * area;
-    if (Math.abs(y) <= 0.35) { equatorTempSum += temp * area; equatorWeight += area; }
-    if (Math.abs(y) >= 0.85) { polarTempSum += temp * area; polarWeight += area; }
+    const absY = y < 0 ? -y : y;
+    if (absY <= 0.35) { equatorTempSum += temp * area; equatorWeight += area; }
+    else if (absY >= 0.85) { polarTempSum += temp * area; polarWeight += area; }
+    const support = continentSupport[c] as number;
+    if ((continentTop1Weight[c] as number) >= 0.75) coreSupport += support;
+    const ent = continentEntropy[c] as number;
+    if (ent >= 0.5) transitionSupport += support;
+    entropyWeighted += support * ent;
   }
   const covariance = tempQSum / areaTotal - (tempSum / areaTotal) * (qSum / areaTotal);
   const varTemp = Math.max(0, temp2Sum / areaTotal - Math.pow(tempSum / areaTotal, 2));
@@ -1269,20 +1381,10 @@ function computeStats(
 
   const continentMasses = continents.records.map(function (r) { return r.effectiveMassCells; });
   const continentDist = distributionStats(continentMasses);
-  let coreSupport = 0, transitionSupport = 0, entropyWeighted = 0;
-  for (c = 0; c < grid.cellCount; c++) {
-    const support = arrays.continentSupport[c] as number;
-    if ((arrays.continentTop1Weight[c] as number) >= 0.75) coreSupport += support;
-    if ((arrays.continentEntropy[c] as number) >= 0.5) transitionSupport += support;
-    entropyWeighted += support * (arrays.continentEntropy[c] as number);
-  }
   const basinMasses = oceanBasins.records.map(function (r) { return r.effectiveMassCells; });
   const basinDist = distributionStats(basinMasses);
   const thresholds = [0.35, 0.5, 0.65].map(function (threshold) {
-    const entry = landmassStats(grid, arrays, threshold);
-    if (threshold === 0.5) arrays.physicalLandmassId.set(entry.ids as Int32Array);
-    delete entry.ids;
-    return entry;
+    return landmassStats(grid, arrays, threshold, threshold === 0.5 ? arrays.physicalLandmassId : null);
   });
   const plateDist = distributionStats(plates.map(function (r) { return r.cellCount; }));
   return {
@@ -1329,7 +1431,8 @@ function finishGeography(
   function progress(stage: string, fraction: number): void {
     if (onProgress) onProgress(stage, fraction);
   }
-  const result = {
+  const expFreq = expectedFrequency(profile.radiusKm);
+  const result: GeographyResult = {
     surfaceApplicable: true,
     gridVersion: grid.gridVersion || profile.gridVersion,
     noiseVersion: NOISE_VERSION,
@@ -1337,26 +1440,50 @@ function finishGeography(
     presetVersion: profile.presetVersion,
     profile: profile,
     v: grid.v,
-    expectedFrequency: expectedFrequency(profile.radiusKm),
-    frequencyMatchesProfile: grid.v === expectedFrequency(profile.radiusKm),
+    expectedFrequency: expFreq,
+    frequencyMatchesProfile: grid.v === expFreq,
     cellCount: grid.cellCount,
     radiusKm: profile.radiusKm,
-    seaLevel: 0,
-    shelfBelowLevel: 0,
-    shelfAboveLevel: 0,
-    elevationMin: 0,
-    elevationMax: 0,
+    seaLevel: 1e-300,
+    shelfBelowLevel: 1e-300,
+    shelfAboveLevel: 1e-300,
+    elevationMin: 1e-300,
+    elevationMax: 1e-300,
     continents: [] as RegionRecord[],
     oceanBasins: [] as RegionRecord[],
     plates: [] as PlateRecord[],
     stats: null as GeographyStats | null,
-  } as unknown as GeographyResult;
-  const writable = result as unknown as Record<string, unknown>;
-  const sourceArrays = arrays as unknown as Record<string, unknown>;
-  for (const name of ARRAY_FIELDS) writable[name] = sourceArrays[name];
+    elevation: arrays.elevation,
+    moisture: arrays.moisture,
+    temperature: arrays.temperature,
+    plateAffinity: arrays.plateAffinity,
+    volcanism: arrays.volcanism,
+    detail: arrays.detail,
+    muLand: arrays.muLand,
+    muShelf: arrays.muShelf,
+    muOcean: arrays.muOcean,
+    signedCoastDistanceCells: arrays.signedCoastDistanceCells,
+    plateId: arrays.plateId,
+    plateBoundary: arrays.plateBoundary,
+    continentSupport: arrays.continentSupport,
+    continentTop1Id: arrays.continentTop1Id,
+    continentTop1Weight: arrays.continentTop1Weight,
+    continentTop2Id: arrays.continentTop2Id,
+    continentTop2Weight: arrays.continentTop2Weight,
+    continentEntropy: arrays.continentEntropy,
+    oceanSupport: arrays.oceanSupport,
+    oceanBasinId: arrays.oceanBasinId,
+    oceanBasinWeight: arrays.oceanBasinWeight,
+    physicalLandmassId: arrays.physicalLandmassId,
+  };
 
   if (profile.surfaceClass === 'gas_giant' || profile.surfaceClass === 'no_surface') {
     result.surfaceApplicable = false;
+    result.seaLevel = 0;
+    result.shelfBelowLevel = 0;
+    result.shelfAboveLevel = 0;
+    result.elevationMin = 0;
+    result.elevationMax = 0;
     result.stats = {
       oceanFractionHard: 0,
       oceanFractionTarget: profile.oceanPctl / 100,
@@ -1376,19 +1503,22 @@ function finishGeography(
   result.seaLevel = quantile(profile.oceanPctl / 100);
   result.shelfBelowLevel = quantile(profile.shelfBelowPctl / 100);
   result.shelfAboveLevel = quantile(profile.shelfAbovePctl / 100);
-  let minE = Infinity, maxE = -Infinity;
-  let c: number;
-  for (c = 0; c < grid.cellCount; c++) {
-    if ((arrays.elevation[c] as number) < minE) minE = arrays.elevation[c] as number;
-    if ((arrays.elevation[c] as number) > maxE) maxE = arrays.elevation[c] as number;
-  }
+  const minE = grid.cellCount > 0 ? quantile(0) : Infinity;
+  const maxE = grid.cellCount > 0 ? quantile(1) : -Infinity;
   result.elevationMin = minE;
   result.elevationMax = maxE;
+  const elevation = arrays.elevation;
+  const volcanism = arrays.volcanism;
+  const temperature = arrays.temperature;
+  const seaLevel = result.seaLevel;
+  const elevSpan = maxE - seaLevel;
+  let c: number;
   for (c = 0; c < grid.cellCount; c++) {
-    const heightNorm = (arrays.elevation[c] as number) > result.seaLevel && maxE > result.seaLevel
-      ? ((arrays.elevation[c] as number) - result.seaLevel) / (maxE - result.seaLevel)
+    const el = elevation[c] as number;
+    const heightNorm = el > seaLevel && elevSpan > 0
+      ? (el - seaLevel) / elevSpan
       : 0;
-    arrays.temperature[c] = clamp01((temperatureBase[c] as number) - 0.22 * heightNorm + 0.03 * (arrays.volcanism[c] as number));
+    temperature[c] = clamp01((temperatureBase[c] as number) - 0.22 * heightNorm + 0.03 * (volcanism[c] as number));
   }
 
   progress('coast', 0.45);
@@ -1438,7 +1568,7 @@ function generateGeography(
   const sampler = createFieldSampler(input);
   const profile = sampler.profile;
   const arrays = allocateGeographyArrays(grid.cellCount);
-  const temperatureBase = new Float32Array(grid.cellCount);
+  const temperatureBase = arrays.temperature;
   if (profile.surfaceClass !== 'gas_giant' && profile.surfaceClass !== 'no_surface') {
     sampleGridFields(grid, sampler, arrays, 0, grid.cellCount, temperatureBase);
   }

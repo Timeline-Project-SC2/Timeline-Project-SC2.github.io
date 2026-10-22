@@ -101,7 +101,7 @@ export function xxhash32(bytes: usize, len: i32, seed: u32): u32 {
 const F3: f64 = 1.0 / 3.0;
 const G3: f64 = 1.0 / 6.0;
 
-function simplex3(table: usize, xin: f64, yin: f64, zin: f64): f64 {
+@inline function simplex3(table: usize, xin: f64, yin: f64, zin: f64): f64 {
   let n0: f64, n1: f64, n2: f64, n3: f64;
   const s = (xin + yin + zin) * F3;
   const i = i32(Math.floor(xin + s)), j = i32(Math.floor(yin + s)), k = i32(Math.floor(zin + s));
@@ -153,7 +153,7 @@ export function simplexOnce(table: usize, x: f64, y: f64, z: f64): f64 {
   return simplex3(table, x, y, z);
 }
 
-function simplexFbm(table: usize, x: f64, y: f64, z: f64, octaves: i32, lacunarity: f64, gain: f64): f64 {
+@inline function simplexFbm(table: usize, x: f64, y: f64, z: f64, octaves: i32, lacunarity: f64, gain: f64): f64 {
   let amp: f64 = 1.0, freq: f64 = 1.0, sum: f64 = 0.0, norm: f64 = 0.0;
   for (let o = 0; o < octaves; o++) {
     sum += amp * simplex3(table, x * freq, y * freq, z * freq);
@@ -264,6 +264,7 @@ function simplex3x2(table: usize, xv: v128, yv: v128, zv: v128): v128 {
   const iiA = iA & 255, jjA = jA & 255, kkA = kA & 255;
   const iiB = iB & 255, jjB = jB & 255, kkB = kB & 255;
   const pm = table + 512;
+  const grad = GRAD;
   const zero = f64x2.splat(0.0);
   const c06 = f64x2.splat(0.6);
 
@@ -273,9 +274,9 @@ function simplex3x2(table: usize, xv: v128, yv: v128, zv: v128): v128 {
   const t0raw = t0v;
   t0v = f64x2.mul(t0v, t0v);
   let n0v = f64x2.mul(f64x2.mul(t0v, t0v), f64x2.add(f64x2.add(
-    f64x2.mul(pack2(load<f64>(GRAD + gi0A), load<f64>(GRAD + gi0B)), x0v),
-    f64x2.mul(pack2(load<f64>(GRAD + gi0A + 8), load<f64>(GRAD + gi0B + 8)), y0v)),
-    f64x2.mul(pack2(load<f64>(GRAD + gi0A + 16), load<f64>(GRAD + gi0B + 16)), z0v)));
+    f64x2.mul(pack2(load<f64>(grad + gi0A), load<f64>(grad + gi0B)), x0v),
+    f64x2.mul(pack2(load<f64>(grad + gi0A + 8), load<f64>(grad + gi0B + 8)), y0v)),
+    f64x2.mul(pack2(load<f64>(grad + gi0A + 16), load<f64>(grad + gi0B + 16)), z0v)));
   n0v = v128.bitselect(zero, n0v, f64x2.lt(t0raw, zero));
 
   const gi1A = usize(load<u8>(pm + usize(iiA + i1A + i32(load<u8>(table + usize(jjA + j1A + i32(load<u8>(table + usize(kkA + k1A))))))))) * 24;
@@ -284,9 +285,9 @@ function simplex3x2(table: usize, xv: v128, yv: v128, zv: v128): v128 {
   const t1raw = t1v;
   t1v = f64x2.mul(t1v, t1v);
   let n1v = f64x2.mul(f64x2.mul(t1v, t1v), f64x2.add(f64x2.add(
-    f64x2.mul(pack2(load<f64>(GRAD + gi1A), load<f64>(GRAD + gi1B)), x1v),
-    f64x2.mul(pack2(load<f64>(GRAD + gi1A + 8), load<f64>(GRAD + gi1B + 8)), y1v)),
-    f64x2.mul(pack2(load<f64>(GRAD + gi1A + 16), load<f64>(GRAD + gi1B + 16)), z1v)));
+    f64x2.mul(pack2(load<f64>(grad + gi1A), load<f64>(grad + gi1B)), x1v),
+    f64x2.mul(pack2(load<f64>(grad + gi1A + 8), load<f64>(grad + gi1B + 8)), y1v)),
+    f64x2.mul(pack2(load<f64>(grad + gi1A + 16), load<f64>(grad + gi1B + 16)), z1v)));
   n1v = v128.bitselect(zero, n1v, f64x2.lt(t1raw, zero));
 
   const gi2A = usize(load<u8>(pm + usize(iiA + i2A + i32(load<u8>(table + usize(jjA + j2A + i32(load<u8>(table + usize(kkA + k2A))))))))) * 24;
@@ -295,9 +296,9 @@ function simplex3x2(table: usize, xv: v128, yv: v128, zv: v128): v128 {
   const t2raw = t2v;
   t2v = f64x2.mul(t2v, t2v);
   let n2v = f64x2.mul(f64x2.mul(t2v, t2v), f64x2.add(f64x2.add(
-    f64x2.mul(pack2(load<f64>(GRAD + gi2A), load<f64>(GRAD + gi2B)), x2v),
-    f64x2.mul(pack2(load<f64>(GRAD + gi2A + 8), load<f64>(GRAD + gi2B + 8)), y2v)),
-    f64x2.mul(pack2(load<f64>(GRAD + gi2A + 16), load<f64>(GRAD + gi2B + 16)), z2v)));
+    f64x2.mul(pack2(load<f64>(grad + gi2A), load<f64>(grad + gi2B)), x2v),
+    f64x2.mul(pack2(load<f64>(grad + gi2A + 8), load<f64>(grad + gi2B + 8)), y2v)),
+    f64x2.mul(pack2(load<f64>(grad + gi2A + 16), load<f64>(grad + gi2B + 16)), z2v)));
   n2v = v128.bitselect(zero, n2v, f64x2.lt(t2raw, zero));
 
   const gi3A = usize(load<u8>(pm + usize(iiA + 1 + i32(load<u8>(table + usize(jjA + 1 + i32(load<u8>(table + usize(kkA + 1))))))))) * 24;
@@ -306,15 +307,15 @@ function simplex3x2(table: usize, xv: v128, yv: v128, zv: v128): v128 {
   const t3raw = t3v;
   t3v = f64x2.mul(t3v, t3v);
   let n3v = f64x2.mul(f64x2.mul(t3v, t3v), f64x2.add(f64x2.add(
-    f64x2.mul(pack2(load<f64>(GRAD + gi3A), load<f64>(GRAD + gi3B)), x3v),
-    f64x2.mul(pack2(load<f64>(GRAD + gi3A + 8), load<f64>(GRAD + gi3B + 8)), y3v)),
-    f64x2.mul(pack2(load<f64>(GRAD + gi3A + 16), load<f64>(GRAD + gi3B + 16)), z3v)));
+    f64x2.mul(pack2(load<f64>(grad + gi3A), load<f64>(grad + gi3B)), x3v),
+    f64x2.mul(pack2(load<f64>(grad + gi3A + 8), load<f64>(grad + gi3B + 8)), y3v)),
+    f64x2.mul(pack2(load<f64>(grad + gi3A + 16), load<f64>(grad + gi3B + 16)), z3v)));
   n3v = v128.bitselect(zero, n3v, f64x2.lt(t3raw, zero));
 
   return f64x2.mul(f64x2.splat(32.0), f64x2.add(f64x2.add(f64x2.add(n0v, n1v), n2v), n3v));
 }
 
-function simplexFbmX2(table: usize, xv: v128, yv: v128, zv: v128, octaves: i32, lacunarity: f64, gain: f64): v128 {
+@inline function simplexFbmX2(table: usize, xv: v128, yv: v128, zv: v128, octaves: i32, lacunarity: f64, gain: f64): v128 {
   let amp: f64 = 1.0, freq: f64 = 1.0, norm: f64 = 0.0;
   let sum = f64x2.splat(0.0);
   for (let o = 0; o < octaves; o++) {
@@ -346,9 +347,9 @@ let sfOD0: f64 = 0, sfOD1: f64 = 0, sfOD2: f64 = 0;
 let sfOW0: f64 = 0, sfOW1: f64 = 0, sfOW2: f64 = 0;
 let sfWarpFreq: f64 = 0, sfWarpAmp: f64 = 0, sfElevationFreq: f64 = 0;
 let sfDetailFreq: f64 = 0, sfMoistureFreq: f64 = 0, sfTempFreq: f64 = 0, sfVolcFreq: f64 = 0;
-let sfCenters: usize = 0, sfOut: usize = 0, sfVolcPreOut: usize = 0;
+let sfCenters: usize = 0, sfOut: usize = 0, sfVolcPreOut: usize = 0, sfIsF32: bool = false;
 
-function sampleStoreCell(c: i32, plate: f64, base: f64, detail: f64,
+@inline function sampleStoreCell(c: i32, plate: f64, base: f64, detail: f64,
   moistureRaw: f64, tempAnomaly: f64, ny: f64, volcRaw: f64): void {
   const elevation = clampd(0.74 * base + 0.30 * plate + 0.10 * detail, -1.0, 1.0);
   const moisture = clamp01d(0.5 + 0.5 * moistureRaw + 0.04 * plate);
@@ -365,9 +366,15 @@ function sampleStoreCell(c: i32, plate: f64, base: f64, detail: f64,
   store<f32>(oi + 20, f32(clampd(detail, -1.0, 1.0)));
 }
 
-function sampleCellScalar(c: i32): void {
-  const ci = sfCenters + usize(c * 24);
-  const x = load<f64>(ci), y = load<f64>(ci + 8), z = load<f64>(ci + 16);
+@inline function sampleCellScalar(c: i32): void {
+  let x: f64, y: f64, z: f64;
+  if (sfIsF32) {
+    const ci = sfCenters + usize(c * 12);
+    x = f64(load<f32>(ci)); y = f64(load<f32>(ci + 4)); z = f64(load<f32>(ci + 8));
+  } else {
+    const ci = sfCenters + usize(c * 24);
+    x = load<f64>(ci); y = load<f64>(ci + 8); z = load<f64>(ci + 16);
+  }
   const len = Math.sqrt(x * x + y * y + z * z);
   const nx = x / len, ny = y / len, nz = z / len;
   const wx = simplex3(sfPW, nx * sfWarpFreq + sfOW0, ny * sfWarpFreq + sfOW1, nz * sfWarpFreq + sfOW2);
@@ -389,11 +396,17 @@ function sampleCellScalar(c: i32): void {
   sampleStoreCell(c, plate, base, detail, moistureRaw, tempAnomaly, ny, volcRaw);
 }
 
-function sampleCellPair(c: i32): void {
-  const ciA = sfCenters + usize(c * 24);
-  const ciB = ciA + 24;
-  const xA = load<f64>(ciA), yA = load<f64>(ciA + 8), zA = load<f64>(ciA + 16);
-  const xB = load<f64>(ciB), yB = load<f64>(ciB + 8), zB = load<f64>(ciB + 16);
+@inline function sampleCellPair(c: i32): void {
+  let xA: f64, yA: f64, zA: f64, xB: f64, yB: f64, zB: f64;
+  if (sfIsF32) {
+    const ciA = sfCenters + usize(c * 12);
+    xA = f64(load<f32>(ciA)); yA = f64(load<f32>(ciA + 4)); zA = f64(load<f32>(ciA + 8));
+    xB = f64(load<f32>(ciA + 12)); yB = f64(load<f32>(ciA + 16)); zB = f64(load<f32>(ciA + 20));
+  } else {
+    const ciA = sfCenters + usize(c * 24);
+    xA = load<f64>(ciA); yA = load<f64>(ciA + 8); zA = load<f64>(ciA + 16);
+    xB = load<f64>(ciA + 24); yB = load<f64>(ciA + 32); zB = load<f64>(ciA + 40);
+  }
   const lenA = Math.sqrt(xA * xA + yA * yA + zA * zA);
   const lenB = Math.sqrt(xB * xB + yB * yB + zB * zB);
   const nxA = xA / lenA, nyA = yA / lenA, nzA = zA / lenA;
@@ -453,6 +466,8 @@ function sampleCellPair(c: i32): void {
 }
 
 export function sampleFieldsBatch(tables: usize, params: usize, centers: usize, out: usize, volcPreOut: usize, count: i32): void {
+  sfIsF32 = count < 0;
+  if (sfIsF32) count = -count;
   const ratio = load<f64>(params);
   const climateRatio = load<f64>(params + 8);
   sfPE = tables; sfPM = tables + 1024; sfPT = tables + 2048; sfPP = tables + 3072;
@@ -475,7 +490,8 @@ export function sampleFieldsBatch(tables: usize, params: usize, centers: usize, 
   sfVolcFreq = 3.6 * ratio;
   sfCenters = centers; sfOut = out; sfVolcPreOut = volcPreOut;
   let c = 0;
-  for (; c + 1 < count; c += 2) sampleCellPair(c);
+  const pairEnd = count & ~1;
+  while (c < pairEnd) { sampleCellPair(c); c += 2; }
   if (c < count) sampleCellScalar(c);
 }
 
@@ -607,33 +623,28 @@ function heapInit(
 }
 
 @inline function heapRec(i: i32): usize { return heapRecPtr + usize(i * 16); }
-@inline function heapLessD(dA: f64, cA: i32, iB: i32): bool {
-  const pB = heapRec(iB);
-  const dB = load<f64>(pB);
-  return dA < dB || (dA == dB && cA < load<i32>(pB + 8));
-}
 
-function heapPush(dist: f64, cell: i32, label: i32): void {
+@inline function heapPush(dist: f64, cell: i32, label: i32): void {
   if (heapSize >= heapCap) { heapOverflow = true; return; }
   let i = heapSize++;
   while (i > 0) {
     const parent = (i - 1) >> 2;
     const pP = heapRec(parent);
     const dp = load<f64>(pP);
-    if (dp < dist || (dp == dist && load<i32>(pP + 8) <= cell)) break;
+    const cp = load<i32>(pP + 8);
+    if (dp < dist || (dp == dist && cp <= cell)) break;
     const pI = heapRec(i);
     store<f64>(pI, dp);
-    store<i32>(pI + 8, load<i32>(pP + 8));
-    if (heapLabelPtr) store<i32>(pI + 12, load<i32>(pP + 12));
+    store<u64>(pI + 8, load<u64>(pP + 8));
     i = parent;
   }
   const pI = heapRec(i);
   store<f64>(pI, dist);
   store<i32>(pI + 8, cell);
-  if (heapLabelPtr) store<i32>(pI + 12, label);
+  store<i32>(pI + 12, label);
 }
 
-function heapPop(): bool {
+@inline function heapPop(): bool {
   if (heapSize == 0) return false;
   heapOutDist = load<f64>(heapRecPtr);
   heapOutCell = load<i32>(heapRecPtr + 8);
@@ -643,29 +654,36 @@ function heapPop(): bool {
   const pLast = heapRec(heapSize);
   const dLast = load<f64>(pLast);
   const cLast = load<i32>(pLast + 8);
-  const lLast = heapLabelPtr ? load<i32>(pLast + 12) : 0;
+  const clLast = load<u64>(pLast + 8);
   let i = 0;
   for (;;) {
-    const first = i * 4 + 1;
+    const first = (i << 2) + 1;
     if (first >= heapSize) break;
     let smallest = first;
+    let pS = heapRec(first);
+    let dS = load<f64>(pS);
+    let cS = load<i32>(pS + 8);
     const lastChild = first + 3 < heapSize ? first + 3 : heapSize - 1;
     for (let ch = first + 1; ch <= lastChild; ch++) {
-      if (heapLessD(load<f64>(heapRec(ch)), load<i32>(heapRec(ch) + 8), smallest)) smallest = ch;
+      const pCh = heapRec(ch);
+      const dCh = load<f64>(pCh);
+      const cCh = load<i32>(pCh + 8);
+      if (dCh < dS || (dCh == dS && cCh < cS)) {
+        smallest = ch;
+        pS = pCh;
+        dS = dCh;
+        cS = cCh;
+      }
     }
-    const pS = heapRec(smallest);
-    const dS = load<f64>(pS);
-    if (dLast < dS || (dLast == dS && cLast <= load<i32>(pS + 8))) break;
+    if (dLast < dS || (dLast == dS && cLast <= cS)) break;
     const pI = heapRec(i);
     store<f64>(pI, dS);
-    store<i32>(pI + 8, load<i32>(pS + 8));
-    if (heapLabelPtr) store<i32>(pI + 12, load<i32>(pS + 12));
+    store<u64>(pI + 8, load<u64>(pS + 8));
     i = smallest;
   }
   const pI = heapRec(i);
   store<f64>(pI, dLast);
-  store<i32>(pI + 8, cLast);
-  if (heapLabelPtr) store<i32>(pI + 12, lLast);
+  store<u64>(pI + 8, clLast);
   return true;
 }
 
@@ -699,6 +717,7 @@ let dSize: i32 = 0;
 let dFreeBlock: i32 = -1;
 let dNextBlock: i32 = 0;
 let dServed: i32 = -1;
+let dMaxBucket: i32 = -1;
 let dActiveCount: i32 = 0;
 let dActivePos: i32 = 0;
 
@@ -718,15 +737,13 @@ function dialInit(
   dFreeBlock = -1;
   dNextBlock = 0;
   dServed = -1;
+  dMaxBucket = -1;
   dActiveCount = 0;
   dActivePos = 0;
   pqDial = true;
   pqFail = 0;
-  for (let b = 0; b < nBuckets; b++) {
-    store<i32>(meta + usize(b * 4), -1);
-    store<i32>(meta + usize((nBuckets + b) * 4), -1);
-    store<i32>(meta + usize((2 * nBuckets + b) * 4), 0);
-  }
+  memory.fill(meta, 0xff, usize(nBuckets * 8));
+  memory.fill(meta + usize(nBuckets * 8), 0, usize(nBuckets * 4));
 }
 
 @inline function dialHead(b: i32): i32 { return load<i32>(dMeta + usize(b * 4)); }
@@ -736,10 +753,11 @@ function dialInit(
 @inline function dialSetTail(b: i32, v: i32): void { store<i32>(dMeta + usize((dBuckets + b) * 4), v); }
 @inline function dialSetFill(b: i32, v: i32): void { store<i32>(dMeta + usize((2 * dBuckets + b) * 4), v); }
 
-function dialPush(dist: f64, cell: i32, label: i32): void {
-  const rel = dist - dOrigin;
+@inline function dialPush(dist: f64, cell: i32, label: i32): void {
+  const rel = (dist - dOrigin) * 8.0;
   const b = i32(rel);
   if (!(rel >= 0) || b <= dServed || b >= dBuckets) { pqFail = 2; return; }
+  if (b > dMaxBucket) dMaxBucket = b;
   let tail = dialTail(b);
   let fill = dialFill(b);
   if (tail < 0 || fill == DIAL_BS) {
@@ -762,8 +780,7 @@ function dialPush(dist: f64, cell: i32, label: i32): void {
   }
   const idx = tail * DIAL_BS + fill;
   store<f64>(dPoolK + usize(idx * 8), dist);
-  store<i32>(dPoolC + usize(idx * 4), cell);
-  store<i32>(dPoolL + usize(idx * 4), label);
+  store<u64>(dPoolC + usize(idx * 8), (u64(u32(cell)) << 32) | u64(u32(label)));
   dialSetFill(b, fill + 1);
   dSize++;
 }
@@ -785,110 +802,110 @@ function dialGatherSort(b: i32): void {
   while (blk >= 0) {
     const next = load<i32>(dBlockNext + usize(blk * 4));
     const lim = blk == tailB ? tailFill : DIAL_BS;
+    if (m + lim > dSortCap) { pqFail = 1; dActiveCount = 0; dActivePos = 0; return; }
     const start = blk * DIAL_BS;
-    for (let s2 = 0; s2 < lim; s2++) {
-      if (m >= dSortCap) { pqFail = 1; dActiveCount = 0; dActivePos = 0; return; }
-      const src = start + s2;
-      store<f64>(dSortK + usize(m * 8), load<f64>(dPoolK + usize(src * 8)));
-      store<i32>(dSortC + usize(m * 4), load<i32>(dPoolC + usize(src * 4)));
-      store<i32>(dSortL + usize(m * 4), load<i32>(dPoolL + usize(src * 4)));
-      m++;
-    }
+    memory.copy(dSortK + usize(m * 8), dPoolK + usize(start * 8), usize(lim * 8));
+    memory.copy(dSortC + usize(m * 8), dPoolC + usize(start * 8), usize(lim * 8));
+    m += lim;
     store<i32>(dBlockNext + usize(blk * 4), dFreeBlock);
     dFreeBlock = blk;
     blk = next;
   }
-  for (let i = 0; i < m; i++) store<u32>(dSortIdx + usize(i * 4), u32(i));
-  if (m <= 24) {
-    for (let i = 1; i < m; i++) {
-      const v = load<u32>(dSortIdx + usize(i * 4));
-      const kv = load<f64>(dSortK + usize(v * 8));
-      const cv = load<i32>(dSortC + usize(v * 4));
+  if (m <= 1) {
+    dActiveCount = m;
+    dActivePos = 0;
+    return;
+  }
+  const RUN: i32 = 32;
+  for (let start = 0; start < m; start += RUN) {
+    let end = start + RUN;
+    if (end > m) end = m;
+    for (let i = start + 1; i < end; i++) {
+      const kv = load<f64>(dSortK + usize(i * 8));
+      const clv = load<u64>(dSortC + usize(i * 8));
+      const cv = i32(clv >> 32);
       let j = i - 1;
-      while (j >= 0) {
-        const u = load<u32>(dSortIdx + usize(j * 4));
-        const ku = load<f64>(dSortK + usize(u * 8));
-        if (ku < kv || (ku == kv && load<i32>(dSortC + usize(u * 4)) <= cv)) break;
-        store<u32>(dSortIdx + usize((j + 1) * 4), u);
+      while (j >= start) {
+        const ku = load<f64>(dSortK + usize(j * 8));
+        const clu = load<u64>(dSortC + usize(j * 8));
+        if (ku < kv || (ku == kv && i32(clu >> 32) <= cv)) break;
+        store<f64>(dSortK + usize((j + 1) * 8), ku);
+        store<u64>(dSortC + usize((j + 1) * 8), clu);
         j--;
       }
-      store<u32>(dSortIdx + usize((j + 1) * 4), v);
+      store<f64>(dSortK + usize((j + 1) * 8), kv);
+      store<u64>(dSortC + usize((j + 1) * 8), clv);
     }
-  } else {
-    // LSD-radix по байтам: cell (4), затем монотонный ключ (8). Проход с
-    // одинаковой цифрой у всех элементов стабилен тождественно и
-    // пропускается: старшие байты cell и экспоненты ключа внутри бакета
-    // шириной 1.0 почти всегда константны.
-    let src = dSortIdx, dst = dSortAux;
-    for (let pass = 0; pass < 12; pass++) {
-      const shift = pass < 4 ? u32(pass * 8) : u32((pass - 4) * 8);
-      const idx0 = load<u32>(src);
-      const digit0 = pass < 4
-        ? (u32(load<i32>(dSortC + usize(idx0 * 4))) >> shift) & 255
-        : u32((dialMonoKey(load<f64>(dSortK + usize(idx0 * 8))) >> u64(shift)) & 255);
-      let uniform = true;
-      for (let i = 1; i < m; i++) {
-        const idx = load<u32>(src + usize(i * 4));
-        const digit = pass < 4
-          ? (u32(load<i32>(dSortC + usize(idx * 4))) >> shift) & 255
-          : u32((dialMonoKey(load<f64>(dSortK + usize(idx * 8))) >> u64(shift)) & 255);
-        if (digit != digit0) { uniform = false; break; }
+  }
+  if (m > RUN) {
+    let srcK = dSortK, dstK = dSortL;
+    let srcCL = dSortC, dstCL = dSortAux;
+    for (let width: i32 = RUN; width < m; width <<= 1) {
+      for (let lo: i32 = 0; lo < m; lo += width << 1) {
+        let mid = lo + width;
+        if (mid > m) mid = m;
+        let hi = lo + (width << 1);
+        if (hi > m) hi = m;
+        let p = lo, q = mid, k = lo;
+        while (p < mid && q < hi) {
+          const ku = load<f64>(srcK + usize(p * 8));
+          const kv = load<f64>(srcK + usize(q * 8));
+          const clu = load<u64>(srcCL + usize(p * 8));
+          const clv = load<u64>(srcCL + usize(q * 8));
+          if (ku < kv || (ku == kv && i32(clu >> 32) <= i32(clv >> 32))) {
+            store<f64>(dstK + usize(k * 8), ku);
+            store<u64>(dstCL + usize(k * 8), clu);
+            p++;
+          } else {
+            store<f64>(dstK + usize(k * 8), kv);
+            store<u64>(dstCL + usize(k * 8), clv);
+            q++;
+          }
+          k++;
+        }
+        while (p < mid) {
+          store<f64>(dstK + usize(k * 8), load<f64>(srcK + usize(p * 8)));
+          store<u64>(dstCL + usize(k * 8), load<u64>(srcCL + usize(p * 8)));
+          p++; k++;
+        }
+        while (q < hi) {
+          store<f64>(dstK + usize(k * 8), load<f64>(srcK + usize(q * 8)));
+          store<u64>(dstCL + usize(k * 8), load<u64>(srcCL + usize(q * 8)));
+          q++; k++;
+        }
       }
-      if (uniform) continue;
-      for (let d = 0; d < 256; d++) store<u32>(dCnt + usize(d * 4), 0);
-      for (let i = 0; i < m; i++) {
-        const idx = load<u32>(src + usize(i * 4));
-        const digit = pass < 4
-          ? (u32(load<i32>(dSortC + usize(idx * 4))) >> shift) & 255
-          : u32((dialMonoKey(load<f64>(dSortK + usize(idx * 8))) >> u64(shift)) & 255);
-        const cp = dCnt + usize(digit * 4);
-        store<u32>(cp, load<u32>(cp) + 1);
-      }
-      let acc: u32 = 0;
-      for (let d = 0; d < 256; d++) {
-        const cp = dCnt + usize(d * 4);
-        const c = load<u32>(cp);
-        store<u32>(cp, acc);
-        acc += c;
-      }
-      for (let i = 0; i < m; i++) {
-        const idx = load<u32>(src + usize(i * 4));
-        const digit = pass < 4
-          ? (u32(load<i32>(dSortC + usize(idx * 4))) >> shift) & 255
-          : u32((dialMonoKey(load<f64>(dSortK + usize(idx * 8))) >> u64(shift)) & 255);
-        const cp = dCnt + usize(digit * 4);
-        const pos = load<u32>(cp);
-        store<u32>(cp, pos + 1);
-        store<u32>(dst + usize(pos * 4), idx);
-      }
-      const swap = src; src = dst; dst = swap;
+      const swapK = srcK; srcK = dstK; dstK = swapK;
+      const swapCL = srcCL; srcCL = dstCL; dstCL = swapCL;
     }
-    if (src != dSortIdx) memory.copy(dSortIdx, src, usize(m * 4));
+    if (srcK != dSortK) {
+      memory.copy(dSortK, srcK, usize(m * 8));
+      memory.copy(dSortC, srcCL, usize(m * 8));
+    }
   }
   dActiveCount = m;
   dActivePos = 0;
 }
 
-function dialPop(): bool {
-  if (dSize == 0) return false;
-  if (dActivePos >= dActiveCount) {
+@inline function dialPop(): bool {
+  while (dActivePos >= dActiveCount) {
+    if (dSize == 0) return false;
     let b = dServed + 1;
-    while (b < dBuckets && dialHead(b) < 0) b++;
-    if (b >= dBuckets) { pqFail = 2; return false; }
+    while (b <= dMaxBucket && dialHead(b) < 0) b++;
+    if (b > dMaxBucket) { pqFail = 2; return false; }
     dServed = b;
     dialGatherSort(b);
     if (pqFail) return false;
   }
-  const idx = load<u32>(dSortIdx + usize(dActivePos * 4));
-  dActivePos++;
+  const idx = dActivePos++;
   heapOutDist = load<f64>(dSortK + usize(idx * 8));
-  heapOutCell = load<i32>(dSortC + usize(idx * 4));
-  heapOutLabel = load<i32>(dSortL + usize(idx * 4));
+  const cl = load<u64>(dSortC + usize(idx * 8));
+  heapOutCell = i32(cl >> 32);
+  heapOutLabel = i32(cl);
   dSize--;
   return true;
 }
 
-function pqPush(dist: f64, cell: i32, label: i32): void {
+@inline function pqPush(dist: f64, cell: i32, label: i32): void {
   if (pqDial) dialPush(dist, cell, label);
   else {
     heapPush(dist, cell, label);
@@ -896,7 +913,7 @@ function pqPush(dist: f64, cell: i32, label: i32): void {
   }
 }
 
-function pqPop(): bool {
+@inline function pqPop(): bool {
   return pqDial ? dialPop() : heapPop();
 }
 
@@ -979,8 +996,8 @@ function topOneBody(
   seeds: usize, biases: usize, seedCount: i32, count: i32,
   labelOut: usize, distScratch: usize
 ): i32 {
+  memory.fill(labelOut, 0xff, usize(count * 4));
   for (let c = 0; c < count; c++) {
-    store<i32>(labelOut + usize(c * 4), -1);
     store<f64>(distScratch + usize(c * 8), Infinity);
   }
   for (let s = 0; s < seedCount; s++) {
@@ -1000,15 +1017,16 @@ function topOneBody(
     const nc = i32(load<u8>(neighborCount + usize(cell)));
     const base = cell * 6;
     for (let n = 0; n < nc; n++) {
-      const nb = load<i32>(neighbors + usize((base + n) * 4));
-      const candidate = currentDist + f64(load<f32>(costs + usize((base + n) * 4)));
+      const eOff = usize((base + n) * 4);
+      const nb = load<i32>(neighbors + eOff);
+      const candidate = currentDist + f64(load<f32>(costs + eOff));
       if (candidate < load<f64>(distScratch + usize(nb * 8)) - 1e-12) {
         store<f64>(distScratch + usize(nb * 8), candidate);
         store<i32>(labelOut + usize(nb * 4), currentLabel);
         pqPush(candidate, nb, currentLabel);
-        if (pqFail) return pqFail;
       }
     }
+    if (pqFail) return pqFail;
   }
   if (pqFail) return pqFail;
   return 0;
@@ -1017,37 +1035,38 @@ function topOneBody(
 // Состояние runTopTwo (offer — бывшее замыкание JS).
 let ttLabel1: usize = 0, ttLabel2: usize = 0, ttDist1: usize = 0, ttDist2: usize = 0;
 
-function ttOffer(cell: i32, label: i32, candidate: f64): void {
-  const l1 = load<i32>(ttLabel1 + usize(cell * 4));
+@inline function ttOffer(cell: i32, label: i32, candidate: f64): void {
+  const c4 = usize(cell * 4);
+  const c8 = usize(cell * 8);
+  const l1 = load<i32>(ttLabel1 + c4);
   if (label == l1) {
-    if (candidate < load<f64>(ttDist1 + usize(cell * 8)) - 1e-12) {
-      store<f64>(ttDist1 + usize(cell * 8), candidate);
+    if (candidate < load<f64>(ttDist1 + c8) - 1e-12) {
+      store<f64>(ttDist1 + c8, candidate);
       pqPush(candidate, cell, label);
     }
     return;
   }
-  const l2 = load<i32>(ttLabel2 + usize(cell * 4));
+  const l2 = load<i32>(ttLabel2 + c4);
   if (label == l2) {
-    if (candidate < load<f64>(ttDist2 + usize(cell * 8)) - 1e-12) {
-      store<f64>(ttDist2 + usize(cell * 8), candidate);
+    if (candidate < load<f64>(ttDist2 + c8) - 1e-12) {
+      store<f64>(ttDist2 + c8, candidate);
       pqPush(candidate, cell, label);
     }
     return;
   }
-  if (candidate < load<f64>(ttDist1 + usize(cell * 8))) {
-    const oldLabel = l1;
-    const oldDist = load<f64>(ttDist1 + usize(cell * 8));
-    if (oldLabel >= 0 && oldDist < load<f64>(ttDist2 + usize(cell * 8))) {
-      store<i32>(ttLabel2 + usize(cell * 4), oldLabel);
-      store<f64>(ttDist2 + usize(cell * 8), oldDist);
-      pqPush(oldDist, cell, oldLabel);
+  const d1 = load<f64>(ttDist1 + c8);
+  const d2 = load<f64>(ttDist2 + c8);
+  if (candidate < d1) {
+    if (l1 >= 0 && d1 < d2) {
+      store<i32>(ttLabel2 + c4, l1);
+      store<f64>(ttDist2 + c8, d1);
     }
-    store<i32>(ttLabel1 + usize(cell * 4), label);
-    store<f64>(ttDist1 + usize(cell * 8), candidate);
+    store<i32>(ttLabel1 + c4, label);
+    store<f64>(ttDist1 + c8, candidate);
     pqPush(candidate, cell, label);
-  } else if (candidate < load<f64>(ttDist2 + usize(cell * 8))) {
-    store<i32>(ttLabel2 + usize(cell * 4), label);
-    store<f64>(ttDist2 + usize(cell * 8), candidate);
+  } else if (candidate < d2) {
+    store<i32>(ttLabel2 + c4, label);
+    store<f64>(ttDist2 + c8, candidate);
     pqPush(candidate, cell, label);
   }
 }
@@ -1094,9 +1113,9 @@ function topTwoBody(
   label1Out: usize, label2Out: usize, dist1Out: usize, dist2Out: usize
 ): i32 {
   ttLabel1 = label1Out; ttLabel2 = label2Out; ttDist1 = dist1Out; ttDist2 = dist2Out;
+  memory.fill(label1Out, 0xff, usize(count * 4));
+  memory.fill(label2Out, 0xff, usize(count * 4));
   for (let c = 0; c < count; c++) {
-    store<i32>(label1Out + usize(c * 4), -1);
-    store<i32>(label2Out + usize(c * 4), -1);
     store<f64>(dist1Out + usize(c * 8), Infinity);
     store<f64>(dist2Out + usize(c * 8), Infinity);
   }
@@ -1120,10 +1139,11 @@ function topTwoBody(
     const nc = i32(load<u8>(neighborCount + usize(cell)));
     const base = cell * 6;
     for (let n = 0; n < nc; n++) {
-      const nb = load<i32>(neighbors + usize((base + n) * 4));
-      ttOffer(nb, label, dist + f64(load<f32>(costs + usize((base + n) * 4))));
-      if (pqFail) return pqFail;
+      const eOff = usize((base + n) * 4);
+      const nb = load<i32>(neighbors + eOff);
+      ttOffer(nb, label, dist + f64(load<f32>(costs + eOff)));
     }
+    if (pqFail) return pqFail;
   }
   if (pqFail) return pqFail;
   return 0;
@@ -1165,19 +1185,51 @@ export function coastDistance(
     }
   }
   if (boundaryCount == 0) return 0;
-  while (heapPop()) {
-    const c = heapOutCell;
-    if (Math.abs(load<f64>(distOut + usize(c * 8)) - heapOutDist) > 1e-12) continue;
+  // Все начальные граничные ячейки имеют d в [0, 1], а все последующие шаги
+  // прибавляют ровно +1.0. Поэтому куча нужна только для начальных граничных
+  // ячеек, а все волны >= 1 идут в монотонную FIFO-очередь (в памяти после кучи).
+  const qBase = heapDist + usize((boundaryCount + 2) * 16);
+  let qHead: i32 = 0;
+  let qTail: i32 = 0;
+  while (heapSize > 0 || qHead < qTail) {
+    let c: i32;
+    let dc: f64;
+    if (heapSize > 0) {
+      const pTop = heapRec(0);
+      const hDist = load<f64>(pTop);
+      const hCell = load<i32>(pTop + 8);
+      if (qHead < qTail) {
+        const qc = load<i32>(qBase + usize(qHead * 4));
+        const qd = load<f64>(distOut + usize(qc * 8));
+        if (qd < hDist || (qd == hDist && qc < hCell)) {
+          qHead++;
+          c = qc;
+          dc = qd;
+        } else {
+          heapPop();
+          c = heapOutCell;
+          dc = heapOutDist;
+        }
+      } else {
+        heapPop();
+        c = heapOutCell;
+        dc = heapOutDist;
+      }
+    } else {
+      c = load<i32>(qBase + usize(qHead * 4));
+      qHead++;
+      dc = load<f64>(distOut + usize(c * 8));
+    }
+    if (Math.abs(load<f64>(distOut + usize(c * 8)) - dc) > 1e-12) continue;
     const nc = i32(load<u8>(neighborCount + usize(c)));
     const base = c * 6;
-    const dc = load<f64>(distOut + usize(c * 8));
+    const candidate = dc + 1.0;
     for (let n = 0; n < nc; n++) {
       const nb = load<i32>(neighbors + usize((base + n) * 4));
-      const candidate = dc + 1.0;
       if (candidate < load<f64>(distOut + usize(nb * 8))) {
         store<f64>(distOut + usize(nb * 8), candidate);
-        heapPush(candidate, nb, 0);
-        if (heapOverflow) return -1;
+        store<i32>(qBase + usize(qTail * 4), nb);
+        qTail++;
       }
     }
   }
@@ -1194,40 +1246,51 @@ export function chooseSeedsKernel(
   desired: usize, desiredLen: i32, countWant: i32, meanSpacing: f64, maxScore: f64,
   selectedOut: usize, minChord2: usize, minResidual: usize
 ): i32 {
+  const candX = minResidual + usize(candCount * 8);
+  const candY = candX + usize(candCount * 8);
+  const candZ = candY + usize(candCount * 8);
+  const candScoreNorm = candZ + usize(candCount * 8);
   for (let j = 0; j < candCount; j++) {
-    store<f64>(minChord2 + usize(j * 8), Infinity);
-    store<f64>(minResidual + usize(j * 8), Infinity);
+    const j8 = usize(j * 8);
+    store<f64>(minChord2 + j8, Infinity);
+    store<f64>(minResidual + j8, Infinity);
+    const other = load<i32>(candidates + usize(j * 4));
+    const o3 = other * 3;
+    store<f64>(candX + j8, f64(load<f32>(centers + usize(o3 * 4))));
+    store<f64>(candY + j8, f64(load<f32>(centers + usize((o3 + 1) * 4))));
+    store<f64>(candZ + j8, f64(load<f32>(centers + usize((o3 + 2) * 4))));
+    store<f64>(candScoreNorm + j8, maxScore > 0.0 ? clamp01d(f64(load<f32>(score + usize(other * 4))) / maxScore) : 0.0);
   }
   let selectedCount = 0;
   const first = load<i32>(candidates);
   store<i32>(selectedOut, first);
   selectedCount = 1;
-  updateWithSeeds(candidates, candCount, centers, desired, desiredLen, meanSpacing, first, 0, minChord2, minResidual);
+  updateWithSeeds(candCount, centers, desired, desiredLen, meanSpacing, first, 0, minChord2, minResidual, candX, candY, candZ);
   const limit = countWant < candCount ? countWant : candCount;
   while (selectedCount < limit) {
     let best = -1;
     let bestObjective: f64 = -Infinity;
     const nextRadius = desiredLen > 0 ? desiredRadiusOf(desired, desiredLen, meanSpacing, selectedCount) : 0.0;
     for (let i = 0; i < candCount; i++) {
-      if (load<f64>(minChord2 + usize(i * 8)) == 0.0) continue;
-      const candidate = load<i32>(candidates + usize(i * 4));
-      const scoreNorm = maxScore > 0.0 ? clamp01d(f64(load<f32>(score + usize(candidate * 4))) / maxScore) : 0.0;
+      const i8 = usize(i * 8);
+      if (load<f64>(minChord2 + i8) == 0.0) continue;
+      const scoreNorm = load<f64>(candScoreNorm + i8);
       let objective: f64;
       if (desiredLen > 0) {
-        const clearance = load<f64>(minResidual + usize(i * 8)) - nextRadius;
+        const clearance = load<f64>(minResidual + i8) - nextRadius;
         objective = clearance + meanSpacing * 0.35 * scoreNorm;
       } else {
-        objective = Math.sqrt(load<f64>(minChord2 + usize(i * 8))) * (0.65 + 0.35 * scoreNorm);
+        objective = Math.sqrt(load<f64>(minChord2 + i8)) * (0.65 + 0.35 * scoreNorm);
       }
       if (objective > bestObjective) {
         bestObjective = objective;
-        best = candidate;
+        best = load<i32>(candidates + usize(i * 4));
       }
     }
     if (best < 0) break;
     store<i32>(selectedOut + usize(selectedCount * 4), best);
     selectedCount++;
-    updateWithSeeds(candidates, candCount, centers, desired, desiredLen, meanSpacing, best, selectedCount - 1, minChord2, minResidual);
+    updateWithSeeds(candCount, centers, desired, desiredLen, meanSpacing, best, selectedCount - 1, minChord2, minResidual, candX, candY, candZ);
   }
   return selectedCount;
 }
@@ -1239,24 +1302,29 @@ export function chooseSeedsKernel(
 }
 
 function updateWithSeeds(
-  candidates: usize, candCount: i32, centers: usize,
+  candCount: i32, centers: usize,
   desired: usize, desiredLen: i32, meanSpacing: f64,
-  cell: i32, selectedIndex: i32, minChord2: usize, minResidual: usize
+  cell: i32, selectedIndex: i32, minChord2: usize, minResidual: usize,
+  candX: usize, candY: usize, candZ: usize
 ): void {
   const x = f64(load<f32>(centers + usize((cell * 3) * 4)));
   const y = f64(load<f32>(centers + usize((cell * 3 + 1) * 4)));
   const z = f64(load<f32>(centers + usize((cell * 3 + 2) * 4)));
   const selectedRadius = desiredLen > 0 ? desiredRadiusOf(desired, desiredLen, meanSpacing, selectedIndex) : 0.0;
   for (let j = 0; j < candCount; j++) {
-    const other = load<i32>(candidates + usize(j * 4));
-    const dx = x - f64(load<f32>(centers + usize((other * 3) * 4)));
-    const dy = y - f64(load<f32>(centers + usize((other * 3 + 1) * 4)));
-    const dz = z - f64(load<f32>(centers + usize((other * 3 + 2) * 4)));
+    const j8 = usize(j * 8);
+    const dx = x - load<f64>(candX + j8);
+    const dy = y - load<f64>(candY + j8);
+    const dz = z - load<f64>(candZ + j8);
     const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 < load<f64>(minChord2 + usize(j * 8))) store<f64>(minChord2 + usize(j * 8), d2);
+    if (d2 < load<f64>(minChord2 + j8)) store<f64>(minChord2 + j8, d2);
     if (desiredLen > 0) {
-      const residual = Math.sqrt(d2) - selectedRadius;
-      if (residual < load<f64>(minResidual + usize(j * 8))) store<f64>(minResidual + usize(j * 8), residual);
+      const curMinRes = load<f64>(minResidual + j8);
+      const maxD = curMinRes + selectedRadius;
+      if (maxD > 0.0 && (curMinRes == Infinity || d2 <= maxD * maxD * 1.0000000001)) {
+        const residual = Math.sqrt(d2) - selectedRadius;
+        if (residual < curMinRes) store<f64>(minResidual + j8, residual);
+      }
     }
   }
 }
@@ -1325,7 +1393,7 @@ export function priorityFlood(
   return Math.sqrt(Math.max(1e-18, 2.0 - 2.0 * clampd(dot, -1.0, 1.0)));
 }
 
-function steepestReceiverF32(
+@inline function steepestReceiverF32(
   neighbors: usize, neighborCount: usize, centers: usize, height: usize, cell: i32, hc: f64
 ): i32 {
   let best = -1;
@@ -1343,7 +1411,7 @@ function steepestReceiverF32(
   return best;
 }
 
-function steepestReceiverF64(
+@inline function steepestReceiverF64(
   neighbors: usize, neighborCount: usize, centers: usize, height: usize, cell: i32, hc: f64
 ): i32 {
   let best = -1;
@@ -1554,12 +1622,46 @@ export function biomeWeights(
     const river = f64(load<f32>(riverInfluence + co));
     const lake = f64(load<f32>(lakeWeight + co));
     const delta = f64(load<f32>(deltaWeight + co));
-    const effMoisture = clamp01d(f64(load<f32>(moisture + co)) + river * 0.22 +
-      lake * 0.25 + delta * 0.10 - (desertFlag != 0.0 ? 0.10 : 0.0));
-    const coldScore = 1.0 - smoothstepK(coldLevel - tempSpan * 0.10, coldLevel + tempSpan * 0.35, temp);
     let iceScore = 1.0 - smoothstepK(coldLevel - tempSpan * 0.35, coldLevel + tempSpan * 0.05, temp);
     if (iceFlag != 0.0) iceScore = clamp01d(iceScore * 1.15 + 0.10);
     iceScore *= iceAvailability;
+    const elev = f64(load<f32>(elevation + co));
+    const depthNorm = seaLevel > elevationMin
+      ? clamp01d((seaLevel - elev) / (seaLevel - elevationMin)) : 0.0;
+    const shelfBand = shelfBelowLevel < seaLevel ? smoothstepK(shelfBelowLevel, seaLevel, elev) : 0.0;
+
+    let s0 = waterMask * (1.0 - shelfBand) * (0.35 + 0.65 * smoothstepK(0.02, 0.30, depthNorm));
+    let s1 = waterMask * (f64(load<f32>(muShelf + co)) * 1.80 + shelfBand * 0.55 + delta * 0.35);
+    let s2 = waterMask * iceScore * 1.25;
+    let s3 = lake * 2.20;
+    if (!(s0 > 0.0)) s0 = 0.0;
+    if (!(s1 > 0.0)) s1 = 0.0;
+    if (!(s2 > 0.0)) s2 = 0.0;
+    if (!(s3 > 0.0)) s3 = 0.0;
+
+    const base = weightsOut + usize(c * 64);
+    if (landMask == 0.0) {
+      let sum = s0 + s1 + s2 + s3;
+      if (!(sum > 0.0)) {
+        s0 = 1.0;
+        sum = 1.0;
+      }
+      store<f32>(base, f32(s0 / sum));
+      store<f32>(base + 4, f32(s1 / sum));
+      store<f32>(base + 8, f32(s2 / sum));
+      store<f32>(base + 12, f32(s3 / sum));
+      store<u64>(base + 16, 0);
+      store<u64>(base + 24, 0);
+      store<u64>(base + 32, 0);
+      store<u64>(base + 40, 0);
+      store<u64>(base + 48, 0);
+      store<u64>(base + 56, 0);
+      continue;
+    }
+
+    const effMoisture = clamp01d(f64(load<f32>(moisture + co)) + river * 0.22 +
+      lake * 0.25 + delta * 0.10 - (desertFlag != 0.0 ? 0.10 : 0.0));
+    const coldScore = 1.0 - smoothstepK(coldLevel - tempSpan * 0.10, coldLevel + tempSpan * 0.35, temp);
     const coolScore = bandK(temp, coldLevel - tempSpan * 0.05, coldLevel + tempSpan * 0.22,
       coldLevel + tempSpan * 0.58, hotLevel - tempSpan * 0.05);
     const mildScore = bandK(temp, coldLevel + tempSpan * 0.15, coldLevel + tempSpan * 0.45,
@@ -1570,20 +1672,12 @@ export function biomeWeights(
     const veryWetScore = smoothstepK(wetLevel, wetLevel + moistSpan * 0.55, effMoisture);
     const midMoistScore = bandK(effMoisture, aridLevel - moistSpan * 0.25, aridLevel + moistSpan * 0.25,
       wetLevel - moistSpan * 0.05, wetLevel + moistSpan * 0.45);
-    const elev = f64(load<f32>(elevation + co));
-    const depthNorm = seaLevel > elevationMin
-      ? clamp01d((seaLevel - elev) / (seaLevel - elevationMin)) : 0.0;
     const landHeight = elevationMax > seaLevel
       ? clamp01d((elev - seaLevel) / (elevationMax - seaLevel)) : 0.0;
     const slopeScore = smoothstepK(slopeP55, slopeP95, f64(load<f32>(slope + co)));
     const mountain = f64(load<f32>(mountainWeight + co));
     const coastProximity = load<f64>(coastExp + usize(c * 8));
-    const shelfBand = shelfBelowLevel < seaLevel ? smoothstepK(shelfBelowLevel, seaLevel, elev) : 0.0;
 
-    let s0 = waterMask * (1.0 - shelfBand) * (0.35 + 0.65 * smoothstepK(0.02, 0.30, depthNorm));
-    let s1 = waterMask * (f64(load<f32>(muShelf + co)) * 1.80 + shelfBand * 0.55 + delta * 0.35);
-    let s2 = waterMask * iceScore * 1.25;
-    let s3 = lake * 2.20;
     let s4 = landMask * iceScore * (0.75 + 0.35 * mountain);
     let s5 = landMask * coldScore * (1.0 - iceScore * 0.75) * (1.0 - mountain * 0.45) * Math.max(vegFactor, 0.25);
     let s6 = landMask * coolScore * (0.35 + 0.65 * wetScore) * (1.0 - mountain * 0.65) * vegFactor;
@@ -1605,10 +1699,6 @@ export function biomeWeights(
     const wetlandDriver = clamp01d(0.20 + river * 0.55 + lake * 0.45 + delta * 0.65 + coastProximity * 0.18);
     let s15 = landMask * wetScore * (1.0 - slopeScore) * (1.0 - landHeight * 0.75) * wetlandDriver * vegFactor;
 
-    if (!(s0 > 0.0)) s0 = 0.0;
-    if (!(s1 > 0.0)) s1 = 0.0;
-    if (!(s2 > 0.0)) s2 = 0.0;
-    if (!(s3 > 0.0)) s3 = 0.0;
     if (!(s4 > 0.0)) s4 = 0.0;
     if (!(s5 > 0.0)) s5 = 0.0;
     if (!(s6 > 0.0)) s6 = 0.0;
@@ -1626,7 +1716,6 @@ export function biomeWeights(
       if (hl) s12 = 1.0; else s0 = 1.0;
       sum = 1.0;
     }
-    const base = weightsOut + usize(c * 64);
     store<f32>(base, f32(s0 / sum));
     store<f32>(base + 4, f32(s1 / sum));
     store<f32>(base + 8, f32(s2 / sum));
@@ -1670,43 +1759,59 @@ export function smoothBiomeWeights(
     const vAlpha = f64x2.splat(alpha);
     for (let c = 0; c < count; c++) {
       const base = usize(c * 64);
+      const sb = src + base;
       const nc = i32(load<u8>(neighborCount + usize(c)));
       const nbase = neighbors + usize(c * 24);
       const zero = f64x2.splat(0.0);
       let a0 = zero, a1 = zero, a2 = zero, a3 = zero;
       let a4 = zero, a5 = zero, a6 = zero, a7 = zero;
+      let hasLand = (load<u64>(sb + 16) | load<u64>(sb + 24) | load<u64>(sb + 32) |
+                     load<u64>(sb + 40) | load<u64>(sb + 48) | load<u64>(sb + 56)) != 0;
       for (let j = 0; j < nc; j++) {
         const nb = load<i32>(nbase + usize(j * 4));
         const wb = src + usize(nb * 64);
         const q0 = v128.load(wb);
         a0 = f64x2.add(a0, f64x2.promote_low_f32x4(q0));
         a1 = f64x2.add(a1, f64x2.promote_low_f32x4(v128.shuffle<f32>(q0, q0, 2, 3, 2, 3)));
-        const q1 = v128.load(wb + 16);
-        a2 = f64x2.add(a2, f64x2.promote_low_f32x4(q1));
-        a3 = f64x2.add(a3, f64x2.promote_low_f32x4(v128.shuffle<f32>(q1, q1, 2, 3, 2, 3)));
-        const q2 = v128.load(wb + 32);
-        a4 = f64x2.add(a4, f64x2.promote_low_f32x4(q2));
-        a5 = f64x2.add(a5, f64x2.promote_low_f32x4(v128.shuffle<f32>(q2, q2, 2, 3, 2, 3)));
-        const q3 = v128.load(wb + 48);
-        a6 = f64x2.add(a6, f64x2.promote_low_f32x4(q3));
-        a7 = f64x2.add(a7, f64x2.promote_low_f32x4(v128.shuffle<f32>(q3, q3, 2, 3, 2, 3)));
+        if ((load<u64>(wb + 16) | load<u64>(wb + 24) | load<u64>(wb + 32) |
+             load<u64>(wb + 40) | load<u64>(wb + 48) | load<u64>(wb + 56)) != 0) {
+          hasLand = true;
+          const q1 = v128.load(wb + 16);
+          a2 = f64x2.add(a2, f64x2.promote_low_f32x4(q1));
+          a3 = f64x2.add(a3, f64x2.promote_low_f32x4(v128.shuffle<f32>(q1, q1, 2, 3, 2, 3)));
+          const q2 = v128.load(wb + 32);
+          a4 = f64x2.add(a4, f64x2.promote_low_f32x4(q2));
+          a5 = f64x2.add(a5, f64x2.promote_low_f32x4(v128.shuffle<f32>(q2, q2, 2, 3, 2, 3)));
+          const q3 = v128.load(wb + 48);
+          a6 = f64x2.add(a6, f64x2.promote_low_f32x4(q3));
+          a7 = f64x2.add(a7, f64x2.promote_low_f32x4(v128.shuffle<f32>(q3, q3, 2, 3, 2, 3)));
+        }
       }
       const vCount = f64x2.splat(f64(nc));
-      const sb = src + base;
-      const w0 = v128.load(sb), w1 = v128.load(sb + 16), w2 = v128.load(sb + 32), w3 = v128.load(sb + 48);
+      const w0 = v128.load(sb);
       const c0 = smoothCombine(f64x2.promote_low_f32x4(w0), a0, vCount, vKeep, vAlpha);
       const c1 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w0, w0, 2, 3, 2, 3)), a1, vCount, vKeep, vAlpha);
-      const c2 = smoothCombine(f64x2.promote_low_f32x4(w1), a2, vCount, vKeep, vAlpha);
-      const c3 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w1, w1, 2, 3, 2, 3)), a3, vCount, vKeep, vAlpha);
-      const c4 = smoothCombine(f64x2.promote_low_f32x4(w2), a4, vCount, vKeep, vAlpha);
-      const c5 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w2, w2, 2, 3, 2, 3)), a5, vCount, vKeep, vAlpha);
-      const c6 = smoothCombine(f64x2.promote_low_f32x4(w3), a6, vCount, vKeep, vAlpha);
-      const c7 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w3, w3, 2, 3, 2, 3)), a7, vCount, vKeep, vAlpha);
       const db = dst + base;
       v128.store(db, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c0), f32x4.demote_f64x2_zero(c1), 0, 1, 4, 5));
-      v128.store(db + 16, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c2), f32x4.demote_f64x2_zero(c3), 0, 1, 4, 5));
-      v128.store(db + 32, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c4), f32x4.demote_f64x2_zero(c5), 0, 1, 4, 5));
-      v128.store(db + 48, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c6), f32x4.demote_f64x2_zero(c7), 0, 1, 4, 5));
+      if (hasLand) {
+        const w1 = v128.load(sb + 16), w2 = v128.load(sb + 32), w3 = v128.load(sb + 48);
+        const c2 = smoothCombine(f64x2.promote_low_f32x4(w1), a2, vCount, vKeep, vAlpha);
+        const c3 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w1, w1, 2, 3, 2, 3)), a3, vCount, vKeep, vAlpha);
+        const c4 = smoothCombine(f64x2.promote_low_f32x4(w2), a4, vCount, vKeep, vAlpha);
+        const c5 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w2, w2, 2, 3, 2, 3)), a5, vCount, vKeep, vAlpha);
+        const c6 = smoothCombine(f64x2.promote_low_f32x4(w3), a6, vCount, vKeep, vAlpha);
+        const c7 = smoothCombine(f64x2.promote_low_f32x4(v128.shuffle<f32>(w3, w3, 2, 3, 2, 3)), a7, vCount, vKeep, vAlpha);
+        v128.store(db + 16, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c2), f32x4.demote_f64x2_zero(c3), 0, 1, 4, 5));
+        v128.store(db + 32, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c4), f32x4.demote_f64x2_zero(c5), 0, 1, 4, 5));
+        v128.store(db + 48, v128.shuffle<f32>(f32x4.demote_f64x2_zero(c6), f32x4.demote_f64x2_zero(c7), 0, 1, 4, 5));
+      } else {
+        store<u64>(db + 16, 0);
+        store<u64>(db + 24, 0);
+        store<u64>(db + 32, 0);
+        store<u64>(db + 40, 0);
+        store<u64>(db + 48, 0);
+        store<u64>(db + 56, 0);
+      }
     }
     const swap = src; src = dst; dst = swap;
   }
@@ -1718,6 +1823,30 @@ export function smoothBiomeWeights(
     const lakeGate = load<f32>(lakeWeight + co) > 0.0 ? 1.0 : 0.0;
     const hl = load<u8>(hardLand + usize(c)) != 0;
     const landMask = clamp01d(f64(load<f32>(muLand + co)) + (hl ? 0.12 : 0.0));
+    if (landMask == 0.0 && lakeGate == 0.0) {
+      let v0 = f32(f64(load<f32>(base)) * waterMask);
+      if (!(v0 > 0.0)) v0 = 0.0;
+      let v1 = f32(f64(load<f32>(base + 4)) * waterMask);
+      if (!(v1 > 0.0)) v1 = 0.0;
+      let v2 = f32(f64(load<f32>(base + 8)) * waterMask);
+      if (!(v2 > 0.0)) v2 = 0.0;
+      let sum = f64(v0) + f64(v1) + f64(v2);
+      if (!(sum > 0.0)) {
+        v0 = 1.0;
+        sum = 1.0;
+      }
+      store<f32>(base, f32(f64(v0) / sum));
+      store<f32>(base + 4, f32(f64(v1) / sum));
+      store<f32>(base + 8, f32(f64(v2) / sum));
+      store<f32>(base + 12, 0.0);
+      store<u64>(base + 16, 0);
+      store<u64>(base + 24, 0);
+      store<u64>(base + 32, 0);
+      store<u64>(base + 40, 0);
+      store<u64>(base + 48, 0);
+      store<u64>(base + 56, 0);
+      continue;
+    }
     let sum: f64 = 0.0;
     for (let b = 0; b < 16; b++) {
       const mask = b < 3 ? waterMask : (b == 3 ? lakeGate : landMask);
