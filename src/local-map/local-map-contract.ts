@@ -129,10 +129,22 @@ export interface FieldSampler3D {
   sampleFields(x: number, y: number, z: number, out?: Float32Array): Float32Array;
 }
 
+const SURFACE_GEOGRAPHY_VERSION = 'c100-soft-v2';
+
 export function createPatchFieldSampler(input: GeographyProfileInput): FieldSampler {
+  // Профиль поверхности глобуса c100-soft-v2 — надстройка PlanetSurface поверх
+  // базовой географии c100-soft-v1 (см. PlanetSurface.normalizeSurfaceProfile),
+  // поэтому на поверхностной копии приводим версию к базовой.
+  const src: GeographyProfileInput = { ...input };
+  const requested = src.geographyVersion != null && src.geographyVersion !== ''
+    ? src.geographyVersion
+    : src.geography_version;
+  if (requested === SURFACE_GEOGRAPHY_VERSION) {
+    src.geographyVersion = PlanetGeography.GEOGRAPHY_VERSION;
+  }
   // PlanetGeography.createFieldSampler внутри использует Wasm-батч
   // planet-core (sampleFieldsBatch) — единый движок И-2/И-3.
-  return PlanetGeography.createFieldSampler(input);
+  return PlanetGeography.createFieldSampler(src);
 }
 
 // ---------------------------------------------------------------------------
