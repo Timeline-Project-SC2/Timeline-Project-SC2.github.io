@@ -236,6 +236,7 @@ button[aria-pressed="true"] { background: rgba(0, 105, 145, .78); border-color: 
 }
 .planet-breadcrumbs a { color: #b9efff; text-decoration: none; }
 .planet-breadcrumbs a:hover { color: var(--cyan); }
+#breadcrumbPatchWrap { display: inline-flex; align-items: center; gap: 9px; }
 #backToSectorBtn { margin-left: 8px; color: var(--orange); }
 .dossier-card, .patch-inspector { margin: 14px 0; padding: 12px; border: 1px solid rgba(89,220,255,.32); border-radius: 8px; background: linear-gradient(145deg, rgba(5,28,52,.75), rgba(0,10,24,.7)); }
 .dossier-card h2, .patch-inspector h3 { margin: 0 0 9px; color: var(--cyan); font-size: 13px; letter-spacing: .08em; }
@@ -417,6 +418,20 @@ body.local-map-active .planet-breadcrumbs {
   left: auto;
   max-width: min(70vw, 900px);
   z-index: 22;
+}
+body.local-map-active #breadcrumbPlanet {
+  color: #b9efff;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color .15s ease;
+}
+body.local-map-active #breadcrumbPlanet:hover,
+body.local-map-active #breadcrumbPlanet:focus-visible {
+  color: var(--cyan);
+}
+body.local-map-active #breadcrumbPlanet:focus-visible {
+  outline: 2px solid rgba(64, 230, 255, .7);
+  outline-offset: 2px;
 }
 
 @media (max-width: 820px) {

@@ -750,11 +750,25 @@ function updateLocalNeighborButtons(patchReady: WorkerPatchReadyResponse | null)
   });
 }
 
-function updateLocalBreadcrumb(visible: boolean): void {
-  els.breadcrumbPatchWrap.hidden = !visible;
-  els.breadcrumbPatchSep.hidden = !visible;
-  els.breadcrumbPatch.hidden = !visible;
-  if (visible) els.breadcrumbPatch.textContent = 'Участок';
+function updateLocalBreadcrumb(active: boolean): void {
+  els.breadcrumbPatchWrap.hidden = !active;
+  els.breadcrumbPatchSep.hidden = !active;
+  els.breadcrumbPatch.hidden = !active;
+  if (active) {
+    els.breadcrumbPatch.textContent = activePatchReady
+      ? 'Участок #' + String(activePatchReady.hexCenterCell)
+      : 'Участок';
+    els.breadcrumbPlanet.removeAttribute('aria-current');
+    els.breadcrumbPlanet.setAttribute('role', 'button');
+    els.breadcrumbPlanet.tabIndex = 0;
+    els.breadcrumbPlanet.title = 'Вернуться на глобус планеты';
+  } else {
+    els.breadcrumbPatch.textContent = 'Участок';
+    els.breadcrumbPlanet.setAttribute('aria-current', 'page');
+    els.breadcrumbPlanet.removeAttribute('role');
+    els.breadcrumbPlanet.tabIndex = -1;
+    els.breadcrumbPlanet.removeAttribute('title');
+  }
 }
 
 function updateLocalMapUrl(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
@@ -763,6 +777,97 @@ function updateLocalMapUrl(patchReady: WorkerPatchReadyResponse, widthKm: number
     localView: true,
     scale: widthKm,
   });
+}
+
+function extractShortFaceCoord(canonicalAddress: string): string {
+  const afterV = /\/v\d+\/(.+)$/.exec(canonicalAddress);
+  if (afterV && afterV[1]) return afterV[1];
+  const segments = canonicalAddress.split('/');
+  return segments.length >= 3 ? segments.slice(-3).join('/') : canonicalAddress;
+}
+
+function renderLocalMapFromPatch(
+  patchReady: WorkerPatchReadyResponse,
+  scale: number,
+  shouldFlyToPatch: boolean,
+  requestId: number,
+): void {
+  const centerCell = patchReady.patch.cells[0];
+  if (!centerCell || requestId !== localMapEntrySeq) return;
+  if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.45, 750);
+
+  const startedAt = performance.now();
+  let localData: LocalMapWorkerResponse;
+  try {
+    let currentProfile: GeographyProfileInput | undefined;
+    try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
+    localData = generateLocalMap({
+      patch: patchReady.patch,
+      seed: parseSeedUint32(els.seed.value),
+      placeId: Number(selectedPlace?.ID || 2),
+      radiusM: Math.max(600, (scale * 1000) / 2),
+      patchKey: patchReady.keys.patchKey,
+      ...(currentProfile ? { profile: currentProfile } : {}),
+    });
+  } catch (error) {
+    setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
+    return;
+  }
+  if (requestId !== localMapEntrySeq) return;
+
+  localMapData = localData;
+  const meta = localData.meta as LocalMapWorkerResponse['meta'] & {
+    genMs?: number;
+    totalInstances?: number;
+    buildableFraction?: number;
+  };
+  const measuredMs = performance.now() - startedAt;
+  localMapGenerationMs = Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs;
+  localMapInstanceCount = localTotalInstances(localData);
+  localMapBuildableFraction = Number.isFinite(meta.buildableFraction)
+    ? clampLocal(meta.buildableFraction as number, 0, 1)
+    : clampLocal(patchReady.buildableFraction, 0, 1);
+  if (!initializeLocalMapRenderer() || !localMapRenderer) return;
+
+  const renderer = localMapRenderer;
+  try {
+    if (typeof renderer.enqueueWorkerData === 'function') {
+      renderer.enqueueWorkerData(localData, 3.0);
+      setLocalMapStatus('Данные готовы; выполняю порционную GPU-заливку без блокировки кадров.', 'info');
+    } else {
+      renderer.onWorkerData(localData);
+      setLocalMapStatus('Локальная карта готова к управлению камерой.', 'ok');
+    }
+  } catch (error) {
+    setLocalMapStatus('Ошибка передачи локальных данных в WebGL2: ' + ((error as Error).message || String(error)), 'error');
+    return;
+  }
+
+  activePatchReady = patchReady;
+  const shortFaceCoord = extractShortFaceCoord(patchReady.canonicalAddress);
+  const planetName = selectedPlace?.name || 'Планета';
+  els.localMapTitle.textContent =
+    `${planetName} · ячейка #${patchReady.hexCenterCell} (${shortFaceCoord}) · ${patchReady.keys.patchKey}`;
+  els.localMapTitle.title =
+    `${patchReady.canonicalAddress} · patch_key ${patchReady.keys.patchKey}`;
+  els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
+    Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
+  els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
+  localMapActive = true;
+  updateLocalNeighborButtons(patchReady);
+  updateLocalBreadcrumb(true);
+  updateLocalMapUrl(patchReady, scale);
+  document.body.classList.add('local-map-active');
+  els.localMapStage.hidden = false;
+  resizeLocalMapCanvas();
+  resetLocalCamera();
+  els.localMapStage.classList.remove('is-active');
+  void els.localMapStage.offsetWidth;
+  els.localMapStage.classList.add('is-active');
+  localMapHudLastAt = 0;
+  updateLocalMapHud();
+  if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
+  els.localMapCanvas.focus({ preventScroll: true });
 }
 
 function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
@@ -786,76 +891,7 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
 
   // Подлёт и CPU-генерация стартуют на одном первом кадре Dive-in.
   window.requestAnimationFrame(() => {
-    if (requestId !== localMapEntrySeq) return;
-    if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.45, 750);
-
-    const startedAt = performance.now();
-    let localData: LocalMapWorkerResponse;
-    try {
-      let currentProfile: GeographyProfileInput | undefined;
-      try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
-      localData = generateLocalMap({
-        patch: patchReady.patch,
-        seed: parseSeedUint32(els.seed.value),
-        placeId: Number(selectedPlace?.ID || 2),
-        radiusM: Math.max(600, (scale * 1000) / 2),
-        patchKey: patchReady.keys.patchKey,
-        ...(currentProfile ? { profile: currentProfile } : {}),
-      });
-    } catch (error) {
-      setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
-      return;
-    }
-    if (requestId !== localMapEntrySeq) return;
-
-    localMapData = localData;
-    const meta = localData.meta as LocalMapWorkerResponse['meta'] & {
-      genMs?: number;
-      totalInstances?: number;
-      buildableFraction?: number;
-    };
-    const measuredMs = performance.now() - startedAt;
-    localMapGenerationMs = Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs;
-    localMapInstanceCount = localTotalInstances(localData);
-    localMapBuildableFraction = Number.isFinite(meta.buildableFraction)
-      ? clampLocal(meta.buildableFraction as number, 0, 1)
-      : clampLocal(patchReady.buildableFraction, 0, 1);
-    if (!initializeLocalMapRenderer() || !localMapRenderer) return;
-
-    const renderer = localMapRenderer;
-    try {
-      if (typeof renderer.enqueueWorkerData === 'function') {
-        renderer.enqueueWorkerData(localData, 3.0);
-        setLocalMapStatus('Данные готовы; выполняю порционную GPU-заливку без блокировки кадров.', 'info');
-      } else {
-        renderer.onWorkerData(localData);
-        setLocalMapStatus('Локальная карта готова к управлению камерой.', 'ok');
-      }
-    } catch (error) {
-      setLocalMapStatus('Ошибка передачи локальных данных в WebGL2: ' + ((error as Error).message || String(error)), 'error');
-      return;
-    }
-
-    els.localMapTitle.textContent = patchReady.canonicalAddress + ' · patch_key ' + patchReady.keys.patchKey;
-    els.localMapTitle.title = 'Ячейка ' + patchReady.canonicalAddress + ' · ключ участка ' + patchReady.keys.patchKey;
-    els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
-      Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
-    els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
-    updateLocalNeighborButtons(patchReady);
-    updateLocalBreadcrumb(true);
-    updateLocalMapUrl(patchReady, scale);
-    document.body.classList.add('local-map-active');
-    els.localMapStage.hidden = false;
-    resizeLocalMapCanvas();
-    resetLocalCamera();
-    els.localMapStage.classList.remove('is-active');
-    void els.localMapStage.offsetWidth;
-    els.localMapStage.classList.add('is-active');
-    localMapActive = true;
-    localMapHudLastAt = 0;
-    updateLocalMapHud();
-    if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
-    els.localMapCanvas.focus({ preventScroll: true });
+    renderLocalMapFromPatch(patchReady, scale, shouldFlyToPatch, requestId);
   });
 }
 
@@ -1682,8 +1718,20 @@ function initEvents(): void {
     }
   });
   els.exitLocalMap.addEventListener('click', exitLocalMap);
+  els.breadcrumbPlanet.addEventListener('click', () => {
+    if (localMapActive) exitLocalMap();
+  });
+  els.breadcrumbPlanet.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (!localMapActive) return;
+    if (event.key === 'Enter' || event.key === ' ' || event.code === 'Space') {
+      event.preventDefault();
+      event.stopPropagation();
+      exitLocalMap();
+    }
+  });
   els.localScale.addEventListener('change', () => {
-    if (lastPatchReady && localMapActive) enterLocalMap(lastPatchReady, Number(els.localScale.value));
+    const patch = lastPatchReady || activePatchReady;
+    if (patch && localMapActive) enterLocalMap(patch, Number(els.localScale.value));
   });
   els.resetLocalCam.addEventListener('click', resetLocalCamera);
   els.localNeighborNav.addEventListener('click', (event: MouseEvent) => {
@@ -1701,7 +1749,13 @@ function initEvents(): void {
       if (status) status.textContent = 'Ссылка на ячейку скопирована.';
     }).catch(() => setStatus('Не удалось скопировать ссылку: проверьте разрешение браузера.', 'warn'));
   });
-  els.preset.addEventListener('change', () => { syncSurfaceClassWithPreset(); updateEstimates(); });
+  els.preset.addEventListener('change', () => {
+    syncSurfaceClassWithPreset();
+    if (selectedPlace === null) {
+      els.breadcrumbPlanet.textContent = els.preset.options[els.preset.selectedIndex]?.text || 'Демо-мир';
+    }
+    updateEstimates();
+  });
   els.radius.addEventListener('input', () => { updateEstimates(); });
   els.quality.addEventListener('change', () => {
     updateEstimates();
@@ -1754,8 +1808,14 @@ function initEvents(): void {
     els.panelBody.hidden = expanded;
   });
   window.addEventListener('keydown', (event: KeyboardEvent) => {
-    const tag = document.activeElement ? document.activeElement.tagName : '';
-    if (event.code === 'Space' && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(tag || '')) {
+    if (localMapActive) return;
+    const activeEl = document.activeElement;
+    const tag = activeEl ? activeEl.tagName : '';
+    if (
+      event.code === 'Space' &&
+      !/INPUT|SELECT|TEXTAREA|BUTTON|A/.test(tag || '') &&
+      activeEl?.getAttribute('role') !== 'button'
+    ) {
       event.preventDefault();
       els.spin.click();
     }
