@@ -26,12 +26,20 @@
        -> colors { colors:Uint8Array }
      pick { token, requestId, direction:[x,y,z], purpose:'select'|'hover' }
        -> pick-result { info }
+     prefetch { token, requestId, targetV?, focusCell?|focusDirection? }
+                (Этап 7: intent-based прогрев, latest-wins)
+       -> prefetch-ready { targetV, focusCell, hexCenterCell, chunkId,
+                           neighborChunks, patchReady, timingsMs }
+     extract-patch { token, requestId, cell }
+                (Этап 7: канонический срез Patch7 по И-1/И-3)
+       -> patch-ready { requestedCell, hexCenterCell, canonicalAddress, patch,
+                        invariants, spanMeters, buildableFraction, keys }
      clear-grid-cache -> cache-cleared
 */
 
 import GeodesicGrid from '../shared/geodesic-grid.ts';
 import type { PlanetGrid } from '../shared/geodesic-grid.ts';
-import { verifyGenerationKey } from '../shared/planet-generation-contract.ts';
+import { verifyGenerationKey, computeGenerationKey } from '../shared/planet-generation-contract.ts';
 import type { GenerationKeyVerification, PlanetGenerationProfileInput } from '../shared/planet-generation-contract.ts';
 import PlanetGeography from '../shared/planet-geography.ts';
 import type { GeographyProfileInput } from '../shared/planet-geography.ts';
@@ -39,6 +47,8 @@ import PlanetSurface from '../shared/planet-surface.ts';
 import type { SurfaceProfile, SurfaceResult } from '../shared/planet-surface.ts';
 import PlanetGlobe from '../shared/planet-globe.ts';
 import type { GlobeGeometry } from '../shared/planet-globe.ts';
+import { LOCAL_MAP_PATCH_VERSION, buildPatch7, verifyPatchInvariants, patchSpanMeters, buildBuildingSpawnMask } from '../../src/local-map/local-map-contract.ts';
+import type { LocalMapPatch, PatchInvariantReport } from '../../src/local-map/local-map-contract.ts';
 
 interface WorkerScopeLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -80,7 +90,33 @@ export interface ClearCacheMessage {
   requestId?: string | number;
 }
 
-export type WorkerMessage = GenerateMessage | ColorModeMessage | PickMessage | ClearCacheMessage;
+/** Этап 7: intent-based прогрев целевого уровня и соседних чанков.
+ *  Отменяется по принципу latest-wins: новый prefetch инкрементирует
+ *  seq, а завершение устаревшей задачи молча отбрасывается. */
+export interface PrefetchMessage {
+  type: 'prefetch';
+  token?: string;
+  requestId?: string | number;
+  /** Целевая частота прокси-сетки для прогрева GridCache. */
+  targetV?: number;
+  /** Фокус камеры единичным вектором сферы (x, y, z). */
+  focusDirection?: ArrayLike<number>;
+  /** Или напрямую каноническая ячейка фокуса на canonicalV (И-1). */
+  focusCell?: number;
+}
+
+/** Этап 7: экспорт канонического среза 7 ячеек Patch7 (local-map-patch-v1)
+ *  вокруг hexCenterCell строго на canonicalV (И-1, Инвариант И-3). */
+export interface ExtractPatchMessage {
+  type: 'extract-patch';
+  token?: string;
+  requestId?: string | number;
+  /** Каноническая ячейка (или пятиугольник, который резолвится в сосед). */
+  cell: number;
+}
+
+export type WorkerMessage = GenerateMessage | ColorModeMessage | PickMessage | ClearCacheMessage
+  | PrefetchMessage | ExtractPatchMessage;
 
 /** Геометрия на проводе: без vertexCellId/cellIndexStart (pick живёт в воркере). */
 export type GlobeWireGeometry = Omit<GlobeGeometry, 'vertexCellId' | 'cellIndexStart'>;
@@ -245,6 +281,51 @@ export interface WorkerCacheClearedResponse {
   requestId?: string | number;
 }
 
+/** Замеры prefetch (Этап 7): прогрев сетки, сборка Patch7 и общее время. */
+export interface PrefetchTimings {
+  gridMs: number;
+  patchMs: number;
+  totalMs: number;
+}
+
+/** Этап 7: ответ на prefetch — целевой уровень прогрет, соседние чанки
+ *  известны, срез Patch7 у центра взгляда собран заранее. */
+export interface WorkerPrefetchReadyResponse {
+  type: 'prefetch-ready';
+  token?: string;
+  requestId?: string | number;
+  targetV: number;
+  focusCell: number;
+  hexCenterCell: number;
+  chunkId: number;
+  neighborChunks: number[];
+  patchReady: boolean;
+  timingsMs: PrefetchTimings;
+}
+
+/** Производные ключи ячейки/области/участка по §8.8 PREPARATION_PLAN. */
+export interface PatchKeys {
+  planetKey: string;
+  cellKey: string;
+  regionKey: string;
+  patchKey: string;
+}
+
+/** Этап 7: канонический срез Patch7 с инвариантами И-3 и ключами §8.8. */
+export interface WorkerPatchReadyResponse {
+  type: 'patch-ready';
+  token?: string;
+  requestId?: string | number;
+  requestedCell: number;
+  hexCenterCell: number;
+  canonicalAddress: string;
+  patch: LocalMapPatch;
+  invariants: PatchInvariantReport;
+  spanMeters: number;
+  buildableFraction: number;
+  keys: PatchKeys;
+}
+
 export interface WorkerErrorResponse {
   type: 'error';
   token?: string;
@@ -256,7 +337,8 @@ export interface WorkerErrorResponse {
 }
 
 export type WorkerResponse = WorkerProgressResponse | WorkerReadyResponse | WorkerColorsResponse
-  | WorkerPickResultResponse | WorkerCacheClearedResponse | WorkerErrorResponse
+  | WorkerPickResultResponse | WorkerCacheClearedResponse | WorkerPrefetchReadyResponse
+  | WorkerPatchReadyResponse | WorkerErrorResponse
   | { type: 'worker-ready'; token?: string; requestId?: string | number };
 
 interface CodedError extends Error {
@@ -306,6 +388,14 @@ function gridKey(v: number): string { return 'gp-v1-bin:' + v; }
 
 interface CurrentPlanet {
   token: string | undefined;
+  /** Канонический профиль генерации (geographyVersion и нормы для И-1). */
+  profile: SurfaceProfile;
+  /** planetKey по §8.8: generation_key профиля или вычисленный PG1. */
+  generationKey: string;
+  canonicalV: number;
+  renderV: number;
+  /** Прокси-сетка отрисовки (совпадает с grid при renderV = canonicalV). */
+  renderGrid: PlanetGrid;
   grid: PlanetGrid;
   surface: SurfaceResult;
   renderSurface: SurfaceResult;
@@ -313,6 +403,8 @@ interface CurrentPlanet {
   cellCount: number;
   reliefScale: number;
   colorMode: string;
+  /** Кэш последнего среза Patch7 (упреждающая сборка prefetch). */
+  lastPatchCache: { hexCenterCell: number; patch: LocalMapPatch } | null;
 }
 
 const memoryGrids = new Map<number, PlanetGrid>();
@@ -320,9 +412,99 @@ let current: CurrentPlanet | null = null;
 let generationBusy = false;
 let pendingGenerate: GenerateMessage | null = null;
 
+/** Счётчик latest-wins для prefetch: новая задача отменяет старую. */
+let latestPrefetchSeq = 0;
+
+/* ------------------------------------------------------------- §8.8 ключи */
+
+/** Детерминированный FNV-1a 64 (хэш-функция контракта §8.8): 16 hex-символов.
+ *  64-битное состояние ведётся парой 32-битных половин, умножение на простую
+ *  0x00000100000001B3 собирается из imul-частей без потери точности. */
+function fnv1a64Hex(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let hi = 0xcbf29ce4 >>> 0;
+  let lo = 0x84222325 >>> 0;
+  for (let i = 0; i < bytes.length; i++) {
+    lo = (lo ^ (bytes[i] as number)) >>> 0;
+    const product = lo * 0x1b3; // < 2^41 — точно в float64
+    const newLo = Math.imul(lo, 0x1b3) >>> 0;
+    const carry = Math.floor(product / 0x100000000) >>> 0;
+    hi = (Math.imul(hi, 0x1b3) + carry + Math.imul(lo, 0x100)) >>> 0;
+    lo = newLo;
+  }
+  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
+}
+
+/** renderV не бывает мельче 4 и детальнее канона (прокси — только грубее). */
+function clampRenderV(requested: number, canonicalV: number): number {
+  const v = Math.max(4, Math.min(256, Math.round(Number(requested) || canonicalV)));
+  return Math.min(v, canonicalV);
+}
+
+/** Ближайшая ячейка сетки к единичному направлению (обёртка GeodesicGrid.pick). */
+function pickCell(grid: PlanetGrid, direction: ArrayLike<number>): number {
+  return GeodesicGrid.pick(grid, [direction[0] as number, direction[1] as number, direction[2] as number]);
+}
+
+/** Этап 7: центральная ячейка среза Patch7 обязана быть шестиугольной.
+ *  Пятиугольные вершины икосаэдра (neighborCount = 5) автоматически
+ *  привязываются к первому шестиугольному соседу кольца. */
+function resolveHexCenterCell(grid: PlanetGrid, cell: number): number {
+  if (!Number.isInteger(cell) || cell < 0 || cell >= grid.cellCount) return -1;
+  const neighborCount = grid.neighborCount[cell] as number;
+  if (neighborCount === 6) return cell;
+  if (neighborCount === 5) {
+    for (let slot = 0; slot < 6; slot++) {
+      const nb = grid.neighbors[cell * 6 + slot] as number;
+      if (nb >= 0 && (grid.neighborCount[nb] as number) === 6) return nb;
+    }
+  }
+  return -1;
+}
+
+/** Канонический адрес ячейки goldberg-gp-v1 на canonicalV (И-1). */
+function canonicalCellAddress(grid: PlanetGrid, cell: number): string {
+  return GeodesicGrid.addressOf(grid, cell);
+}
+
+/** Производные ключи ячейки, области и участка по §8.8 PREPARATION_PLAN:
+ *    cell_key   = H(planet_key + '|' + canonical_address)
+ *    region_key = H(planet_key + '|c100|' + top1ContinentId + '|' + geoVersion)
+ *    patch_key  = H(planet_key + '|' + patch_version + '|' + hexCenterCell) */
+function derivePatchKeys(planet: CurrentPlanet, hexCenterCell: number, canonicalAddress: string): PatchKeys {
+  const planetKey = String(planet.generationKey || '');
+  const geographyVersion = String(planet.profile.geographyVersion || '');
+  const top1ContinentId = planet.surface.continentTop1Id[hexCenterCell] as number;
+  return {
+    planetKey: planetKey,
+    cellKey: 'CK1-' + fnv1a64Hex(planetKey + '|' + canonicalAddress),
+    regionKey: 'RK1-' + fnv1a64Hex(planetKey + '|c100|' + String(top1ContinentId) + '|' + geographyVersion),
+    patchKey: 'PK1-' + fnv1a64Hex(planetKey + '|' + LOCAL_MAP_PATCH_VERSION + '|' + String(hexCenterCell)),
+  };
+}
+
+/** Сборка Patch7 вокруг шестиугольной ячейки с кэшем prefetch (latest-wins). */
+function buildPatchCached(planet: CurrentPlanet, hexCenterCell: number): LocalMapPatch {
+  if (planet.lastPatchCache && planet.lastPatchCache.hexCenterCell === hexCenterCell) {
+    return planet.lastPatchCache.patch;
+  }
+  const patch = buildPatch7(planet.grid, planet.surface, hexCenterCell);
+  planet.lastPatchCache = { hexCenterCell: hexCenterCell, patch: patch };
+  return patch;
+}
+
+/** Подменяемый приёмник исходящих сообщений: null — обычный workerScope
+ *  (браузерный worker), иначе обработчик createWorkerHandler копит ответы. */
+type PostSink = (message: Record<string, unknown>, transfer?: Transferable[]) => void;
+let postSink: PostSink | null = null;
+
 function post(type: string, payload?: Record<string, unknown>, transfer?: Transferable[]): void {
   const message = payload || {};
   message.type = type;
+  if (postSink) {
+    postSink(message, transfer);
+    return;
+  }
   if (transfer && transfer.length) workerScope.postMessage(message, transfer);
   else workerScope.postMessage(message);
 }
@@ -380,7 +562,7 @@ function yieldLoop(): Promise<void> {
 
 async function getGrid(
   v: number, token: string | undefined, requestId: string | number | undefined,
-  progressFraction?: number,
+  progressFraction?: number, emitProgress: boolean = true,
 ): Promise<{ grid: PlanetGrid; source: string }> {
   const cached = memoryGrids.get(v);
   if (cached) return { grid: cached, source: 'memory' };
@@ -398,8 +580,11 @@ async function getGrid(
     if (oldest === v) break;
     memoryGrids.delete(oldest);
   }
-  progress(token, requestId, 'mesh', progressFraction == null ? 0.10 : progressFraction,
-    loaded.source === 'cache' ? 'Сетка загружена из кэша' : 'Сетка построена');
+  // Прогрев prefetch (Этап 7) молчит: это фоновая задача, а не этап генерации.
+  if (emitProgress) {
+    progress(token, requestId, 'mesh', progressFraction == null ? 0.10 : progressFraction,
+      loaded.source === 'cache' ? 'Сетка загружена из кэша' : 'Сетка построена');
+  }
   return { grid: loaded.grid, source: loaded.source };
 }
 
@@ -575,8 +760,24 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
       preview = PlanetGlobe.buildEquirectPreview(renderGrid, renderSurface, 720, 360, colorMode);
     }
 
+    // planetKey по §8.8: generation_key профиля (frozen) или вычисленный PG1.
+    const requestProfile = (message.profile || {}) as Record<string, unknown>;
+    let generationKey = String(requestProfile.generationKey || requestProfile.generation_key || '');
+    if (!generationKey) {
+      try {
+        generationKey = computeGenerationKey((message.profile || {}) as PlanetGenerationProfileInput);
+      } catch (_) {
+        generationKey = '';
+      }
+    }
+
     current = {
       token: token,
+      profile: info.canonical,
+      generationKey: generationKey,
+      canonicalV: info.canonicalV,
+      renderV: renderV,
+      renderGrid: renderGrid,
       grid: grid,
       surface: surface,
       renderSurface: renderSurface,
@@ -584,6 +785,7 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
       cellCount: geometry.cellCount,
       reliefScale: reliefScale,
       colorMode: colorMode,
+      lastPatchCache: null,
     };
 
     const payloadGeometry = {
@@ -759,11 +961,128 @@ async function ensureGeneration(message: GenerateMessage): Promise<void> {
   }
 }
 
-workerScope.onmessage = function (event: MessageEvent) {
-  const message = (event.data || {}) as WorkerMessage;
+/** Этап 7: intent-based prefetch — прогрев целевой сетки GridCache, канонической
+ *  ячейки фокуса и упреждающая сборка Patch7. Latest-wins: пока задача ждёт
+ *  сетку, новый prefetch инкрементирует seq, и результат старой отбрасывается. */
+async function runPrefetch(message: PrefetchMessage): Promise<void> {
+  const started = performance.now();
+  const seq = ++latestPrefetchSeq;
+  function safeResponse(targetV: number, focusCell: number, hexCenterCell: number, chunkId: number, patchReady: boolean): void {
+    post('prefetch-ready', {
+      token: message.token, requestId: message.requestId,
+      targetV: targetV, focusCell: focusCell, hexCenterCell: hexCenterCell,
+      chunkId: chunkId, neighborChunks: [], patchReady: patchReady,
+      timingsMs: {
+        gridMs: 0, patchMs: 0,
+        totalMs: round(performance.now() - started, 3),
+      },
+    });
+  }
+  // Планета ещё не сгенерирована — безопасный ответ без прогрева (И-1).
+  if (!current) {
+    safeResponse(0, -1, -1, -1, false);
+    return;
+  }
+  const planet = current;
+  const targetV = clampRenderV(Number(message.targetV) || planet.renderV, planet.canonicalV);
+
+  // 1. Прогрев целевой прокси-сетки в GridCache (молча, без progress-спама).
+  const gridStarted = performance.now();
+  try {
+    await getGrid(targetV, message.token, message.requestId, undefined, false);
+  } catch (_) {
+    // Прогрев — упреждающая задача: ошибка сетки не ломает камеру.
+  }
+  const gridMs = performance.now() - gridStarted;
+  if (seq !== latestPrefetchSeq) return; // устаревшая задача
+
+  // 2. Каноническая ячейка фокуса: focusCell ИЛИ pickCell по focusDirection.
+  let focusCell = -1;
+  const requestedFocus = Number(message.focusCell);
+  if (Number.isInteger(requestedFocus) && requestedFocus >= 0 && requestedFocus < planet.grid.cellCount) {
+    focusCell = requestedFocus;
+  } else if (message.focusDirection &&
+    Number.isFinite(Number(message.focusDirection[0])) &&
+    Number.isFinite(Number(message.focusDirection[1])) &&
+    Number.isFinite(Number(message.focusDirection[2]))) {
+    focusCell = pickCell(planet.grid, message.focusDirection);
+  }
+  const hexCenterCell = focusCell >= 0 ? resolveHexCenterCell(planet.grid, focusCell) : -1;
+  if (focusCell < 0 || hexCenterCell < 0) {
+    safeResponse(targetV, focusCell, hexCenterCell, -1, false);
+    return;
+  }
+
+  // 3. Упреждающая сборка и кэширование среза Patch7 вокруг hexCenterCell.
+  const patchStarted = performance.now();
+  try {
+    buildPatchCached(planet, hexCenterCell);
+  } catch (_) {
+    safeResponse(targetV, focusCell, hexCenterCell, -1, false);
+    return;
+  }
+  const patchMs = performance.now() - patchStarted;
+  if (seq !== latestPrefetchSeq) return; // устаревшая задача
+
+  // 4. Чанк прокси-сетки под фокусом и его соседи (getChunkNeighbors).
+  const renderGrid = planet.renderGrid;
+  const renderCell = pickCell(renderGrid, planet.grid.centers.subarray(
+    focusCell * 3, focusCell * 3 + 3,
+  ));
+  const chunkId = renderGrid.cellChunk ? renderGrid.cellChunk[renderCell] as number : 0;
+  const neighborChunks = GeodesicGrid.getChunkNeighbors(renderGrid, chunkId);
+
+  post('prefetch-ready', {
+    token: message.token, requestId: message.requestId,
+    targetV: targetV, focusCell: focusCell, hexCenterCell: hexCenterCell,
+    chunkId: chunkId, neighborChunks: neighborChunks, patchReady: true,
+    timingsMs: {
+      gridMs: round(gridMs, 3),
+      patchMs: round(patchMs, 3),
+      totalMs: round(performance.now() - started, 3),
+    },
+  });
+}
+
+/** Этап 7: экспорт канонического среза Patch7 (local-map-patch-v1) по И-1/И-3:
+ *  сетка и поверхность строго canonicalV, пятиугольник резолвится в соседа,
+ *  инварианты проверяются на месте, ключи §8.8 считаются детерминированно. */
+function runExtractPatch(message: ExtractPatchMessage): void {
+  if (!current) throw new Error('Планета ещё не сгенерирована');
+  const planet = current;
+  const requestedCell = Number(message.cell);
+  if (!Number.isInteger(requestedCell) || requestedCell < 0 || requestedCell >= planet.grid.cellCount) {
+    throw new Error('extract-patch: ячейка ' + String(message.cell) + ' вне канонической сетки v=' + planet.canonicalV);
+  }
+  const hexCenterCell = resolveHexCenterCell(planet.grid, requestedCell);
+  if (hexCenterCell < 0) {
+    throw new Error('extract-patch: не найден шестиугольный центр для ячейки ' + requestedCell);
+  }
+  const patch = buildPatchCached(planet, hexCenterCell);
+  const invariants = verifyPatchInvariants(patch);
+  const spanMeters = patchSpanMeters(patch);
+  const spawnMask = buildBuildingSpawnMask(patch, 32);
+  let buildable = 0;
+  for (let i = 0; i < spawnMask.length; i++) buildable += spawnMask[i] as number;
+  const buildableFraction = spawnMask.length ? buildable / spawnMask.length : 0;
+  const canonicalAddress = canonicalCellAddress(planet.grid, hexCenterCell);
+  const keys = derivePatchKeys(planet, hexCenterCell, canonicalAddress);
+  post('patch-ready', {
+    token: message.token, requestId: message.requestId,
+    requestedCell: requestedCell, hexCenterCell: hexCenterCell,
+    canonicalAddress: canonicalAddress, patch: patch, invariants: invariants,
+    spanMeters: round(spanMeters, 3),
+    buildableFraction: round(buildableFraction, 6),
+    keys: keys,
+  });
+}
+
+/** Маршрутизация одного входного сообщения: общий контур для реального
+ *  workerScope.onmessage и тестируемого PlanetGlobeWorker.createWorkerHandler. */
+async function routeMessage(message: WorkerMessage): Promise<void> {
   try {
     if (message.type === 'generate') {
-      void ensureGeneration(message);
+      await ensureGeneration(message);
     } else if (message.type === 'color-mode') {
       if (!current) throw new Error('Планета ещё не сгенерирована');
       const mode = message.mode || 'biome';
@@ -778,6 +1097,10 @@ workerScope.onmessage = function (event: MessageEvent) {
         token: message.token, requestId: message.requestId,
         purpose: message.purpose || 'select', info: info,
       });
+    } else if (message.type === 'prefetch') {
+      await runPrefetch(message);
+    } else if (message.type === 'extract-patch') {
+      runExtractPatch(message);
     } else if (message.type === 'clear-grid-cache') {
       idb().then(function (db) {
         return new Promise<void>(function (resolve, reject) {
@@ -801,10 +1124,47 @@ workerScope.onmessage = function (event: MessageEvent) {
       stack: e && e.stack ? String(e.stack) : '',
     });
   }
+}
+
+/** Тестируемый контур воркера (Этап 7): обрабатывает сообщения без реального
+ *  Worker-скоупа и возвращает исходящие ответы каждого вызова по порядку. */
+export interface WorkerTestHandler {
+  handle(message: WorkerMessage): Promise<WorkerResponse[]>;
+}
+
+export const PlanetGlobeWorker = {
+  GLOBE_VERSION: PlanetGlobe.GLOBE_VERSION,
+  GRID_VERSION: GeodesicGrid.GRID_VERSION,
+  SURFACE_VERSION: PlanetSurface.SURFACE_VERSION,
+  createWorkerHandler: function (): WorkerTestHandler {
+    const outbox: WorkerResponse[] = [];
+    return {
+      handle: async function (message: WorkerMessage): Promise<WorkerResponse[]> {
+        outbox.length = 0;
+        const previousSink = postSink;
+        postSink = function (payload) { outbox.push(payload as WorkerResponse); };
+        try {
+          await routeMessage(message);
+        } finally {
+          postSink = previousSink;
+        }
+        return outbox.slice();
+      },
+    };
+  },
 };
 
-post('worker-ready', {
-  globeVersion: PlanetGlobe.GLOBE_VERSION,
-  gridVersion: GeodesicGrid.GRID_VERSION,
-  surfaceVersion: PlanetSurface.SURFACE_VERSION,
-});
+// Реальный Worker-скоуп есть только в браузере: в Node-тестах модуль
+// импортируется ради PlanetGlobeWorker.createWorkerHandler, и попытка
+// подписаться/отправить в отсутствие postMessage не должна падать.
+if (typeof workerScope.postMessage === 'function') {
+  workerScope.onmessage = function (event: MessageEvent) {
+    const message = (event.data || {}) as WorkerMessage;
+    void routeMessage(message);
+  };
+  post('worker-ready', {
+    globeVersion: PlanetGlobe.GLOBE_VERSION,
+    gridVersion: GeodesicGrid.GRID_VERSION,
+    surfaceVersion: PlanetSurface.SURFACE_VERSION,
+  });
+}

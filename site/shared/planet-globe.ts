@@ -122,8 +122,33 @@ export interface PlanetGlobeOptions {
   onPickDirection?: (dir: number[]) => void;
   onPickMiss?: () => void;
   onZoomChange?: (distance: number) => void;
+  /** Этап 7 (intent-based prefetch): debounced-уведомление (180 мс) об изменении
+   *  ракурса/дистанции камеры (колесо, pinch, drag, flyToDirection). viewDirection —
+   *  единичный вектор сферы в центре экрана, zoomRatio = 0 (далеко) … 1 (вплотную). */
+  onCameraIntent?: (intent: {
+    viewDirection: [number, number, number];
+    distance: number;
+    zoomRatio: number;
+  }) => void;
   onContextLost?: () => void;
   onContextRestored?: () => void;
+}
+
+/** Геометрия на входе transitionGeometry: полный GPU-бандл PlanetGlobe или
+ *  wire-срез воркера (GlobeWireGeometry без vertexCellId/cellIndexStart). */
+export type GlobeGeometryData =
+  Omit<GlobeGeometry, 'vertexCellId' | 'cellIndexStart'> & {
+    vertexCellId?: Uint32Array;
+    cellIndexStart?: Uint32Array;
+  };
+
+/** Снимок ракурса камеры глобуса (Этап 7): углы и дистанция плюс единичный
+ *  вектор сферы в центре экрана (направление от камеры к центру планеты). */
+export interface GlobeCameraState {
+  rotX: number;
+  rotY: number;
+  distance: number;
+  viewDirection: [number, number, number];
 }
 
 export interface PlanetGlobeHandle {
@@ -151,6 +176,18 @@ export interface PlanetGlobeHandle {
   animateBuild(durationSec: number): void;
   /** Двухслойное центробежное замещение: uCenterGrow 0..1, опционально uHide. */
   setCenterGrow(value: number, hideMask?: number): void;
+  /** Этап 7: бесшовная подмена геометрии центробежной волной — уходящий слой
+   *  сжимается (uHide = t), новый прорастает из центра взгляда (uCenterGrow = t)
+   *  за durationSec секунд (по умолчанию 0.45, минимум 0.08) без перезапуска
+   *  каскадной сборки с полюса и без «попа»; prev-слой освобождается сразу
+   *  по завершении волны. */
+  transitionGeometry(nextGeometry: GlobeGeometryData, durationSec?: number): void;
+  /** Этап 7: плавный подлёт так, чтобы point сферы direction оказался ровно
+   *  в центре экрана; опционально меняет дистанцию за durationMs (650 мс).
+   *  Любой ручной жест (pointerdown / wheel) прерывает подлёт. */
+  flyToDirection(direction: ArrayLike<number>, targetDistance?: number, durationMs?: number): void;
+  /** Этап 7: текущий ракурс камеры (углы, дистанция и центр экрана на сфере). */
+  getCameraState(): GlobeCameraState;
   dispose(): void;
 }
 
@@ -545,6 +582,22 @@ function transformDirectionTranspose(m: Float32Array, p: number[]): number[] {
     (m[8] as number) * (p[0] as number) + (m[9] as number) * (p[1] as number) + (m[10] as number) * (p[2] as number),
   ];
 }
+/** Этап 7: точка сферы в центре экрана для ракурса (rotX = pitch, rotY = yaw).
+ *  Камера стоит в [0, 0, distance] и смотрит в центр, поэтому центр экрана —
+ *  это модельная точка (0, 0, 1): (-cp·sy, sp, cp·cy) (см. mat4RotationYawPitch). */
+function cameraDirectionFromAngles(rotX: number, rotY: number): [number, number, number] {
+  const cp = Math.cos(rotX), sp = Math.sin(rotX);
+  const cy = Math.cos(rotY), sy = Math.sin(rotY);
+  const len = Math.hypot(cp * sy, sp, cp * cy) || 1;
+  return [(-cp * sy) / len, sp / len, (cp * cy) / len];
+}
+/** Кратчайшая дуга угла в (-π, π] — для подлёта без лишних оборотов по yaw. */
+function shortestArcDelta(delta: number): number {
+  let d = delta % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
 function normalize3(v: number[]): number[] {
   const l = Math.hypot(v[0] as number, v[1] as number, v[2] as number) || 1;
   return [(v[0] as number) / l, (v[1] as number) / l, (v[2] as number) / l];
@@ -731,10 +784,39 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
   let selection: CellPolygon | null = null, selectionVao: WebGLVertexArrayObject | null = null, selectionBuffer: WebGLBuffer | null = null, selectionIndexBuffer: WebGLBuffer | null = null, selectionIndexCount = 0, selectionCornerCount = 0;
   let pendingUpload: PendingUpload | null = null;
   let queuedColors: Uint8Array | null = null;
+  // Этап 7: временный prev-слой двухслойного центробежного замещения.
+  // prevBorderBuf/prevIdBuf зарезервированы под будущие буферы границ/ID —
+  // в planet-globe-v1 границы и ID живут в цвете и CPU-массивах.
+  let prevVao: WebGLVertexArrayObject | null = null;
+  let prevPosBuf: WebGLBuffer | null = null;
+  let prevNormBuf: WebGLBuffer | null = null;
+  let prevColorBuf: WebGLBuffer | null = null;
+  let prevBorderBuf: WebGLBuffer | null = null;
+  let prevIdBuf: WebGLBuffer | null = null;
+  let prevIdxBuf: WebGLBuffer | null = null;
+  let prevIndexCount = 0;
+  let prevGeometry: GlobeGeometry | null = null;
+  let waveStartMs = 0;
+  let waveDurationMs = 0;
+  // Этап 7: авто-подлёт flyToDirection и debounced-интент камеры (180 мс).
+  interface FlyAnimation {
+    fromX: number;
+    fromY: number;
+    toX: number;
+    deltaY: number;
+    fromDist: number;
+    toDist: number;
+    startAt: number;
+    durationMs: number;
+  }
+  let flyAnim: FlyAnimation | null = null;
+  let intentTimer: ReturnType<typeof setTimeout> | 0 = 0;
   let disposed = false;
   let raf = 0;
   let yaw = -0.65, pitch = 0.38;
   let yawVelocity = 0, pitchVelocity = 0;
+  // Этап 7: пределы дистанции камеры и zoomRatio для onCameraIntent.
+  const MIN_DISTANCE = 1.35, MAX_DISTANCE = 6.0;
   let distance = 3.05, targetDistance = 3.05;
   let autoRotate = opts.autoRotate !== false;
   let bordersEnabled = opts.borders !== false;
@@ -849,6 +931,51 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     if (pendingUpload.normalBuffer) GL.deleteBuffer(pendingUpload.normalBuffer);
     if (pendingUpload.indexBuffer) GL.deleteBuffer(pendingUpload.indexBuffer);
     pendingUpload = null;
+  }
+  function disposePrevGeometry(): void {
+    // Немедленное освобождение GPU-памяти уходящего слоя: буферы предыдущего
+    // шара не должны переживать волну центробежного замещения.
+    if (prevVao) GL.deleteVertexArray(prevVao);
+    if (prevPosBuf) GL.deleteBuffer(prevPosBuf);
+    if (prevNormBuf) GL.deleteBuffer(prevNormBuf);
+    if (prevColorBuf) GL.deleteBuffer(prevColorBuf);
+    if (prevBorderBuf) GL.deleteBuffer(prevBorderBuf);
+    if (prevIdBuf) GL.deleteBuffer(prevIdBuf);
+    if (prevIdxBuf) GL.deleteBuffer(prevIdxBuf);
+    prevVao = null;
+    prevPosBuf = null;
+    prevNormBuf = null;
+    prevColorBuf = null;
+    prevBorderBuf = null;
+    prevIdBuf = null;
+    prevIdxBuf = null;
+    prevIndexCount = 0;
+    prevGeometry = null;
+  }
+  function scheduleCameraIntent(): void {
+    // Этап 7: debounced-интент камеры (180 мс) для intent-based prefetch
+    // воркера — частые жесты не должны заспамить канал postMessage.
+    if (typeof opts.onCameraIntent !== 'function') return;
+    if (intentTimer) clearTimeout(intentTimer);
+    intentTimer = setTimeout(function () {
+      intentTimer = 0;
+      if (disposed) return;
+      try {
+        opts.onCameraIntent?.({
+          viewDirection: cameraDirectionFromAngles(pitch, yaw),
+          distance: distance,
+          zoomRatio: clamp((MAX_DISTANCE - distance) / (MAX_DISTANCE - MIN_DISTANCE), 0, 1),
+        });
+      } catch (_) { /* коллбэк страницы не ломает рендер */ }
+    }, 180);
+  }
+  function startCentrifugalTransition(durationSec: number | undefined): void {
+    buildAnimStart = -1;
+    buildValue = 1;
+    centerGrowValue = 0;
+    hideValue = 0;
+    waveStartMs = performance.now();
+    waveDurationMs = Math.max(80, (Number(durationSec) == null ? 0.45 : Number(durationSec)) * 1000);
   }
   function uploadGeometry(nextGeometry: GlobeGeometry | null): void {
     // Порционная заливка: текущая планета продолжает рисоваться старым
@@ -1005,15 +1132,15 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     GL.viewport(0, 0, canvas.width, canvas.height);
     return canvas.width / canvas.height;
   }
-  function visibleRanges(model: Float32Array): { indexStart: number; indexCount: number }[] {
-    if (!geometry || !geometry.chunkRanges || !geometry.chunkRanges.length) {
-      return geometry ? [{ indexStart: 0, indexCount: geometry.indexCount }] : [];
+  function visibleRanges(model: Float32Array, layerGeometry: GlobeGeometry): { indexStart: number; indexCount: number }[] {
+    if (!layerGeometry || !layerGeometry.chunkRanges || !layerGeometry.chunkRanges.length) {
+      return [{ indexStart: 0, indexCount: layerGeometry.indexCount }];
     }
     const ranges: { indexStart: number; indexCount: number }[] = [];
     const threshold = 0.92 / distance;
     let current: { indexStart: number; indexCount: number } | null = null;
-    for (let i = 0; i < geometry.chunkRanges.length; i++) {
-      const range = geometry.chunkRanges[i] as GlobeChunkRange;
+    for (let i = 0; i < layerGeometry.chunkRanges.length; i++) {
+      const range = layerGeometry.chunkRanges[i] as GlobeChunkRange;
       // Нужна только z-координата центра в мировом пространстве;
       // без временного массива на каждый chunk в каждом кадре.
       const czRaw = (model[2] as number) * (range.center[0] as number) + (model[6] as number) * (range.center[1] as number) + (model[10] as number) * (range.center[2] as number);
@@ -1081,14 +1208,26 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     processPendingUpload();
     const aspect = resizeIfNeeded();
     const dt = Math.min(0.05, Math.max(0.001, dtMs / 1000));
-    if (!interacting) {
-      yaw += yawVelocity * dt;
-      pitch = clamp(pitch + pitchVelocity * dt, -1.35, 1.35);
-      yawVelocity *= Math.pow(0.12, dt);
-      pitchVelocity *= Math.pow(0.12, dt);
-      if (autoRotate) yaw += 0.045 * dt;
+    if (flyAnim) {
+      // Этап 7: авто-подлёт flyToDirection с easeOutCubic по углам и дистанции.
+      const t = clamp01((now - flyAnim.startAt) / Math.max(1, flyAnim.durationMs));
+      const e = 1 - Math.pow(1 - t, 3);
+      pitch = flyAnim.fromX + (flyAnim.toX - flyAnim.fromX) * e;
+      yaw = flyAnim.fromY + flyAnim.deltaY * e;
+      distance = flyAnim.fromDist + (flyAnim.toDist - flyAnim.fromDist) * e;
+      targetDistance = flyAnim.toDist;
+      scheduleCameraIntent();
+      if (t >= 1) flyAnim = null;
+    } else {
+      if (!interacting) {
+        yaw += yawVelocity * dt;
+        pitch = clamp(pitch + pitchVelocity * dt, -1.35, 1.35);
+        yawVelocity *= Math.pow(0.12, dt);
+        pitchVelocity *= Math.pow(0.12, dt);
+        if (autoRotate) yaw += 0.045 * dt;
+      }
+      distance += (targetDistance - distance) * Math.min(1, dt * 9);
     }
-    distance += (targetDistance - distance) * Math.min(1, dt * 9);
     const model = mat4RotationYawPitch(yaw, pitch);
     const view = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -distance, 1]);
     const proj = mat4Perspective(fieldOfViewYForAspect(aspect), aspect, 0.05, 30);
@@ -1119,19 +1258,44 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       GL.uniform3f(U.uSunDir as WebGLUniformLocation | null, sunDir[0] as number, sunDir[1] as number, sunDir[2] as number);
       GL.uniform3f(U.uCamPos as WebGLUniformLocation | null, camPos[0] as number, camPos[1] as number, camPos[2] as number);
       GL.uniform1f(U.uBorder as WebGLUniformLocation | null, bordersEnabled ? 1 : 0);
-      GL.uniform1f(U.uBuild as WebGLUniformLocation | null, buildP);
-      GL.uniform1f(U.uHide as WebGLUniformLocation | null, hideValue);
-      GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, centerGrowValue);
       GL.uniform3f(U.uViewDir as WebGLUniformLocation | null, viewDirObj[0] as number, viewDirObj[1] as number, viewDirObj[2] as number);
       if (opts.fx && opts.fx.onSurfaceDraw && surfaceProgram) {
         opts.fx.onSurfaceDraw(GL, surfaceProgram);
       }
-      GL.bindVertexArray(vao);
-      const ranges = visibleRanges(model);
-      for (let i = 0; i < ranges.length; i++) {
-        GL.drawElements(GL.TRIANGLES, (ranges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (ranges[i] as { indexStart: number }).indexStart * 4);
+      if (prevVao && prevIndexCount > 0 && prevGeometry) {
+        // Этап 7: волна двухслойного центробежного замещения. Уходящий слой
+        // схлопывается от центра взгляда к краю (uHide = t), новый прорастает
+        // из центра (uCenterGrow = t). Оба рисуются собранными (uBuild = 1):
+        // каскадная сборка с полюса не перезапускается.
+        const t = clamp01((now - waveStartMs) / Math.max(1, waveDurationMs));
+        GL.uniform1f(U.uBuild as WebGLUniformLocation | null, 1.0);
+        GL.uniform1f(U.uHide as WebGLUniformLocation | null, t);
+        GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, 1.0);
+        GL.bindVertexArray(prevVao);
+        const prevRanges = visibleRanges(model, prevGeometry);
+        for (let i = 0; i < prevRanges.length; i++) {
+          GL.drawElements(GL.TRIANGLES, (prevRanges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (prevRanges[i] as { indexStart: number }).indexStart * 4);
+        }
+        GL.uniform1f(U.uHide as WebGLUniformLocation | null, 0.0);
+        GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, t);
+        GL.bindVertexArray(vao);
+        const ranges = visibleRanges(model, geometry);
+        for (let i = 0; i < ranges.length; i++) {
+          GL.drawElements(GL.TRIANGLES, (ranges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (ranges[i] as { indexStart: number }).indexStart * 4);
+        }
+        GL.bindVertexArray(null);
+        if (t >= 1) disposePrevGeometry();
+      } else {
+        GL.uniform1f(U.uBuild as WebGLUniformLocation | null, buildP);
+        GL.uniform1f(U.uHide as WebGLUniformLocation | null, hideValue);
+        GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, centerGrowValue);
+        GL.bindVertexArray(vao);
+        const ranges = visibleRanges(model, geometry);
+        for (let i = 0; i < ranges.length; i++) {
+          GL.drawElements(GL.TRIANGLES, (ranges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (ranges[i] as { indexStart: number }).indexStart * 4);
+        }
+        GL.bindVertexArray(null);
       }
-      GL.bindVertexArray(null);
 
       if (opts.fx && opts.fx.onAfterSurfaceDraw) {
         try { opts.fx.onAfterSurfaceDraw(GL, frameCtx); } catch (_) { /* плагин не ломает рендер */ }
@@ -1216,6 +1380,7 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     interacting = true;
+    flyAnim = null; // ручной жест прерывает авто-подлёт (Этап 7)
     yawVelocity = pitchVelocity = 0;
     downInfo = { x: e.clientX, y: e.clientY, at: performance.now(), moved: 0 };
     lastPinchDistance = pointerDistance();
@@ -1233,10 +1398,12 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
         pitch = clamp(pitch + dy * scale, -1.35, 1.35);
         yawVelocity = dx * scale * 60;
         pitchVelocity = dy * scale * 60;
+        if (downInfo && downInfo.moved > 2) scheduleCameraIntent();
       } else if (pointers.size === 2) {
         const d = pointerDistance();
         if (lastPinchDistance > 0 && d > 0) {
-          targetDistance = clamp(targetDistance * lastPinchDistance / d, 1.35, 6.0);
+          targetDistance = clamp(targetDistance * lastPinchDistance / d, MIN_DISTANCE, MAX_DISTANCE);
+          scheduleCameraIntent();
         }
         lastPinchDistance = d;
       }
@@ -1274,8 +1441,10 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
   }
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
+    flyAnim = null; // ручной жест прерывает авто-подлёт (Этап 7)
     const factor = Math.exp(clamp(e.deltaY, -240, 240) * 0.0016);
-    targetDistance = clamp(targetDistance * factor, 1.35, 6.0);
+    targetDistance = clamp(targetDistance * factor, MIN_DISTANCE, MAX_DISTANCE);
+    scheduleCameraIntent();
     if (typeof opts.onZoomChange === 'function') {
       try { opts.onZoomChange(targetDistance); } catch (_) { /* noop */ }
     }
@@ -1289,6 +1458,7 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
   function onContextRestored(): void {
     const restoreGeometry = pendingUpload ? pendingUpload.geometry : geometry;
     pendingUpload = null;
+    disposePrevGeometry(); // prev-слой погиб вместе с контекстом
     vao = positionBuffer = colorBuffer = normalBuffer = indexBuffer = null;
     selectionVao = selectionBuffer = selectionIndexBuffer = null;
     initPrograms();
@@ -1341,7 +1511,7 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     setBordersEnabled: function (enabled) { bordersEnabled = !!enabled; },
     setAutoRotate: function (enabled) { autoRotate = !!enabled; },
     setAtmosphereEnabled: function (enabled) { atmosphereEnabled = !!enabled; },
-    setDistance: function (value) { targetDistance = clamp(Number(value) || targetDistance, 1.35, 6.0); },
+    setDistance: function (value) { targetDistance = clamp(Number(value) || targetDistance, MIN_DISTANCE, MAX_DISTANCE); },
     getDistance: function () { return targetDistance; },
     resetView: function () {
       yaw = -0.65; pitch = 0.38; yawVelocity = pitchVelocity = 0;
@@ -1365,12 +1535,79 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       centerGrowValue = clamp01(Number(value));
       if (hideMask !== undefined) hideValue = clamp01(Number(hideMask));
     },
+    transitionGeometry: function (nextGeometry, durationSec) {
+      // Этап 7: двухслойное центробежное замещение. Текущий слой переносится
+      // в prev-слот целиком (VAO + все буферы), затем новая геометрия грузится
+      // в основной слот через setGeometry — ракурс и каскадная сборка (uBuild=1)
+      // не сбрасываются, волна идёт от центра взгляда.
+      if (!nextGeometry) {
+        disposePrevGeometry();
+        uploadGeometry(null);
+        return;
+      }
+      if (vao && positionBuffer && normalBuffer && colorBuffer && indexBuffer && geometry) {
+        disposePrevGeometry();
+        prevVao = vao;
+        prevPosBuf = positionBuffer;
+        prevNormBuf = normalBuffer;
+        prevColorBuf = colorBuffer;
+        prevIdxBuf = indexBuffer;
+        prevIndexCount = geometry.indexCount;
+        prevGeometry = geometry;
+        vao = null;
+        positionBuffer = null;
+        normalBuffer = null;
+        colorBuffer = null;
+        indexBuffer = null;
+      }
+      uploadGeometry(nextGeometry as GlobeGeometry);
+      startCentrifugalTransition(durationSec);
+    },
+    flyToDirection: function (direction, targetDistanceValue, durationMs) {
+      // Этап 7: подлёт так, чтобы point сферы direction встал ровно в центр
+      // экрана: targetRotX = asin(dy), targetRotY = atan2(-dx, dz) — тогда
+      // normalize(cameraPosition()) совпадает с direction (см.
+      // cameraDirectionFromAngles и mat4RotationYawPitch).
+      const dx = Number(direction && direction[0]) || 0;
+      const dy = Number(direction && direction[1]) || 0;
+      const dz = Number(direction && direction[2]) || 0;
+      const len = Math.hypot(dx, dy, dz);
+      if (!(len > 0) || !Number.isFinite(len)) return;
+      const targetRotX = clamp(Math.asin(clamp(dy / len, -1, 1)), -1.48, 1.48);
+      const targetRotY = Math.atan2(-dx / len, dz / len);
+      const requested = Number(targetDistanceValue);
+      flyAnim = {
+        fromX: pitch,
+        fromY: yaw,
+        toX: targetRotX,
+        deltaY: shortestArcDelta(targetRotY - yaw),
+        fromDist: distance,
+        toDist: Number.isFinite(requested) && requested > 0
+          ? clamp(requested, MIN_DISTANCE, MAX_DISTANCE)
+          : targetDistance,
+        startAt: performance.now(),
+        durationMs: Math.max(80, Number(durationMs) == null ? 650 : Number(durationMs)),
+      };
+      yawVelocity = pitchVelocity = 0;
+      scheduleCameraIntent();
+    },
+    getCameraState: function () {
+      return {
+        rotX: pitch,
+        rotY: yaw,
+        distance: distance,
+        viewDirection: cameraDirectionFromAngles(pitch, yaw),
+      };
+    },
     dispose: function () {
       disposed = true;
       if (opts.fx && opts.fx.onDispose) {
         try { opts.fx.onDispose(GL); } catch (_) { /* плагин не ломает dispose */ }
       }
+      if (intentTimer) { clearTimeout(intentTimer); intentTimer = 0; }
+      flyAnim = null;
       cancelAnimationFrame(raf);
+      disposePrevGeometry();
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
