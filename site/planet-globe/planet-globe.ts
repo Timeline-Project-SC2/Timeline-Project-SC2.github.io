@@ -65,7 +65,7 @@ const els = {
   loadingBar: must<HTMLElement>('loadingBar'),
   loadingPct: must<HTMLElement>('loadingPct'),
   stats: must<HTMLElement>('statsBox'),
-  selection: must<HTMLElement>('selectionBox'),
+  selection: must<HTMLElement>('pickOut'),
   hover: must<HTMLElement>('hoverLine'),
   fps: must<HTMLElement>('fps'),
   cells: must<HTMLElement>('cells'),
@@ -133,6 +133,9 @@ let cycleTimer = 0;
 let cycleActive = false;
 let completedPlanets = 0;
 let generationHistory: HistoryEntry[] = [];
+let placesCatalog: CsvRow[] = [];
+let systemsCatalog: CsvRow[] = [];
+let selectedPlace: CsvRow | null = null;
 let globe: PlanetGlobeHandle | null = null;
 let webglAvailable = true;
 
@@ -342,6 +345,7 @@ function profileKey(profile: GeographyProfileInput): string {
 
 function updateUrl(profile: GeographyProfileInput): void {
   const params = new URLSearchParams();
+  const prior = new URLSearchParams(window.location.search);
   params.set('preset', els.preset.value);
   params.set('planet', String(profile.planetId));
   params.set('seed', els.seed.value.trim());
@@ -350,6 +354,9 @@ function updateUrl(profile: GeographyProfileInput): void {
   params.set('quality', els.quality.value);
   params.set('mode', els.colorMode.value);
   params.set('relief', els.relief.value);
+  if (selectedPlace) params.set('place', selectedPlace.ID || '');
+  if (prior.has('cell')) params.set('cell', prior.get('cell') || '');
+  if (prior.has('system')) params.set('system', prior.get('system') || '');
   window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
 }
 
@@ -481,6 +488,16 @@ function onWorkerMessage(event: MessageEvent): void {
       if (msg.requestId !== latestPickRequest) return;
       if (globe && msg.info && msg.info.polygon) globe.setSelection(msg.info.polygon as CellPolygon);
       renderSelection(msg.info);
+      if (msg.info) {
+        const params = new URLSearchParams(window.location.search);
+        params.set('place', selectedPlace ? (selectedPlace.ID || '') : String(els.planetId.value));
+        params.set('cell', msg.info.address);
+        window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
+        const inspector = document.getElementById('patchInspector');
+        if (inspector) inspector.dataset.cell = String(msg.info.cell);
+        const prefetch = document.getElementById('prefetchStatus');
+        if (prefetch) prefetch.textContent = 'Каноническая ячейка ' + msg.info.address + ' выбрана; ожидается срез Patch7.';
+      }
     }
     return;
   }
@@ -756,6 +773,13 @@ function setCycle(active: boolean): void {
 
 /* --------------------------------------------------------------- события */
 function initEvents(): void {
+  const copyLink = document.getElementById('copyCellLinkBtn');
+  copyLink?.addEventListener('click', () => {
+    void navigator.clipboard.writeText(window.location.href).then(() => {
+      const status = document.getElementById('prefetchStatus');
+      if (status) status.textContent = 'Ссылка на ячейку скопирована.';
+    }).catch(() => setStatus('Не удалось скопировать ссылку: проверьте разрешение браузера.', 'warn'));
+  });
   els.preset.addEventListener('change', () => { syncSurfaceClassWithPreset(); updateEstimates(); });
   els.radius.addEventListener('input', () => { updateEstimates(); });
   els.quality.addEventListener('change', () => {
@@ -817,6 +841,48 @@ function initEvents(): void {
   void spinState;
 }
 
+function installPlaceCatalog(placesText: string, systemsText: string): void {
+  placesCatalog = parseCsv(placesText).filter((row) => row.type === 'planet' || row.type === 'moon');
+  systemsCatalog = parseCsv(systemsText);
+  const select = document.getElementById('catalogPlaceSel') as HTMLSelectElement | null;
+  if (!select) return;
+  const placeOptions = placesCatalog.map((row) => '<option value="' + escapeHtml(row.ID) + '">' +
+    escapeHtml(row.name + (row.type === 'moon' ? ' · луна' : '')) + '</option>').join('');
+  const demo = ['korhal-iv|Корхал IV · эталон', 'char|Чар · эталон', 'shakuras|Шакурас · эталон'];
+  select.innerHTML = '<optgroup label="Каталог сектора Копрулу (places.csv)">' + placeOptions +
+    '</optgroup><optgroup label="Эталонные миры генератора (DEMO_PLANETS)">' + demo.map((v) => {
+      const parts = v.split('|'); return '<option value="demo:' + escapeHtml(parts[0]) + '">' + escapeHtml(parts[1]) + '</option>';
+    }).join('') + '</optgroup>';
+  const query = new URLSearchParams(location.search);
+  const requested = query.get('place') || query.get('planet') || '2';
+  const selected = placesCatalog.find((r) => r.ID === requested || (r.name || '').toLocaleLowerCase('ru') === requested.toLocaleLowerCase('ru'));
+  selectedPlace = selected || placesCatalog.find((r) => r.ID === '2') || null;
+  if (selectedPlace) { select.value = selectedPlace.ID || ''; applyPlace(selectedPlace); }
+  else if (requested) { const demoValue = 'demo:' + requested; if ([...select.options].some((o) => o.value === demoValue)) select.value = demoValue; }
+  select.addEventListener('change', () => {
+    if (select.value.startsWith('demo:')) { selectedPlace = null; els.planetId.value = select.value.slice(5); els.seed.value = select.value.slice(5); }
+    else { selectedPlace = placesCatalog.find((r) => r.ID === select.value) || null; if (selectedPlace) applyPlace(selectedPlace); }
+    startGeneration(true, 'catalog');
+  });
+}
+
+function applyPlace(place: CsvRow): void {
+  els.planetId.value = place.ID || place.name || 'world';
+  els.seed.value = 'place-' + (place.ID || '') + '-' + (place.name || 'world');
+  els.radius.value = place.type === 'moon' ? '1737' : '6371';
+  const system = systemsCatalog.find((row) => row.system_id === place.system_id);
+  const name = document.getElementById('dossierName'); if (name) name.textContent = place.name || 'Мир';
+  const meta = document.getElementById('dossierMeta'); if (meta) meta.textContent = (system ? system.name : 'Система не указана') + ' · ' + (place.faction || 'фракция неизвестна') + ' · ' + (place.type === 'moon' ? 'луна' : 'планета');
+  const desc = document.getElementById('dossierDesc'); if (desc) desc.textContent = place.description && place.description !== 'none' ? place.description : 'Описание мира пока не внесено в каталог.';
+  const badge = document.getElementById('dossierProfileBadge'); if (badge) { badge.textContent = 'L0 Draft · черновик'; badge.className = 'profile-badge draft'; }
+  const key = document.getElementById('dossierGenKey'); if (key) key.textContent = 'Черновой профиль';
+  const crumb = document.getElementById('breadcrumbPlanet'); if (crumb) crumb.textContent = place.name || 'Планета';
+  const sysCrumb = document.getElementById('breadcrumbSystem') as HTMLAnchorElement | null;
+  if (sysCrumb) { sysCrumb.textContent = system ? (system.name || 'Система') : 'Система'; sysCrumb.href = '../sector/#system=' + encodeURIComponent(place.system_id || ''); }
+  const back = document.getElementById('backToSectorBtn') as HTMLAnchorElement | null;
+  if (back) back.href = '../sector/?place=' + encodeURIComponent(place.ID || '');
+}
+
 /* --------------------------------------------------------------- запуск */
 function init(): void {
   try {
@@ -868,12 +934,13 @@ function init(): void {
   initEvents();
   renderHistory();
   renderSelection(null);
-  fetchFirst([
-    '../data/planet-archetypes-template.csv',
-    '../../data/planet-archetypes-template.csv',
-    '/data/planet-archetypes-template.csv',
-  ]).then((text) => {
-    installPresets(parseCsv(text));
+  Promise.all([
+    fetchFirst(['../data/planet-archetypes-template.csv', '../../data/planet-archetypes-template.csv', '/data/planet-archetypes-template.csv']),
+    fetchFirst(['/data/places.csv', '../data/places.csv']),
+    fetchFirst(['/data/systems.csv', '../data/systems.csv']),
+  ]).then(([presetText, placeText, systemText]) => {
+    installPresets(parseCsv(presetText));
+    installPlaceCatalog(placeText, systemText);
     ensureWorker();
     startGeneration(false, 'initial');
   }).catch((err: Error) => {

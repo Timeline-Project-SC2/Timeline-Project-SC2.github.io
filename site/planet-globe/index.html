@@ -8,6 +8,13 @@
 <link rel="stylesheet" href="planet-globe.css">
 </head>
 <body>
+  <nav class="planet-breadcrumbs" aria-label="Навигация по уровню карты">
+    <a href="../">Галактика</a><span aria-hidden="true">→</span>
+    <a href="../sector/">Сектор Копрулу</a><span aria-hidden="true">→</span>
+    <a id="breadcrumbSystem" href="../sector/">Система</a><span aria-hidden="true">→</span>
+    <span id="breadcrumbPlanet" aria-current="page">Планета</span>
+    <a id="backToSectorBtn" href="../sector/">← В сектор к планете</a>
+  </nav>
   <main class="stage" aria-label="Глобус планеты">
     <canvas id="globe" tabindex="0" role="img" aria-label="3D-глобус планеты с гексагональными ячейками. Перетаскивайте для вращения, колесо или pinch — масштаб, клик выбирает ячейку."></canvas>
     <div id="fallbackWrap" class="fallback" hidden>
@@ -21,13 +28,22 @@
   <aside class="panel" aria-label="Параметры планеты">
     <div class="panel-head">
       <div>
-        <p class="kicker">TIMELINE PROJECT · ЭТАП 6</p>
-        <h1>Боевой глобус планеты</h1>
+        <p class="kicker">TIMELINE PROJECT · ЭТАП 7</p>
+        <h1>Страница планеты и глобус Голдберга</h1>
       </div>
       <button id="panelToggle" class="icon-btn" type="button" aria-expanded="true" aria-controls="panelBody" title="Свернуть панель">−</button>
     </div>
 
     <div id="panelBody" class="panel-body">
+      <section id="planetDossierCard" class="dossier-card" aria-labelledby="dossierName">
+        <h2>Досье мира</h2>
+        <div class="field"><label for="catalogPlaceSel">Каталог планет и лун</label><select id="catalogPlaceSel"><option>Загрузка каталога…</option></select></div>
+        <h3 id="dossierName">Корхал IV</h3><p id="dossierMeta" class="hint">Система · фракция · планета</p>
+        <p id="dossierDesc" class="dossier-desc">Описание мира загружается из каталога.</p>
+        <span id="dossierProfileBadge" class="profile-badge draft">L0 Draft · черновик</span>
+        <p class="gen-key">generation_key <code id="dossierGenKey">—</code></p>
+      </section>
+
       <p class="lead">Первая живая планета полной цепочки: сетка Голдберга, поля, C100-континенты, реки, озёра и мягкие биомы — всё настоящее, не картинка-заглушка.</p>
 
       <div class="field">
@@ -123,7 +139,18 @@
       </div>
 
       <h2>Выбранная ячейка</h2>
-      <div id="selectionBox" class="selection"></div>
+      <div id="selectionBox" class="selection"><div id="pickOut"></div></div>
+        <section id="patchInspector" class="patch-inspector" aria-live="polite">
+          <h3>Континентальный регион C100 · Patch7</h3>
+          <p>Выберите ячейку глобуса, чтобы открыть канонический срез и производные ключи.</p>
+          <div class="key-table" aria-label="Ключи ячейки и участка">
+            <div><span>planet_key</span><code id="planetKeyOut">—</code></div><div><span>region_key</span><code id="regionKeyOut">—</code></div>
+            <div><span>cell_key</span><code id="cellKeyOut">—</code></div><div><span>patch_key</span><code id="patchKeyOut">—</code></div>
+          </div>
+          <button id="copyCellLinkBtn" type="button">Скопировать ссылку на ячейку / участок</button>
+          <p id="prefetchStatus" class="hint" role="status">Подготовка данных по запросу</p>
+          <div id="patchDetails"></div>
+        </section>
 
       <h2>Сводка планеты</h2>
       <pre id="statsBox" class="stats">Загрузка пресетов…</pre>
