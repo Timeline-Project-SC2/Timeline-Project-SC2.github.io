@@ -13,15 +13,42 @@
    только через `import type` — у модуля есть побочный эффект регистрации
    onmessage, и value-импорт из него тащил бы его в главный поток. */
 
-import { buildBuildingSpawnMask, verifyPatchInvariants } from './local-map-contract.ts';
-import type { BuildingSpawnRule, LocalMapPatch } from './local-map-contract.ts';
+import {
+  baseElevationOf,
+  buildBuildingSpawnMask,
+  createPatchFieldSampler,
+  isWaterCell,
+  localPointToDirection,
+  nearestPatchCell,
+  patchSpanMeters,
+  samplePatchFields,
+  verifyPatchInvariants,
+  waterLevelOf,
+} from './local-map-contract.ts';
+import type { BuildingSpawnRule, LocalMapPatch, PatchCell } from './local-map-contract.ts';
 import type { MeshModuleId } from './local-map-mesh.ts';
+import type { FieldSampler, GeographyProfileInput } from '../../site/shared/planet-geography.ts';
 
 // ---- Константы контракта ----
 export const HEIGHTFIELD_RES = 256;
 export const ZONE_RES = 64;
 export const TERRAFORM_RES = 256;
 export const MAX_INSTANCES = 4096;
+
+/** Метры рельефа на единицу канонической высоты c100-soft-v2 (И-3.2). */
+export const METERS_PER_ELEVATION_UNIT = 900;
+/** Амплитуда локального fBm-рельефа на суше, м. */
+export const LAND_FBM_AMPLITUDE_M = 80;
+/** Амплитуда канала `detail` единого 3D-сэмплера, м (И-3.1). */
+export const PROFILE_DETAIL_AMPLITUDE_M = 40;
+/** Узлов решётки кэширования канала `detail` на сторону (65×65 опросов). */
+export const DETAIL_LATTICE_STEPS = 64;
+/** Полуширина русла реки в долях радиуса участка. */
+export const RIVER_HALF_WIDTH_RATIO = 0.03;
+/** Глубина вреза русла в долях радиуса участка. */
+export const RIVER_DEPTH_RATIO = 0.0025;
+/** Ёмкость LRU-кэша локальных участков (И-3, Патч 8). */
+export const LOCAL_MAP_CACHE_LIMIT = 8;
 
 /** Данные инстанса: 8 float × 4 Б = 32 байта (контракт layout-а шейдера). */
 export type InstanceData = readonly [
@@ -46,6 +73,18 @@ export interface LocalMapMeta {
   readonly hfRes: number;
   readonly zoneRes: number;
   readonly tfRes: number;
+  /** Число высаженных инстансов 3D-структур (после маски И-3.4). */
+  readonly totalInstances?: number;
+  /** Доля точек рельефа, где разрешён спавн (buildingSpawnMask == 1). */
+  readonly buildableFraction?: number;
+  /** Доля точек рельефа, попавших в воду/озёра канонических ячеек (И-3.2). */
+  readonly waterFraction?: number;
+  readonly minHeightM?: number;
+  readonly maxHeightM?: number;
+  /** Время CPU-генерации участка, мс (гейт G4: <= 150 мс). */
+  readonly genMs?: number;
+  /** Ключ участка (§8.8); по умолчанию строка канонического центра. */
+  readonly patchKey?: string;
 }
 
 export interface LocalMapWorkerRequest {
@@ -58,6 +97,10 @@ export interface LocalMapWorkerRequest {
   readonly centerLon?: number;
   /** Правило маски спавна (И-3.4); по умолчанию DEFAULT_BUILDING_SPAWN_RULE. */
   readonly spawnRule?: BuildingSpawnRule;
+  /** Профиль планеты для единого 3D-сэмплера полей (И-3.1); без него — только fBm. */
+  readonly profile?: GeographyProfileInput;
+  /** Ключ участка §8.8 — ключ LRU-кэша и метки `meta.patchKey`. */
+  readonly patchKey?: string;
 }
 
 export interface LocalMapWorkerResponse {
@@ -78,8 +121,11 @@ function pcgHash(state: number): number {
 }
 
 function hash2(ix: number, iy: number, seed: number): number {
-  // 2D → uint32
-  return pcgHash(pcgHash(ix + seed * 198491317) ^ (iy * 6542989));
+  // 2D → uint32: один раунд PCG по XOR-смешанным входам. Два раунда
+  // (как в первой версии) давали тот же детерминизм, но вдвое дороже —
+  // гейт G4 (worker-генерация <= 150 мс) оставляет запас на слабых машинах.
+  const mixed = (Math.imul(ix | 0, 0x9E3779B1) ^ Math.imul(iy | 0, 0x85EBCA77) ^ Math.imul(seed | 0, 0xC2B2AE3D)) >>> 0;
+  return pcgHash(mixed);
 }
 
 function hashFloat(ix: number, iy: number, seed: number): number {
@@ -213,6 +259,30 @@ export function generateTerraformMap(): Uint8Array {
     }
   }
   return map;
+}
+
+/**
+ * И-3.2/И-3.4: вода, озёра и русла не получают зонирования. Тексели `zone_map`,
+ * попавшие в водные канонические ячейки Patch7, переводятся в зону 0 (пустошь)
+ * с нулевой плотностью — шейдер рельефа по `zone == 0u` и глубине ниже
+ * `seaLevel` плавно тонирует их водно-бирюзовым оттенком, а `scatterInstances`
+ * не ставит над ними ни одного здания.
+ */
+export function applyWaterZoning(zoneMap: Uint8Array, patch: LocalMapPatch): Uint8Array {
+  const zRes = ZONE_RES;
+  const span = patchSpanMeters(patch);
+  for (let zy = 0; zy < zRes; zy++) {
+    const v = ((zy + 0.5) / zRes - 0.5) * span;
+    for (let zx = 0; zx < zRes; zx++) {
+      const u = ((zx + 0.5) / zRes - 0.5) * span;
+      const cell = nearestPatchCell(patch, localPointToDirection(patch, u, v));
+      if (!isWaterCell(cell, patch.seaLevel) && cell.streamWeight <= 0) continue;
+      const idx = (zy * zRes + zx) * 2;
+      zoneMap[idx] = 0;
+      zoneMap[idx + 1] = 0;
+    }
+  }
+  return zoneMap;
 }
 
 // ---- ZONE_MODULES (зеркало контракта) ----
@@ -421,9 +491,223 @@ export function packInstancesByModule(instances: readonly ScatterInstance[]): In
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// И-3.1/И-3.3: касательный кадр патча — координаты 7 канонических ячеек в метрах
+// ---------------------------------------------------------------------------
+
+interface Tangent2D { readonly u: number; readonly v: number; }
+
+/** Обратная exp-карта: центр канонической ячейки → (u, v) касательной плоскости, м. */
+function cellTangentMeters(patch: LocalMapPatch, cell: PatchCell): Tangent2D {
+  const { origin, east, north, radiusM } = patch.frame;
+  const dot = (a: readonly number[], b: readonly number[]): number =>
+    (a[0] as number) * (b[0] as number) + (a[1] as number) * (b[1] as number) + (a[2] as number) * (b[2] as number);
+  const cosTheta = Math.min(1, Math.max(-1, dot(cell.center, origin)));
+  const theta = Math.acos(cosTheta);
+  const sinTheta = Math.sin(theta);
+  // chord = theta * R, u = chord * dot(dir, east) / sin(theta) — точный обратный exp-мап.
+  const scale = sinTheta > 1e-9 ? (theta * radiusM) / sinTheta : radiusM;
+  return { u: dot(cell.center, east) * scale, v: dot(cell.center, north) * scale };
+}
+
+interface RiverSegment {
+  readonly u0: number; readonly v0: number;
+  readonly u1: number; readonly v1: number;
+  /** Bounding box сегмента, расширенная на полуширину русла, — быстрый отсев. */
+  readonly minU: number; readonly minV: number;
+  readonly maxU: number; readonly maxV: number;
+}
+
+/**
+ * И-3.3: русло входит строго через грани соседей-притоков (`inlets`) и выходит
+ * строго через грань `flowReceiver` центра (`outlet`) в касательном кадре.
+ */
+function riverSegments(patch: LocalMapPatch, radiusM: number, halfWidthM: number): RiverSegment[] {
+  const raw: Array<Omit<RiverSegment, 'minU' | 'minV' | 'maxU' | 'maxV'>> = [];
+  if (patch.river.flowsThroughCenter || patch.river.inlets.length > 0) {
+    for (const edge of patch.river.inlets) {
+      const cell = patch.cells[edge.slot + 1];
+      if (!cell) continue;
+      const inlet = cellTangentMeters(patch, cell);
+      raw.push({ u0: inlet.u, v0: inlet.v, u1: 0, v1: 0 });
+    }
+    if (patch.river.outlet) {
+      const cell = patch.cells[patch.river.outlet.slot + 1];
+      if (cell) {
+        const outlet = cellTangentMeters(patch, cell);
+        raw.push({ u0: 0, v0: 0, u1: outlet.u, v1: outlet.v });
+      }
+    }
+    // Русло без притоков/устья (терминальное озеро): прямой створ через центр.
+    if (raw.length === 0 && patch.river.flowsThroughCenter) {
+      raw.push({ u0: -2 * radiusM, v0: 0, u1: 2 * radiusM, v1: 0 });
+    }
+  }
+  return raw.map((seg) => ({
+    ...seg,
+    minU: Math.min(seg.u0, seg.u1) - halfWidthM,
+    minV: Math.min(seg.v0, seg.v1) - halfWidthM,
+    maxU: Math.max(seg.u0, seg.u1) + halfWidthM,
+    maxV: Math.max(seg.v0, seg.v1) + halfWidthM,
+  }));
+}
+
+/** Расстояние от точки до отрезка в касательной плоскости, м. */
+function distanceToSegment(wx: number, wy: number, seg: RiverSegment): number {
+  const dx = seg.u1 - seg.u0;
+  const dy = seg.v1 - seg.v0;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((wx - seg.u0) * dx + (wy - seg.v0) * dy) / len2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const px = seg.u0 + dx * t;
+  const py = seg.v0 + dy * t;
+  return Math.hypot(wx - px, wy - py);
+}
+
+/** Плавный профиль вреза русла: 1 в стрежне, 0 за полушириной. */
+function riverCarveFactor(wx: number, wy: number, segments: readonly RiverSegment[], halfWidthM: number): number {
+  if (segments.length === 0 || !(halfWidthM > 0)) return 0;
+  let best = Infinity;
+  for (const seg of segments) {
+    if (wx < seg.minU || wx > seg.maxU || wy < seg.minV || wy > seg.maxV) continue;
+    const d = distanceToSegment(wx, wy, seg);
+    if (d < best) best = d;
+  }
+  if (best === Infinity) return 0;
+  if (best >= halfWidthM) return 0;
+  const t = 1 - best / halfWidthM;
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Канал `detail` единого 3D-сэмплера (И-3.1) на решётке 65×65 узлов с
+ * билинейной интерполяцией: 4 225 опросов вместо 65 536 держат гейт G4
+ * (генерация <= 150 мс) при сохранении непрерывности поля (И-3.1).
+ */
+function sampleDetailLattice(
+  patch: LocalMapPatch, sampler: FieldSampler, radiusM: number,
+): Float32Array {
+  const nodes = DETAIL_LATTICE_STEPS + 1;
+  const lattice = new Float32Array(nodes * nodes);
+  const scratch = new Float32Array(8);
+  for (let j = 0; j < nodes; j++) {
+    const v = ((j / DETAIL_LATTICE_STEPS) - 0.5) * 2 * radiusM;
+    for (let i = 0; i < nodes; i++) {
+      const u = ((i / DETAIL_LATTICE_STEPS) - 0.5) * 2 * radiusM;
+      const fields = samplePatchFields(patch, sampler, u, v, scratch);
+      const detail = fields[5] as number;
+      lattice[j * nodes + i] = detail < -1 ? -1 : detail > 1 ? 1 : detail;
+    }
+  }
+  return lattice;
+}
+
+function sampleDetailAt(lattice: Float32Array, tx: number, ty: number): number {
+  const nodes = DETAIL_LATTICE_STEPS + 1;
+  const fx = Math.min(DETAIL_LATTICE_STEPS - 1e-9, Math.max(0, tx * DETAIL_LATTICE_STEPS));
+  const fy = Math.min(DETAIL_LATTICE_STEPS - 1e-9, Math.max(0, ty * DETAIL_LATTICE_STEPS));
+  const ix = Math.floor(fx), iy = Math.floor(fy);
+  const ax = fx - ix, ay = fy - iy;
+  const i0 = iy * nodes + ix;
+  const i1 = i0 + 1;
+  const i2 = i0 + nodes;
+  const i3 = i2 + 1;
+  const top = (lattice[i0] as number) * (1 - ax) + (lattice[i1] as number) * ax;
+  const bottom = (lattice[i2] as number) * (1 - ax) + (lattice[i3] as number) * ax;
+  return top * (1 - ay) + bottom * ay;
+}
+
+// ---------------------------------------------------------------------------
+// LRU-кэш локальных участков (до 8 записей, Патч 8)
+// ---------------------------------------------------------------------------
+
+interface LocalMapCacheEntry {
+  readonly response: LocalMapWorkerResponse;
+  readonly fingerprint: string;
+}
+
+const LOCAL_MAP_CACHE = new Map<string, LocalMapCacheEntry>();
+
+/** Ключ участка: `${patchKey || centerCell}:${radiusM}:${seed}:${placeId}`. */
+export function localMapCacheKey(request: LocalMapWorkerRequest): string {
+  const center = request.patchKey || String(request.patch.centerCell);
+  return `${center}:${request.radiusM}:${request.seed}:${request.placeId}`;
+}
+
+/** Отпечаток входных данных, влияющих на рельеф помимо ключа участка. */
+function localMapFingerprint(request: LocalMapWorkerRequest): string {
+  const seedHex = request.profile ? String(request.profile['masterSeedHex'] ?? '') : 'none';
+  const rule = request.spawnRule
+    ? `${request.spawnRule.minLand}/${request.spawnRule.maxSlope}`
+    : 'default';
+  return `${seedHex}|${rule}`;
+}
+
+function cloneInstanceBuffers(instanceBuffers: InstanceBuffers): InstanceBuffers {
+  const copy: Record<string, InstancePack> = {};
+  for (const [id, pack] of Object.entries(instanceBuffers)) {
+    if (!pack) continue;
+    copy[id] = { buffer: new Float32Array(pack.buffer), count: pack.count };
+  }
+  return copy as InstanceBuffers;
+}
+
+/** Глубокая копия ответа: кэш и Transferable-буферы вызывающего не пересекаются. */
+export function cloneLocalMapResponse(response: LocalMapWorkerResponse): LocalMapWorkerResponse {
+  return {
+    heightfield: new Float32Array(response.heightfield),
+    zoneMap: new Uint8Array(response.zoneMap),
+    terraformMap: new Uint8Array(response.terraformMap),
+    instanceBuffers: cloneInstanceBuffers(response.instanceBuffers),
+    meta: { ...response.meta },
+  };
+}
+
+function readCache(key: string, fingerprint: string | null): LocalMapWorkerResponse | undefined {
+  const entry = LOCAL_MAP_CACHE.get(key);
+  if (!entry) return undefined;
+  if (fingerprint !== null && entry.fingerprint !== fingerprint) {
+    LOCAL_MAP_CACHE.delete(key);
+    return undefined;
+  }
+  // Освежаем порядок LRU: последняя запись — самая свежая.
+  LOCAL_MAP_CACHE.delete(key);
+  LOCAL_MAP_CACHE.set(key, entry);
+  return cloneLocalMapResponse(entry.response);
+}
+
+function writeCache(key: string, request: LocalMapWorkerRequest, response: LocalMapWorkerResponse): void {
+  LOCAL_MAP_CACHE.delete(key);
+  LOCAL_MAP_CACHE.set(key, {
+    response: cloneLocalMapResponse(response),
+    fingerprint: localMapFingerprint(request),
+  });
+  while (LOCAL_MAP_CACHE.size > LOCAL_MAP_CACHE_LIMIT) {
+    const oldest = LOCAL_MAP_CACHE.keys().next();
+    if (oldest.done) break;
+    LOCAL_MAP_CACHE.delete(oldest.value);
+  }
+}
+
+/** Кэшированный участок или `undefined`; буферы всегда клонируются. */
+export function getCachedLocalMap(key: string): LocalMapWorkerResponse | undefined {
+  return readCache(key, null);
+}
+
+/** Полная очистка LRU-кэша участков (смена планеты/профиля). */
+export function clearLocalMapCache(): void {
+  LOCAL_MAP_CACHE.clear();
+}
+
+/** Текущее число записей кэша (диагностика). */
+export function localMapCacheSize(): number {
+  return LOCAL_MAP_CACHE.size;
+}
+
 // ---- Main Entry Point ----
 export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorkerResponse {
   const { patch, seed, placeId, radiusM } = request;
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const hfRes = HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / hfRes;
 
@@ -433,46 +717,112 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
     throw new Error('LocalMapWorker: патч 7 ячеек нарушил инварианты И-3: ' + JSON.stringify(report.checks));
   }
 
-  // 1. Heightfield (h_natural)
+  const cacheKey = localMapCacheKey(request);
+  const cached = readCache(cacheKey, localMapFingerprint(request));
+  if (cached) return cached;
+
+  // 0. И-3.4: маска спавна нужна и для смешивания терраформинга, и для scatter.
+  const spawnMask = buildBuildingSpawnMask(patch, hfRes, request.spawnRule);
+
+  // 1. Heightfield (h_natural): якорь высоты — каноническая ячейка Patch7 (И-3.2),
+  //    детализация — fBm и канал `detail` единого сэмплера (И-3.1), врез русла (И-3.3).
+  const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
+  const detailLattice = sampler ? sampleDetailLattice(patch, sampler, radiusM) : null;
+  const riverHalfWidthM = Math.max(cellSize * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
+  const riverDepthM = Math.max(6, radiusM * RIVER_DEPTH_RATIO);
+  const segments = riverSegments(patch, radiusM, riverHalfWidthM);
+  const noiseScale = 1 / Math.max(radiusM, 1);
   const heightfield = new Float32Array(hfRes * hfRes);
-  const noiseScale = 0.01;   // подбирается под масштаб планеты
+  let waterPoints = 0;
+  let buildablePoints = 0;
+
   for (let y = 0; y < hfRes; y++) {
     for (let x = 0; x < hfRes; x++) {
+      const idx = y * hfRes + x;
       const wx = (x - hfRes / 2) * cellSize;
       const wy = (y - hfRes / 2) * cellSize;
-      heightfield[y * hfRes + x] = fBm(wx * noiseScale, wy * noiseScale, seed, 6) * 80;
-      // 80 = макс. перепад высот в метрах
+
+      // И-3.1: (u, v) → 3D-направление → ближайшая каноническая ячейка Patch7.
+      const cell = nearestPatchCell(patch, localPointToDirection(patch, wx, wy));
+      if (spawnMask[idx] === 1) buildablePoints++;
+
+      let height: number;
+      if (isWaterCell(cell, patch.seaLevel)) {
+        // И-3.2: вода/переполняющееся озеро держит зеркало waterLevelOf.
+        waterPoints++;
+        height = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+      } else {
+        // И-3.2: суша надёжно выше канонической высоты ячейки (берег не «ныряет»).
+        const anchor = (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+        const fbmM = fBm(wx * noiseScale, wy * noiseScale, seed, 6) * LAND_FBM_AMPLITUDE_M;
+        const detailM = detailLattice
+          ? (sampleDetailAt(detailLattice, x / hfRes, y / hfRes) * 0.5 + 0.5) * PROFILE_DETAIL_AMPLITUDE_M
+          : 0;
+        height = anchor + fbmM + detailM;
+        // И-3.3: плавный врез русла от входных граней к центру и к выходной грани.
+        const carve = riverCarveFactor(wx, wy, segments, riverHalfWidthM);
+        if (carve > 0) height -= riverDepthM * carve;
+      }
+
+      heightfield[idx] = height;
     }
   }
 
-  // 2. Smoothed copy + box blur
+  // 2. Smoothed copy + box blur (площадка терраформинга без «висящего плато»).
   const blurKernel = Math.max(4, Math.min(32, Math.round(radiusM / cellSize * 0.3)));
   const smoothed = boxBlurSeparable(heightfield, hfRes, hfRes, blurKernel);
 
   // 3. Terraform mask
   const terraformMap = generateTerraformMap();
 
-  // 4. Mix: h_final = mix(h_natural, h_smoothed, terraform_alpha)
+  // 4. Mix: h_final = mix(h_natural, h_smoothed, terraform_alpha) только там, где
+  //    спавн разрешён, — терраформинг базы не засыпает реки и озёра (И-3.2/И-3.3).
   for (let i = 0; i < hfRes * hfRes; i++) {
+    if (spawnMask[i] !== 1) continue;
     const alpha = (terraformMap[i] as number) / 255;
     heightfield[i] = (heightfield[i] as number) * (1 - alpha) + (smoothed[i] as number) * alpha;
   }
 
-  // 5. Zone map
-  const zoneMap = generateZoneMap(seed, placeId);
+  // 5. Zone map: вода/озёра/русла остаются без зонирования (И-3.2/И-3.4).
+  const zoneMap = applyWaterZoning(generateZoneMap(seed, placeId), patch);
 
   // 6. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
-  const spawnMask = buildBuildingSpawnMask(patch, hfRes, request.spawnRule);
   const instances = scatterInstances(zoneMap, heightfield, radiusM, seed, placeId, spawnMask);
   const instanceBuffers = packInstancesByModule(instances);
 
-  return {
+  // Финальные границы высот после смешивания терраформинга.
+  let finalMin = Infinity;
+  let finalMax = -Infinity;
+  for (let i = 0; i < heightfield.length; i++) {
+    const h = heightfield[i] as number;
+    if (h < finalMin) finalMin = h;
+    if (h > finalMax) finalMax = h;
+  }
+
+  const totalPoints = hfRes * hfRes;
+  const genMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
+  const response: LocalMapWorkerResponse = {
     heightfield,
     zoneMap,
     terraformMap,
     instanceBuffers,
-    meta: { radiusM, hfRes: HEIGHTFIELD_RES, zoneRes: ZONE_RES, tfRes: TERRAFORM_RES },
+    meta: {
+      radiusM,
+      hfRes: HEIGHTFIELD_RES,
+      zoneRes: ZONE_RES,
+      tfRes: TERRAFORM_RES,
+      totalInstances: instances.length,
+      buildableFraction: totalPoints > 0 ? buildablePoints / totalPoints : 0,
+      waterFraction: totalPoints > 0 ? waterPoints / totalPoints : 0,
+      minHeightM: finalMin === Infinity ? 0 : finalMin,
+      maxHeightM: finalMax === -Infinity ? 0 : finalMax,
+      genMs,
+      patchKey: request.patchKey || String(patch.centerCell),
+    },
   };
+
+  writeCache(cacheKey, request, response);
+  return response;
 }
 
 export function localMapTransferables(response: LocalMapWorkerResponse): Transferable[] {

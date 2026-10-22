@@ -178,6 +178,10 @@ const vec3 ZONE_COLORS[5] = vec3[5](
   vec3(0.55, 0.55, 0.58)    // 4: ядро (чистый бетон)
 );
 
+// Вода/озёра/русла (И-3.2, И-3.3): мелководье и глубина ниже уровня моря.
+const vec3 SHALLOW_WATER_COLOR = vec3(0.145, 0.375, 0.415);
+const vec3 DEEP_WATER_COLOR    = vec3(0.055, 0.235, 0.290);
+
 void main() {
   uvec4 zoneData = texture(u_zoning_map, v_uv);
   uint zone = zoneData.r;
@@ -187,6 +191,18 @@ void main() {
   vec3 naturalColor = ZONE_COLORS[0];
   vec3 zoneColor    = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
   vec3 baseColor    = mix(naturalColor, zoneColor, terraformBlend);
+
+  // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
+  // воды/озёр канонической ячейки лежит ровно на уровне seaLevel (z == 0),
+  // врез речного русла уходит ниже, поэтому условие — z <= 0. Воркер не
+  // зонирует воду (applyWaterZoning), так что zone == 0u здесь означает
+  // «вода, озеро, русло или пустошь вне техногенных площадок».
+  if (zone == 0u && v_worldPos.z <= 0.0) {
+    float depthBelowZero = max(0.0, -v_worldPos.z);
+    float waterBlend = smoothstep(0.0, 3.0, depthBelowZero);
+    vec3 waterColor = mix(SHALLOW_WATER_COLOR, DEEP_WATER_COLOR, smoothstep(0.0, 24.0, depthBelowZero));
+    baseColor = mix(baseColor, waterColor, waterBlend * 0.92);
+  }
 
   // Освещение
   vec3 N   = normalize(v_normal);
