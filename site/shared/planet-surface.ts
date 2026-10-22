@@ -1429,6 +1429,7 @@ function computeMountains(
   grid: PlanetGrid, geography: GeographyResult, arrays: SurfaceArrays, hardLand: Uint8Array,
   thresholds: SurfaceThresholds, areaScale: number, landCells: Int32Array,
 ): { ranges: MountainRangeRecord[]; stats: MountainStats } {
+  void hardLand;
   let c: number;
   let mountainArea = 0, seamArea = 0, landArea = 0;
   const mask = grid.cellCount <= surfMountainMaskBuf.length

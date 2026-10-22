@@ -30,6 +30,7 @@ import {
 import type { FxPaletteId, FxRuntimeState, FxTextureMode, SeparationAnimationHandle } from '../../src/planet/planet-globe-fx.ts';
 
 function must<T extends HTMLElement>(id: string): T {
+  if (typeof document === 'undefined') return {} as T;
   const node = document.getElementById(id);
   if (!node) throw new Error('Нет обязательного узла стенда: #' + id);
   return node as T;
@@ -349,4 +350,6 @@ function init(): void {
   generate();
 }
 
-init();
+if (typeof document !== 'undefined') {
+  init();
+}
