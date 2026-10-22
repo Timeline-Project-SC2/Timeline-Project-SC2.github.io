@@ -105,6 +105,7 @@ const decimalCases = [
   ['ocean_basin_mean_cells', '6000.0005'],
 ];
 
+// Фиксированные значения покрывают обе ветки ISO-парсера и не зависят от часов.
 const approvedAtCases = ['2026-10-21', '2026-10-21T18:30:00Z'];
 
 const pythonCode = String.raw`
@@ -124,6 +125,7 @@ for raw in request["profiles"]:
             raw,
             approved_by="cross-verifier",
             approved_at=approved_at,
+            seed_hex=raw.get("master_seed_hex") or "0123456789abcdef",
         )
         result = pg.validate_profiles(
             [frozen],
