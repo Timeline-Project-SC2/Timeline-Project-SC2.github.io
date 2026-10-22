@@ -4,13 +4,28 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint site src",
+    "test": "node --test tests/geodesic-grid.test.mjs tests/planet-grid-cache.test.mjs tests/planet-generation-contract.test.mjs tests/planet-geography.test.mjs tests/planet-surface.test.mjs tests/planet-globe.test.mjs tests/planet-globe-fx.test.mjs tests/local-map.test.mjs",
+    "test:py": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:all": "npm test && npm run test:py",
+    "build:planet-core": "node tools/build_planet_core.mjs",
+    "check:planet-core": "node tools/build_planet_core.mjs --check",
     "verify:contract": "node tools/verify_planet_contract_cross.mjs",
-    "verify:publish": "node tools/verify_feature_parity.mjs"
+    "verify:publish": "node tools/verify_feature_parity.mjs",
+    "verify:hashes": "node tools/verify_planet_hashes.mjs",
+    "assets:build": "python3 tools/build_assets.py",
+    "assets:check": "python3 tools/build_assets.py --check",
+    "assets:sync-only": "python3 tools/build_assets.py --sync-only"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "assemblyscript": "0.28.20",
     "esbuild": "^0.28.2",
-    "typescript": "^7.0.2",
+    "eslint": "^10.0.0",
+    "globals": "^17.0.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite": "^8.3.5"
   }
 }

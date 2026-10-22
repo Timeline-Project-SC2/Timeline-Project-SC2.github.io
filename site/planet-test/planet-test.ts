@@ -212,7 +212,7 @@ function onWorkerMessage(event: MessageEvent): void {
     if (msg.requestId !== activeRequestId) return;
     displayedSummary = msg.summary;
     fxState.reliefScale = msg.geometry.reliefScale || 1;
-    fxState.geometry = msg.geometry;
+    fxState.geometry = msg.geometry as unknown as GlobeGeometry;
     if (globe) globe.setGeometry(msg.geometry as unknown as GlobeGeometry);
     renderSummary(msg.summary);
     els.cellInfo.textContent = 'ячейка не выбрана — кликните по глобусу';
