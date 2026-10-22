@@ -31,7 +31,7 @@
 
 import PlanetNoise from '../../site/shared/planet-noise.ts';
 import type { PlanetGrid } from '../../site/shared/geodesic-grid.ts';
-import type { PlanetGlobeFxHooks } from '../../site/shared/planet-globe.ts';
+import type { GlobeGeometry, PlanetGlobeFxHooks } from '../../site/shared/planet-globe.ts';
 
 export const PLANET_GLOBE_FX_VERSION = 'planet-globe-fx-v1';
 
@@ -627,6 +627,41 @@ export interface FxRuntimeState {
   theme: FxTheme;
   /** reliefScale активной геометрии — из неё в шейдере восстанавливается высота. */
   reliefScale: number;
+  /* ---- Опциональные поля волны PR 6.1 (Интерфейс-контракт FxRuntimeState) ---- */
+  /** Режим раскладки осколков (по умолчанию 'power'). */
+  shardDist?: ShardDist;
+  /** Толщина стен разлома (по умолчанию 0.14). */
+  shardThick?: number;
+  /** Рваность границ осколков (по умолчанию 0.5). */
+  shardJag?: number;
+  /** Доля «потерянных» осколков (по умолчанию 0). */
+  shardLoss?: number;
+  /** Радиус раскалённого ядра Шакураса (по умолчанию 0.55). */
+  coreScale?: number;
+  /** Сетка планеты: включает канонический клеточный путь осколков. */
+  grid?: PlanetGrid | null;
+  /** Готовая геометрия глобуса: источник vertexCellId для индекса осколка. */
+  geometry?: GlobeGeometry | null;
+}
+
+/** Контекст кадра, который боевой глобус отдаёт плагину FX. */
+export interface FxFrameContext {
+  mvp: Float32Array;
+  model: Float32Array;
+  normalMat: Float32Array;
+  lightDir: Float32Array;
+  eyePos: Float32Array;
+  timeSec: number;
+}
+
+/** Расширенный интерфейс контроллера FX: базовые хуки + объём и ядро. */
+export interface PlanetGlobeFxController extends PlanetGlobeFxHooks {
+  /** Геометрия и сетка готовы: строим объём осколков и ядро. */
+  onGeometryReady?: (gl: WebGL2RenderingContext, grid: PlanetGrid, geometry: GlobeGeometry) => void;
+  /** После отрисовки поверхности: объём осколков и раскалённое ядро. */
+  onAfterSurfaceDraw?: (gl: WebGL2RenderingContext, frame: FxFrameContext) => void;
+  /** Освобождение GPU-ресурсов плагина. */
+  onDispose?: (gl: WebGL2RenderingContext) => void;
 }
 
 function replaceOnce(source: string, needle: string, replacement: string, label: string): string {
@@ -652,7 +687,7 @@ interface FxUniforms {
 }
 
 /** Хуки плагина: декорируют surface-шейдеры глобуса и гоняют uniform-ы FX. */
-export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxHooks {
+export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
   let uniforms: FxUniforms | null = null;
   let shardTexture: WebGLTexture | null = null;
   let shardTextureKey = '';
