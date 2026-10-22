@@ -26,6 +26,8 @@ export const CONFIG = {
     planets: 'planets.json',
     overrides: 'system-overrides.json',
     labels: 'map-labels.json',
+    // Снимок профилей планет (Этап 7): place_id -> пресет, радиус, статус и ключ PG1.
+    generation: 'planet-generation.csv',
   },
   tiles: {
     manifest: '/assets/tiles.json',
@@ -79,6 +81,19 @@ export const PLACE_TYPES: Readonly<Record<string, PlaceTypeInfo>> = {
 export type UnknownRecord = Record<string, unknown>;
 export type MapCoord = [number, number];
 
+/* Статус 3D-профиля планеты из `data/planet-generation.csv` (Этап 7).
+ * `frozen` — утверждённый L1-профиль с замороженным `generation_key` (PG1),
+ * `draft` — черновик администратора, `review` — профиль на проверке. */
+export type PlanetProfileStatus = 'draft' | 'review' | 'frozen';
+
+/* Маршрут боевого WebGL2-глобуса и подпись пресета по умолчанию.
+ * Ссылка перехода из Атласа сектора собирается только через `planetGlobeUrl`,
+ * чтобы формат `?place=<id>&system=<systemId>` оставался единым. */
+export const PLANET_GLOBE = {
+  route: '/planet-globe/',
+  defaultPresetLabel: 'процедурный глобус c100-soft-v2',
+} as const;
+
 export interface MapPoint {
   x: number;
   y: number;
@@ -115,6 +130,12 @@ export interface PlaceRecord {
   wiki?: string;
   wikiConfidence?: string;
   primaryFaction?: string;
+  /* 3D-профиль планеты из `data/planet-generation.csv` (Этап 7). Поля заполняет
+   * `mergePlanetGenerationRows`; отсутствие строки в таблице оставляет их пустыми. */
+  planetProfileStatus?: PlanetProfileStatus | null;
+  planetPresetId?: string | null;
+  planetRadiusKm?: number | null;
+  planetGenerationKey?: string | null;
   [key: string]: unknown;
 }
 
