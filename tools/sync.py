@@ -10,12 +10,14 @@ URL-источники обрабатываются в две фазы: снач
 При любой ошибке — ненулевой код выхода (workflow создаёт Issue).
 При отсутствии изменений — выход 0 без записи (нет пустых коммитов).
 """
+import argparse
 import copy
 import csv
 import datetime
 import hashlib
 import io
 import json
+import math
 import os
 import shutil
 import sys
@@ -277,7 +279,200 @@ def check_unique_ids(sid, rows, fieldnames):
             fail(f"source {sid}: duplicate id")
 
 
-def prepare_url_source(src, manifest):
+def _strict_column(fieldnames, name):
+    wanted = name.casefold()
+    return next(
+        (
+            field
+            for field in (fieldnames or [])
+            if isinstance(field, str) and field.strip().casefold() == wanted
+        ),
+        None,
+    )
+
+
+def _strict_cell_is_set(value):
+    return str(value or "").strip().casefold() not in ("", "none")
+
+
+def strict_map_size(sources_cfg, overall_meta):
+    """Получить размер координатной сетки из конфигурации или метаданных."""
+
+    sources_cfg = sources_cfg if isinstance(sources_cfg, dict) else {}
+    overall_meta = overall_meta if isinstance(overall_meta, dict) else {}
+    map_config = sources_cfg.get("map", {})
+    map_config = map_config if isinstance(map_config, dict) else {}
+    candidates = (
+        sources_cfg.get("mapSize"),
+        sources_cfg.get("map_size"),
+        map_config.get("mapSize"),
+        map_config.get("map_size"),
+        overall_meta.get("mapSize"),
+        overall_meta.get("map_size"),
+    )
+    raw_value = next(
+        (value for value in candidates if value is not None and str(value).strip()),
+        None,
+    )
+    if raw_value is None:
+        return None, "не задан mapSize в data/sources.json или data/meta.json"
+    try:
+        map_size = float(raw_value)
+    except (TypeError, ValueError):
+        return None, f"некорректный mapSize: {raw_value!r}"
+    if not math.isfinite(map_size) or map_size < 0:
+        return None, f"некорректный mapSize: {raw_value!r}"
+    return map_size, None
+
+
+def validate_strict_table(label, rows, fieldnames, map_size, role=None):
+    """Вернуть все ошибки строгой проверки одной таблицы, не завершая процесс."""
+
+    errors = []
+    id_col = next(
+        (
+            field
+            for field in (fieldnames or [])
+            if isinstance(field, str)
+            and field.strip().casefold() in ("id", "system_id", "place_id")
+        ),
+        None,
+    )
+    if id_col:
+        seen_ids = {}
+        for row_number, row in enumerate(rows, start=2):
+            value = str(row.get(id_col) or "").strip()
+            if not value:
+                continue
+            if value in seen_ids:
+                errors.append(
+                    f"{label}: дублирующийся id «{value}» "
+                    f"(записи {seen_ids[value]} и {row_number})"
+                )
+            else:
+                seen_ids[value] = row_number
+
+    x_col = _strict_column(fieldnames, "x")
+    y_col = _strict_column(fieldnames, "y")
+    system_id_col = _strict_column(fieldnames, "system_id")
+    is_places = str(role or "").casefold() == "places"
+
+    for row_number, row in enumerate(rows, start=2):
+        x_raw = row.get(x_col) if x_col else None
+        y_raw = row.get(y_col) if y_col else None
+        if (
+            is_places
+            and system_id_col
+            and _strict_cell_is_set(row.get(system_id_col))
+            and (_strict_cell_is_set(x_raw) or _strict_cell_is_set(y_raw))
+        ):
+            errors.append(
+                f"{label}: запись {row_number}: одновременно заполнены system_id "
+                "и ручные координаты x/y"
+            )
+
+        for coordinate, column, raw_value in (
+            ("x", x_col, x_raw),
+            ("y", y_col, y_raw),
+        ):
+            if not column or not _strict_cell_is_set(raw_value):
+                continue
+            text = str(raw_value).strip()
+            try:
+                value = float(text)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{label}: запись {row_number}: {coordinate}=«{text}» — "
+                    "ожидается число"
+                )
+                continue
+            if not math.isfinite(value):
+                errors.append(
+                    f"{label}: запись {row_number}: {coordinate}=«{text}» — "
+                    "ожидается конечное число"
+                )
+            elif map_size is not None and not 0 <= value <= map_size:
+                errors.append(
+                    f"{label}: запись {row_number}: {coordinate}={text} выходит "
+                    f"за диапазон 0..{map_size:g}"
+                )
+
+    return errors
+
+
+def read_csv_table_for_strict(path):
+    """Прочитать локальный CSV-снимок для проверки, не изменяя его."""
+
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as error:
+        return [], [], f"{path}: не удалось прочитать CSV: {error}"
+
+    reader = csv.DictReader(io.StringIO(text))
+    fieldnames = [(field or "").strip() for field in (reader.fieldnames or [])]
+    rows = []
+    for row in reader:
+        normalized = {
+            (key or "").strip(): value.strip() if isinstance(value, str) else value
+            for key, value in row.items()
+        }
+        if all(not str(value or "").strip() for value in normalized.values()):
+            continue
+        rows.append(normalized)
+    return fieldnames, rows, None
+
+
+def strict_table_role(item):
+    role = str(item.get("role") or "").strip().casefold()
+    if role:
+        return role
+    return Path(str(item.get("target") or "")).stem.casefold()
+
+
+def validate_strict_tables(prepared, sources_cfg, overall_meta):
+    """Проверить источники URL и локальные systems/places до записи снимков."""
+
+    map_size, map_size_error = strict_map_size(sources_cfg, overall_meta)
+    errors = []
+    if map_size_error:
+        errors.append(f"строгая проверка: {map_size_error}")
+
+    prepared_paths = {
+        Path(item["target_path"]) for item in prepared if item.get("target_path")
+    }
+    for item in prepared:
+        role = strict_table_role(item)
+        label = f"source {item['id']} ({item['target']})"
+        errors.extend(
+            validate_strict_table(
+                label,
+                item.get("rows", []),
+                item.get("fieldnames", []),
+                map_size,
+                role=role,
+            )
+        )
+
+    for role in ("systems", "places"):
+        path = DATA / f"{role}.csv"
+        if path in prepared_paths:
+            continue
+        if not path.exists():
+            continue
+        fieldnames, rows, read_error = read_csv_table_for_strict(path)
+        if read_error:
+            errors.append(read_error)
+            continue
+        errors.extend(
+            validate_strict_table(
+                str(path.relative_to(ROOT)), rows, fieldnames, map_size, role=role
+            )
+        )
+
+    return errors
+
+
+def prepare_url_source(src, manifest, strict=False):
     """Скачать и нормализовать URL-источник, ничего не записывая в data/."""
 
     sid = src["id"]
@@ -314,9 +509,12 @@ def prepare_url_source(src, manifest):
         fail(f"source {sid}: empty response")
     if looks_like_html(data, headers):
         fail(
-            f"source {sid}: вместо CSV пришёл HTML — таблица не опубликована в интернете. "
-            f"Откройте таблицу → Файл → Поделиться → Опубликовать в интернете, "
-            f"выберите нужный лист и формат CSV, затем обновите url в data/sources.json"
+            f"source {sid}: вместо CSV пришёл HTML — возможно, таблица не опубликована "
+            "или ссылка требует входа. Проверьте:\n"
+            "1. В Google Sheets откройте «Файл → Поделиться → Опубликовать в интернете».\n"
+            "2. Выберите нужную вкладку и формат CSV, нажмите «Опубликовать».\n"
+            "3. Откройте CSV-ссылку в окне инкогнито: CSV должен быть доступен без входа. "
+            "При необходимости обновите url в data/sources.json."
         )
 
     sha = hashlib.sha256(data).hexdigest()
@@ -349,7 +547,9 @@ def prepare_url_source(src, manifest):
         transformed_text, rows, fieldnames = transform_csv(
             text, src.get("transform", {}), None, None
         )
-        check_unique_ids(sid, rows, fieldnames)
+        if not strict:
+            # Совместимость: в мягком режиме сохраняем прежнюю проверку URL-CSV.
+            check_unique_ids(sid, rows, fieldnames)
 
     return {
         "id": sid,
@@ -443,7 +643,17 @@ def apply_prepared_url_sources(prepared, manifest, overall_meta, enabled_source_
     return updated_manifest, updated_meta
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Синхронизация данных из Google Sheets и GitHub-источников"
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="проверить координаты, конфликты привязки и дубли ID до записи снимков",
+    )
+    args = parser.parse_args(argv)
+
     token = os.environ.get("GITHUB_TOKEN")
     sources_cfg = load_json(SOURCES)
     sources = sources_cfg.get("sources", [])
@@ -459,8 +669,17 @@ def main():
         src for src in sources if src.get("type", "github") == "url"
     ]
     prepared_url_sources = [
-        prepare_url_source(src, manifest) for src in url_sources
+        prepare_url_source(src, manifest, strict=args.strict) for src in url_sources
     ]
+    if args.strict:
+        strict_errors = validate_strict_tables(
+            prepared_url_sources, sources_cfg, overall_meta
+        )
+        if strict_errors:
+            fail(
+                "строгая проверка не пройдена; снимки не изменены:\n- "
+                + "\n- ".join(strict_errors)
+            )
     validate_prepared_url_datasets(prepared_url_sources)
     enabled_source_ids = [
         src["id"] for src in sources if src.get("enabled", True) is not False
