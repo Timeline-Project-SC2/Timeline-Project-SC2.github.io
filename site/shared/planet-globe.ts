@@ -74,13 +74,25 @@ export interface GlobeStats {
   p99: number;
   over50: number;
   over100: number;
+  worst5: number[];
   renderScale: number;
   distance: number;
 }
 
-/** Опциональный FX-плагин рендера (CR-01 PR 5): экспериментальные режимы
- *  из planet-globe-fx (взрыв осколков Шакураса uSep, диагностические палитры)
- *  подключаются только через это поле — без hooks глобус рисуется как раньше. */
+/** Кадровый контекст для хука onAfterSurfaceDraw (объём осколков / ядро). */
+export interface FxFrameContext {
+  mvp: Float32Array;
+  model: Float32Array;
+  normalMat: Float32Array;
+  lightDir: Float32Array;
+  eyePos: Float32Array;
+  timeSec: number;
+}
+
+/** Опциональный FX-плагин рендера (CR-01 PR 5 / PR 6.1): экспериментальные
+ *  режимы из planet-globe-fx (взрыв осколков Шакураса uSep, диагностические
+ *  палитры, объём и ядро) подключаются только через это поле — без hooks
+ *  глобус рисуется как раньше. */
 export interface PlanetGlobeFxHooks {
   /** Декорирование исходников surface-шейдеров перед компиляцией. */
   decorateSurfaceShaders?: (src: { vs: string; fs: string }) => { vs: string; fs: string };
@@ -88,6 +100,12 @@ export interface PlanetGlobeFxHooks {
   onSurfaceProgram?: (gl: WebGL2RenderingContext, program: WebGLProgram) => void;
   /** Перед отрисовкой поверхности каждого кадра (uniform-ы плагина). */
   onSurfaceDraw?: (gl: WebGL2RenderingContext, program: WebGLProgram) => void;
+  /** После загрузки геометрии на GPU: клеточный индекс осколков / объём. */
+  onGeometryReady?: (gl: WebGL2RenderingContext, grid: PlanetGrid, geometry: GlobeGeometry) => void;
+  /** Сразу после поверхности, до атмосферы (объём осколков и ядро). */
+  onAfterSurfaceDraw?: (gl: WebGL2RenderingContext, frame: FxFrameContext) => void;
+  /** Освобождение GPU-ресурсов плагина. */
+  onDispose?: (gl: WebGL2RenderingContext) => void;
 }
 
 export interface PlanetGlobeOptions {
@@ -127,6 +145,12 @@ export interface PlanetGlobeHandle {
   isGeometryUploading(): boolean;
   resetStats(): void;
   getStats(): GlobeStats;
+  /** Каскадная сборка: uBuild в 0..1 (1 — планета полностью собрана). */
+  setBuildProgress(value: number): void;
+  /** Анимация uBuild от 0 до 1 за durationSec секунд. */
+  animateBuild(durationSec: number): void;
+  /** Двухслойное центробежное замещение: uCenterGrow 0..1, опционально uHide. */
+  setCenterGrow(value: number, hideMask?: number): void;
   dispose(): void;
 }
 
@@ -533,17 +557,51 @@ const SURFACE_VS = [
   'layout(location=2) in vec4 aNormal;',
   'uniform mat4 uMvp;',
   'uniform mat4 uModel;',
+  // Каскадная сборка (uBuild) и двухслойное центробежное замещение
+  // (uHide / uCenterGrow). При uBuild=1, uHide=0, uCenterGrow=0 —
+  // тождество, чтобы decorateSurfaceShaders мог подменить aPos на fxPos.
+  'uniform float uBuild;',
+  'uniform float uHide;',
+  'uniform float uCenterGrow;',
+  'uniform vec3 uViewDir;',
   'out vec3 vColor;',
   'out float vEdge;',
   'out vec3 vNormal;',
   'out vec3 vWorldPos;',
+  'out float vBuildEdge;',
   'void main() {',
   '  vec4 wp = uModel * vec4(aPos, 1.0);',
   '  vWorldPos = wp.xyz;',
   '  vNormal = normalize(mat3(uModel) * aNormal.xyz);',
   '  vColor = aColor.rgb;',
   '  vEdge = aColor.a;',
+  '  vBuildEdge = 0.0;',
   '  gl_Position = uMvp * vec4(aPos, 1.0);',
+  '  float birthLat = 0.78 * (0.5 - 0.5 * clamp(normalize(aPos).y, -1.0, 1.0));',
+  '  float tBuild = clamp((uBuild - birthLat) / 0.22, 0.0, 1.0);',
+  '  float invB = 1.0 - tBuild;',
+  '  float easeB = 1.0 - invB * invB * invB;',
+  '  float cellScale = 1.0 - 2.0 * invB * invB * invB + invB * invB;',
+  '  float lift = (1.0 - easeB) * 0.38;',
+  '  vec3 nrm = normalize(aPos);',
+  '  vec3 built = nrm * (1.0 + lift) + (aPos - nrm) * cellScale;',
+  '  float facing = dot(nrm, normalize(uViewDir));',
+  '  float limbBirth = 0.78 * clamp(1.0 - facing, 0.0, 1.0);',
+  '  if (uCenterGrow > 0.001) {',
+  '    float tGrow = clamp((uCenterGrow - limbBirth) / 0.22, 0.0, 1.0);',
+  '    float easeG = 1.0 - pow(1.0 - tGrow, 3.0);',
+  '    built = aPos * easeG;',
+  '  }',
+  '  if (uHide > 0.001) {',
+  '    float tHide = clamp((uHide - limbBirth) / 0.22, 0.0, 1.0);',
+  '    built = nrm + (built - nrm) * (1.0 - tHide * tHide);',
+  '  }',
+  '  vBuildEdge = (uBuild < 0.999) ? (1.0 - easeB) : 0.0;',
+  '  if (uBuild < 0.999 || uHide > 0.001 || uCenterGrow > 0.001) {',
+  '    vec4 wpB = uModel * vec4(built, 1.0);',
+  '    vWorldPos = wpB.xyz;',
+  '    gl_Position = uMvp * vec4(built, 1.0);',
+  '  }',
   '}',
 ].join('\n');
 const SURFACE_FS = [
@@ -553,6 +611,7 @@ const SURFACE_FS = [
   'in float vEdge;',
   'in vec3 vNormal;',
   'in vec3 vWorldPos;',
+  'in float vBuildEdge;',
   'uniform vec3 uSunDir;',
   'uniform vec3 uCamPos;',
   'uniform float uBorder;',
@@ -568,6 +627,8 @@ const SURFACE_FS = [
   '  col = mix(col, vec3(0.015, 0.10, 0.13), border * 0.46);',
   '  col += vec3(0.05, 0.55, 0.62) * border * 0.10;',
   '  col += vec3(0.05, 0.28, 0.38) * rim * 0.16;',
+  '  col = mix(col, vec3(1.0, 0.82, 0.32), vBuildEdge * 0.55);',
+  '  col += vec3(1.0, 0.72, 0.22) * vBuildEdge * 0.40;',
   '  fragColor = vec4(col, 1.0);',
   '}',
 ].join('\n');
@@ -594,12 +655,14 @@ const ATMO_FS = [
   'in vec3 vWorldPos;',
   'uniform vec3 uCamPos;',
   'uniform float uIntensity;',
+  'uniform float uBuild;',
   'out vec4 fragColor;',
   'void main() {',
   '  vec3 viewDir = normalize(uCamPos - vWorldPos);',
   '  float f = pow(clamp(1.0 - abs(dot(normalize(vNormal), viewDir)), 0.0, 1.0), 3.2);',
-  '  vec3 col = vec3(0.16, 0.62, 0.92) * f * uIntensity;',
-  '  fragColor = vec4(col, f * 0.78 * uIntensity);',
+  '  float on = smoothstep(0.7, 1.0, uBuild);',
+  '  vec3 col = vec3(0.16, 0.62, 0.92) * f * uIntensity * on;',
+  '  fragColor = vec4(col, f * 0.78 * uIntensity * on);',
   '}',
 ].join('\n');
 const SIMPLE_VS = [
@@ -676,6 +739,11 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
   let autoRotate = opts.autoRotate !== false;
   let bordersEnabled = opts.borders !== false;
   let atmosphereEnabled = opts.atmosphere !== false;
+  let buildValue = 1;
+  let buildAnimStart = -1;
+  let buildAnimDur = 0;
+  let centerGrowValue = 0;
+  let hideValue = 0;
   let interacting = false;
   const pointers = new Map<number, { x: number; y: number }>();
   let lastPinchDistance = 0;
@@ -689,6 +757,27 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
   let lastFrameAt = performance.now();
   let adaptCooldownUntil = 0;
   const sunDir = normalize3([-0.55, 0.35, 0.76]);
+  const lightDirF = new Float32Array(sunDir);
+  const eyePosF = new Float32Array(3);
+  const frameCtx: FxFrameContext = {
+    mvp: new Float32Array(16),
+    model: new Float32Array(16),
+    normalMat: new Float32Array(16),
+    lightDir: lightDirF,
+    eyePos: eyePosF,
+    timeSec: 0,
+  };
+
+  function currentBuildProgress(now: number): number {
+    if (buildAnimStart < 0) return buildValue;
+    const p = (now - buildAnimStart) / Math.max(1, buildAnimDur);
+    if (p >= 1) {
+      buildAnimStart = -1;
+      buildValue = 1;
+      return 1;
+    }
+    return p < 0 ? 0 : p;
+  }
 
   function compile(type: number, source: string): WebGLShader {
     const shader = GL.createShader(type) as WebGLShader;
@@ -724,8 +813,8 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     }
     atmoProgram = makeProgram(ATMO_VS, ATMO_FS);
     simpleProgram = makeProgram(SIMPLE_VS, SIMPLE_FS);
-    U = locations(surfaceProgram, ['uMvp', 'uModel', 'uSunDir', 'uCamPos', 'uBorder']);
-    UA = locations(atmoProgram, ['uMvp', 'uModel', 'uScale', 'uCamPos', 'uIntensity']);
+    U = locations(surfaceProgram, ['uMvp', 'uModel', 'uSunDir', 'uCamPos', 'uBorder', 'uBuild', 'uHide', 'uCenterGrow', 'uViewDir']);
+    UA = locations(atmoProgram, ['uMvp', 'uModel', 'uScale', 'uCamPos', 'uIntensity', 'uBuild']);
     US = locations(simpleProgram, ['uMvp', 'uColor']);
     buildAtmosphere();
   }
@@ -822,6 +911,10 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     }
     if (typeof opts.onGeometryReady === 'function') {
       try { opts.onGeometryReady(geometry); } catch (_) { /* вызывающий код не ломает рендер */ }
+    }
+    if (opts.fx && opts.fx.onGeometryReady) {
+      // Сетка живёт в воркере (pick); плагин добирает её через своё состояние.
+      try { opts.fx.onGeometryReady(GL, geometry as unknown as PlanetGrid, geometry); } catch (_) { /* плагин не ломает рендер */ }
     }
   }
   function processPendingUpload(): void {
@@ -951,6 +1044,7 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       p99: percentile(values, 0.99),
       over50: values.filter(function (x) { return x > 50; }).length,
       over100: values.filter(function (x) { return x > 100; }).length,
+      worst5: values.slice(-5).reverse(),
       renderScale: renderScale,
       distance: distance,
     };
@@ -999,6 +1093,15 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     const proj = mat4Perspective(fieldOfViewYForAspect(aspect), aspect, 0.05, 30);
     const mvp = mat4Multiply(proj, mat4Multiply(view, model));
     const camPos = [0, 0, distance];
+    const buildP = currentBuildProgress(now);
+    const viewDirObj = normalize3(transformDirectionTranspose(model, [0, 0, 1]));
+    frameCtx.mvp = mvp;
+    frameCtx.model = model;
+    frameCtx.normalMat = model;
+    eyePosF[0] = camPos[0] as number;
+    eyePosF[1] = camPos[1] as number;
+    eyePosF[2] = camPos[2] as number;
+    frameCtx.timeSec = now * 0.001;
 
     GL.clearColor(0.006, 0.012, 0.030, 1);
     GL.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
@@ -1015,6 +1118,10 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       GL.uniform3f(U.uSunDir as WebGLUniformLocation | null, sunDir[0] as number, sunDir[1] as number, sunDir[2] as number);
       GL.uniform3f(U.uCamPos as WebGLUniformLocation | null, camPos[0] as number, camPos[1] as number, camPos[2] as number);
       GL.uniform1f(U.uBorder as WebGLUniformLocation | null, bordersEnabled ? 1 : 0);
+      GL.uniform1f(U.uBuild as WebGLUniformLocation | null, buildP);
+      GL.uniform1f(U.uHide as WebGLUniformLocation | null, hideValue);
+      GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, centerGrowValue);
+      GL.uniform3f(U.uViewDir as WebGLUniformLocation | null, viewDirObj[0] as number, viewDirObj[1] as number, viewDirObj[2] as number);
       if (opts.fx && opts.fx.onSurfaceDraw && surfaceProgram) {
         opts.fx.onSurfaceDraw(GL, surfaceProgram);
       }
@@ -1024,6 +1131,10 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
         GL.drawElements(GL.TRIANGLES, (ranges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (ranges[i] as { indexStart: number }).indexStart * 4);
       }
       GL.bindVertexArray(null);
+    }
+
+    if (opts.fx && opts.fx.onAfterSurfaceDraw) {
+      try { opts.fx.onAfterSurfaceDraw(GL, frameCtx); } catch (_) { /* плагин не ломает рендер */ }
     }
 
     if (selectionVao && selectionIndexCount) {
@@ -1052,6 +1163,7 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       GL.uniformMatrix4fv(UA.uMvp as WebGLUniformLocation | null, false, mvp);
       GL.uniformMatrix4fv(UA.uModel as WebGLUniformLocation | null, false, model);
       GL.uniform3f(UA.uCamPos as WebGLUniformLocation | null, camPos[0] as number, camPos[1] as number, camPos[2] as number);
+      GL.uniform1f(UA.uBuild as WebGLUniformLocation | null, buildP);
       GL.bindVertexArray(atmoVao);
       GL.enable(GL.CULL_FACE);
       GL.cullFace(GL.FRONT);
@@ -1239,8 +1351,24 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     isGeometryUploading: function () { return !!pendingUpload; },
     resetStats: resetStats,
     getStats: function () { return collectStats(performance.now()); },
+    setBuildProgress: function (value) {
+      buildAnimStart = -1;
+      buildValue = clamp01(Number(value));
+    },
+    animateBuild: function (durationSec) {
+      buildValue = 0;
+      buildAnimStart = performance.now();
+      buildAnimDur = Math.max(0.05, Number(durationSec) || 0) * 1000;
+    },
+    setCenterGrow: function (value, hideMask) {
+      centerGrowValue = clamp01(Number(value));
+      if (hideMask !== undefined) hideValue = clamp01(Number(hideMask));
+    },
     dispose: function () {
       disposed = true;
+      if (opts.fx && opts.fx.onDispose) {
+        try { opts.fx.onDispose(GL); } catch (_) { /* плагин не ломает dispose */ }
+      }
       cancelAnimationFrame(raf);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
