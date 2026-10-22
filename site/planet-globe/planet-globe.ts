@@ -1124,6 +1124,7 @@ function startGeneration(restart: boolean, reason: string): void {
     return;
   }
   if (localMapActive) exitLocalMap();
+  latestPatchRequest++;
   lastPatchReady = null;
   els.diveLocalMap.disabled = true;
   updateLocalNeighborButtons(null);
@@ -1334,6 +1335,7 @@ function sendPick(direction: number[], purpose: string): void {
   const id = ++requestSeq;
   if (purpose === 'hover') latestHoverRequest = id; else {
     latestPickRequest = id;
+    latestPatchRequest++;
     lastPatchReady = null;
     els.diveLocalMap.disabled = true;
     updateLocalNeighborButtons(null);
@@ -1682,6 +1684,7 @@ function requestPatchExtract(cell: number): void {
 
 function requestCellPick(cell: number): void {
   if (!worker || !displayedToken || !Number.isInteger(cell) || cell < 0) return;
+  latestPatchRequest++;
   lastPatchReady = null;
   els.diveLocalMap.disabled = true;
   updateLocalNeighborButtons(null);
