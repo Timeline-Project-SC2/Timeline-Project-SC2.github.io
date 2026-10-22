@@ -137,6 +137,20 @@ class StrictSyncModeTest(unittest.TestCase):
         self.assertEqual(1, raised.exception.code)
         self.assertIn("system_id «s1» указан вместе с ручными координатами", error_output.getvalue())
 
+    def test_strict_infers_places_role_from_target_when_role_is_missing(self):
+        source = sheet_source("places")
+        source.pop("role")
+        payload = "ID,name,system_id,x,y\np1,Планета,s1,25,\n".encode("utf-8")
+        with sync_sandbox([source], payloads={source["url"]: payload}):
+            error_output = io.StringIO()
+            with contextlib.redirect_stderr(error_output):
+                with self.assertRaises(SystemExit) as raised:
+                    sync_module.main(["--strict"])
+
+        self.assertEqual(1, raised.exception.code)
+        self.assertIn("(places)", error_output.getvalue())
+        self.assertIn("указан вместе с ручными координатами", error_output.getvalue())
+
     def test_default_and_strict_modes_for_duplicate_nonempty_local_id(self):
         source = sheet_source("systems", enabled=False)
         snapshot = (

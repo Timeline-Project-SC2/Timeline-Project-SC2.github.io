@@ -323,6 +323,13 @@ def _row_cell(row, column):
     return None
 
 
+def _strict_table_role(role, target):
+    if role:
+        return role
+    target_stem = Path(str(target)).stem.lower()
+    return target_stem if target_stem in ("systems", "places") else role
+
+
 def _strict_id_column(role, fieldnames):
     columns = {}
     for field in fieldnames or []:
@@ -451,6 +458,7 @@ def prepare_url_source(src, manifest, strict=False, map_size=None):
     sid = src["id"]
     role = src.get("role")
     target = src.get("target", f"data/{sid}.csv")
+    strict_role = _strict_table_role(role, target)
     target_path = ROOT / target
     enabled = src.get("enabled", True) is not False
 
@@ -458,7 +466,7 @@ def prepare_url_source(src, manifest, strict=False, map_size=None):
         print(f"== source {sid} (url, disabled)")
         fieldnames, rows = read_local_csv_dataset(target_path)
         strict_errors = (
-            validate_strict_table(sid, role, rows, fieldnames, map_size)
+            validate_strict_table(sid, strict_role, rows, fieldnames, map_size)
             if strict
             else []
         )
@@ -529,7 +537,7 @@ def prepare_url_source(src, manifest, strict=False, map_size=None):
 
     if strict:
         strict_errors = validate_strict_table(
-            sid, role, rows, fieldnames, map_size
+            sid, strict_role, rows, fieldnames, map_size
         )
     else:
         strict_errors = []

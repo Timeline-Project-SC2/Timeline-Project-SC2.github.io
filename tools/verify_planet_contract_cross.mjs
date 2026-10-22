@@ -92,6 +92,11 @@ const profiles = [
   },
 ];
 
+const approvedAtFormats = [
+  '2026-10-21',
+  '2026-10-21T18:30:00Z',
+];
+
 const decimalCases = [
   ['radius_km', '6371.0005'],
   ['radius_km', '6371.0004'],
@@ -116,26 +121,30 @@ request = json.load(sys.stdin)
 profiles_out = []
 for raw in request["profiles"]:
     place_type = raw.get("_place_type", "planet")
-    frozen = pg.prepare_freeze_row(
-        raw,
-        approved_by="cross-verifier",
-        approved_at="2026-10-21",
-    )
-    result = pg.validate_profiles(
-        [frozen],
-        list(pg.FIELDS),
-        [{"ID": raw["place_id"], "name": "cross", "type": place_type}],
-        ["ID", "name", "type"],
-    )
-    if result.errors:
-        raise AssertionError("\n".join(result.errors))
-    profile = result.profiles[0]
-    profiles_out.append({
-        "canonical": pg.canonical_json_bytes(
-            pg.build_geography_manifest(profile)
-        ).decode("utf-8"),
-        "generation_key": pg.compute_generation_key(profile),
-    })
+    format_results = []
+    for approved_at in request["approved_at_formats"]:
+        frozen = pg.prepare_freeze_row(
+            raw,
+            approved_by="cross-verifier",
+            approved_at=approved_at,
+        )
+        result = pg.validate_profiles(
+            [frozen],
+            list(pg.FIELDS),
+            [{"ID": raw["place_id"], "name": "cross", "type": place_type}],
+            ["ID", "name", "type"],
+        )
+        if result.errors:
+            raise AssertionError("\n".join(result.errors))
+        profile = result.profiles[0]
+        format_results.append({
+            "approved_at": approved_at,
+            "canonical": pg.canonical_json_bytes(
+                pg.build_geography_manifest(profile)
+            ).decode("utf-8"),
+            "generation_key": pg.compute_generation_key(profile),
+        })
+    profiles_out.append(format_results)
 
 decimal_out = []
 for field, text in request["decimal_cases"]:
@@ -184,7 +193,7 @@ const child = spawnSync(python, ['-c', pythonCode], {
   cwd: root,
   encoding: 'utf8',
   env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
-  input: JSON.stringify({ profiles, decimal_cases: decimalCases }),
+  input: JSON.stringify({ profiles, approved_at_formats: approvedAtFormats, decimal_cases: decimalCases }),
   maxBuffer: 16 * 1024 * 1024,
 });
 if (child.status !== 0) {
@@ -231,8 +240,34 @@ const pythonPresets = Object.fromEntries(Object.entries(pythonResult.presets).ma
 checkEqual('presets', tsPresets, pythonPresets);
 
 profiles.forEach((profile, index) => {
-  checkEqual(`profile[${index}].canonical`, geographyManifestCanonicalText(profile), pythonResult.profiles[index].canonical);
-  checkEqual(`profile[${index}].generation_key`, computeGenerationKey(profile), pythonResult.profiles[index].generation_key);
+  const javascriptCanonical = geographyManifestCanonicalText(profile);
+  const javascriptKey = computeGenerationKey(profile);
+  if (!javascriptKey.startsWith('PG1-')) {
+    failures.push(`profile[${index}].generation_key не имеет префикс PG1-: ${javascriptKey}`);
+  }
+
+  const pythonFormats = pythonResult.profiles[index] || [];
+  if (pythonFormats.length !== approvedAtFormats.length) {
+    failures.push(
+      `profile[${index}]: Python проверил ${pythonFormats.length} форматов approved_at, ` +
+      `ожидалось ${approvedAtFormats.length}`,
+    );
+  }
+  approvedAtFormats.forEach((approvedAt, formatIndex) => {
+    const pythonProfile = pythonFormats[formatIndex];
+    if (!pythonProfile) return;
+    const label = `profile[${index}].approved_at=${approvedAt}`;
+    checkEqual(`${label}.input`, pythonProfile.approved_at, approvedAt);
+    checkEqual(`${label}.canonical`, javascriptCanonical, pythonProfile.canonical);
+    checkEqual(`${label}.generation_key`, javascriptKey, pythonProfile.generation_key);
+  });
+  if (pythonFormats.length >= 2) {
+    checkEqual(
+      `profile[${index}].approved_at_generation_key`,
+      pythonFormats[0].generation_key,
+      pythonFormats[1].generation_key,
+    );
+  }
 });
 
 decimalCases.forEach(([field, text], index) => {
@@ -247,5 +282,6 @@ if (failures.length) {
 
 console.log(
   `Planet contract cross-check OK: ${FIELDS.length} колонок, ${Object.keys(PRESETS).length} пресетов, ` +
-  `${profiles.length} PG1-профилей, ${decimalCases.length} decimal-кейсов.`,
+  `${profiles.length} PG1-профилей × ${approvedAtFormats.length} формата approved_at, ` +
+  `${decimalCases.length} decimal-кейсов.`,
 );
