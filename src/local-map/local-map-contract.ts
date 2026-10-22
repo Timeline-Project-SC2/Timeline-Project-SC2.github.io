@@ -358,7 +358,7 @@ export interface BuildingSpawnRule {
 
 export const DEFAULT_BUILDING_SPAWN_RULE: BuildingSpawnRule = {
   minLand: 0.5,
-  maxSlope: 0.5,
+  maxSlope: 5.5,
 };
 
 export function spawnSampleOf(cell: PatchCell, seaLevel: number): BuildingSpawnSample {
