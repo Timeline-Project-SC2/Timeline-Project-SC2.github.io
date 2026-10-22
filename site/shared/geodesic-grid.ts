@@ -246,6 +246,57 @@ interface RawGrid {
   addrJ: Uint16Array;
 }
 
+let rawScratchCap = 0;
+let centersRawBuf = new Float32Array(0);
+let trianglesRawBuf = new Uint32Array(0);
+let addrFaceRawBuf = new Uint8Array(0);
+let addrIRawBuf = new Uint16Array(0);
+let addrJRawBuf = new Uint16Array(0);
+let incidenceCountBuf = new Uint8Array(0);
+let cellCornerStartRawBuf = new Uint32Array(0);
+let cellCornersRawBuf = new Uint32Array(0);
+let fillCursorBuf = new Uint32Array(0);
+let neighborsRawBuf = new Int32Array(0);
+let neighborCountRawBuf = new Uint8Array(0);
+let areasRawBuf = new Float32Array(0);
+let oldKeyBuf = new Uint32Array(0);
+let orderBuf = new Uint32Array(0);
+let sortKeyBuf = new Uint32Array(0);
+let newIdBuf = new Uint32Array(0);
+let localRawBuf = new Int32Array(129 * 129);
+
+function ensureRawScratch(expectedCells: number, expectedTriangles: number): void {
+  const capCells = expectedCells < 163842 ? 163842 : expectedCells;
+  if (rawScratchCap >= capCells) return;
+  const capTris = expectedTriangles < 327680 ? 327680 : expectedTriangles;
+  rawScratchCap = capCells;
+  centersRawBuf = new Float32Array(capCells * 3);
+  trianglesRawBuf = new Uint32Array(capTris * 3);
+  addrFaceRawBuf = new Uint8Array(capCells);
+  addrIRawBuf = new Uint16Array(capCells);
+  addrJRawBuf = new Uint16Array(capCells);
+  incidenceCountBuf = new Uint8Array(capCells);
+  cellCornerStartRawBuf = new Uint32Array(capCells + 1);
+  cellCornersRawBuf = new Uint32Array(capTris * 3);
+  fillCursorBuf = new Uint32Array(capCells + 1);
+  neighborsRawBuf = new Int32Array(capCells * 6);
+  neighborCountRawBuf = new Uint8Array(capCells);
+  areasRawBuf = new Float32Array(capCells);
+  oldKeyBuf = new Uint32Array(capCells);
+  orderBuf = new Uint32Array(capCells);
+  sortKeyBuf = new Uint32Array(capCells);
+  newIdBuf = new Uint32Array(capCells);
+}
+
+function addNeighborRaw(cell: number, nb: number): void {
+  const base = cell * 6;
+  const count = neighborCountRawBuf[cell] as number;
+  for (let k = 0; k < count; k++) if (neighborsRawBuf[base + k] === nb) return;
+  if (count >= 6) throw new Error('GeodesicGrid.build: у ячейки больше 6 соседей');
+  neighborsRawBuf[base + count] = nb;
+  neighborCountRawBuf[cell] = count + 1;
+}
+
 function build(v: number): PlanetGrid {
   if (!Number.isInteger(v) || v < 1 || v > 10000) {
     throw new Error('GeodesicGrid.build: v должно быть целым от 1 до 10000');
@@ -253,21 +304,22 @@ function build(v: number): PlanetGrid {
   const ico = icosahedron();
   const expectedCells = cellCountForFrequency(v);
   const expectedTriangles = triangleCountForFrequency(v);
+  ensureRawScratch(expectedCells, expectedTriangles);
 
-  const centersRaw = new Float32Array(expectedCells * 3);
-  const addrFaceRaw = new Uint8Array(expectedCells);
-  const addrIRaw = new Uint16Array(expectedCells);
-  const addrJRaw = new Uint16Array(expectedCells);
+  const centersRaw = centersRawBuf.subarray(0, expectedCells * 3);
+  const addrFaceRaw = addrFaceRawBuf.subarray(0, expectedCells);
+  const addrIRaw = addrIRawBuf.subarray(0, expectedCells);
+  const addrJRaw = addrJRawBuf.subarray(0, expectedCells);
   let vertexCount = 0;
   const byKey = new Map<string, number>();
-  const tmp = [0, 0, 0];
 
   function getVertex(x: number, y: number, z: number, face: number, i: number, j: number): number {
-    normalize3(x, y, z, tmp);
+    const len = Math.sqrt(x * x + y * y + z * z);
+    const nx = x / len, ny = y / len, nz = z / len;
     // Внутренние вершины грани (i > 0 && j > 0 && i + j < v) топологически не могут
     // совпадать с вершинами других граней икосаэдра — строковый ключ нужен только на границе.
     if (i === 0 || j === 0 || i + j === v) {
-      const key = (tmp[0] as number).toFixed(9) + ',' + (tmp[1] as number).toFixed(9) + ',' + (tmp[2] as number).toFixed(9);
+      const key = nx.toFixed(9) + ',' + ny.toFixed(9) + ',' + nz.toFixed(9);
       const found = byKey.get(key);
       if (found !== undefined) {
         if (candidateIsSmaller(face, i, j, addrFaceRaw[found] as number, addrIRaw[found] as number, addrJRaw[found] as number)) {
@@ -278,9 +330,10 @@ function build(v: number): PlanetGrid {
         return found;
       }
       const id = vertexCount++;
-      centersRaw[id * 3] = tmp[0] as number;
-      centersRaw[id * 3 + 1] = tmp[1] as number;
-      centersRaw[id * 3 + 2] = tmp[2] as number;
+      const id3 = id * 3;
+      centersRaw[id3] = nx;
+      centersRaw[id3 + 1] = ny;
+      centersRaw[id3 + 2] = nz;
       addrFaceRaw[id] = face;
       addrIRaw[id] = i;
       addrJRaw[id] = j;
@@ -288,19 +341,22 @@ function build(v: number): PlanetGrid {
       return id;
     }
     const id = vertexCount++;
-    centersRaw[id * 3] = tmp[0] as number;
-    centersRaw[id * 3 + 1] = tmp[1] as number;
-    centersRaw[id * 3 + 2] = tmp[2] as number;
+    const id3 = id * 3;
+    centersRaw[id3] = nx;
+    centersRaw[id3 + 1] = ny;
+    centersRaw[id3 + 2] = nz;
     addrFaceRaw[id] = face;
     addrIRaw[id] = i;
     addrJRaw[id] = j;
     return id;
   }
 
-  const trianglesRaw = new Uint32Array(expectedTriangles * 3);
+  const trianglesRaw = trianglesRawBuf.subarray(0, expectedTriangles * 3);
   let triCursor = 0;
   const stride = v + 1;
-  const local = new Int32Array(stride * stride);
+  const strideSq = stride * stride;
+  if (localRawBuf.length < strideSq) localRawBuf = new Int32Array(strideSq);
+  const local = localRawBuf.subarray(0, strideSq);
   ico.faces.forEach(function (faceIdx, faceNo) {
     const A = ico.verts[faceIdx[0] as number] as number[];
     const B = ico.verts[faceIdx[1] as number] as number[];
@@ -322,13 +378,16 @@ function build(v: number): PlanetGrid {
     }
     for (let i = 0; i < v; i++) {
       for (let j = 0; j < v - i; j++) {
-        trianglesRaw[triCursor++] = P(i, j);
-        trianglesRaw[triCursor++] = P(i + 1, j);
-        trianglesRaw[triCursor++] = P(i, j + 1);
+        const p00 = P(i, j);
+        const p10 = P(i + 1, j);
+        const p01 = P(i, j + 1);
+        trianglesRaw[triCursor++] = p00;
+        trianglesRaw[triCursor++] = p10;
+        trianglesRaw[triCursor++] = p01;
         if (i + j < v - 1) {
-          trianglesRaw[triCursor++] = P(i + 1, j);
+          trianglesRaw[triCursor++] = p10;
           trianglesRaw[triCursor++] = P(i + 1, j + 1);
-          trianglesRaw[triCursor++] = P(i, j + 1);
+          trianglesRaw[triCursor++] = p01;
         }
       }
     }
@@ -340,23 +399,24 @@ function build(v: number): PlanetGrid {
   const cellCount = expectedCells;
   const triangleCount = expectedTriangles;
   const corners = new Float32Array(triangleCount * 3);
-  const incidenceCount = new Uint8Array(cellCount);
+  const incidenceCount = incidenceCountBuf.subarray(0, cellCount);
+  incidenceCount.fill(0);
   let t: number, a: number, b: number, d: number;
   for (t = 0; t < triangleCount; t++) {
-    a = trianglesRaw[t * 3] as number; b = trianglesRaw[t * 3 + 1] as number; d = trianglesRaw[t * 3 + 2] as number;
-    normalize3(
-      (centersRaw[a * 3] as number) + (centersRaw[b * 3] as number) + (centersRaw[d * 3] as number),
-      (centersRaw[a * 3 + 1] as number) + (centersRaw[b * 3 + 1] as number) + (centersRaw[d * 3 + 1] as number),
-      (centersRaw[a * 3 + 2] as number) + (centersRaw[b * 3 + 2] as number) + (centersRaw[d * 3 + 2] as number),
-      tmp,
-    );
-    corners[t * 3] = tmp[0] as number; corners[t * 3 + 1] = tmp[1] as number; corners[t * 3 + 2] = tmp[2] as number;
+    const t3 = t * 3;
+    a = trianglesRaw[t3] as number; b = trianglesRaw[t3 + 1] as number; d = trianglesRaw[t3 + 2] as number;
+    const a3 = a * 3, b3 = b * 3, d3 = d * 3;
+    const sx = (centersRaw[a3] as number) + (centersRaw[b3] as number) + (centersRaw[d3] as number);
+    const sy = (centersRaw[a3 + 1] as number) + (centersRaw[b3 + 1] as number) + (centersRaw[d3 + 1] as number);
+    const sz = (centersRaw[a3 + 2] as number) + (centersRaw[b3 + 2] as number) + (centersRaw[d3 + 2] as number);
+    const len = Math.sqrt(sx * sx + sy * sy + sz * sz);
+    corners[t3] = sx / len; corners[t3 + 1] = sy / len; corners[t3 + 2] = sz / len;
     incidenceCount[a] = (incidenceCount[a] as number) + 1;
     incidenceCount[b] = (incidenceCount[b] as number) + 1;
     incidenceCount[d] = (incidenceCount[d] as number) + 1;
   }
 
-  const cellCornerStartRaw = new Uint32Array(cellCount + 1);
+  const cellCornerStartRaw = cellCornerStartRawBuf.subarray(0, cellCount + 1);
   let offset = 0;
   let c: number;
   for (c = 0; c < cellCount; c++) {
@@ -364,8 +424,9 @@ function build(v: number): PlanetGrid {
     offset += incidenceCount[c] as number;
   }
   cellCornerStartRaw[cellCount] = offset;
-  const cellCornersRaw = new Uint32Array(offset);
-  const fillCursor = new Uint32Array(cellCornerStartRaw);
+  const cellCornersRaw = cellCornersRawBuf.subarray(0, offset);
+  const fillCursor = fillCursorBuf.subarray(0, cellCount + 1);
+  fillCursor.set(cellCornerStartRaw);
   for (t = 0; t < triangleCount; t++) {
     a = trianglesRaw[t * 3] as number; b = trianglesRaw[t * 3 + 1] as number; d = trianglesRaw[t * 3 + 2] as number;
     cellCornersRaw[fillCursor[a] as number] = t;
@@ -378,38 +439,30 @@ function build(v: number): PlanetGrid {
 
   // Соседи фиксированной ширины 6: без Set на каждую ячейку. Дубли рёбер
   // от двух инцидентных треугольников отсекаются линейной проверкой до 6 слотов.
-  const neighborsRaw = new Int32Array(cellCount * 6).fill(-1);
-  const neighborCountRaw = new Uint8Array(cellCount);
-  function addNeighbor(cell: number, nb: number): void {
-    const base = cell * 6;
-    const count = neighborCountRaw[cell] as number;
-    for (let k = 0; k < count; k++) if (neighborsRaw[base + k] === nb) return;
-    if (count >= 6) throw new Error('GeodesicGrid.build: у ячейки больше 6 соседей');
-    neighborsRaw[base + count] = nb;
-    neighborCountRaw[cell] = count + 1;
-  }
+  const neighborsRaw = neighborsRawBuf.subarray(0, cellCount * 6);
+  const neighborCountRaw = neighborCountRawBuf.subarray(0, cellCount);
+  neighborCountRaw.fill(0);
   for (t = 0; t < triangleCount; t++) {
     a = trianglesRaw[t * 3] as number; b = trianglesRaw[t * 3 + 1] as number; d = trianglesRaw[t * 3 + 2] as number;
-    addNeighbor(a, b); addNeighbor(a, d);
-    addNeighbor(b, a); addNeighbor(b, d);
-    addNeighbor(d, a); addNeighbor(d, b);
+    addNeighborRaw(a, b); addNeighborRaw(a, d);
+    addNeighborRaw(b, a); addNeighborRaw(b, d);
+    addNeighborRaw(d, a); addNeighborRaw(d, b);
   }
   let pentagons = 0;
   for (c = 0; c < cellCount; c++) {
     if (neighborCountRaw[c] === 5) pentagons++;
-    insertionSortSegment(neighborsRaw, c * 6, c * 6 + (neighborCountRaw[c] as number));
   }
 
-  const areasRaw = new Float32Array(cellCount);
+  const areasRaw = areasRawBuf.subarray(0, cellCount);
   const angles = new Float64Array(6);
-  const t1 = [0, 0, 0];
   for (c = 0; c < cellCount; c++) {
     const start = cellCornerStartRaw[c] as number;
     const end = cellCornerStartRaw[c + 1] as number;
     const cx = centersRaw[c * 3] as number, cy = centersRaw[c * 3 + 1] as number, cz = centersRaw[c * 3 + 2] as number;
     const ax = Math.abs(cx) < 0.9 ? 1 : 0, ay = Math.abs(cx) < 0.9 ? 0 : 1;
-    normalize3(cy * 0 - cz * ay, cz * ax - cx * 0, cx * ay - cy * ax, t1);
-    const t1x = t1[0] as number, t1y = t1[1] as number, t1z = t1[2] as number;
+    const ux = -cz * ay, uy = cz * ax, uz = cx * ay - cy * ax;
+    const ulen = Math.sqrt(ux * ux + uy * uy + uz * uz);
+    const t1x = ux / ulen, t1y = uy / ulen, t1z = uz / ulen;
     const t2x = cy * t1z - cz * t1y;
     const t2y = cz * t1x - cx * t1z;
     const t2z = cx * t1y - cy * t1x;
@@ -417,10 +470,12 @@ function build(v: number): PlanetGrid {
     for (k = start; k < end; k++) {
       const corner = (cellCornersRaw[k] as number) * 3;
       const crx = corners[corner] as number, cry = corners[corner + 1] as number, crz = corners[corner + 2] as number;
-      angles[k - start] = Math.atan2(
-        crx * t2x + cry * t2y + crz * t2z,
-        crx * t1x + cry * t1y + crz * t1z,
-      );
+      const py = crx * t2x + cry * t2y + crz * t2z;
+      const px = crx * t1x + cry * t1y + crz * t1z;
+      const axp = px < 0 ? -px : px;
+      const ayp = py < 0 ? -py : py;
+      const r = px / (axp + ayp);
+      angles[k - start] = py < 0 ? r - 1 : (py === 0 && px < 0 ? 2 : 1 - r);
     }
     // Insertion sort сегмента из 5/6 углов по заранее посчитанным углам.
     for (let ii = 1; ii < end - start; ii++) {
@@ -482,120 +537,146 @@ function build(v: number): PlanetGrid {
   grid.chunkSchema = CHUNK_SCHEMA;
   grid.chunkBlockSteps = CHUNK_BLOCK_STEPS;
   grid.bodyIndex = 0;
-  attachChunks(grid);
+  attachChunks(grid, lastReorderedBaseDescs);
+  lastReorderedBaseDescs = null;
   return grid;
 }
+
+interface BaseChunkDesc {
+  tempId: number;
+  faceIndex: number;
+  blockI: number;
+  blockJ: number;
+  startCell: number;
+  cellCount: number;
+}
+
+let lastReorderedBaseDescs: BaseChunkDesc[] | null = null;
 
 function reorderCells(raw: RawGrid): PlanetGrid {
   const count = raw.cellCount;
   const maxBlock = Math.floor(raw.v / CHUNK_BLOCK_STEPS) + 1;
-  interface Group { faceIndex: number; blockI: number; blockJ: number; tempIndex: number; ordinal: number }
-  const groupsByKey = new Map<number, Group>();
-  const groups: Group[] = [];
-  const oldGroup = new Uint32Array(count);
-  let c: number;
-  for (c = 0; c < count; c++) {
-    const face = raw.addrFace[c] as number;
-    const qa = chunkBlockIndex(raw.addrI[c] as number);
-    const qb = chunkBlockIndex(raw.addrJ[c] as number);
-    const key = (face * maxBlock + qa) * maxBlock + qb;
-    let group = groupsByKey.get(key);
-    if (!group) {
-      group = { faceIndex: face, blockI: qa, blockJ: qb, tempIndex: groups.length, ordinal: groups.length };
-      groupsByKey.set(key, group);
-      groups.push(group);
-    }
-    oldGroup[c] = group.tempIndex;
-  }
-  const groupList = groups.slice();
-  groups.sort(function (p, q) {
-    return p.faceIndex - q.faceIndex || p.blockI - q.blockI || p.blockJ - q.blockJ;
-  });
-  for (let gi = 0; gi < groups.length; gi++) (groups[gi] as Group).ordinal = gi;
-  const oldChunk = new Uint32Array(count);
-  for (c = 0; c < count; c++) oldChunk[c] = (groupList[oldGroup[c] as number] as Group).ordinal;
-
-  // Counting bucket sort по oldChunk[c] + стабильная сортировка вставками внутри
-  // каждого малого чанка (~145 ячеек, уже почти отсортированных по addrI/addrJ).
-  const groupCount = groups.length;
-  const chunkCounts = new Uint32Array(groupCount);
-  for (c = 0; c < count; c++) {
-    const ch = oldChunk[c] as number;
-    chunkCounts[ch] = (chunkCounts[ch] as number) + 1;
-  }
-  const chunkOffsets = new Uint32Array(groupCount + 1);
-  let runningOffset = 0;
-  for (let gi = 0; gi < groupCount; gi++) {
-    chunkOffsets[gi] = runningOffset;
-    runningOffset += chunkCounts[gi] as number;
-  }
-  chunkOffsets[groupCount] = runningOffset;
-  const chunkWrite = new Uint32Array(chunkOffsets);
-  const order = new Uint32Array(count);
-  for (c = 0; c < count; c++) {
-    const ch = oldChunk[c] as number;
-    const pos = chunkWrite[ch] as number;
-    chunkWrite[ch] = pos + 1;
-    order[pos] = c;
-  }
+  const keySpace = 20 * maxBlock * maxBlock;
+  const keyCounts = new Uint32Array(keySpace);
+  const oldKey = oldKeyBuf.length >= count ? oldKeyBuf.subarray(0, count) : new Uint32Array(count);
+  const rawAddrFace = raw.addrFace;
   const addrIRaw = raw.addrI;
   const addrJRaw = raw.addrJ;
+  let c: number;
+  for (c = 0; c < count; c++) {
+    const face = rawAddrFace[c] as number;
+    const qa = (addrIRaw[c] as number) >> 5;
+    const qb = (addrJRaw[c] as number) >> 5;
+    const key = (face * maxBlock + qa) * maxBlock + qb;
+    oldKey[c] = key;
+    keyCounts[key] = (keyCounts[key] as number) + 1;
+  }
+
+  // Ключ (face * maxBlock + qa) * maxBlock + qb уже монотонен по (faceIndex, blockI, blockJ).
+  const keyWrite = new Uint32Array(keySpace);
+  const baseDescs: BaseChunkDesc[] = [];
+  let runningOffset = 0;
+  const maxBlockSq = maxBlock * maxBlock;
+  for (let key = 0; key < keySpace; key++) {
+    const cnt = keyCounts[key] as number;
+    if (cnt === 0) continue;
+    keyWrite[key] = runningOffset;
+    const face = Math.floor(key / maxBlockSq);
+    const rem = key - face * maxBlockSq;
+    const qa = Math.floor(rem / maxBlock);
+    const qb = rem - qa * maxBlock;
+    baseDescs.push({
+      tempId: baseDescs.length,
+      faceIndex: face,
+      blockI: qa,
+      blockJ: qb,
+      startCell: runningOffset,
+      cellCount: cnt,
+    });
+    runningOffset += cnt;
+  }
+  lastReorderedBaseDescs = baseDescs;
+
+  const order = orderBuf.length >= count ? orderBuf.subarray(0, count) : new Uint32Array(count);
+  const sortKeys = sortKeyBuf.length >= count ? sortKeyBuf.subarray(0, count) : new Uint32Array(count);
+  for (c = 0; c < count; c++) {
+    const key = oldKey[c] as number;
+    const pos = keyWrite[key] as number;
+    keyWrite[key] = pos + 1;
+    order[pos] = c;
+    sortKeys[pos] = (((addrIRaw[c] as number) << 16) | (addrJRaw[c] as number)) >>> 0;
+  }
+  const groupCount = baseDescs.length;
   for (let gi = 0; gi < groupCount; gi++) {
-    const start = chunkOffsets[gi] as number;
-    const end = chunkOffsets[gi + 1] as number;
+    const desc = baseDescs[gi] as BaseChunkDesc;
+    const start = desc.startCell;
+    const end = start + desc.cellCount;
     for (let i = start + 1; i < end; i++) {
       const curr = order[i] as number;
-      const currKey = ((addrIRaw[curr] as number) << 16) | (addrJRaw[curr] as number);
+      const currKey = sortKeys[i] as number;
       let j = i - 1;
-      while (j >= start) {
-        const prev = order[j] as number;
-        const prevKey = ((addrIRaw[prev] as number) << 16) | (addrJRaw[prev] as number);
-        if (prevKey <= currKey) break;
-        order[j + 1] = prev;
+      while (j >= start && (sortKeys[j] as number) > currKey) {
+        order[j + 1] = order[j] as number;
+        sortKeys[j + 1] = sortKeys[j] as number;
         j--;
       }
       order[j + 1] = curr;
+      sortKeys[j + 1] = currKey;
     }
   }
-  const newId = new Uint32Array(count);
+  const newId = newIdBuf.length >= count ? newIdBuf.subarray(0, count) : new Uint32Array(count);
   for (let pos = 0; pos < count; pos++) newId[order[pos] as number] = pos;
 
-  const centers = new Float32Array(raw.centers.length);
-  const areas = new Float32Array(raw.areas.length);
-  const neighbors = new Int32Array(raw.neighbors.length).fill(-1);
-  const neighborCount = new Uint8Array(raw.neighborCount.length);
-  const addrFace = new Uint8Array(raw.addrFace.length);
-  const addrI = new Uint16Array(raw.addrI.length);
-  const addrJ = new Uint16Array(raw.addrJ.length);
+  const rawCenters = raw.centers;
+  const rawAreas = raw.areas;
+  const rawNeighbors = raw.neighbors;
+  const rawNeighborCount = raw.neighborCount;
+  const rawCellCornerStart = raw.cellCornerStart;
+  const rawCellCorners = raw.cellCorners;
+  const rawTriangles = raw.triangles;
+
+  const centers = new Float32Array(rawCenters.length);
+  const areas = new Float32Array(rawAreas.length);
+  const neighbors = new Int32Array(rawNeighbors.length);
+  const neighborCount = new Uint8Array(rawNeighborCount.length);
+  const addrFace = new Uint8Array(rawAddrFace.length);
+  const addrI = new Uint16Array(addrIRaw.length);
+  const addrJ = new Uint16Array(addrJRaw.length);
   const cellChunk = new Uint32Array(count);
   const cellCornerStart = new Uint32Array(count + 1);
-  const cellCorners = new Uint32Array(raw.cellCorners.length);
+  const cellCorners = new Uint32Array(rawCellCorners.length);
 
   let cornerOffset = 0;
   for (let pos = 0; pos < count; pos++) {
     const old = order[pos] as number;
-    centers[pos * 3] = raw.centers[old * 3] as number;
-    centers[pos * 3 + 1] = raw.centers[old * 3 + 1] as number;
-    centers[pos * 3 + 2] = raw.centers[old * 3 + 2] as number;
-    areas[pos] = raw.areas[old] as number;
-    neighborCount[pos] = raw.neighborCount[old] as number;
-    addrFace[pos] = raw.addrFace[old] as number;
-    addrI[pos] = raw.addrI[old] as number;
-    addrJ[pos] = raw.addrJ[old] as number;
-    cellChunk[pos] = oldChunk[old] as number;
-    for (let n = 0; n < (raw.neighborCount[old] as number); n++) {
-      neighbors[pos * 6 + n] = newId[raw.neighbors[old * 6 + n] as number] as number;
+    const pos3 = pos * 3;
+    const old3 = old * 3;
+    centers[pos3] = rawCenters[old3] as number;
+    centers[pos3 + 1] = rawCenters[old3 + 1] as number;
+    centers[pos3 + 2] = rawCenters[old3 + 2] as number;
+    areas[pos] = rawAreas[old] as number;
+    const nc = rawNeighborCount[old] as number;
+    neighborCount[pos] = nc;
+    addrFace[pos] = rawAddrFace[old] as number;
+    addrI[pos] = addrIRaw[old] as number;
+    addrJ[pos] = addrJRaw[old] as number;
+    const basePos = pos * 6;
+    const baseOld = old * 6;
+    for (let n = 0; n < nc; n++) {
+      neighbors[basePos + n] = newId[rawNeighbors[baseOld + n] as number] as number;
     }
-    insertionSortSegment(neighbors, pos * 6, pos * 6 + (neighborCount[pos] as number));
+    if (nc < 6) neighbors[basePos + 5] = -1;
+    insertionSortSegment(neighbors, basePos, basePos + nc);
     cellCornerStart[pos] = cornerOffset;
-    const rawStart = raw.cellCornerStart[old] as number;
-    const rawEnd = raw.cellCornerStart[old + 1] as number;
-    for (let k = rawStart; k < rawEnd; k++) cellCorners[cornerOffset++] = raw.cellCorners[k] as number;
+    const rawStart = rawCellCornerStart[old] as number;
+    const rawEnd = rawCellCornerStart[old + 1] as number;
+    for (let k = rawStart; k < rawEnd; k++) cellCorners[cornerOffset++] = rawCellCorners[k] as number;
   }
   cellCornerStart[count] = cornerOffset;
 
-  const triangles = new Uint32Array(raw.triangles.length);
-  for (let ti = 0; ti < raw.triangles.length; ti++) triangles[ti] = newId[raw.triangles[ti] as number] as number;
+  const triLen = rawTriangles.length;
+  const triangles = new Uint32Array(triLen);
+  for (let ti = 0; ti < triLen; ti++) triangles[ti] = newId[rawTriangles[ti] as number] as number;
 
   return {
     v: raw.v,
@@ -618,66 +699,71 @@ function reorderCells(raw: RawGrid): PlanetGrid {
   };
 }
 
-function attachChunks(grid: PlanetGrid): PlanetGrid {
+function attachChunks(grid: PlanetGrid, precomputedBase?: BaseChunkDesc[] | null): PlanetGrid {
   if (!grid || !grid.addrFace || !grid.addrI || !grid.addrJ) {
     throw new Error('GeodesicGrid.attachChunks: нет адресных массивов');
-  }
-  interface BaseDesc {
-    tempId: number; faceIndex: number; blockI: number; blockJ: number;
-    startCell: number; cellCount: number;
   }
   interface EffDesc {
     id: number; faceIndex: number; blockI: number; blockJ: number;
     blockCount: number; startCell: number; cellCount: number;
   }
-  const maxBlock = Math.floor(grid.v / CHUNK_BLOCK_STEPS) + 1;
-  const baseDescriptors: BaseDesc[] = [];
-  const byKey = new Map<number, BaseDesc>();
-  const cellBase = new Uint32Array(grid.cellCount);
+  let baseDescriptors: BaseChunkDesc[];
   let c: number;
-  for (c = 0; c < grid.cellCount; c++) {
-    const face = grid.addrFace[c] as number;
-    const qa = chunkBlockIndex(grid.addrI[c] as number);
-    const qb = chunkBlockIndex(grid.addrJ[c] as number);
-    const key = (face * maxBlock + qa) * maxBlock + qb;
-    let desc = byKey.get(key);
-    if (!desc) {
-      desc = {
-        tempId: baseDescriptors.length,
-        faceIndex: face,
-        blockI: qa,
-        blockJ: qb,
-        startCell: c,
-        cellCount: 0,
-      };
-      byKey.set(key, desc);
-      baseDescriptors.push(desc);
+  if (precomputedBase) {
+    baseDescriptors = precomputedBase;
+  } else {
+    const maxBlock = Math.floor(grid.v / CHUNK_BLOCK_STEPS) + 1;
+    baseDescriptors = [];
+    const keyToDescIdx = new Int32Array(20 * maxBlock * maxBlock).fill(-1);
+    let lastKey = -1;
+    let currentDesc: BaseChunkDesc | null = null;
+    for (c = 0; c < grid.cellCount; c++) {
+      const face = grid.addrFace[c] as number;
+      const qa = chunkBlockIndex(grid.addrI[c] as number);
+      const qb = chunkBlockIndex(grid.addrJ[c] as number);
+      const key = (face * maxBlock + qa) * maxBlock + qb;
+      if (key !== lastKey || !currentDesc) {
+        let idx = keyToDescIdx[key] as number;
+        if (idx < 0) {
+          idx = baseDescriptors.length;
+          keyToDescIdx[key] = idx;
+          currentDesc = {
+            tempId: idx,
+            faceIndex: face,
+            blockI: qa,
+            blockJ: qb,
+            startCell: c,
+            cellCount: 0,
+          };
+          baseDescriptors.push(currentDesc);
+        } else {
+          currentDesc = baseDescriptors[idx] as BaseChunkDesc;
+        }
+        lastKey = key;
+      }
+      if (currentDesc.startCell + currentDesc.cellCount !== c) {
+        throw new Error('GeodesicGrid: ячейки chunk не образуют непрерывный диапазон');
+      }
+      currentDesc.cellCount++;
     }
-    if (desc.startCell + desc.cellCount !== c) {
-      throw new Error('GeodesicGrid: ячейки chunk не образуют непрерывный диапазон');
-    }
-    desc.cellCount++;
-    cellBase[c] = desc.tempId;
+    baseDescriptors.sort(function (p, q) {
+      return p.faceIndex - q.faceIndex || p.blockI - q.blockI || p.blockJ - q.blockJ;
+    });
   }
 
-  const baseByTemp = baseDescriptors.slice();
-  baseDescriptors.sort(function (p, q) {
-    return p.faceIndex - q.faceIndex || p.blockI - q.blockI || p.blockJ - q.blockJ;
-  });
-  const effectiveIdByTemp = new Uint32Array(baseDescriptors.length);
   const descriptors: EffDesc[] = [];
-  baseDescriptors.forEach(function (base) {
+  for (let bi = 0; bi < baseDescriptors.length; bi++) {
+    const base = baseDescriptors[bi] as BaseChunkDesc;
     const prev = descriptors[descriptors.length - 1];
     const shouldMerge = !!prev && prev.faceIndex === base.faceIndex &&
       (base.cellCount < CHUNK_MIN_CELLS || prev.cellCount < CHUNK_MIN_CELLS) &&
       prev.cellCount + base.cellCount <= CHUNK_MAX_CELLS;
     if (shouldMerge && prev) {
-      effectiveIdByTemp[base.tempId] = prev.id;
       prev.cellCount += base.cellCount;
       prev.blockCount++;
-      return;
+      continue;
     }
-    const effective: EffDesc = {
+    descriptors.push({
       id: descriptors.length,
       faceIndex: base.faceIndex,
       blockI: base.blockI,
@@ -685,13 +771,14 @@ function attachChunks(grid: PlanetGrid): PlanetGrid {
       blockCount: 1,
       startCell: base.startCell,
       cellCount: base.cellCount,
-    };
-    effectiveIdByTemp[base.tempId] = effective.id;
-    descriptors.push(effective);
-  });
-  const cellChunk = new Uint32Array(grid.cellCount);
-  for (c = 0; c < grid.cellCount; c++) {
-    cellChunk[c] = effectiveIdByTemp[(baseByTemp[cellBase[c] as number] as BaseDesc).tempId] as number;
+    });
+  }
+  const cellChunk = grid.cellChunk && grid.cellChunk.length === grid.cellCount
+    ? grid.cellChunk
+    : new Uint32Array(grid.cellCount);
+  for (let di = 0; di < descriptors.length; di++) {
+    const desc = descriptors[di] as EffDesc;
+    cellChunk.fill(desc.id, desc.startCell, desc.startCell + desc.cellCount);
   }
 
   const chunkCount = descriptors.length;
@@ -702,35 +789,43 @@ function attachChunks(grid: PlanetGrid): PlanetGrid {
   const chunkCos = new Float32Array(chunkCount);
   const chunkSin = new Float32Array(chunkCount);
   const chunks = new Array<GridChunk>(chunkCount);
+  const centers = grid.centers;
+  const cellCornerStart = grid.cellCornerStart;
+  const cellCorners = grid.cellCorners;
+  const corners = grid.corners;
 
-  descriptors.forEach(function (desc) {
+  for (let di = 0; di < chunkCount; di++) {
+    const desc = descriptors[di] as EffDesc;
     chunkCellStart[desc.id] = desc.startCell;
     chunkFace[desc.id] = desc.faceIndex;
     let mx = 0, my = 0, mz = 0;
-    for (c = desc.startCell; c < desc.startCell + desc.cellCount; c++) {
-      mx += grid.centers[c * 3] as number;
-      my += grid.centers[c * 3 + 1] as number;
-      mz += grid.centers[c * 3 + 2] as number;
+    const endCell = desc.startCell + desc.cellCount;
+    for (c = desc.startCell; c < endCell; c++) {
+      const c3 = c * 3;
+      mx += centers[c3] as number;
+      my += centers[c3 + 1] as number;
+      mz += centers[c3 + 2] as number;
     }
     const center = normalize3(mx, my, mz, [0, 0, 0]);
+    const cx0 = center[0] as number, cy0 = center[1] as number, cz0 = center[2] as number;
     let minDot = Infinity;
-    function visit(px: number, py: number, pz: number): void {
-      const dot = px * (center[0] as number) + py * (center[1] as number) + pz * (center[2] as number);
-      if (dot < minDot) minDot = dot;
-    }
-    for (c = desc.startCell; c < desc.startCell + desc.cellCount; c++) {
-      visit(grid.centers[c * 3] as number, grid.centers[c * 3 + 1] as number, grid.centers[c * 3 + 2] as number);
-      for (let k = grid.cellCornerStart[c] as number; k < (grid.cellCornerStart[c + 1] as number); k++) {
-        const corner = (grid.cellCorners[k] as number) * 3;
-        visit(grid.corners[corner] as number, grid.corners[corner + 1] as number, grid.corners[corner + 2] as number);
+    for (c = desc.startCell; c < endCell; c++) {
+      const c3 = c * 3;
+      const d0 = (centers[c3] as number) * cx0 + (centers[c3 + 1] as number) * cy0 + (centers[c3 + 2] as number) * cz0;
+      if (d0 < minDot) minDot = d0;
+      const kEnd = cellCornerStart[c + 1] as number;
+      for (let k = cellCornerStart[c] as number; k < kEnd; k++) {
+        const corner = (cellCorners[k] as number) * 3;
+        const dk = (corners[corner] as number) * cx0 + (corners[corner + 1] as number) * cy0 + (corners[corner + 2] as number) * cz0;
+        if (dk < minDot) minDot = dk;
       }
     }
     const cos = clamp(minDot, -1, 1);
     const angularRadius = Math.acos(cos);
     const radius = Math.sqrt(Math.max(0, 2 - 2 * cos));
-    chunkCenters[desc.id * 3] = center[0] as number;
-    chunkCenters[desc.id * 3 + 1] = center[1] as number;
-    chunkCenters[desc.id * 3 + 2] = center[2] as number;
+    chunkCenters[desc.id * 3] = cx0;
+    chunkCenters[desc.id * 3 + 1] = cy0;
+    chunkCenters[desc.id * 3 + 2] = cz0;
     chunkRadius[desc.id] = radius;
     chunkCos[desc.id] = cos;
     chunkSin[desc.id] = Math.sin(angularRadius);
@@ -749,26 +844,36 @@ function attachChunks(grid: PlanetGrid): PlanetGrid {
         angularRadius: angularRadius,
       },
     };
-  });
+  }
   chunkCellStart[chunkCount] = grid.cellCount;
 
-  const neighborSets = new Array<Set<number>>(chunkCount);
-  let ci: number;
-  for (ci = 0; ci < chunkCount; ci++) neighborSets[ci] = new Set<number>();
-  for (c = 0; c < grid.cellCount; c++) {
-    const own = cellChunk[c] as number;
-    for (let n = 0; n < (grid.neighborCount[c] as number); n++) {
-      const other = cellChunk[grid.neighbors[c * 6 + n] as number] as number;
-      if (other !== own) (neighborSets[own] as Set<number>).add(other);
-    }
-  }
-  const chunkNeighborStart = new Uint32Array(chunkCount + 1);
-  let totalNeighbors = 0;
   const sortedNeighbors = new Array<number[]>(chunkCount);
+  const seenChunk = new Int32Array(chunkCount).fill(-1);
+  const neighbors = grid.neighbors;
+  const neighborCount = grid.neighborCount;
+  let ci: number;
+  let totalNeighbors = 0;
+  const chunkNeighborStart = new Uint32Array(chunkCount + 1);
   for (ci = 0; ci < chunkCount; ci++) {
-    sortedNeighbors[ci] = Array.from(neighborSets[ci] as Set<number>).sort(function (p, q) { return p - q; });
+    const desc = descriptors[ci] as EffDesc;
+    const ownList: number[] = [];
+    seenChunk[ci] = ci;
+    const endCell = desc.startCell + desc.cellCount;
+    for (c = desc.startCell; c < endCell; c++) {
+      const nc = neighborCount[c] as number;
+      const base = c * 6;
+      for (let n = 0; n < nc; n++) {
+        const other = cellChunk[neighbors[base + n] as number] as number;
+        if (seenChunk[other] !== ci) {
+          seenChunk[other] = ci;
+          ownList.push(other);
+        }
+      }
+    }
+    ownList.sort(function (p, q) { return p - q; });
+    sortedNeighbors[ci] = ownList;
     chunkNeighborStart[ci] = totalNeighbors;
-    totalNeighbors += (sortedNeighbors[ci] as number[]).length;
+    totalNeighbors += ownList.length;
   }
   chunkNeighborStart[chunkCount] = totalNeighbors;
   const chunkNeighbors = new Uint32Array(totalNeighbors);

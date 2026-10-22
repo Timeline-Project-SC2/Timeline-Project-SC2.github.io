@@ -13,7 +13,7 @@ import type {
   DistributionStats, GeographyProfile, GeographyProfileInput,
   GeographyResult, GeographyStats, GeographyValidation,
 } from './planet-geography.ts';
-import { PlanetCore } from '../../src/planet/planet-core-host.ts';
+import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
 
 export interface SurfaceProfile extends GeographyProfile {
@@ -242,10 +242,18 @@ const ARRAY_FIELDS = [
   'biomeEntropy', 'biomeColor',
 ] as const;
 
-let sharedCore: PlanetCore | null = null;
+const BIOME_COLOR_R = new Float64Array(BIOME_COUNT);
+const BIOME_COLOR_G = new Float64Array(BIOME_COUNT);
+const BIOME_COLOR_B = new Float64Array(BIOME_COUNT);
+for (let bi = 0; bi < BIOME_COUNT; bi++) {
+  const col = (BIOME_DEFINITIONS[bi] as BiomeDefinition).color;
+  BIOME_COLOR_R[bi] = col[0] as number;
+  BIOME_COLOR_G[bi] = col[1] as number;
+  BIOME_COLOR_B[bi] = col[2] as number;
+}
 
+const sharedCore = getSharedPlanetCore();
 function getCore(): PlanetCore {
-  if (!sharedCore) sharedCore = new PlanetCore();
   return sharedCore;
 }
 
@@ -346,24 +354,52 @@ function allocateSurfaceArrays(cellCount: number): SurfaceArrays {
   };
 }
 
+let surfCumulativeBuf = new Float64Array(163842);
+const surfHardLandBuf = new Uint8Array(163842);
+const surfLandCellsRawBuf = new Uint32Array(163842);
+const surfPrecip01Buf = new Float32Array(163842);
+const surfLocalRunoffKm2Buf = new Float64Array(163842);
+const surfLocalRunoffCellsBuf = new Float64Array(163842);
+const surfDepressionMaskBuf = new Uint8Array(163842);
+const surfRawRootBuf = new Int32Array(163842);
+const surfRawAccKm2Buf = new Float64Array(163842);
+const surfRawAccCellsBuf = new Float64Array(163842);
+const surfRawPrecipAreaBuf = new Float64Array(163842);
+const surfRawWeightedAreaBuf = new Float64Array(163842);
+const surfRawRootSeenBuf = new Uint8Array(163842);
+const surfLakeDistBuf = new Int32Array(163842);
+const surfLakeCandStampBuf = new Int32Array(163842);
+const surfLakeSeenStampBuf = new Int32Array(163842);
+const surfMountainMaskBuf = new Uint8Array(163842);
+
 function makeWeightedQuantiles(
-  values: Float32Array | Float64Array, weights: Float64Array,
+  values: Float32Array | Float64Array, weights: Float32Array | Float64Array,
+  preFilteredOrder?: Uint32Array, sortedOrderOut?: { order: Uint32Array },
 ): (q: number) => number {
-  const rawOrder = new Uint32Array(values.length);
-  let count = 0;
+  let activeOrder: Uint32Array;
   let i: number;
-  for (i = 0; i < values.length; i++) {
-    if ((weights[i] as number) > 0 && Number.isFinite(values[i] as number)) {
-      rawOrder[count++] = i;
+  if (preFilteredOrder) {
+    activeOrder = preFilteredOrder;
+  } else {
+    const rawOrder = new Uint32Array(values.length);
+    let count = 0;
+    for (i = 0; i < values.length; i++) {
+      if ((weights[i] as number) > 0 && Number.isFinite(values[i] as number)) {
+        rawOrder[count++] = i;
+      }
     }
+    activeOrder = rawOrder.subarray(0, count);
   }
+  const needCopy = Boolean(sortedOrderOut);
   // LSD radix sort стабилен на возрастающих индексах → строгий tie-break (a - b) (И-2).
-  const order = count > 0
+  const order = activeOrder.length > 0
     ? (values instanceof Float32Array
-      ? getCore().radixOrderF32(values, rawOrder.subarray(0, count), false)
-      : getCore().radixOrderF64(values, rawOrder.subarray(0, count), false))
+      ? getCore().radixOrderF32(values, activeOrder, false, needCopy)
+      : getCore().radixOrderF64(values, activeOrder, false, needCopy))
     : new Uint32Array(0);
-  const cumulative = new Float64Array(order.length);
+  if (sortedOrderOut) sortedOrderOut.order = order;
+  if (surfCumulativeBuf.length < order.length) surfCumulativeBuf = new Float64Array(order.length);
+  const cumulative = surfCumulativeBuf.subarray(0, order.length);
   let total = 0;
   for (i = 0; i < order.length; i++) {
     total += weights[order[i] as number] as number;
@@ -384,13 +420,13 @@ function makeWeightedQuantiles(
   };
 }
 
-function quantileSorted(sorted: number[], q: number): number {
+function quantileSorted(sorted: ArrayLike<number>, q: number): number {
   if (!sorted.length) return 0;
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] as number;
 }
 
 function distributionStats(values: number[]): DistributionStats {
-  const sorted = values.slice().sort(function (a, b) { return a - b; });
+  const sorted = Float64Array.from(values).sort();
   let sum = 0;
   for (let i = 0; i < sorted.length; i++) sum += sorted[i] as number;
   return {
@@ -432,25 +468,37 @@ function assertInputs(grid: PlanetGrid, geography: GeographyResult): void {
   }
 }
 
-function connectedComponents(grid: PlanetGrid, mask: Uint8Array): { ids: Int32Array; components: number[][] } {
-  const ids = new Int32Array(grid.cellCount).fill(-1);
+let ccStackBuf = new Int32Array(163842);
+
+function connectedComponents(
+  grid: PlanetGrid, mask: Uint8Array, candidateCells?: ArrayLike<number>,
+): { ids: Int32Array; components: number[][] } {
+  const n = grid.cellCount;
+  const ids = new Int32Array(n).fill(-1);
   const components: number[][] = [];
-  const stack: number[] = [];
-  for (let start = 0; start < grid.cellCount; start++) {
+  if (ccStackBuf.length < n) ccStackBuf = new Int32Array(n);
+  const stack = ccStackBuf;
+  const neighbors = grid.neighbors;
+  const neighborCount = grid.neighborCount;
+  const scanCount = candidateCells ? candidateCells.length : n;
+  for (let idx = 0; idx < scanCount; idx++) {
+    const start = candidateCells ? (candidateCells[idx] as number) : idx;
     if (!mask[start] || (ids[start] as number) >= 0) continue;
     const id = components.length;
     const cells: number[] = [];
-    stack.length = 0;
-    stack.push(start);
+    let sp = 0;
+    stack[sp++] = start;
     ids[start] = id;
-    while (stack.length) {
-      const cell = stack.pop() as number;
+    while (sp > 0) {
+      const cell = stack[--sp] as number;
       cells.push(cell);
-      for (let j = 0; j < (grid.neighborCount[cell] as number); j++) {
-        const nb = grid.neighbors[cell * 6 + j] as number;
+      const nc = neighborCount[cell] as number;
+      const base = cell * 6;
+      for (let j = 0; j < nc; j++) {
+        const nb = neighbors[base + j] as number;
         if (mask[nb] && (ids[nb] as number) < 0) {
           ids[nb] = id;
-          stack.push(nb);
+          stack[sp++] = nb;
         }
       }
     }
@@ -508,24 +556,84 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
   const radiusKm = baseGeography.radiusKm || profile.radiusKm;
   const areaScale = radiusKm * radiusKm;
 
-  const surface = Object.assign({}, baseGeography) as unknown as SurfaceResult;
-  surface.baseGeography = baseGeography;
-  surface.geographyVersion = SURFACE_GEOGRAPHY_VERSION;
-  surface.baseGeographyVersion = BASE_GEOGRAPHY_VERSION;
-  surface.surfaceVersion = SURFACE_VERSION;
-  surface.hydrologyVersion = HYDROLOGY_VERSION;
-  surface.biomeVersion = BIOME_VERSION;
-  surface.profile = profile;
-  const surfaceWritable = surface as unknown as Record<string, unknown>;
-  const arraysSource = arrays as unknown as Record<string, unknown>;
-  for (const name of ARRAY_FIELDS) surfaceWritable[name] = arraysSource[name];
-  surface.catchments = [];
-  surface.drainageRegions = [];
-  surface.lakes = [];
-  surface.mountainRanges = [];
-  surface.biomeDefinitions = cloneBiomeDefinitions();
-  surface.thresholds = {} as SurfaceThresholds;
-  surface.stats = Object.assign({}, baseGeography.stats || {}) as SurfaceStats;
+  const surface: SurfaceResult = {
+    surfaceApplicable: baseGeography.surfaceApplicable,
+    gridVersion: baseGeography.gridVersion,
+    noiseVersion: baseGeography.noiseVersion,
+    geographyVersion: SURFACE_GEOGRAPHY_VERSION,
+    presetVersion: baseGeography.presetVersion,
+    profile: profile,
+    v: baseGeography.v,
+    expectedFrequency: baseGeography.expectedFrequency,
+    frequencyMatchesProfile: baseGeography.frequencyMatchesProfile,
+    cellCount: baseGeography.cellCount,
+    radiusKm: baseGeography.radiusKm,
+    seaLevel: baseGeography.seaLevel,
+    shelfBelowLevel: baseGeography.shelfBelowLevel,
+    shelfAboveLevel: baseGeography.shelfAboveLevel,
+    elevationMin: baseGeography.elevationMin,
+    elevationMax: baseGeography.elevationMax,
+    continents: baseGeography.continents,
+    oceanBasins: baseGeography.oceanBasins,
+    plates: baseGeography.plates,
+    stats: Object.assign({}, baseGeography.stats || {}) as SurfaceStats,
+    elevation: baseGeography.elevation,
+    moisture: baseGeography.moisture,
+    temperature: baseGeography.temperature,
+    plateAffinity: baseGeography.plateAffinity,
+    volcanism: baseGeography.volcanism,
+    detail: baseGeography.detail,
+    muLand: baseGeography.muLand,
+    muShelf: baseGeography.muShelf,
+    muOcean: baseGeography.muOcean,
+    signedCoastDistanceCells: baseGeography.signedCoastDistanceCells,
+    plateId: baseGeography.plateId,
+    plateBoundary: baseGeography.plateBoundary,
+    continentSupport: baseGeography.continentSupport,
+    continentTop1Id: baseGeography.continentTop1Id,
+    continentTop1Weight: baseGeography.continentTop1Weight,
+    continentTop2Id: baseGeography.continentTop2Id,
+    continentTop2Weight: baseGeography.continentTop2Weight,
+    continentEntropy: baseGeography.continentEntropy,
+    oceanSupport: baseGeography.oceanSupport,
+    oceanBasinId: baseGeography.oceanBasinId,
+    oceanBasinWeight: baseGeography.oceanBasinWeight,
+    physicalLandmassId: baseGeography.physicalLandmassId,
+    baseGeography: baseGeography,
+    baseGeographyVersion: BASE_GEOGRAPHY_VERSION,
+    surfaceVersion: SURFACE_VERSION,
+    hydrologyVersion: HYDROLOGY_VERSION,
+    biomeVersion: BIOME_VERSION,
+    filledElevation: arrays.filledElevation,
+    depressionDepth: arrays.depressionDepth,
+    slope: arrays.slope,
+    flowReceiver: arrays.flowReceiver,
+    flowAccumulationKm2: arrays.flowAccumulationKm2,
+    flowAccumulationCells: arrays.flowAccumulationCells,
+    catchmentId: arrays.catchmentId,
+    drainageRegionId: arrays.drainageRegionId,
+    terminalType: arrays.terminalType,
+    lakeId: arrays.lakeId,
+    lakeWeight: arrays.lakeWeight,
+    streamWeight: arrays.streamWeight,
+    riverInfluence: arrays.riverInfluence,
+    deltaWeight: arrays.deltaWeight,
+    mountainWeight: arrays.mountainWeight,
+    mountainSeamWeight: arrays.mountainSeamWeight,
+    mountainRangeId: arrays.mountainRangeId,
+    biomeTop1Id: arrays.biomeTop1Id,
+    biomeTop1Weight: arrays.biomeTop1Weight,
+    biomeTop2Id: arrays.biomeTop2Id,
+    biomeTop2Weight: arrays.biomeTop2Weight,
+    biomeEntropy: arrays.biomeEntropy,
+    biomeColor: arrays.biomeColor,
+    catchments: [],
+    drainageRegions: [],
+    lakes: [],
+    mountainRanges: [],
+    biomeDefinitions: cloneBiomeDefinitions(),
+    thresholds: {} as SurfaceThresholds,
+  };
 
   if (!baseGeography.surfaceApplicable) {
     surface.stats.hydrology = emptyHydrologyStats(profile);
@@ -536,61 +644,86 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
   }
 
   const elevation = baseGeography.elevation;
+  const areas = grid.areas;
   const seaLevel = baseGeography.seaLevel;
-  const hardLand = new Uint8Array(n);
-  const landCells: number[] = [];
-  let c: number, j: number, nb: number;
-  for (c = 0; c < n; c++) {
-    if (profile.oceanPctl <= 0) hardLand[c] = 1;
-    else if (profile.oceanPctl < 100) hardLand[c] = (elevation[c] as number) > seaLevel ? 1 : 0;
-    if (hardLand[c]) landCells.push(c);
-  }
-
-  const landWeights = new Float64Array(n);
+  const hardLand = n <= surfHardLandBuf.length ? surfHardLandBuf.subarray(0, n) : new Uint8Array(n);
+  hardLand.fill(0);
+  const landCellsRaw = n <= surfLandCellsRawBuf.length ? surfLandCellsRawBuf.subarray(0, n) : new Uint32Array(n);
+  let landCount = 0;
   let totalArea = 0;
   let hardLandArea = 0;
+  const oceanPctl = profile.oceanPctl;
+  let c: number, j: number, nb: number;
   for (c = 0; c < n; c++) {
-    totalArea += grid.areas[c] as number;
-    if (hardLand[c]) {
-      landWeights[c] = grid.areas[c] as number;
-      hardLandArea += grid.areas[c] as number;
+    const a = areas[c] as number;
+    totalArea += a;
+    const isLand = oceanPctl <= 0 ? 1 : (oceanPctl < 100 && (elevation[c] as number) > seaLevel ? 1 : 0);
+    if (isLand) {
+      hardLand[c] = 1;
+      landCellsRaw[landCount++] = c;
+      hardLandArea += a;
     }
   }
-  const qElevation = makeWeightedQuantiles(elevation, landWeights);
-  const qMoisture = makeWeightedQuantiles(baseGeography.moisture, landWeights);
-  const qTemperature = makeWeightedQuantiles(baseGeography.temperature, landWeights);
+  const landCellsU32 = landCellsRaw.subarray(0, landCount);
+  const landCells = new Int32Array(landCellsRaw.buffer, landCellsRaw.byteOffset, landCount);
+  const elevOrderBox = { order: new Uint32Array(0) };
+  const qElevation = makeWeightedQuantiles(elevation, areas, landCellsU32, elevOrderBox);
+  const highlandLevel = qElevation(profile.highlandLandPctl / 100);
+  const mountainLevel = qElevation(profile.mountainLandPctl / 100);
+  const qMoisture = makeWeightedQuantiles(baseGeography.moisture, areas, landCellsU32);
+  const aridLevel = qMoisture(profile.aridLandPctl / 100);
+  const wetLevel = qMoisture(profile.wetLandPctl / 100);
+  const qTemperature = makeWeightedQuantiles(baseGeography.temperature, areas, landCellsU32);
+  const coldLevel = qTemperature(profile.coldPctl / 100);
+  const hotLevel = qTemperature(profile.hotPctl / 100);
   const thresholds: SurfaceThresholds = {
-    highlandLevel: qElevation(profile.highlandLandPctl / 100),
-    mountainLevel: qElevation(profile.mountainLandPctl / 100),
-    aridLevel: qMoisture(profile.aridLandPctl / 100),
-    wetLevel: qMoisture(profile.wetLandPctl / 100),
-    coldLevel: qTemperature(profile.coldPctl / 100),
-    hotLevel: qTemperature(profile.hotPctl / 100),
+    highlandLevel: highlandLevel,
+    mountainLevel: mountainLevel,
+    aridLevel: aridLevel,
+    wetLevel: wetLevel,
+    coldLevel: coldLevel,
+    hotLevel: hotLevel,
     streamFlowKm2: 0,
     majorRiverFlowKm2: 0,
   };
   surface.thresholds = thresholds;
 
-  const precip01 = new Float32Array(n);
-  const localRunoffKm2 = new Float64Array(n);
-  const localRunoffCells = new Float64Array(n);
+  const precip01 = n <= surfPrecip01Buf.length ? surfPrecip01Buf.subarray(0, n) : new Float32Array(n);
+  const localRunoffKm2 = n <= surfLocalRunoffKm2Buf.length ? surfLocalRunoffKm2Buf.subarray(0, n) : new Float64Array(n);
+  const localRunoffCells = n <= surfLocalRunoffCellsBuf.length ? surfLocalRunoffCellsBuf.subarray(0, n) : new Float64Array(n);
   let liquidFactor = surfaceLiquidFactor(profile.surfaceClass);
   if (profile.surfaceClass === 'barren' && profile.oceanPctl <= 0) liquidFactor = 0.035;
-  for (c = 0; c < n; c++) {
-    precip01[c] = thresholds.wetLevel > thresholds.aridLevel
-      ? smoothstep(thresholds.aridLevel, thresholds.wetLevel, baseGeography.moisture[c] as number)
-      : clamp01(baseGeography.moisture[c] as number);
-    const tempFactor = 0.45 + 0.55 * smoothstep(thresholds.coldLevel, thresholds.hotLevel, baseGeography.temperature[c] as number);
+  const moisture = baseGeography.moisture;
+  const temperature = baseGeography.temperature;
+  const muLand = baseGeography.muLand;
+  const hasMoistSpan = thresholds.wetLevel > thresholds.aridLevel;
+  for (let li = 0; li < landCount; li++) {
+    c = landCells[li] as number;
+    precip01[c] = hasMoistSpan
+      ? smoothstep(thresholds.aridLevel, thresholds.wetLevel, moisture[c] as number)
+      : clamp01(moisture[c] as number);
+    const tempFactor = 0.45 + 0.55 * smoothstep(thresholds.coldLevel, thresholds.hotLevel, temperature[c] as number);
     const coeff = liquidFactor * tempFactor * (0.06 + 0.94 * (precip01[c] as number));
-    localRunoffKm2[c] = hardLand[c] ? (grid.areas[c] as number) * areaScale * (baseGeography.muLand[c] as number) * coeff : 0;
-    localRunoffCells[c] = hardLand[c] ? (baseGeography.muLand[c] as number) : 0;
+    const mu = muLand[c] as number;
+    localRunoffKm2[c] = (areas[c] as number) * areaScale * mu * coeff;
+    localRunoffCells[c] = mu;
   }
 
   progress('hydrology-priority-flood', 0.08);
   const flood = getCore().priorityFlood(grid.neighbors, grid.neighborCount, elevation, hardLand, n);
+  const floodFilled = flood.filled;
+  const filledElevation = arrays.filledElevation;
+  const depressionDepth = arrays.depressionDepth;
+  const depressionMask = n <= surfDepressionMaskBuf.length ? surfDepressionMaskBuf.subarray(0, n) : new Uint8Array(n);
+  depressionMask.fill(0);
   for (c = 0; c < n; c++) {
-    arrays.filledElevation[c] = flood.filled[c] as number;
-    arrays.depressionDepth[c] = hardLand[c] ? Math.max(0, (flood.filled[c] as number) - (elevation[c] as number)) : 0;
+    const fe = floodFilled[c] as number;
+    filledElevation[c] = fe;
+    if (hardLand[c]) {
+      const dd = Math.max(0, fe - (elevation[c] as number));
+      depressionDepth[c] = dd;
+      if (dd > 1e-9) depressionMask[c] = 1;
+    }
   }
 
   progress('hydrology-flow', 0.18);
@@ -600,23 +733,18 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
   const filledReceiver = flow.filledReceiver;
   const rawSlope = flow.rawSlope;
   arrays.slope.set(flow.slope);
-  const qSlope = makeWeightedQuantiles(rawSlope, landWeights);
-  thresholds.slopeP55 = qSlope(0.55);
-  thresholds.slopeP70 = qSlope(0.70);
-  thresholds.slopeP95 = qSlope(0.95);
+  arrays.flowReceiver.set(filledReceiver);
 
   // LSD radix sort по возрастающему списку landCells сохраняет tie-break (a - b) (И-2).
-  const orderAsc = landCells.length > 0
-    ? getCore().radixOrderF32(elevation, Uint32Array.from(landCells), false)
-    : new Uint32Array(0);
-  const rawRoot = new Int32Array(n).fill(-1);
+  const orderAsc = elevOrderBox.order;
+  const rawRoot = n <= surfRawRootBuf.length ? surfRawRootBuf.subarray(0, n) : new Int32Array(n);
   for (c = 0; c < orderAsc.length; c++) {
     const cell = orderAsc[c] as number;
     const rr = rawReceiver[cell] as number;
     rawRoot[cell] = (rr < 0 || !hardLand[rr]) ? cell : (rawRoot[rr] as number);
   }
-  const rawAccKm2 = new Float64Array(n);
-  const rawAccCells = new Float64Array(n);
+  const rawAccKm2 = n <= surfRawAccKm2Buf.length ? surfRawAccKm2Buf.subarray(0, n) : new Float64Array(n);
+  const rawAccCells = n <= surfRawAccCellsBuf.length ? surfRawAccCellsBuf.subarray(0, n) : new Float64Array(n);
   for (c = 0; c < landCells.length; c++) {
     rawAccKm2[landCells[c] as number] = localRunoffKm2[landCells[c] as number] as number;
     rawAccCells[landCells[c] as number] = localRunoffCells[landCells[c] as number] as number;
@@ -629,40 +757,35 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
       rawAccCells[rr] = (rawAccCells[rr] as number) + (rawAccCells[cell] as number);
     }
   }
-  interface RawCatchmentEntry { cellCount: number; areaKm2: number; precipArea: number; weightedArea: number }
-  const rawCatchmentStats = new Map<number, RawCatchmentEntry>();
+  const depressionComponents = connectedComponents(grid, depressionMask, landCells);
+  const sinkRootsByComponent: number[][] = depressionComponents.components.map(function () { return []; });
+  const rawPrecipArea = n <= surfRawPrecipAreaBuf.length ? surfRawPrecipAreaBuf.subarray(0, n) : new Float64Array(n);
+  const rawWeightedArea = n <= surfRawWeightedAreaBuf.length ? surfRawWeightedAreaBuf.subarray(0, n) : new Float64Array(n);
+  const rawRootSeen = n <= surfRawRootSeenBuf.length ? surfRawRootSeenBuf.subarray(0, n) : new Uint8Array(n);
+  rawRootSeen.fill(0);
   for (c = 0; c < landCells.length; c++) {
     const cell = landCells[c] as number;
     const root = rawRoot[cell] as number;
-    let entry = rawCatchmentStats.get(root);
-    if (!entry) {
-      entry = { cellCount: 0, areaKm2: 0, precipArea: 0, weightedArea: 0 };
-      rawCatchmentStats.set(root, entry);
+    if (!rawRootSeen[root]) {
+      rawRootSeen[root] = 1;
+      rawPrecipArea[root] = 0;
+      rawWeightedArea[root] = 0;
+      if (rawReceiver[root] === -1) {
+        const componentId = depressionComponents.ids[root] as number;
+        if (componentId >= 0) (sinkRootsByComponent[componentId] as number[]).push(root);
+      }
     }
     const physicalArea = (grid.areas[cell] as number) * areaScale;
     const weighted = physicalArea * Math.max(0.02, baseGeography.muLand[cell] as number);
-    entry.cellCount++;
-    entry.areaKm2 += physicalArea;
-    entry.precipArea += (precip01[cell] as number) * weighted;
-    entry.weightedArea += weighted;
+    rawPrecipArea[root] = (rawPrecipArea[root] as number) + (precip01[cell] as number) * weighted;
+    rawWeightedArea[root] = (rawWeightedArea[root] as number) + weighted;
   }
-
-  const depressionMask = new Uint8Array(n);
-  for (c = 0; c < n; c++) depressionMask[c] = hardLand[c] && (arrays.depressionDepth[c] as number) > 1e-9 ? 1 : 0;
-  const depressionComponents = connectedComponents(grid, depressionMask);
-  const sinkRootsByComponent: number[][] = depressionComponents.components.map(function () { return []; });
-  rawCatchmentStats.forEach(function (_entry, rootCell) {
-    if (rawReceiver[rootCell] === -1) {
-      const componentId = depressionComponents.ids[rootCell] as number;
-      if (componentId >= 0) (sinkRootsByComponent[componentId] as number[]).push(rootCell);
-    }
-  });
   const relief = Math.max(1e-9, baseGeography.elevationMax - seaLevel);
   const microDepth = Math.max(0.0015, relief * 0.004);
   const lakeCutoffs = lakeThresholds(profile.surfaceClass);
-  const lakeDistance = new Int32Array(n).fill(-1);
+  const lakeDistance = n <= surfLakeDistBuf.length ? surfLakeDistBuf.subarray(0, n) : new Int32Array(n);
+  lakeDistance.fill(-1);
   const depressionInfo: DepressionInfo[] = [];
-  arrays.flowReceiver.set(filledReceiver);
 
   for (let compIndex = 0; compIndex < depressionComponents.components.length; compIndex++) {
     const cells = depressionComponents.components[compIndex] as number[];
@@ -710,13 +833,12 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
     let upstreamWeightedArea = 0;
     for (c = 0; c < componentSinkRoots.length; c++) {
       const sinkRoot = componentSinkRoots[c] as number;
-      const sinkEntry = rawCatchmentStats.get(sinkRoot);
       info.sinkRoots.push(sinkRoot);
       info.inflowKm2 += rawAccKm2[sinkRoot] as number;
       info.inflowCells += rawAccCells[sinkRoot] as number;
-      if (sinkEntry) {
-        info.upstreamPrecip += sinkEntry.precipArea;
-        upstreamWeightedArea += sinkEntry.weightedArea;
+      if (rawRootSeen[sinkRoot]) {
+        info.upstreamPrecip += rawPrecipArea[sinkRoot] as number;
+        upstreamWeightedArea += rawWeightedArea[sinkRoot] as number;
       }
     }
     const localPrecip = info.localWeightedArea > 0 ? info.localPrecipArea / info.localWeightedArea : 0;
@@ -753,10 +875,16 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
       }
     }
   }
+  const qSlope = makeWeightedQuantiles(rawSlope, areas, landCellsU32);
+  thresholds.slopeP55 = qSlope(0.55);
+  thresholds.slopeP70 = qSlope(0.70);
+  thresholds.slopeP95 = qSlope(0.95);
 
   const lakeRecords: LakeRecord[] = [];
-  const lakeCandidateStamp = new Int32Array(n).fill(-1);
-  const lakeSeenStamp = new Int32Array(n).fill(-1);
+  const lakeCandidateStamp = n <= surfLakeCandStampBuf.length ? surfLakeCandStampBuf.subarray(0, n) : new Int32Array(n);
+  lakeCandidateStamp.fill(-1);
+  const lakeSeenStamp = n <= surfLakeSeenStampBuf.length ? surfLakeSeenStampBuf.subarray(0, n) : new Int32Array(n);
+  lakeSeenStamp.fill(-1);
   for (let compIndex = 0; compIndex < depressionInfo.length; compIndex++) {
     const info = depressionInfo[compIndex] as DepressionInfo;
     if (info.mode !== 'overflow_lake' && info.mode !== 'terminal_lake') continue;
@@ -832,23 +960,26 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
   surface.lakes = lakeRecords;
 
   progress('hydrology-accumulation', 0.34);
-  const topo = accumulateFlow(grid, hardLand, Int32Array.from(landCells), arrays, localRunoffKm2, localRunoffCells, flood.filled);
+  const topo = accumulateFlow(grid, hardLand, landCells, arrays, localRunoffKm2, localRunoffCells, flood.filled);
   const flowOrder = topo.order;
 
-  const rootCellOf = new Int32Array(n).fill(-1);
+  const rootCellOf = rawRoot;
   for (c = flowOrder.length - 1; c >= 0; c--) {
     const cell = flowOrder[c] as number;
     const rr = arrays.flowReceiver[cell] as number;
     rootCellOf[cell] = (rr < 0 || !hardLand[rr]) ? cell : (rootCellOf[rr] as number);
   }
-  const uniqueRoots: number[] = [];
-  const rootSeen = new Uint8Array(n);
+  const rootSeen = rawRootSeen;
   for (c = 0; c < landCells.length; c++) {
     const r = rootCellOf[landCells[c] as number] as number;
-    if (r >= 0 && !rootSeen[r]) { rootSeen[r] = 1; uniqueRoots.push(r); }
+    if (r >= 0) rootSeen[r] = 2;
   }
-  uniqueRoots.sort(function (a, b) { return a - b; });
-  const rootToCatchment = new Int32Array(n).fill(-1);
+  const uniqueRoots: number[] = [];
+  for (c = 0; c < landCells.length; c++) {
+    const cell = landCells[c] as number;
+    if (rootSeen[cell] === 2) uniqueRoots.push(cell);
+  }
+  const rootToCatchment = lakeDistance;
   const catchmentRecords: CatchmentRecord[] = uniqueRoots.map(function (rootCell, id) {
     rootToCatchment[rootCell] = id;
     const receiver = arrays.flowReceiver[rootCell] as number;
@@ -885,7 +1016,7 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
     lake.catchmentId = arrays.catchmentId[lake.representativeCell] as number;
   }
 
-  const qFlow = makeWeightedQuantiles(arrays.flowAccumulationKm2, landWeights);
+  const qFlow = makeWeightedQuantiles(arrays.flowAccumulationKm2, areas, landCellsU32);
   thresholds.streamFlowKm2 = qFlow(profile.streamFlowPctl / 100);
   thresholds.majorRiverFlowKm2 = qFlow(profile.majorRiverFlowPctl / 100);
   if (!(thresholds.majorRiverFlowKm2 > thresholds.streamFlowKm2)) {
@@ -899,7 +1030,7 @@ function computeSurface(grid: PlanetGrid, geography: GeographyResult, options: S
   );
 
   progress('mountains', 0.60);
-  const mountainStats = computeMountains(grid, baseGeography, arrays, hardLand, thresholds, areaScale);
+  const mountainStats = computeMountains(grid, baseGeography, arrays, hardLand, thresholds, areaScale, landCells);
   surface.mountainRanges = mountainStats.ranges;
 
   progress('biomes', 0.72);
@@ -932,13 +1063,17 @@ function computeStreamAndDelta(
 ): void {
   const stream = Math.max(1e-12, thresholds.streamFlowKm2);
   const major = Math.max(stream * 1.000001, thresholds.majorRiverFlowKm2);
+  const lowFlowKm2 = stream * 0.35;
   const logStream = Math.log1p(stream);
   const logMajor = Math.log1p(major);
-  const logLow = Math.log1p(stream * 0.35);
+  const logMajor15 = Math.log1p(major * 1.5);
+  const logLow = Math.log1p(lowFlowKm2);
   let c: number, j: number, nb: number;
   for (c = 0; c < grid.cellCount; c++) {
     if (!hardLand[c]) continue;
-    const logFlow = Math.log1p(Math.max(0, arrays.flowAccumulationKm2[c] as number));
+    const flow = Math.max(0, arrays.flowAccumulationKm2[c] as number);
+    if (flow <= lowFlowKm2) continue;
+    const logFlow = Math.log1p(flow);
     let weight: number;
     if (logFlow <= logLow) weight = 0;
     else if (logFlow < logStream) weight = 0.32 * smoothstep(logLow, logStream, logFlow);
@@ -955,7 +1090,9 @@ function computeStreamAndDelta(
     if (!hardLand[c]) continue;
     const receiver = arrays.flowReceiver[c] as number;
     if (receiver < 0 || hardLand[receiver]) continue;
-    const flowScore = smoothstep(logStream, Math.log1p(major * 1.5), Math.log1p(arrays.flowAccumulationKm2[c] as number));
+    const flow = arrays.flowAccumulationKm2[c] as number;
+    if (flow <= stream) continue;
+    const flowScore = smoothstep(logStream, logMajor15, Math.log1p(flow));
     if (flowScore <= 0) continue;
     const slopeFactor = 1 - smoothstep(thresholds.slopeP70 as number, thresholds.slopeP95 as number, arrays.slope[c] as number);
     const base = clamp01(flowScore * (0.35 + 0.65 * slopeFactor) * liquidFactor);
@@ -971,102 +1108,219 @@ function computeStreamAndDelta(
       }
     }
   }
-  const first = new Float32Array(arrays.riverInfluence);
-  for (c = 0; c < grid.cellCount; c++) {
+  const neighbors = grid.neighbors;
+  const neighborCount = grid.neighborCount;
+  const signedCoast = geography.signedCoastDistanceCells;
+  const riverInfluence = arrays.riverInfluence;
+  const lakeWeight = arrays.lakeWeight;
+  const deltaWeight = arrays.deltaWeight;
+  const n = grid.cellCount;
+  const first = new Float32Array(riverInfluence);
+  for (c = 0; c < n; c++) {
+    if ((signedCoast[c] as number) < -1.5) continue;
     let best = first[c] as number;
-    for (j = 0; j < (grid.neighborCount[c] as number); j++) {
-      nb = grid.neighbors[c * 6 + j] as number;
-      best = Math.max(best, (first[nb] as number) * 0.55);
+    const nc = neighborCount[c] as number;
+    const base = c * 6;
+    for (j = 0; j < nc; j++) {
+      const fnb = first[neighbors[base + j] as number] as number;
+      if (fnb > 0) {
+        const cand = fnb * 0.55;
+        if (cand > best) best = cand;
+      }
     }
-    arrays.riverInfluence[c] = best;
+    riverInfluence[c] = best;
   }
-  const second = new Float32Array(arrays.riverInfluence);
-  for (c = 0; c < grid.cellCount; c++) {
-    let best = second[c] as number;
-    for (j = 0; j < (grid.neighborCount[c] as number); j++) {
-      nb = grid.neighbors[c * 6 + j] as number;
-      best = Math.max(best, (second[nb] as number) * 0.35);
+  first.set(riverInfluence);
+  for (c = 0; c < n; c++) {
+    if ((signedCoast[c] as number) < -3.5) continue;
+    let best = first[c] as number;
+    const nc = neighborCount[c] as number;
+    const base = c * 6;
+    for (j = 0; j < nc; j++) {
+      const snb = first[neighbors[base + j] as number] as number;
+      if (snb > 0) {
+        const cand = snb * 0.35;
+        if (cand > best) best = cand;
+      }
     }
-    arrays.riverInfluence[c] = clamp01(Math.max(best, (arrays.lakeWeight[c] as number) * 0.85, (arrays.deltaWeight[c] as number) * 0.80));
+    riverInfluence[c] = clamp01(Math.max(best, (lakeWeight[c] as number) * 0.85, (deltaWeight[c] as number) * 0.80));
   }
 }
 
 interface DrainageSegment {
   id: number;
   alive: boolean;
-  cells: number[];
+  head: number;
+  tail: number;
   size: number;
   minCell: number;
-  catchments: Set<number>;
+  firstCatchment: number;
+  catchments: Set<number> | null;
   dominantLandmass: number;
   outletCell: number;
   neighbors: Set<number>;
 }
 
+function addCatchmentToSegment(seg: DrainageSegment, cid: number): void {
+  if (seg.catchments) {
+    seg.catchments.add(cid);
+  } else if (seg.firstCatchment === -1) {
+    seg.firstCatchment = cid;
+  } else if (seg.firstCatchment !== cid) {
+    seg.catchments = new Set<number>();
+    seg.catchments.add(seg.firstCatchment);
+    seg.catchments.add(cid);
+  }
+}
+
+function segmentsShareCatchment(a: DrainageSegment, b: DrainageSegment): boolean {
+  if (!a.catchments) {
+    if (a.firstCatchment < 0) return false;
+    return b.catchments ? b.catchments.has(a.firstCatchment) : a.firstCatchment === b.firstCatchment;
+  }
+  if (!b.catchments) {
+    return b.firstCatchment >= 0 && a.catchments.has(b.firstCatchment);
+  }
+  for (const id of a.catchments) {
+    if (b.catchments.has(id)) return true;
+  }
+  return false;
+}
+
 function buildDrainageRegions(
   grid: PlanetGrid, geography: GeographyResult, arrays: SurfaceArrays, hardLand: Uint8Array,
-  landCells: number[], flowOrder: Int32Array, profile: SurfaceProfile, areaScale: number,
+  landCells: ArrayLike<number>, flowOrder: Int32Array, profile: SurfaceProfile, areaScale: number,
 ): DrainageRegionRecord[] {
   const n = grid.cellCount;
   const target = Math.max(1, profile.drainageMeanCells || 1);
-  const pending: (number[] | null)[] = new Array(n).fill(null);
-  const initial: number[][] = [];
+  const listHead = new Int32Array(n);
+  const listTail = new Int32Array(n);
+  const listLen = new Int32Array(n);
+  const listNext = new Int32Array(n).fill(-1);
+  const initialHeads: number[] = [];
+  const initialTails: number[] = [];
+  const initialSizes: number[] = [];
+  const flowReceiver = arrays.flowReceiver;
   let c: number, cell: number, receiver: number;
-  function mergeLists(a: number[] | null, b: number[] | null): number[] | null {
-    if (!a) return b;
-    if (!b) return a;
-    if (a.length < b.length) { const tmp = a; a = b; b = tmp; }
-    for (let i = 0; i < b.length; i++) a.push(b[i] as number);
-    return a;
-  }
   for (c = 0; c < flowOrder.length; c++) {
     cell = flowOrder[c] as number;
-    const list = pending[cell] || [];
-    pending[cell] = null;
-    list.push(cell);
-    receiver = arrays.flowReceiver[cell] as number;
-    if (receiver >= 0 && hardLand[receiver]) {
-      if (list.length >= target) initial.push(list);
-      else pending[receiver] = mergeLists(pending[receiver] as number[] | null, list);
+    let hB: number, tB: number, lenB: number;
+    const prevLen = listLen[cell] as number;
+    if (prevLen === 0) {
+      hB = cell;
+      tB = cell;
+      lenB = 1;
+      listNext[cell] = -1;
     } else {
-      initial.push(list);
+      hB = listHead[cell] as number;
+      listNext[listTail[cell] as number] = cell;
+      listNext[cell] = -1;
+      tB = cell;
+      lenB = prevLen + 1;
+    }
+    receiver = flowReceiver[cell] as number;
+    if (receiver >= 0 && hardLand[receiver]) {
+      if (lenB >= target) {
+        initialHeads.push(hB);
+        initialTails.push(tB);
+        initialSizes.push(lenB);
+      } else {
+        const lenA = listLen[receiver] as number;
+        if (lenA === 0) {
+          listHead[receiver] = hB;
+          listTail[receiver] = tB;
+          listLen[receiver] = lenB;
+        } else if (lenA < lenB) {
+          listNext[tB] = listHead[receiver] as number;
+          listHead[receiver] = hB;
+          listLen[receiver] = lenA + lenB;
+        } else {
+          listNext[listTail[receiver] as number] = hB;
+          listTail[receiver] = tB;
+          listLen[receiver] = lenA + lenB;
+        }
+      }
+    } else {
+      initialHeads.push(hB);
+      initialTails.push(tB);
+      initialSizes.push(lenB);
     }
   }
 
   const segmentId = new Int32Array(n).fill(-1);
-  const segments: DrainageSegment[] = initial.map(function (cells, id) {
-    const catchmentSet = new Set<number>();
-    const landmassCounts = new Map<number, number>();
+  const catchmentId = arrays.catchmentId;
+  const physicalLandmassId = geography.physicalLandmassId;
+  const flowAccumulationCells = arrays.flowAccumulationCells;
+  const segments: DrainageSegment[] = new Array<DrainageSegment>(initialHeads.length);
+  for (let id = 0; id < initialHeads.length; id++) {
+    const head = initialHeads[id] as number;
+    const tail = initialTails[id] as number;
+    const size = initialSizes[id] as number;
+    let firstCatchment = -1;
+    let catchmentSet: Set<number> | null = null;
+    let landmassCounts: Map<number, number> | null = null;
+    let firstLm = -1;
+    let firstLmCount = 0;
     let minCell = Infinity;
-    let outletCell = cells[0] as number;
-    for (let i = 0; i < cells.length; i++) {
-      const x = cells[i] as number;
+    let outletCell = head;
+    for (let x = head; x >= 0; x = listNext[x] as number) {
       segmentId[x] = id;
-      minCell = Math.min(minCell, x);
-      catchmentSet.add(arrays.catchmentId[x] as number);
-      const lm = geography.physicalLandmassId[x] as number;
-      if (lm >= 0) landmassCounts.set(lm, (landmassCounts.get(lm) || 0) + 1);
-      if ((arrays.flowAccumulationCells[x] as number) > (arrays.flowAccumulationCells[outletCell] as number)) outletCell = x;
+      if (x < minCell) minCell = x;
+      const cid = catchmentId[x] as number;
+      if (catchmentSet) {
+        catchmentSet.add(cid);
+      } else if (firstCatchment === -1) {
+        firstCatchment = cid;
+      } else if (firstCatchment !== cid) {
+        catchmentSet = new Set<number>();
+        catchmentSet.add(firstCatchment);
+        catchmentSet.add(cid);
+      }
+      const lm = physicalLandmassId[x] as number;
+      if (lm >= 0) {
+        if (!landmassCounts) {
+          if (firstLm === -1 || firstLm === lm) {
+            firstLm = lm;
+            firstLmCount++;
+          } else {
+            landmassCounts = new Map<number, number>();
+            landmassCounts.set(firstLm, firstLmCount);
+            landmassCounts.set(lm, 1);
+          }
+        } else {
+          landmassCounts.set(lm, (landmassCounts.get(lm) || 0) + 1);
+        }
+      }
+      if ((flowAccumulationCells[x] as number) > (flowAccumulationCells[outletCell] as number)) outletCell = x;
     }
-    let dominantLandmass = -1, bestCount = -1;
-    landmassCounts.forEach(function (count, lm) {
-      if (count > bestCount) { bestCount = count; dominantLandmass = lm; }
-    });
-    return {
-      id: id, alive: true, cells: cells, size: cells.length, minCell: minCell,
-      catchments: catchmentSet, dominantLandmass: dominantLandmass,
+    let dominantLandmass = firstLm;
+    if (landmassCounts) {
+      let bestCount = -1;
+      for (const [lm, count] of landmassCounts) {
+        if (count > bestCount) { bestCount = count; dominantLandmass = lm; }
+      }
+    }
+    segments[id] = {
+      id: id, alive: true, head: head, tail: tail, size: size, minCell: minCell,
+      firstCatchment: firstCatchment, catchments: catchmentSet,
+      dominantLandmass: dominantLandmass,
       outletCell: outletCell, neighbors: new Set<number>(),
     };
-  });
+  }
   for (c = 0; c < landCells.length; c++) {
     cell = landCells[c] as number;
     const sid = segmentId[cell] as number;
-    for (let j = 0; j < (grid.neighborCount[cell] as number); j++) {
-      const nb = grid.neighbors[cell * 6 + j] as number;
+    const seg = segments[sid] as DrainageSegment;
+    const nc = grid.neighborCount[cell] as number;
+    const base = cell * 6;
+    let lastOther = -1;
+    for (let j = 0; j < nc; j++) {
+      const nb = grid.neighbors[base + j] as number;
       if (!hardLand[nb]) continue;
       const other = segmentId[nb] as number;
-      if (other >= 0 && other !== sid) {
-        (segments[sid] as DrainageSegment).neighbors.add(other);
+      if (other >= 0 && other !== sid && other !== lastOther) {
+        lastOther = other;
+        seg.neighbors.add(other);
         (segments[other] as DrainageSegment).neighbors.add(sid);
       }
     }
@@ -1074,17 +1328,22 @@ function buildDrainageRegions(
 
   function mergeSegments(survivor: DrainageSegment, removed: DrainageSegment): void {
     if (survivor === removed || !survivor.alive || !removed.alive) return;
-    for (let i = 0; i < removed.cells.length; i++) {
-      survivor.cells.push(removed.cells[i] as number);
-      segmentId[removed.cells[i] as number] = survivor.id;
+    for (let x = removed.head; x >= 0; x = listNext[x] as number) {
+      segmentId[x] = survivor.id;
     }
-    survivor.size = survivor.cells.length;
+    listNext[survivor.tail] = removed.head;
+    survivor.tail = removed.tail;
+    survivor.size += removed.size;
     survivor.minCell = Math.min(survivor.minCell, removed.minCell);
-    removed.catchments.forEach(function (id) { survivor.catchments.add(id); });
+    if (removed.catchments) {
+      for (const id of removed.catchments) addCatchmentToSegment(survivor, id);
+    } else if (removed.firstCatchment >= 0) {
+      addCatchmentToSegment(survivor, removed.firstCatchment);
+    }
     if ((arrays.flowAccumulationCells[removed.outletCell] as number) > (arrays.flowAccumulationCells[survivor.outletCell] as number)) {
       survivor.outletCell = removed.outletCell;
     }
-    removed.neighbors.forEach(function (otherId) {
+    for (const otherId of removed.neighbors) {
       const other = segments[otherId] as DrainageSegment | undefined;
       if (!other || !other.alive) return;
       other.neighbors.delete(removed.id);
@@ -1092,34 +1351,39 @@ function buildDrainageRegions(
         other.neighbors.add(survivor.id);
         survivor.neighbors.add(other.id);
       }
-    });
+    }
     survivor.neighbors.delete(removed.id);
     survivor.neighbors.delete(survivor.id);
     removed.alive = false;
-    removed.cells = [];
+    removed.head = -1;
+    removed.tail = -1;
+    removed.size = 0;
     removed.neighbors.clear();
   }
 
   const mergeThreshold = target * 0.85;
   for (let pass = 0; pass < 16; pass++) {
-    const active = segments.filter(function (s) { return s.alive; })
-      .sort(function (a, b) { return a.size - b.size || a.minCell - b.minCell; });
+    const active: DrainageSegment[] = [];
+    for (let si = 0; si < segments.length; si++) {
+      const s = segments[si] as DrainageSegment;
+      if (s.alive && s.size < mergeThreshold) active.push(s);
+    }
+    active.sort(function (a, b) { return a.size - b.size || a.minCell - b.minCell; });
     let changed = false;
     for (c = 0; c < active.length; c++) {
       const seg = active[c] as DrainageSegment;
       if (!seg.alive || seg.size >= mergeThreshold) continue;
       let bestSeg: DrainageSegment | null = null;
       let bestScore = Infinity;
-      seg.neighbors.forEach(function (otherId) {
+      for (const otherId of seg.neighbors) {
         const other = segments[otherId] as DrainageSegment | undefined;
-        if (!other || !other.alive || other === seg) return;
+        if (!other || !other.alive || other === seg) continue;
         if (seg.dominantLandmass >= 0 && other.dominantLandmass >= 0 &&
-            seg.dominantLandmass !== other.dominantLandmass) return;
-        let sharedCatchment = false;
-        seg.catchments.forEach(function (id) { if (other.catchments.has(id)) sharedCatchment = true; });
+            seg.dominantLandmass !== other.dominantLandmass) continue;
+        const sharedCatchment = segmentsShareCatchment(seg, other);
         const score = seg.size + other.size - (sharedCatchment ? target * 0.75 : 0);
         if (score < bestScore) { bestScore = score; bestSeg = other; }
-      });
+      }
       if (!bestSeg) continue;
       const best = bestSeg as DrainageSegment;
       if (seg.size + best.size > target * 2.25 && seg.size > target * 0.25) continue;
@@ -1136,21 +1400,23 @@ function buildDrainageRegions(
   const records: DrainageRegionRecord[] = finalSegments.map(function (seg, id) {
     let areaKm2 = 0;
     let effectiveLandAreaKm2 = 0;
-    for (let i = 0; i < seg.cells.length; i++) {
-      const x = seg.cells[i] as number;
+    for (let x = seg.head; x >= 0; x = listNext[x] as number) {
       arrays.drainageRegionId[x] = id;
       areaKm2 += (grid.areas[x] as number) * areaScale;
       effectiveLandAreaKm2 += (grid.areas[x] as number) * areaScale * (geography.muLand[x] as number);
     }
     const outletCatchment = arrays.catchmentId[seg.outletCell] as number;
+    const cIds = seg.catchments
+      ? Array.from(seg.catchments).sort(function (a, b) { return a - b; })
+      : (seg.firstCatchment >= 0 ? [seg.firstCatchment] : []);
     return {
       id: id,
       outletCell: seg.outletCell,
-      cellCount: seg.cells.length,
+      cellCount: seg.size,
       areaKm2: areaKm2,
       effectiveLandAreaKm2: effectiveLandAreaKm2,
-      catchmentCount: seg.catchments.size,
-      catchmentIds: Array.from(seg.catchments).sort(function (a, b) { return a - b; }),
+      catchmentCount: cIds.length,
+      catchmentIds: cIds,
       terminalType: TERMINAL_TYPE_NAMES[arrays.terminalType[seg.outletCell] as number] || 'none',
       dominantCatchmentId: outletCatchment,
       physicalLandmassId: seg.dominantLandmass,
@@ -1161,34 +1427,54 @@ function buildDrainageRegions(
 
 function computeMountains(
   grid: PlanetGrid, geography: GeographyResult, arrays: SurfaceArrays, hardLand: Uint8Array,
-  thresholds: SurfaceThresholds, areaScale: number,
+  thresholds: SurfaceThresholds, areaScale: number, landCells: Int32Array,
 ): { ranges: MountainRangeRecord[]; stats: MountainStats } {
   let c: number;
   let mountainArea = 0, seamArea = 0, landArea = 0;
-  for (c = 0; c < grid.cellCount; c++) {
-    if (!hardLand[c]) continue;
-    landArea += grid.areas[c] as number;
-    const heightScore = thresholds.mountainLevel > thresholds.highlandLevel
-      ? smoothstep(thresholds.highlandLevel, thresholds.mountainLevel, geography.elevation[c] as number)
-      : ((geography.elevation[c] as number) >= thresholds.mountainLevel ? 1 : 0);
-    const slopeScore = smoothstep(thresholds.slopeP55 as number, thresholds.slopeP95 as number, arrays.slope[c] as number);
-    const mountain = (geography.muLand[c] as number) * heightScore * (0.45 + 0.55 * slopeScore);
-    const seamRelief = thresholds.mountainLevel > thresholds.highlandLevel
-      ? smoothstep(
-          thresholds.highlandLevel - (thresholds.mountainLevel - thresholds.highlandLevel) * 0.35,
-          thresholds.mountainLevel, geography.elevation[c] as number)
+  const mask = grid.cellCount <= surfMountainMaskBuf.length
+    ? surfMountainMaskBuf.subarray(0, grid.cellCount)
+    : new Uint8Array(grid.cellCount);
+  mask.fill(0);
+  const areas = grid.areas;
+  const elevation = geography.elevation;
+  const muLand = geography.muLand;
+  const plateBoundary = geography.plateBoundary;
+  const volcanism = geography.volcanism;
+  const slope = arrays.slope;
+  const mountainWeight = arrays.mountainWeight;
+  const mountainSeamWeight = arrays.mountainSeamWeight;
+  const highlandLevel = thresholds.highlandLevel;
+  const mountainLevel = thresholds.mountainLevel;
+  const slopeP55 = thresholds.slopeP55 as number;
+  const slopeP95 = thresholds.slopeP95 as number;
+  const hasMountainSpan = mountainLevel > highlandLevel;
+  const seamLow = highlandLevel - (mountainLevel - highlandLevel) * 0.35;
+  for (let li = 0; li < landCells.length; li++) {
+    c = landCells[li] as number;
+    const cellArea = areas[c] as number;
+    landArea += cellArea;
+    const el = elevation[c] as number;
+    const heightScore = hasMountainSpan
+      ? smoothstep(highlandLevel, mountainLevel, el)
+      : (el >= mountainLevel ? 1 : 0);
+    const slopeScore = smoothstep(slopeP55, slopeP95, slope[c] as number);
+    const mu = muLand[c] as number;
+    const mountain = mu * heightScore * (0.45 + 0.55 * slopeScore);
+    const seamRelief = hasMountainSpan
+      ? smoothstep(seamLow, mountainLevel, el)
       : heightScore;
-    const seam = (geography.muLand[c] as number) * seamRelief *
-      smoothstep(0.28, 0.88, geography.plateBoundary[c] as number) *
-      (0.38 + 0.38 * slopeScore + 0.24 * (geography.volcanism[c] as number));
-    arrays.mountainWeight[c] = clamp01(mountain);
-    arrays.mountainSeamWeight[c] = clamp01(seam);
-    mountainArea += (arrays.mountainWeight[c] as number) * (grid.areas[c] as number);
-    seamArea += (arrays.mountainSeamWeight[c] as number) * (grid.areas[c] as number);
+    const seam = mu * seamRelief *
+      smoothstep(0.28, 0.88, plateBoundary[c] as number) *
+      (0.38 + 0.38 * slopeScore + 0.24 * (volcanism[c] as number));
+    const mw = clamp01(mountain);
+    const sw = clamp01(seam);
+    mountainWeight[c] = mw;
+    mountainSeamWeight[c] = sw;
+    mountainArea += mw * cellArea;
+    seamArea += sw * cellArea;
+    if (sw >= 0.42) mask[c] = 1;
   }
-  const mask = new Uint8Array(grid.cellCount);
-  for (c = 0; c < grid.cellCount; c++) mask[c] = hardLand[c] && (arrays.mountainSeamWeight[c] as number) >= 0.42 ? 1 : 0;
-  const comps = connectedComponents(grid, mask).components
+  const comps = connectedComponents(grid, mask, landCells).components
     .filter(function (cells) { return cells.length >= 3; });
   const ranges: MountainRangeRecord[] = comps.map(function (cells, id) {
     let areaKm2 = 0;
@@ -1232,6 +1518,9 @@ function computeMountains(
   };
 }
 
+let coastExpBuf = new Float64Array(163842);
+let volcPowBuf = new Float64Array(163842);
+
 function computeBiomes(
   grid: PlanetGrid, geography: GeographyResult, arrays: SurfaceArrays, hardLand: Uint8Array,
   profile: SurfaceProfile, thresholds: SurfaceThresholds,
@@ -1247,11 +1536,21 @@ function computeBiomes(
     : profile.surfaceClass === 'desert' ? 1.45 : 1.0;
   let c: number, b: number;
 
-  const coastExp = new Float64Array(n);
-  const volcPow = new Float64Array(n);
+  if (coastExpBuf.length < n) {
+    coastExpBuf = new Float64Array(n);
+    volcPowBuf = new Float64Array(n);
+  }
+  const coastExp = coastExpBuf.subarray(0, n);
+  const volcPow = volcPowBuf.subarray(0, n);
+  const muLand = geography.muLand;
+  const signedCoast = geography.signedCoastDistanceCells;
+  const volcanism = geography.volcanism;
   for (c = 0; c < n; c++) {
-    coastExp[c] = Math.exp(-Math.max(0, geography.signedCoastDistanceCells[c] as number) / 4);
-    volcPow[c] = Math.pow(geography.volcanism[c] as number, 1.5);
+    if ((muLand[c] as number) <= 0 && !hardLand[c]) continue;
+    const cd = signedCoast[c] as number;
+    coastExp[c] = cd <= 0 ? 1.0 : Math.exp(-cd / 4);
+    const v = volcanism[c] as number;
+    volcPow[c] = v === 0 ? 0.0 : Math.pow(v, 1.5);
   }
   const params = new Float64Array([
     thresholds.coldLevel, thresholds.hotLevel, thresholds.aridLevel, thresholds.wetLevel,
@@ -1263,64 +1562,122 @@ function computeBiomes(
     profile.surfaceClass === 'barren' ? 1 : 0,
     profile.surfaceClass === 'volcanic' ? 1.80 : 0.80,
   ]);
-  let weights: Float32Array = getCore().biomeWeights({
+  const width = Math.max(0, Number(profile.biomeSoftWidthCells) || 0);
+  let alphas: Float64Array | null = null;
+  if (width > 0) {
+    const fullSteps = Math.floor(width);
+    const fraction = width - fullSteps;
+    const steps = Math.min(6, fullSteps + (fraction > 0 ? 1 : 0));
+    alphas = new Float64Array(steps);
+    for (let step = 0; step < steps; step++) {
+      alphas[step] = 0.42 * (step < fullSteps ? 1 : fraction);
+    }
+  }
+  const weights: Float32Array = getCore().biomeWeightsAndSmooth({
     muOcean: geography.muOcean, muShelf: geography.muShelf, muLand: geography.muLand,
     temperature: geography.temperature, moisture: geography.moisture, elevation: geography.elevation,
     riverInfluence: arrays.riverInfluence, lakeWeight: arrays.lakeWeight, deltaWeight: arrays.deltaWeight,
     slope: arrays.slope, mountainWeight: arrays.mountainWeight, mountainSeamWeight: arrays.mountainSeamWeight,
     coastExp: coastExp, volcPow: volcPow,
-  }, hardLand, params, n);
-
-  const width = Math.max(0, Number(profile.biomeSoftWidthCells) || 0);
-  if (width > 0) {
-    const fullSteps = Math.floor(width);
-    const fraction = width - fullSteps;
-    const steps = Math.min(6, fullSteps + (fraction > 0 ? 1 : 0));
-    const alphas = new Float64Array(steps);
-    for (let step = 0; step < steps; step++) {
-      alphas[step] = 0.42 * (step < fullSteps ? 1 : fraction);
-    }
-    weights = getCore().smoothBiomeWeights(weights, grid.neighbors, grid.neighborCount,
-      geography.muOcean, geography.muShelf, geography.muLand,
-      arrays.lakeWeight, hardLand, alphas, n);
-  }
+  }, grid.neighbors, grid.neighborCount, hardLand, params, alphas, n);
 
   const globalSums = new Float64Array(BIOME_COUNT);
   const landSums = new Float64Array(BIOME_COUNT);
   const top1Sums = new Float64Array(BIOME_COUNT);
+  const areas = grid.areas;
+  const detail = geography.detail;
+  const mountainWeight = arrays.mountainWeight;
+  const biomeTop1Id = arrays.biomeTop1Id;
+  const biomeTop1Weight = arrays.biomeTop1Weight;
+  const biomeTop2Id = arrays.biomeTop2Id;
+  const biomeTop2Weight = arrays.biomeTop2Weight;
+  const biomeEntropy = arrays.biomeEntropy;
+  const biomeColor = arrays.biomeColor;
+  const r0 = BIOME_COLOR_R[0] as number;
+  const g0 = BIOME_COLOR_G[0] as number;
+  const b0 = BIOME_COLOR_B[0] as number;
   let totalArea = 0, landArea = 0, entropyWeighted = 0;
   for (c = 0; c < n; c++) {
     const base = c * BIOME_COUNT;
+    const cellArea = areas[c] as number;
+    const isLand = hardLand[c];
+    if (!isLand &&
+        (signedCoast[c] as number) < -6.5 &&
+        (weights[base] as number) === 1 &&
+        (weights[base + 1] as number) === 0 &&
+        (weights[base + 2] as number) === 0) {
+      globalSums[0] = (globalSums[0] as number) + cellArea;
+      totalArea += cellArea;
+      top1Sums[0] = (top1Sums[0] as number) + cellArea;
+      biomeTop1Id[c] = 0;
+      biomeTop1Weight[c] = 1;
+      biomeTop2Id[c] = 1;
+      biomeTop2Weight[c] = 0;
+      biomeEntropy[c] = 0;
+      const shade = clamp(0.94 + (detail[c] as number) * 0.08 + (mountainWeight[c] as number) * 0.05, 0.82, 1.12);
+      const c3 = c * 3;
+      biomeColor[c3] = clamp01(r0 * shade);
+      biomeColor[c3 + 1] = clamp01(g0 * shade);
+      biomeColor[c3 + 2] = clamp01(b0 * shade);
+      continue;
+    }
     let top1 = -1, top2 = -1, w1 = -1, w2 = -1;
     let r = 0, g = 0, bl = 0;
-    for (b = 0; b < BIOME_COUNT; b++) {
-      const w = weights[base + b] as number;
-      globalSums[b] = (globalSums[b] as number) + w * (grid.areas[c] as number);
-      if (hardLand[c]) landSums[b] = (landSums[b] as number) + w * (grid.areas[c] as number);
-      const color = (BIOME_DEFINITIONS[b] as BiomeDefinition).color;
-      r += (color[0] as number) * w; g += (color[1] as number) * w; bl += (color[2] as number) * w;
-      if (w > w1) { top2 = top1; w2 = w1; top1 = b; w1 = w; }
-      else if (w > w2) { top2 = b; w2 = w; }
+    if (!isLand && (signedCoast[c] as number) < -6.5) {
+      for (b = 0; b < 3; b++) {
+        const w = weights[base + b] as number;
+        if (w > 0) {
+          const wa = w * cellArea;
+          globalSums[b] = (globalSums[b] as number) + wa;
+          r += (BIOME_COLOR_R[b] as number) * w;
+          g += (BIOME_COLOR_G[b] as number) * w;
+          bl += (BIOME_COLOR_B[b] as number) * w;
+          if (w > w1) { top2 = top1; w2 = w1; top1 = b; w1 = w; }
+          else if (w > w2) { top2 = b; w2 = w; }
+        } else if (w > w2) {
+          top2 = b; w2 = w;
+        }
+      }
+    } else {
+      for (b = 0; b < BIOME_COUNT; b++) {
+        const w = weights[base + b] as number;
+        if (w > 0) {
+          const wa = w * cellArea;
+          globalSums[b] = (globalSums[b] as number) + wa;
+          if (isLand) landSums[b] = (landSums[b] as number) + wa;
+          r += (BIOME_COLOR_R[b] as number) * w;
+          g += (BIOME_COLOR_G[b] as number) * w;
+          bl += (BIOME_COLOR_B[b] as number) * w;
+          if (w > w1) { top2 = top1; w2 = w1; top1 = b; w1 = w; }
+          else if (w > w2) { top2 = b; w2 = w; }
+        } else if (w > w2) {
+          top2 = b; w2 = w;
+        }
+      }
     }
-    totalArea += grid.areas[c] as number;
-    if (hardLand[c]) landArea += grid.areas[c] as number;
-    const topSum = w1 + Math.max(0, w2);
+    totalArea += cellArea;
+    if (isLand) landArea += cellArea;
+    const topSum = w1 + (w2 > 0 ? w2 : 0);
     const p1 = topSum > 0 ? w1 / topSum : 1;
-    const p2 = topSum > 0 && top2 >= 0 ? Math.max(0, w2) / topSum : 0;
-    arrays.biomeTop1Id[c] = top1;
-    arrays.biomeTop1Weight[c] = p1;
-    arrays.biomeTop2Id[c] = top2;
-    arrays.biomeTop2Weight[c] = p2;
+    const p2 = topSum > 0 && top2 >= 0 ? (w2 > 0 ? w2 : 0) / topSum : 0;
+    biomeTop1Id[c] = top1;
+    biomeTop1Weight[c] = p1;
+    biomeTop2Id[c] = top2;
+    biomeTop2Weight[c] = p2;
     let entropy = 0;
-    if (p1 > 0) entropy -= p1 * Math.log(p1);
-    if (p2 > 0) entropy -= p2 * Math.log(p2);
-    arrays.biomeEntropy[c] = entropy / Math.LN2;
-    entropyWeighted += (arrays.biomeEntropy[c] as number) * (grid.areas[c] as number);
-    if (top1 >= 0) top1Sums[top1] = (top1Sums[top1] as number) + (grid.areas[c] as number);
-    const shade = clamp(0.94 + (geography.detail[c] as number) * 0.08 + (arrays.mountainWeight[c] as number) * 0.05, 0.82, 1.12);
-    arrays.biomeColor[c * 3] = clamp01(r * shade);
-    arrays.biomeColor[c * 3 + 1] = clamp01(g * shade);
-    arrays.biomeColor[c * 3 + 2] = clamp01(bl * shade);
+    if (p2 > 0) {
+      if (p1 > 0 && p1 < 1) entropy -= p1 * Math.log(p1);
+      entropy -= p2 * Math.log(p2);
+      entropy /= Math.LN2;
+    }
+    biomeEntropy[c] = entropy;
+    entropyWeighted += (biomeEntropy[c] as number) * cellArea;
+    if (top1 >= 0) top1Sums[top1] = (top1Sums[top1] as number) + cellArea;
+    const shade = clamp(0.94 + (detail[c] as number) * 0.08 + (mountainWeight[c] as number) * 0.05, 0.82, 1.12);
+    const c3 = c * 3;
+    biomeColor[c3] = clamp01(r * shade);
+    biomeColor[c3 + 1] = clamp01(g * shade);
+    biomeColor[c3 + 2] = clamp01(bl * shade);
   }
   const fractions: BiomeFraction[] = BIOME_DEFINITIONS.map(function (d, id) {
     return {
@@ -1352,27 +1709,45 @@ function computeHydrologyStats(
   let streamCells = 0, majorCells = 0, deltaCells = 0;
   let uphillFilledEdges = 0, uphillRawOutsideDepressions = 0, checkedEdges = 0;
   let majorEdges = 0, majorUphillRawOutsideDepressions = 0;
-  for (let c = 0; c < grid.cellCount; c++) {
-    depressionArea += (arrays.depressionDepth[c] as number) > 1e-9 ? (grid.areas[c] as number) : 0;
-    lakeArea += (arrays.lakeWeight[c] as number) * (grid.areas[c] as number);
-    if ((arrays.deltaWeight[c] as number) >= 0.25) deltaCells++;
+  const areas = grid.areas;
+  const depressionDepth = arrays.depressionDepth;
+  const lakeWeight = arrays.lakeWeight;
+  const deltaWeight = arrays.deltaWeight;
+  const terminalType = arrays.terminalType;
+  const catchmentId = arrays.catchmentId;
+  const flowAccumulationKm2 = arrays.flowAccumulationKm2;
+  const flowReceiver = arrays.flowReceiver;
+  const filledElevation = arrays.filledElevation;
+  const elevation = geography.elevation;
+  const streamFlowKm2 = thresholds.streamFlowKm2;
+  const majorRiverFlowKm2 = thresholds.majorRiverFlowKm2;
+  const n = grid.cellCount;
+  for (let c = 0; c < n; c++) {
+    if ((deltaWeight[c] as number) >= 0.25) deltaCells++;
     if (!hardLand[c]) continue;
-    terminalArea[arrays.terminalType[c] as number] = (terminalArea[arrays.terminalType[c] as number] as number) + (grid.areas[c] as number);
-    if ((arrays.catchmentId[c] as number) >= 0) routed++;
-    if ((arrays.flowAccumulationKm2[c] as number) >= thresholds.streamFlowKm2) streamCells++;
-    if ((arrays.flowAccumulationKm2[c] as number) >= thresholds.majorRiverFlowKm2) majorCells++;
-    const receiver = arrays.flowReceiver[c] as number;
+    const area = areas[c] as number;
+    const dep = depressionDepth[c] as number;
+    const lw = lakeWeight[c] as number;
+    if (dep > 1e-9) depressionArea += area;
+    if (lw > 0) lakeArea += lw * area;
+    const tt = terminalType[c] as number;
+    terminalArea[tt] = (terminalArea[tt] as number) + area;
+    if ((catchmentId[c] as number) >= 0) routed++;
+    const flow = flowAccumulationKm2[c] as number;
+    if (flow >= streamFlowKm2) streamCells++;
+    if (flow >= majorRiverFlowKm2) majorCells++;
+    const receiver = flowReceiver[c] as number;
     if (receiver >= 0) {
       checkedEdges++;
-      if ((arrays.filledElevation[receiver] as number) > (arrays.filledElevation[c] as number) + 1e-9) uphillFilledEdges++;
+      if ((filledElevation[receiver] as number) > (filledElevation[c] as number) + 1e-9) uphillFilledEdges++;
       // Внутри priority-flood впадины маршрут идёт по уровню заполненной
       // поверхности/озера, поэтому сырой рельеф дна может локально расти.
       // Вне впадин и озёр подъём по сырой высоте — настоящая ошибка стока.
-      const outsideDepression = (arrays.depressionDepth[c] as number) <= 1e-9 && (arrays.lakeWeight[c] as number) <= 0;
+      const outsideDepression = dep <= 1e-9 && lw <= 0;
       const rawUphillOutside = outsideDepression &&
-        (geography.elevation[receiver] as number) > (geography.elevation[c] as number) + 1e-9;
+        (elevation[receiver] as number) > (elevation[c] as number) + 1e-9;
       if (rawUphillOutside) uphillRawOutsideDepressions++;
-      if ((arrays.flowAccumulationKm2[c] as number) >= thresholds.majorRiverFlowKm2 && hardLand[receiver]) {
+      if (flow >= majorRiverFlowKm2 && hardLand[receiver]) {
         majorEdges++;
         if (rawUphillOutside) majorUphillRawOutsideDepressions++;
       }
