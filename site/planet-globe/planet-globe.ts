@@ -451,7 +451,7 @@ function resizeLocalMapCanvas(): void {
 
 function resetLocalCamera(): void {
   localCameraYaw = -0.65;
-  localCameraPitch = 0.82;
+  localCameraPitch = 0.56;
   const hf = localMapData?.heightfield;
   const res = Math.round(Math.sqrt(hf?.length || 0));
   const centerZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
@@ -459,7 +459,7 @@ function resetLocalCamera(): void {
   const rect = els.localMapCanvas.getBoundingClientRect();
   const aspect = rect.height > 0 ? rect.width / rect.height : 1;
   const fit = Math.max(0.45, Math.min(1, aspect || 1));
-  localCameraDistance = Math.max(2, (localMapRadiusM * 1.18) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+  localCameraDistance = Math.max(2, (localMapRadiusM * 0.72) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
 }
 
 function localViewProjection(): Float32Array {
@@ -675,7 +675,7 @@ function renderLocalMapFrame(): void {
   if (!gl || !renderer || gl.isContextLost()) return;
   resizeLocalMapCanvas();
   if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
-  gl.clearColor(0.004, 0.018, 0.034, 1);
+  gl.clearColor(0.025, 0.09, 0.13, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   const viewProj = localViewProjection();
   if (typeof renderer.renderFrame === 'function') {
@@ -700,24 +700,44 @@ function selectedLocalScale(value: number): number {
   return LOCAL_MAP_SCALE_STEPS.find((step) => step === value) || 1.2;
 }
 
+function neighborCompassLabel(east: readonly number[], north: readonly number[], dir: readonly number[]): string {
+  const u = (dir[0] || 0) * (east[0] || 0) + (dir[1] || 0) * (east[1] || 0) + (dir[2] || 0) * (east[2] || 0);
+  const v = (dir[0] || 0) * (north[0] || 0) + (dir[1] || 0) * (north[1] || 0) + (dir[2] || 0) * (north[2] || 0);
+  const deg = ((Math.atan2(u, v) * 180 / Math.PI) + 360) % 360;
+  const dirs = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'] as const;
+  return dirs[Math.round(deg / 45) % 8] as string;
+}
+
+function neighborTerrainKind(cell: WorkerPatchReadyResponse['patch']['cells'][number], seaLevel: number): string {
+  if (cell.elevation < seaLevel) return 'океан';
+  if (cell.lakeWeight > 0) return 'озеро';
+  if (cell.streamWeight > 0) return 'река';
+  if (cell.muLand < 0.5) return 'берег';
+  return 'суша';
+}
+
 function updateLocalNeighborButtons(patchReady: WorkerPatchReadyResponse | null): void {
   const buttons = els.localNeighborNav.querySelectorAll<HTMLButtonElement>('button[data-slot]');
   const neighbors = patchReady ? patchReady.patch.cells.slice(1) : [];
+  const frame = patchReady ? patchReady.patch.frame : null;
+  const seaLevel = patchReady ? patchReady.patch.seaLevel : 0;
   buttons.forEach((button) => {
     const slot = Number(button.dataset.slot);
     const cell = neighbors[slot];
-    if (!cell) {
+    if (!cell || !frame) {
       button.disabled = true;
       button.removeAttribute('data-cell');
       button.textContent = 'Слот ' + String(slot);
       button.setAttribute('aria-label', 'Соседняя ячейка, слот ' + String(slot));
       return;
     }
+    const compass = neighborCompassLabel(frame.east, frame.north, cell.center);
+    const kind = neighborTerrainKind(cell, seaLevel);
     button.disabled = false;
     button.dataset.cell = String(cell.cell);
-    button.textContent = 'Слот ' + String(slot) + ' · #' + String(cell.cell);
-    button.title = 'Каноническая ячейка ' + String(cell.cell);
-    button.setAttribute('aria-label', 'Перецентровка на соседнюю ячейку #' + String(cell.cell) + ', слот ' + String(slot));
+    button.textContent = compass + ' · ' + kind + ' #' + String(cell.cell);
+    button.title = 'Слот ' + String(slot) + ' (' + compass + ', ' + kind + '): переход на каноническую ячейку #' + String(cell.cell);
+    button.setAttribute('aria-label', 'Перецентровка на соседнюю ячейку #' + String(cell.cell) + ' (' + compass + ', ' + kind + '), слот ' + String(slot));
   });
 }
 
@@ -764,11 +784,15 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
     const startedAt = performance.now();
     let localData: LocalMapWorkerResponse;
     try {
+      let currentProfile: GeographyProfileInput | undefined;
+      try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
       localData = generateLocalMap({
         patch: patchReady.patch,
         seed: parseSeedUint32(els.seed.value),
         placeId: Number(selectedPlace?.ID || 2),
         radiusM: Math.max(600, (scale * 1000) / 2),
+        patchKey: patchReady.keys.patchKey,
+        ...(currentProfile ? { profile: currentProfile } : {}),
       });
     } catch (error) {
       setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');

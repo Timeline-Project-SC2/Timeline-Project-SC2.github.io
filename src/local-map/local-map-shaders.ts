@@ -188,10 +188,25 @@ void main() {
   uint zone = zoneData.r;
   float terraformBlend = texture(u_terraform_map, v_uv).r;
 
-  // Базовый цвет грунта: микс натурального и зонального
-  vec3 naturalColor = ZONE_COLORS[0];
+  // Гипсометрия и изолинии рельефа: низины зеленее, склоны и гребни каменистее.
+  float hNorm = clamp((v_worldPos.z - 15.0) / 140.0, 0.0, 1.0);
+  vec3 lowlandColor  = vec3(0.31, 0.39, 0.30);
+  vec3 highlandColor = vec3(0.57, 0.53, 0.47);
+  vec3 naturalColor  = mix(lowlandColor, ZONE_COLORS[0], smoothstep(0.0, 0.45, hNorm));
+  naturalColor       = mix(naturalColor, highlandColor, smoothstep(0.45, 1.0, hNorm));
+
+  // Тонкие топографические изолинии каждые 16 м высоты для читаемости 3D-рельефа
+  float contourPhase = abs(fract(v_worldPos.z / 16.0) - 0.5);
+  float contourLine  = 1.0 - smoothstep(0.0, 0.045, contourPhase);
+  naturalColor      *= (1.0 - 0.12 * contourLine);
+
   vec3 zoneColor    = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
-  vec3 baseColor    = mix(naturalColor, zoneColor, terraformBlend);
+  if (zone > 0u && zone < 5u) {
+    vec2 gridCell = abs(fract(v_uv * 64.0) - 0.5);
+    float padGrid = 1.0 - smoothstep(0.44, 0.49, max(gridCell.x, gridCell.y));
+    zoneColor *= (0.92 + 0.08 * padGrid);
+  }
+  vec3 baseColor    = mix(naturalColor, zoneColor, terraformBlend * 0.72);
 
   // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
   // воды/озёр канонической ячейки лежит ровно на уровне seaLevel (z == 0),

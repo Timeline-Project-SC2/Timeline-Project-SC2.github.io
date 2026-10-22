@@ -430,12 +430,14 @@ export function scatterInstances(
       // Yaw
       const yaw = hashFloat(gx + 3, gy + 3, baseSeed + 11) * Math.PI * 2;
 
-      // Scale
+      // Scale (масштабируется к физическому окну обзора, чтобы постройки
+      // были читаемы и на 1,2 км тактического участка, и на региональном обзоре)
       const sRoll = hashFloat(gx + 4, gy + 4, baseSeed + 13);
       const hRoll = hashFloat(gx + 5, gy + 5, baseSeed + 17);
-      const sx = lerp(mod.scale[0], mod.scale[1], sRoll);
+      const worldScale = Math.max(1.8, radiusM / 320);
+      const sx = lerp(mod.scale[0], mod.scale[1], sRoll) * worldScale;
       const sy = sx;  // квадратный footprint (или отдельный roll для sy)
-      const sz = lerp(mod.hScale[0], mod.hScale[1], hRoll);
+      const sz = lerp(mod.hScale[0], mod.hScale[1], hRoll) * worldScale;
 
       // Tint
       const palette = TINT_PALETTES[zone];
@@ -726,12 +728,13 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 
   // 1. Heightfield (h_natural): якорь высоты — каноническая ячейка Patch7 (И-3.2),
   //    детализация — fBm и канал `detail` единого сэмплера (И-3.1), врез русла (И-3.3).
+  const cellSeed = (seed ^ Math.imul((patch.centerCell + 1) >>> 0, 0x9E3779B1)) >>> 0;
   const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
   const detailLattice = sampler ? sampleDetailLattice(patch, sampler, radiusM) : null;
   const riverHalfWidthM = Math.max(cellSize * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
   const riverDepthM = Math.max(6, radiusM * RIVER_DEPTH_RATIO);
   const segments = riverSegments(patch, radiusM, riverHalfWidthM);
-  const noiseScale = 1 / Math.max(radiusM, 1);
+  const noiseScale = (3.5 + Math.log2(Math.max(1, radiusM / 600)) * 0.65) / Math.max(radiusM, 1);
   const heightfield = new Float32Array(hfRes * hfRes);
   let waterPoints = 0;
   let buildablePoints = 0;
@@ -754,7 +757,7 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
       } else {
         // И-3.2: суша надёжно выше канонической высоты ячейки (берег не «ныряет»).
         const anchor = (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
-        const fbmM = fBm(wx * noiseScale, wy * noiseScale, seed, 6) * LAND_FBM_AMPLITUDE_M;
+        const fbmM = fBm(wx * noiseScale, wy * noiseScale, cellSeed, 6) * LAND_FBM_AMPLITUDE_M;
         const detailM = detailLattice
           ? (sampleDetailAt(detailLattice, x / hfRes, y / hfRes) * 0.5 + 0.5) * PROFILE_DETAIL_AMPLITUDE_M
           : 0;
@@ -769,7 +772,7 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   }
 
   // 2. Smoothed copy + box blur (площадка терраформинга без «висящего плато»).
-  const blurKernel = Math.max(4, Math.min(32, Math.round(radiusM / cellSize * 0.3)));
+  const blurKernel = Math.max(3, Math.min(10, Math.round(radiusM / cellSize * 0.08)));
   const smoothed = boxBlurSeparable(heightfield, hfRes, hfRes, blurKernel);
 
   // 3. Terraform mask
@@ -784,10 +787,10 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   }
 
   // 5. Zone map: вода/озёра/русла остаются без зонирования (И-3.2/И-3.4).
-  const zoneMap = applyWaterZoning(generateZoneMap(seed, placeId), patch);
+  const zoneMap = applyWaterZoning(generateZoneMap(cellSeed, placeId), patch);
 
   // 6. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
-  const instances = scatterInstances(zoneMap, heightfield, radiusM, seed, placeId, spawnMask);
+  const instances = scatterInstances(zoneMap, heightfield, radiusM, cellSeed, placeId, spawnMask);
   const instanceBuffers = packInstancesByModule(instances);
 
   // Финальные границы высот после смешивания терраформинга.
