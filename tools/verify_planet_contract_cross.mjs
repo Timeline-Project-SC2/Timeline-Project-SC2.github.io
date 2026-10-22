@@ -105,6 +105,8 @@ const decimalCases = [
   ['ocean_basin_mean_cells', '6000.0005'],
 ];
 
+const approvedAtCases = ['2026-10-21', '2026-10-21T18:30:00Z'];
+
 const pythonCode = String.raw`
 import json
 import sys
@@ -116,26 +118,30 @@ request = json.load(sys.stdin)
 profiles_out = []
 for raw in request["profiles"]:
     place_type = raw.get("_place_type", "planet")
-    frozen = pg.prepare_freeze_row(
-        raw,
-        approved_by="cross-verifier",
-        approved_at="2026-10-21",
-    )
-    result = pg.validate_profiles(
-        [frozen],
-        list(pg.FIELDS),
-        [{"ID": raw["place_id"], "name": "cross", "type": place_type}],
-        ["ID", "name", "type"],
-    )
-    if result.errors:
-        raise AssertionError("\n".join(result.errors))
-    profile = result.profiles[0]
-    profiles_out.append({
-        "canonical": pg.canonical_json_bytes(
-            pg.build_geography_manifest(profile)
-        ).decode("utf-8"),
-        "generation_key": pg.compute_generation_key(profile),
-    })
+    variants = []
+    for approved_at in request["approved_at_cases"]:
+        frozen = pg.prepare_freeze_row(
+            raw,
+            approved_by="cross-verifier",
+            approved_at=approved_at,
+        )
+        result = pg.validate_profiles(
+            [frozen],
+            list(pg.FIELDS),
+            [{"ID": raw["place_id"], "name": "cross", "type": place_type}],
+            ["ID", "name", "type"],
+        )
+        if result.errors:
+            raise AssertionError(f"{approved_at}: " + "\n".join(result.errors))
+        profile = result.profiles[0]
+        variants.append({
+            "approved_at": profile["approved_at"],
+            "canonical": pg.canonical_json_bytes(
+                pg.build_geography_manifest(profile)
+            ).decode("utf-8"),
+            "generation_key": pg.compute_generation_key(profile),
+        })
+    profiles_out.append({"approved_at_variants": variants})
 
 decimal_out = []
 for field, text in request["decimal_cases"]:
@@ -184,7 +190,11 @@ const child = spawnSync(python, ['-c', pythonCode], {
   cwd: root,
   encoding: 'utf8',
   env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
-  input: JSON.stringify({ profiles, decimal_cases: decimalCases }),
+  input: JSON.stringify({
+    profiles,
+    decimal_cases: decimalCases,
+    approved_at_cases: approvedAtCases,
+  }),
   maxBuffer: 16 * 1024 * 1024,
 });
 if (child.status !== 0) {
@@ -231,8 +241,39 @@ const pythonPresets = Object.fromEntries(Object.entries(pythonResult.presets).ma
 checkEqual('presets', tsPresets, pythonPresets);
 
 profiles.forEach((profile, index) => {
-  checkEqual(`profile[${index}].canonical`, geographyManifestCanonicalText(profile), pythonResult.profiles[index].canonical);
-  checkEqual(`profile[${index}].generation_key`, computeGenerationKey(profile), pythonResult.profiles[index].generation_key);
+  const variants = pythonResult.profiles[index].approved_at_variants;
+  checkEqual(
+    `profile[${index}].approved_at branches`,
+    variants.map((variant) => variant.approved_at),
+    approvedAtCases,
+  );
+
+  const generationKey = computeGenerationKey(profile);
+  for (const approvedAt of approvedAtCases) {
+    const variant = variants.find((item) => item.approved_at === approvedAt);
+    if (!variant) {
+      failures.push(`profile[${index}]: Python validator skipped approved_at=${approvedAt}`);
+      continue;
+    }
+    checkEqual(
+      `profile[${index}].canonical approved_at=${approvedAt}`,
+      geographyManifestCanonicalText(profile),
+      variant.canonical,
+    );
+    checkEqual(
+      `profile[${index}].generation_key approved_at=${approvedAt}`,
+      generationKey,
+      variant.generation_key,
+    );
+    if (!variant.generation_key.startsWith('PG1-')) {
+      failures.push(`profile[${index}]: invalid PG1 generation_key for ${approvedAt}`);
+    }
+  }
+  checkEqual(
+    `profile[${index}].generation_key independent of approved_at`,
+    variants.map((variant) => variant.generation_key),
+    approvedAtCases.map(() => generationKey),
+  );
 });
 
 decimalCases.forEach(([field, text], index) => {
@@ -247,5 +288,6 @@ if (failures.length) {
 
 console.log(
   `Planet contract cross-check OK: ${FIELDS.length} колонок, ${Object.keys(PRESETS).length} пресетов, ` +
-  `${profiles.length} PG1-профилей, ${decimalCases.length} decimal-кейсов.`,
+  `${profiles.length} профилей × ${approvedAtCases.length} approved_at-формата, ` +
+  `${decimalCases.length} decimal-кейсов.`,
 );
