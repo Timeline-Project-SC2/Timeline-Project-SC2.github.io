@@ -629,21 +629,22 @@ function sampleGridFields(
 }
 
 function makeWeightedQuantiles(values: Float32Array, weights: Float32Array): (q: number) => number {
-  const order = new Uint32Array(values.length);
+  const initOrder = new Uint32Array(values.length);
   let i: number;
-  for (i = 0; i < order.length; i++) order[i] = i;
-  const orderArray = Array.from(order);
-  orderArray.sort(function (a, b) { return (values[a] as number) - (values[b] as number); });
-  const cumulative = new Float64Array(orderArray.length);
+  for (i = 0; i < initOrder.length; i++) initOrder[i] = i;
+  const order = initOrder.length > 0
+    ? getCore().radixOrderF32(values, initOrder, false)
+    : initOrder;
+  const cumulative = new Float64Array(order.length);
   let total = 0;
-  for (i = 0; i < orderArray.length; i++) {
-    total += weights[orderArray[i] as number] as number;
+  for (i = 0; i < order.length; i++) {
+    total += weights[order[i] as number] as number;
     cumulative[i] = total;
   }
   return function quantile(q: number): number {
-    if (!orderArray.length) return 0;
-    if (q <= 0) return values[orderArray[0] as number] as number;
-    if (q >= 1) return values[orderArray[orderArray.length - 1] as number] as number;
+    if (!order.length) return 0;
+    if (q <= 0) return values[order[0] as number] as number;
+    if (q >= 1) return values[order[order.length - 1] as number] as number;
     const target = total * q;
     let lo = 0, hi = cumulative.length - 1;
     while (lo < hi) {
@@ -651,7 +652,7 @@ function makeWeightedQuantiles(values: Float32Array, weights: Float32Array): (q:
       if ((cumulative[mid] as number) >= target) hi = mid;
       else lo = mid + 1;
     }
-    return values[orderArray[lo] as number] as number;
+    return values[order[lo] as number] as number;
   };
 }
 
@@ -870,24 +871,27 @@ function chooseSeeds(
   componentIds: Int32Array | null, componentSizes: number[] | null,
   minComponentCells: number, desiredMassesSortedDesc: number[] | null,
 ): number[] {
-  const candidates: number[] = [];
+  const rawCandidates = new Uint32Array(grid.cellCount);
+  let candCount = 0;
   for (let c = 0; c < grid.cellCount; c++) {
     if ((support[c] as number) < 0.45) continue;
     if (componentIds && componentSizes) {
       const component = componentIds[c] as number;
       if (component < 0 || (componentSizes[component] as number) < minComponentCells) continue;
     }
-    candidates.push(c);
+    rawCandidates[candCount++] = c;
   }
-  if (!candidates.length || countWant <= 0) return [];
-  candidates.sort(function (a, b) { return (score[b] as number) - (score[a] as number) || a - b; });
-  const cap = Math.min(candidates.length, Math.max(10000, countWant * 120));
-  candidates.length = cap;
+  if (!candCount || countWant <= 0) return [];
+  // LSD radix sort по f32-ключу стабилен: возрастающий порядок сырых кандидатов
+  // сохраняет строгий tie-break (a - b) при равных score (Инвариант И-2).
+  const sortedOrder = getCore().radixOrderF32(score, rawCandidates.subarray(0, candCount), true);
+  const cap = Math.min(candCount, Math.max(10000, countWant * 120));
+  const candidates = new Int32Array(sortedOrder.buffer, sortedOrder.byteOffset, cap);
   const maxScore = (score[candidates[0] as number] as number) || 1;
   const desiredSorted = desiredMassesSortedDesc && desiredMassesSortedDesc.length
     ? Float64Array.from(desiredMassesSortedDesc) : new Float64Array(0);
   const meanSpacing = Math.sqrt(4 * Math.PI / grid.cellCount);
-  const selected = getCore().chooseSeeds(Int32Array.from(candidates), grid.centers, score,
+  const selected = getCore().chooseSeeds(candidates, grid.centers, score,
     desiredSorted, countWant, meanSpacing, maxScore);
   return Array.from(selected);
 }
