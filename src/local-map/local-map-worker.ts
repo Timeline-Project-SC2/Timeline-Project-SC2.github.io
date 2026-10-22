@@ -20,6 +20,7 @@ import {
   isWaterCell,
   localPointToDirection,
   nearestPatchCell,
+  patchSpanMeters,
   samplePatchFields,
   verifyPatchInvariants,
   waterLevelOf,
@@ -258,6 +259,30 @@ export function generateTerraformMap(): Uint8Array {
     }
   }
   return map;
+}
+
+/**
+ * И-3.2/И-3.4: вода, озёра и русла не получают зонирования. Тексели `zone_map`,
+ * попавшие в водные канонические ячейки Patch7, переводятся в зону 0 (пустошь)
+ * с нулевой плотностью — шейдер рельефа по `zone == 0u` и глубине ниже
+ * `seaLevel` плавно тонирует их водно-бирюзовым оттенком, а `scatterInstances`
+ * не ставит над ними ни одного здания.
+ */
+export function applyWaterZoning(zoneMap: Uint8Array, patch: LocalMapPatch): Uint8Array {
+  const zRes = ZONE_RES;
+  const span = patchSpanMeters(patch);
+  for (let zy = 0; zy < zRes; zy++) {
+    const v = ((zy + 0.5) / zRes - 0.5) * span;
+    for (let zx = 0; zx < zRes; zx++) {
+      const u = ((zx + 0.5) / zRes - 0.5) * span;
+      const cell = nearestPatchCell(patch, localPointToDirection(patch, u, v));
+      if (!isWaterCell(cell, patch.seaLevel) && cell.streamWeight <= 0) continue;
+      const idx = (zy * zRes + zx) * 2;
+      zoneMap[idx] = 0;
+      zoneMap[idx + 1] = 0;
+    }
+  }
+  return zoneMap;
 }
 
 // ---- ZONE_MODULES (зеркало контракта) ----
@@ -758,8 +783,8 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
     heightfield[i] = (heightfield[i] as number) * (1 - alpha) + (smoothed[i] as number) * alpha;
   }
 
-  // 5. Zone map
-  const zoneMap = generateZoneMap(seed, placeId);
+  // 5. Zone map: вода/озёра/русла остаются без зонирования (И-3.2/И-3.4).
+  const zoneMap = applyWaterZoning(generateZoneMap(seed, placeId), patch);
 
   // 6. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
   const instances = scatterInstances(zoneMap, heightfield, radiusM, seed, placeId, spawnMask);
