@@ -442,11 +442,28 @@ function createMockGl() {
     texParameteri() {},
     activeTexture() {},
     deleteTexture() { calls.deleteTexture++; },
-    createShader(type) { return { kind: 'shader', type, id: ++nextId }; },
-    shaderSource() {},
-    compileShader() {},
-    getShaderParameter() { return true; },
-    getShaderInfoLog() { return ''; },
+    createShader(type) { return { kind: 'shader', type, id: ++nextId, source: '', compiled: true, log: '' }; },
+    shaderSource(shader, source) { shader.source = String(source); },
+    compileShader(shader) {
+      const src = shader.source;
+      if (!src.startsWith('#version 300 es\n')) {
+        shader.compiled = false;
+        shader.log = 'WebGL2 §4.3: #version 300 es обязан быть в самом начале шейдера без ведущих пробелов/переводов строк';
+        return;
+      }
+      if (/\busampler2D\b/.test(src) && !/precision\s+(highp|mediump|lowp)\s+usampler2D\s*;/.test(src) && !/uniform\s+(highp|mediump|lowp)\s+usampler2D\b/.test(src)) {
+        shader.compiled = false;
+        shader.log = "GLSL ES 3.00 §4.5.4: 'usampler2D' : No precision specified";
+        return;
+      }
+      shader.compiled = true;
+      shader.log = '';
+    },
+    getShaderParameter(shader, pname) {
+      if (pname === 0x8B81) return Boolean(shader && shader.compiled);
+      return true;
+    },
+    getShaderInfoLog(shader) { return shader && shader.log ? shader.log : ''; },
     deleteShader() {},
     createProgram() { calls.createProgram++; return { kind: 'program', id: ++nextId }; },
     attachShader() {},
@@ -609,8 +626,19 @@ test('StructureRenderer: compilePrograms, renderFrame и dispose работаю�
   assert.equal(calls.draws.length, drawsBefore, 'после dispose ничего не рисуется');
 });
 
-test('шейдеры Этапа 8: тонирование водных низин и неизменные имена юниформов', () => {
+test('шейдеры Этапа 8: тонирование водных низин, строгое начало #version 300 es и точность usampler2D', () => {
   const terrain = Shaders.TERRAIN_FRAGMENT_SHADER;
+  for (const [label, shader] of [
+    ['STRUCTURE_VERTEX_SHADER', Shaders.STRUCTURE_VERTEX_SHADER],
+    ['STRUCTURE_FRAGMENT_SHADER', Shaders.STRUCTURE_FRAGMENT_SHADER],
+    ['TERRAIN_VERTEX_SHADER', Shaders.TERRAIN_VERTEX_SHADER],
+    ['TERRAIN_FRAGMENT_SHADER', Shaders.TERRAIN_FRAGMENT_SHADER],
+  ]) {
+    assert.ok(shader.startsWith('#version 300 es\n'), `${label}: #version 300 es обязан быть в первой строке без ведущих переводов строк (WebGL 2.0 §4.3)`);
+    assert.ok(shader.includes('precision highp float;'), `${label}: precision highp float объявлена`);
+    assert.ok(shader.includes('precision highp int;'), `${label}: precision highp int объявлена`);
+  }
+  assert.ok(/precision\s+highp\s+usampler2D\s*;/.test(terrain), 'TERRAIN_FRAGMENT_SHADER: явная точность precision highp usampler2D (GLSL ES 3.00 §4.5.4)');
   assert.ok(terrain.includes('SHALLOW_WATER_COLOR'), 'мелководный оттенок объявлен');
   assert.ok(terrain.includes('DEEP_WATER_COLOR'), 'глубоководный оттенок объявлен');
   assert.ok(terrain.includes('zone == 0u'), 'тонирование только вне зон застройки');
