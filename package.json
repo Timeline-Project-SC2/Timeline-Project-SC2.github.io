@@ -19,8 +19,17 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@typescript-eslint/parser": "^8.0.0",
+    "assemblyscript": "0.28.20",
     "esbuild": "^0.28.2",
+    "eslint": "^10.0.0",
+    "globals": "^17.0.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
+  },
+  "overrides": {
+    "@typescript-eslint/parser": {
+      "typescript": "$typescript"
+    }
   }
 }
