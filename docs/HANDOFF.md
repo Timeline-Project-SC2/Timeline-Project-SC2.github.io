@@ -1,7 +1,7 @@
 # Конспект для следующего агента
 
 Дата: 22 октября 2026. Обновлено в ветке `arena/4e8296a0-timeline-project-sc2-github-io`
-(CR-01 PR 6: целевая оптимизация скорости генерации планеты v=128 до гейта ≥3× / ≤855 мс от baseline 2 564,7 мс при 100 % побитовой эквивалентности; в работе, **стоп перед merge — сливать только по отдельной команде владельца**).
+([PR #139](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/139), CR-01 PR 6: целевая оптимизация скорости генерации планеты v=128 до гейта ≥3× / ≤855 мс от baseline 2 564,7 мс при 100 % побитовой эквивалентности; **готово к merge, стоп перед merge — сливать только по отдельной команде владельца**).
 До этого — PR #138 (CR-01 PR 5 — консолидация глобусов и модули локальной карты И-3, И-5, И-6; **слит в `main` 22.10**).
 До этого — PR #137 (CR-01 PR 4 — Wasm-ядро planet-core, строгие TS-порты планетных модулей
 и И-1; **слит в `main` 21.10**; работа восстановлена после утраты незакоммиченной сессии,
@@ -20,7 +20,7 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 
 | | |
 |---|---|
-| Последняя работа | CR-01 PR 6 (ветка `arena/4e8296a0-…`, **в работе, WIP-PR; merge только по отдельной команде владельца**): добивка скорости генерации планеты v=128 до гейта ≥3× / ≤855 мс от baseline 2 564,7 мс при 100 % побитовой эквивалентности (FULL EQ). Шаги: (1) подключение Wasm `getCore().radixOrderF32` в `makeWeightedQuantiles` / `chooseSeeds` (`planet-geography.ts`) и `makeWeightedQuantiles` / `orderAsc` (`planet-surface.ts`) с проверкой FULL EQ на v=16/24/32/128; (2) ускорение `GeodesicGrid.build(v)` в 3–4× (плоский `Int32Array` вместо `local Map`, пропуск `.toFixed(9)`/`byKey` на внутренних вершинах грани `i>0 && j>0 && i+j<v`, преаллоцированные буферы в цикле углов/площадей, counting bucket sort в `reorderCells`) с побитовым совпадением всех массивов и CRC32C на v=16/32/64/128; (3) пакетный/удерживающий путь в `assignRegions` / `planet-core-host.ts` без повторного копирования `neighbors + edgeCosts` и типизированный `Int32Array`-стек в `componentSizes` / `connectedComponents`; (4) полный прогон тестов и бенчмарков Stage 3–6; (5) фиксация таблицы замеров в `CHANGELOG.md` и `docs/HANDOFF.md`, зелёный `check.yml` 4/4, стоп перед merge |
+| Последняя работа | CR-01 PR 6 ([PR #139](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/139), ветка `arena/4e8296a0-…`, **готово к merge, стоп перед merge — сливать только по отдельной команде владельца**): добивка скорости генерации планеты v=128 до гейта ≥3× / ≤855 мс от baseline 2 564,7 мс при 100 % побитовой эквивалентности (FULL EQ `185/185`). Итог `bench_planet_stage5.mjs --seeds=5`: `meshMedian = 125,8–139,1 мс`, `surfaceMedian = 691,3–724,5 мс` (`min = 601,0–617,3 мс`), `totalMedian = 812,1–852,7 мс <= 855,0 мс` (**ускорение `3,01×–3,16×` от baseline `2 564,7 мс`**); `bench_planet_ci.mjs`: `v=128 build 922,7 → 100,1 мс (−89,2 %)`; `bench_planet_stage6.mjs`: `geometry median = 123,2 мс`, `surfacePlusGeometry median = 964,6 мс`. Все 6 PR плана **CR-01** (`docs/CHANGE_REQUEST_PLAN.md`) полностью закрыты |
 | Предыдущая работа | CR-01 PR 5 ([PR #138](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/138), ветка `arena/37e6e1a9-…`, **слит в `main` 22.10**): финальный PR миграции по `docs/CHANGE_REQUEST_PLAN.md` (И-3, И-5, И-6 и раздел 6.2). Распил `temp_code_structures.js` на 4 модуля `src/local-map/*`, контракт сшивки патча 7 ячеек + `tests/local-map.test.mjs`, строгий `planet-globe.ts` + опциональный `src/planet/planet-globe-fx.ts`, перевод `/planet-test/` на боевое ядро с удалением `planet-test.js` и `planet-worker.js` |
 | До этого | CR-01 PR 4 ([PR #137](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/137), ветка `arena/07852140-…`, **слит в `main` 21.10**): Wasm-ядро planet-core (AssemblyScript, 24 613/2 690 Б), строгие TS-порты `geodesic-grid`/`planet-noise`/`planet-geography`/`planet-surface`/`planet-globe` и воркера глобуса с побитовой эквивалентностью JS (FULL EQ), закрыта И-1, честные нормали рельефа (вершина 24 Б), старые `.js` удалены. Генерация v=128: 2 564,7 → 1 630,8 мс (1,57×); гейт плана 3–4× добивается в PR 6. Восстановлено после утраты незакоммиченной сессии (§7). После merge — телефонная проверка глобуса владельцем (скрины Redmi Note 10 от 21.10: генерация и финал v=64 проходят) |
 | До этого | Этап 2 планет (PR #115): контракт `planet_generation` из 37 колонок, пресеты/валидатор/ключ `PG1` в `tools/planet_generation.py`, начальный снимок и шаблон CSV, источник в `data/sources.json` включён для вкладки `planet_generation` (`gid=1183479406`; живой Sync применит его после merge PR), двухфазный атомарный синк и 26 Python-тестов. Отчёт — `docs/stages/stage-2-data-and-sync.md`; сайт новый CSV пока не читает |
@@ -36,8 +36,41 @@ PR #110 (каталог и поиск атласа), #109 (тайминг пер
 
 Что изменено (подробно — в `CHANGELOG.md`, правила — в `AGENTS.md`, разделы «Прицел» и «Курсор»):
 
-- CR-01 PR 5 (21.10, ветка `arena/37e6e1a9-…`, PR #138; стоп перед merge —
-  сливать только по отдельной команде владельца). Финальный PR миграции по
+- CR-01 PR 6 (22.10, ветка `arena/4e8296a0-…`, [PR #139](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/139);
+  **готово к merge, стоп перед merge — сливать только по отдельной команде владельца**).
+  Финальный оптимизационный PR плана `docs/CHANGE_REQUEST_PLAN.md` (добивка скорости
+  генерации планеты v=128 до гейта ≥3× / ≤855 мс от baseline 2 564,7 мс при 100 %
+  побитовой эквивалентности FULL EQ), 5 шагов с коммитом и пушем после каждого
+  (`1fbaeaf`, `384eef2`, `9b86b35`, `d7dc179`, `c4ab968`):
+  1. Подключены Wasm `getCore().radixOrderF32` / `radixOrderF64` в `makeWeightedQuantiles`
+     и `chooseSeeds` (`site/shared/planet-geography.ts`), а также в `makeWeightedQuantiles`
+     и `orderAsc` (`site/shared/planet-surface.ts`) с сохранением строгого tie-break
+     `(a - b)` (И-2).
+  2. Ускорено построение геодезической сетки `GeodesicGrid.build(v)` в ~3,7–4,1×
+     (`442,9 мс → 100,1–125,8 мс` на `v=128`): модульный пул буферов `ensureRawScratch(163842)`,
+     плоский `Int32Array` вместо `Map` на грань, пропуск `.toFixed(9)`/`byKey` на внутренних
+     вершинах грани (`i > 0 && j > 0 && i + j < v`), монотонный Diamond Angle вместо `Math.atan2`,
+     counting bucket sort с `sortKeys` в `reorderCells` и однопроходный `attachChunks`.
+  3. Расширены и ускорены ядра `src/planet/assembly/kernels.ts` и хост
+     `src/planet/planet-core-host.ts` (полное ядро 42 039 Б, noise 3 703 Б): 2-канальный
+     `f64x2` SIMD (`simplex3x2`, `sampleCellPair`) в `sampleFieldsBatch`, ленивые JS-шумы
+     в `createFieldSampler`, синглтон `getSharedPlanetCore()` с ареной 24 МиБ, удержание
+     `putGrid` и `balArenaEnd` между `buildContinents` и `buildOceanBasins`, пакетные
+     `balanceRegionsTopTwo` и `biomeWeightsAndSmooth`, сквозная арена гидрологии,
+     непрерывные `candX/candY/candZ/candScoreNorm` в `chooseSeedsKernel`, гибрид кучи + FIFO
+     в `coastDistance`, insertion+merge sort упакованных `u64(cell, label)` в `dialGatherSort`,
+     интрузивный список `Int32Array(n)` в `buildDrainageRegions`, обход только `landCells`
+     в `computeSurface`/`connectedComponents`/`computeMountains` и фиксированные V8 Map
+     у `GeographyResult` и `SurfaceResult`.
+  4. Пройдены все проверки: `185/185` побитовых хэшей FULL EQ (SHA-256 всех 45 массивов
+     географии и поверхности + CRC32C сетки на `v=16, 24, 32, 64, 128`), `tsc --noEmit`,
+     `npx eslint site src`, `npm run build`, `verify:publish`, `verify:contract`,
+     `node --test` (44/44), `python3 -m unittest` (28/28).
+  5. Итоговые метрики `bench_planet_stage5.mjs --seeds=5` (v=128):
+     `meshMedian = 125,8–139,1 мс`, `surfaceMedian = 691,3–724,5 мс` (`min = 601,0–617,3 мс`),
+     **`totalMedian = 812,1–852,7 мс <= 855,0 мс` (`3,01×–3,16×` к baseline `2 564,7 мс`)**.
+     Все 6 PR плана **CR-01** завершены.
+- CR-01 PR 5 (21.10, ветка `arena/37e6e1a9-…`, PR #138; **слит в `main` 22.10**). Финальный PR миграции по
   `docs/CHANGE_REQUEST_PLAN.md` (И-3, И-5, И-6, раздел 6.2), 5 шагов, коммит
   после каждого (`a9dc170`, `cf20f9c`, `c1cd5dc`, `63c9990` + документация):
   1. `site/shared/temp_code_structures.js` (1 176 строк) распилен на 4 строго
