@@ -24,10 +24,18 @@
    необязательного поля `fx` в PlanetGlobeOptions. Без hooks глобус
    рисуется ровно как раньше (побочных эффектов нет).
 
-   Канонический CPU-путь осколков (computeShardLayout + buildShardTextureData
-   из planet-geometry.js спайка) сохранён для геометрий с атрибутом aShard
-   (Этапы 8/9); на вершинном формате planet-globe-v1 без aShard осколок
-   назначается квантованием направления прямо в GLSL (fxShardIndex). */
+   Канонический CPU-путь осколков (computeShardLayout + buildShardTextureData)
+   перенесён сюда из легаси-модуля site/shared/planet-geometry.js (И-5) и
+   работает одинаково для стенда /planet-test/ и объёма разломов.
+
+   Индекс осколка на вершинном формате planet-globe-v1 (Волна PR 6.1):
+   вершина не несёт `aShard`, поэтому принадлежность ячейки осколку
+   разворачивается на вершины через `geometry.vertexCellId` и уходит в
+   целочисленную текстуру `uShardIdTex`, которую вершинный шейдер читает по
+   `gl_VertexID`. Все вершины одной ячейки получают ОДИН индекс, и веер
+   ячейки не растягивается через всю планету (старый `fxShardIndex(aPos)`
+   квантовал направление каждой вершины отдельно). Резерв без grid/geometry —
+   квантование направления нормали ячейки (uShardIdReady = 0). */
 
 import PlanetNoise from '../../site/shared/planet-noise.ts';
 import type { PlanetGrid } from '../../site/shared/geodesic-grid.ts';
@@ -63,6 +71,33 @@ vec3 shardTransform(vec3 p, float sf) {
   vec3 v = p - pivot;
   vec3 r = v * ca + cross(axis, v) * sa + axis * dot(axis, v) * (1.0 - ca);
   return pivot + r + drift * sepEff;
+}
+`;
+
+/** Клеточный индекс осколка: целочисленная текстура по gl_VertexID.
+ *  Все вершины одной ячейки читают один и тот же texel (vertexCellId →
+ *  layout.shardOf), поэтому веер ячейки не расходится между осколками. */
+export const SHARD_CELL_INDEX_GLSL = `
+uniform float uShardCount;
+uniform float uShardIdReady;
+uniform highp usampler2D uShardIdTex;
+uniform int uShardIdW;
+// Канонический путь: индекс осколка ячейки из текстуры (КЛЕТОЧНЫЙ индекс,
+// одинаковый для центра веера и всех его углов).
+float fxShardIndexCell() {
+  int w = max(uShardIdW, 1);
+  int vid = gl_VertexID;
+  return float(texelFetch(uShardIdTex, ivec2(vid % w, vid / w), 0).r);
+}
+// Резерв без сетки/геометрии: квантование направления нормали ячейки.
+float fxShardIndexFallback(vec3 cellNormal) {
+  vec3 q = floor(normalize(cellNormal) * max(uShardCount, 1.0) * 0.5) + 0.5;
+  return floor(fract(sin(dot(q, vec3(12.9898, 78.233, 37.719))) * 43758.5453) * uShardCount);
+}
+vec3 fxShardPosition(vec3 p, vec3 cellNormal) {
+  if (uShardMode < 0.5) return p;
+  float si = uShardIdReady > 0.5 ? fxShardIndexCell() : fxShardIndexFallback(cellNormal);
+  return shardTransform(p, si);
 }
 `;
 
@@ -484,6 +519,529 @@ export function buildProceduralShardLayout(sp: ShardParams): ShardLayout | null 
 }
 
 // ===========================================================================
+// 2.1 Перенос site/shared/planet-geometry.js в строгий TS (Инвариант И-5)
+// ===========================================================================
+//
+// Модуль не знает про DOM и WebGL: он превращает сетку Голдберга, поля
+// планеты и параметры осколков в типизированные массивы поверхности и
+// объёма. Численные выражения перенесены из легаси-файла дословно, поэтому
+// канонические адреса ячеек и форма разломов не меняются. Легаси-файл
+// site/shared/planet-geometry.js удалён: единственный владелец логики —
+// этот модуль.
+
+/** Поля ячейки, из которых строятся цвета и квантованные атрибуты. */
+export interface PlanetFields {
+  elev: Float32Array;
+  moist: Float32Array;
+  temp: Float32Array;
+  sea: number;
+  minE: number;
+  maxE: number;
+  masterSeed: number;
+}
+
+/** Результат buildCellData: цвета ячеек, упакованные поля и seed фактур. */
+export interface CellData {
+  colors: Float32Array;
+  fieldCells: Uint8Array;
+  texSeed: number[];
+}
+
+/** Массивы поверхности спайка (вершины ячеек + углы, индексы-веера). */
+export interface SurfaceArrays {
+  positions: Float32Array;
+  colors: Float32Array;
+  centerW: Float32Array;
+  centers: Float32Array;
+  birth: Float32Array;
+  shard: Float32Array;
+  field: Uint8Array;
+  indices: Uint32Array;
+  cellIndexStart: Uint32Array;
+  vertexCount: number;
+  indexCount: number;
+}
+
+/** Массивы объёма осколков: нижняя оболочка + боковые стенки разломов. */
+export interface VolumeArrays {
+  positions: Float32Array;
+  colors: Float32Array;
+  emissive: Float32Array;
+  centers: Float32Array;
+  birth: Float32Array;
+  shard: Float32Array;
+  /** 0 — стенка разлома, 1 — нижняя оболочка осколка. */
+  kind: Float32Array;
+  indices: Uint32Array;
+  indexCount: number;
+}
+
+export interface SpikeGeometry {
+  cellData: CellData;
+  surface: SurfaceArrays;
+  volume: VolumeArrays | null;
+  layout: ShardLayout | null;
+  shardTexData: Float32Array | null;
+  shardInfo: ShardTextureInfo | null;
+  shardMaxB: number;
+  shardMode: number;
+}
+
+export interface SpikeGeometryOptions {
+  /** Строить массивы объёма (нижняя оболочка + стенки разломов). */
+  includeVolume?: boolean;
+  /** Готовая палитра ячеек (иначе считается из полей). */
+  cellData?: CellData;
+  /** Отчёт о фазах сборки (cells → surface → volume). */
+  onPhase?: (phase: string) => void;
+}
+
+type NoiseApi = typeof PlanetNoise;
+
+const BIOME_COLORS = {
+  deepOcean: [0.008, 0.05, 0.16],
+  shelf: [0.06, 0.42, 0.52],
+  coast: [0.12, 0.58, 0.62],
+  ice: [0.84, 0.91, 0.96],
+  tundra: [0.52, 0.58, 0.52],
+  desert: [0.74, 0.59, 0.30],
+  plains: [0.44, 0.56, 0.24],
+  forest: [0.10, 0.42, 0.20],
+  rock: [0.43, 0.41, 0.39],
+  snow: [0.95, 0.97, 1.0],
+};
+
+function mix3(a: readonly number[], b: readonly number[], t: number, out: number[]): number[] {
+  out[0] = (a[0] as number) + ((b[0] as number) - (a[0] as number)) * t;
+  out[1] = (a[1] as number) + ((b[1] as number) - (a[1] as number)) * t;
+  out[2] = (a[2] as number) + ((b[2] as number) - (a[2] as number)) * t;
+  return out;
+}
+
+function clamp01(x: number): number { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+function smooth01(a: number, b: number, x: number): number {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+}
+
+function biomeColor(e: number, sea: number, minE: number, maxE: number,
+  moist: number, temp: number, out: number[]): number[] {
+  if (e <= sea) {
+    const depth = clamp01((sea - e) / Math.max(1e-6, sea - minE));
+    mix3(BIOME_COLORS.coast, BIOME_COLORS.shelf, smooth01(0, 0.15, depth), out);
+    mix3(out, BIOME_COLORS.deepOcean, smooth01(0.12, 0.75, depth), out);
+    if (temp < 0.14) mix3(out, BIOME_COLORS.ice, (0.14 - temp) / 0.14 * 0.85, out);
+    return out;
+  }
+  const landH = clamp01((e - sea) / Math.max(1e-6, maxE - sea));
+  // База: пустыня → равнина → лес по влажности.
+  mix3(BIOME_COLORS.desert, BIOME_COLORS.plains, smooth01(0.28, 0.48, moist), out);
+  mix3(out, BIOME_COLORS.forest, smooth01(0.55, 0.78, moist), out);
+  // Холод: тундра и лёд.
+  mix3(out, BIOME_COLORS.tundra, smooth01(0.38, 0.22, temp), out);
+  mix3(out, BIOME_COLORS.ice, smooth01(0.20, 0.08, temp), out);
+  // Высота: скалы и снег.
+  mix3(out, BIOME_COLORS.rock, smooth01(0.68, 0.9, landH) * 0.85, out);
+  mix3(out, BIOME_COLORS.snow, smooth01(0.9, 1.0, landH), out);
+  return out;
+}
+
+/** Цвета ячеек, упакованные поля (relief/moist/temp/hash) и seed фактур. */
+export function buildCellData(fields: PlanetFields, noise: NoiseApi = PlanetNoise): CellData {
+  const F = fields.elev.length;
+  const colors = new Float32Array(F * 3);
+  const rgb = [0, 0, 0];
+  for (let c = 0; c < F; c++) {
+    biomeColor(fields.elev[c] as number, fields.sea, fields.minE, fields.maxE,
+      fields.moist[c] as number, fields.temp[c] as number, rgb);
+    colors[c * 3] = rgb[0] as number;
+    colors[c * 3 + 1] = rgb[1] as number;
+    colors[c * 3 + 2] = rgb[2] as number;
+  }
+
+  const fieldCells = new Uint8Array(F * 4);
+  for (let c = 0; c < F; c++) {
+    let relief: number;
+    const elev = fields.elev[c] as number;
+    if (elev <= fields.sea) {
+      relief = -clamp01((fields.sea - elev) / Math.max(1e-6, fields.sea - fields.minE));
+    } else {
+      relief = clamp01((elev - fields.sea) / Math.max(1e-6, fields.maxE - fields.sea));
+    }
+    fieldCells[c * 4] = Math.round((relief * 0.5 + 0.5) * 255);
+    fieldCells[c * 4 + 1] = Math.round(clamp01(fields.moist[c] as number) * 255);
+    fieldCells[c * 4 + 2] = Math.round(clamp01(fields.temp[c] as number) * 255);
+    fieldCells[c * 4 + 3] =
+      noise.hash32(((fields.masterSeed >>> 0) ^ Math.imul(c + 1, 0x9E3779B1)) >>> 0) >>> 24;
+  }
+
+  return {
+    colors,
+    fieldCells,
+    texSeed: [
+      noise.hash32(((fields.masterSeed >>> 0) ^ 0xA53A9DBD) >>> 0) / 4294967296 * 64,
+      noise.hash32(((fields.masterSeed >>> 0) ^ 0x5F356495) >>> 0) / 4294967296 * 64,
+      noise.hash32(((fields.masterSeed >>> 0) ^ 0x1B873593) >>> 0) / 4294967296 * 64,
+    ],
+  };
+}
+
+function cellBirth(centerY: number, cellIndex: number): number {
+  const lat01 = (1 - centerY) / 2;
+  const h = Math.sin(cellIndex * 127.1) * 43758.5453;
+  const jitter = (h - Math.floor(h) - 0.5) * 0.07;
+  const b = lat01 * 0.74 + jitter;
+  return b < 0 ? 0 : b > 0.78 ? 0.78 : b;
+}
+
+/** Соседняя через ребро (t1,t2) ячейка, отличная от c (или -1). */
+function sideNeighbor(grid: PlanetGrid, c: number, t1: number, t2: number): number {
+  let other = -1;
+  for (let i = 0; i < 3; i++) {
+    const a = grid.triangles[t1 * 3 + i] as number;
+    for (let j = 0; j < 3; j++) {
+      if (a === (grid.triangles[t2 * 3 + j] as number) && a !== c) other = a;
+    }
+  }
+  return other;
+}
+
+/** Массивы поверхности: центр ячейки + её углы (веера, индексы по ячейкам). */
+export function buildSurfaceArrays(grid: PlanetGrid, cellData: CellData,
+  layout: ShardLayout | null): SurfaceArrays {
+  const F = grid.cellCount;
+  const totalSides = grid.cellCorners.length;
+  const vertexCount = F + totalSides;
+  const colors = cellData.colors;
+  const fieldCells = cellData.fieldCells;
+  const positions = new Float32Array(vertexCount * 3);
+  const colorArr = new Float32Array(vertexCount * 3);
+  const centerW = new Float32Array(vertexCount);
+  const centersAttr = new Float32Array(vertexCount * 3);
+  const birthArr = new Float32Array(vertexCount);
+  const shardAttr = new Float32Array(vertexCount);
+  const fieldVert = new Uint8Array(vertexCount * 4);
+  if (fieldCells && fieldCells.length === F * 4) fieldVert.set(fieldCells, 0);
+  colorArr.set(colors, 0);
+
+  for (let c = 0; c < F; c++) {
+    centerW[c] = 1;
+    birthArr[c] = cellBirth(grid.centers[c * 3 + 1] as number, c);
+    positions[c * 3] = grid.centers[c * 3] as number;
+    positions[c * 3 + 1] = grid.centers[c * 3 + 1] as number;
+    positions[c * 3 + 2] = grid.centers[c * 3 + 2] as number;
+    shardAttr[c] = layout ? (layout.shardOf[c] as number) : 0;
+    centersAttr[c * 3] = positions[c * 3] as number;
+    centersAttr[c * 3 + 1] = positions[c * 3 + 1] as number;
+    centersAttr[c * 3 + 2] = positions[c * 3 + 2] as number;
+  }
+  let slot = F;
+  for (let c = 0; c < F; c++) {
+    const start = grid.cellCornerStart[c] as number;
+    const count = (grid.cellCornerStart[c + 1] as number) - start;
+    for (let k = 0; k < count; k++) {
+      const corner = grid.cellCorners[start + k] as number;
+      positions[slot * 3] = grid.corners[corner * 3] as number;
+      positions[slot * 3 + 1] = grid.corners[corner * 3 + 1] as number;
+      positions[slot * 3 + 2] = grid.corners[corner * 3 + 2] as number;
+      shardAttr[slot] = layout ? (layout.shardOf[c] as number) : 0;
+      colorArr[slot * 3] = colors[c * 3] as number;
+      colorArr[slot * 3 + 1] = colors[c * 3 + 1] as number;
+      colorArr[slot * 3 + 2] = colors[c * 3 + 2] as number;
+      centersAttr[slot * 3] = positions[c * 3] as number;
+      centersAttr[slot * 3 + 1] = positions[c * 3 + 1] as number;
+      centersAttr[slot * 3 + 2] = positions[c * 3 + 2] as number;
+      birthArr[slot] = birthArr[c] as number;
+      if (fieldCells && fieldCells.length === F * 4) {
+        fieldVert[slot * 4] = fieldCells[c * 4] as number;
+        fieldVert[slot * 4 + 1] = fieldCells[c * 4 + 1] as number;
+        fieldVert[slot * 4 + 2] = fieldCells[c * 4 + 2] as number;
+        fieldVert[slot * 4 + 3] = fieldCells[c * 4 + 3] as number;
+      }
+      slot++;
+    }
+  }
+
+  const indices = new Uint32Array(totalSides * 3);
+  const cellIndexStart = new Uint32Array(F + 1);
+  let w = 0;
+  slot = F;
+  for (let c = 0; c < F; c++) {
+    cellIndexStart[c] = w;
+    const sides = (grid.cellCornerStart[c + 1] as number) - (grid.cellCornerStart[c] as number);
+    for (let k = 0; k < sides; k++) {
+      indices[w++] = c;
+      indices[w++] = slot + k;
+      indices[w++] = slot + ((k + 1) % sides);
+    }
+    slot += sides;
+  }
+  cellIndexStart[F] = w;
+
+  return {
+    positions,
+    colors: colorArr,
+    centerW,
+    centers: centersAttr,
+    birth: birthArr,
+    shard: shardAttr,
+    field: fieldVert,
+    indices,
+    cellIndexStart,
+    vertexCount,
+    indexCount: indices.length,
+  };
+}
+
+/**
+ * Массивы объёма: закрытая нижняя оболочка осколка (1 − thick) и боковые
+ * стенки разломов между ячейками разных осколков.
+ *
+ * Кромка стенки берётся из `surfPos` (позиции вершин поверхности): стенка
+ * садится ровно на свою ячейку даже с рельефом. Низ считается от единичной
+ * сферы по направлению — как в легаси-спайке, поэтому у соседних ячеек
+ * одного осколка общая нижняя кромка не расходится.
+ */
+export function buildVolumeArrays(grid: PlanetGrid, layout: ShardLayout,
+  sp: ShardParams, surfPos: Float32Array, birthArr: Float32Array,
+  noise: NoiseApi = PlanetNoise): VolumeArrays | null {
+  const F = grid.cellCount;
+  const thickEff = sp.thick * (1 - 0.45 * sp.loss);
+  const fracNoise = noise.makeNoise('simplex',
+    noise.hash32(noise.stringSeed(sp.seedText + ':fracture')));
+  const pos: number[] = [];
+  const col: number[] = [];
+  const emi: number[] = [];
+  const cen: number[] = [];
+  const bir: number[] = [];
+  const shr: number[] = [];
+  const kind: number[] = [];
+  const idx: number[] = [];
+
+  const isBoundary = new Uint8Array(F);
+  for (let c = 0; c < F; c++) {
+    for (let n = 0; n < (grid.neighborCount[c] as number); n++) {
+      if ((layout.shardOf[grid.neighbors[c * 6 + n] as number] as number) !== (layout.shardOf[c] as number)) {
+        isBoundary[c] = 1;
+        break;
+      }
+    }
+  }
+
+  const shadeAt = (x: number, y: number, z: number): number =>
+    0.85 + 0.3 * (0.5 + 0.5 * fracNoise(x * 21 - 3.7, y * 21 + 8.9, z * 21 + 1.3));
+
+  // Единая глубина нижней поверхности для стены, центров и углов: одинаковая
+  // функция исходного направления не даёт щелей между кусками оболочки.
+  let bottomNoise01 = 0.5;
+  const bottomRadius = (x: number, y: number, z: number): number => {
+    bottomNoise01 = 0.5 + 0.5 * fracNoise(x * 9 + 1.9, y * 9 + 5.5, z * 9 - 6.2);
+    return 1 - thickEff * (0.65 + 0.55 * bottomNoise01);
+  };
+
+  const pushVert = (ox: number, oy: number, oz: number, s: number, cell: number,
+    r: number, g: number, b: number, e: number, kindFlag: number): number => {
+    const o = pos.length;
+    pos.push(ox, oy, oz);
+    col.push(r, g, b);
+    emi.push(e);
+    shr.push(s);
+    kind.push(kindFlag || 0);
+    cen.push(surfPos[cell * 3] as number, surfPos[cell * 3 + 1] as number, surfPos[cell * 3 + 2] as number);
+    bir.push(birthArr[cell] as number);
+    return o / 3;
+  };
+
+  const pushBottomVert = (x: number, y: number, z: number, s: number, cell: number,
+    knownRadius?: number): number => {
+    const rr = knownRadius === undefined ? bottomRadius(x, y, z) : knownRadius;
+    const shade = 0.80 + 0.38 * bottomNoise01;
+    // Низ — преимущественно тёмная порода с горячими пятнами, а не сплошная
+    // лавовая плёнка: иначе эмиссия забивает гранёную геометрию. Глубже
+    // участок оболочки — в среднем горячее.
+    const heat = 0.08 + 0.30 * bottomNoise01 * bottomNoise01;
+    return pushVert(x * rr, y * rr, z * rr, s, cell,
+      0.105 * shade, 0.064 * shade, 0.048 * shade, heat, 1);
+  };
+
+  const bottomCenterIndex = new Int32Array(F).fill(-1);
+  const bottomCenterOf = (cell: number): number => {
+    const cached = bottomCenterIndex[cell] as number;
+    if (cached >= 0) return cached;
+    const vi = pushBottomVert(
+      grid.centers[cell * 3] as number, grid.centers[cell * 3 + 1] as number,
+      grid.centers[cell * 3 + 2] as number,
+      layout.shardOf[cell] as number, cell);
+    bottomCenterIndex[cell] = vi;
+    return vi;
+  };
+
+  const bottomCornerOf = (t: number, s: number, anchorCell: number): number =>
+    pushBottomVert(
+      grid.corners[t * 3] as number, grid.corners[t * 3 + 1] as number,
+      grid.corners[t * 3 + 2] as number, s, anchorCell);
+
+  // Внутренняя часть низа: один треугольник центров на первичную ячейку
+  // триангуляции. В смешанном треугольнике пара ячеек одного шарда
+  // доводится до общего угла; оставшуюся приграничную часть закроют веера
+  // граничных сторон ниже. Ориентация обратная верхней поверхности.
+  for (let t = 0; t < grid.triangleCount; t++) {
+    const ta = grid.triangles[t * 3] as number;
+    const tb = grid.triangles[t * 3 + 1] as number;
+    const tc = grid.triangles[t * 3 + 2] as number;
+    const sa = layout.shardOf[ta] as number;
+    const sb = layout.shardOf[tb] as number;
+    const sc = layout.shardOf[tc] as number;
+    if (sa === sb && sb === sc) {
+      idx.push(bottomCenterOf(ta), bottomCenterOf(tc), bottomCenterOf(tb));
+    } else {
+      if (sa === sb) idx.push(bottomCenterOf(ta), bottomCornerOf(t, sa, ta), bottomCenterOf(tb));
+      if (sb === sc) idx.push(bottomCenterOf(tb), bottomCornerOf(t, sb, tb), bottomCenterOf(tc));
+      if (sc === sa) idx.push(bottomCenterOf(tc), bottomCornerOf(t, sc, tc), bottomCenterOf(ta));
+    }
+  }
+
+  const SEG = 3;
+  for (let c = 0; c < F; c++) {
+    if (!isBoundary[c]) continue;
+    const s = layout.shardOf[c] as number;
+    const start = grid.cellCornerStart[c] as number;
+    const sides = (grid.cellCornerStart[c + 1] as number) - start;
+    for (let k = 0; k < sides; k++) {
+      const k2 = (k + 1) % sides;
+      const t1 = grid.cellCorners[start + k] as number;
+      const t2 = grid.cellCorners[start + k2] as number;
+      const nb = sideNeighbor(grid, c, t1, t2);
+      if (nb < 0 || (layout.shardOf[nb] as number) === s) continue;
+      const ax = grid.corners[t1 * 3] as number;
+      const ay = grid.corners[t1 * 3 + 1] as number;
+      const az = grid.corners[t1 * 3 + 2] as number;
+      const bx = grid.corners[t2 * 3] as number;
+      const by = grid.corners[t2 * 3 + 1] as number;
+      const bz = grid.corners[t2 * 3 + 2] as number;
+      const ex = bx - ax, ey = by - ay, ez = bz - az;
+      const edgeLen = Math.sqrt(ex * ex + ey * ey + ez * ez);
+      // Радиус кромки — ровно из вершин поверхности этой ячейки (с рельефом).
+      const ra = Math.hypot(surfPos[(F + start + k) * 3] as number,
+        surfPos[(F + start + k) * 3 + 1] as number, surfPos[(F + start + k) * 3 + 2] as number);
+      const rb = Math.hypot(surfPos[(F + start + k2) * 3] as number,
+        surfPos[(F + start + k2) * 3 + 1] as number, surfPos[(F + start + k2) * 3 + 2] as number);
+      let prevTop = -1;
+      let prevBot = -1;
+      const sideBottom: number[] = [];
+      for (let j = 0; j <= SEG; j++) {
+        const tt = j / SEG;
+        let px = ax + ex * tt, py = ay + ey * tt, pz = az + ez * tt;
+        let pl = Math.sqrt(px * px + py * py + pz * pz) || 1;
+        px /= pl; py /= pl; pz /= pl;
+        if (j > 0 && j < SEG && sp.jag > 0) {
+          const tx = py * ez - pz * ey, ty = pz * ex - px * ez, tz = px * ey - py * ex;
+          const tl = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+          const off = fracNoise(px * 13 + 7.3, py * 13 - 2.1, pz * 13 + 4.7) *
+            sp.jag * Math.sin(Math.PI * tt) * edgeLen * 0.45;
+          px += (tx / tl) * off; py += (ty / tl) * off; pz += (tz / tl) * off;
+          pl = Math.sqrt(px * px + py * py + pz * pz) || 1;
+          px /= pl; py /= pl; pz /= pl;
+        }
+        const shade = shadeAt(px, py, pz);
+        // Верх стенки — на радиусе поверхности ячейки (иначе шов с рельефом).
+        const rTop = ra + (rb - ra) * tt;
+        const topIdx = pushVert(px * rTop, py * rTop, pz * rTop, s, c,
+          0.23 * shade, 0.145 * shade, 0.09 * shade, 0.03, 0);
+        const rr2 = bottomRadius(px, py, pz);
+        const botIdx = pushVert(px * rr2, py * rr2, pz * rr2, s, c,
+          0.075 * shade, 0.05 * shade, 0.045 * shade, 0.85, 0);
+        sideBottom.push(pushBottomVert(px, py, pz, s, c, rr2));
+        if (prevTop >= 0) {
+          idx.push(prevTop, topIdx, botIdx, prevTop, botIdx, prevBot);
+        }
+        prevTop = topIdx;
+        prevBot = botIdx;
+      }
+      // Локальное закрытие именно этой стороны: короткий веер в пределах
+      // одной ячейки, без лучей через весь осколок.
+      const bottomCenter = bottomCenterOf(c);
+      for (let j = 0; j < SEG; j++) {
+        idx.push(bottomCenter, sideBottom[j + 1] as number, sideBottom[j] as number);
+      }
+    }
+  }
+  if (!idx.length) return null;
+  return {
+    positions: new Float32Array(pos),
+    colors: new Float32Array(col),
+    emissive: new Float32Array(emi),
+    centers: new Float32Array(cen),
+    birth: new Float32Array(bir),
+    shard: new Float32Array(shr),
+    kind: new Float32Array(kind),
+    indices: new Uint32Array(idx),
+    indexCount: idx.length,
+  };
+}
+
+/** Полная сборка геометрии спайка: ячейки → поверхность → объём. */
+export function buildGeometry(grid: PlanetGrid, fields: PlanetFields, sp: ShardParams,
+  noise: NoiseApi = PlanetNoise, opts: SpikeGeometryOptions = {}): SpikeGeometry {
+  const phase = opts.onPhase || ((): void => {});
+  phase('cells');
+  const cellData = opts.cellData || buildCellData(fields, noise);
+  phase('surface');
+  const layout = computeShardLayout(grid, sp);
+  const built = buildShardTextureData(layout, sp.loss);
+  const surface = buildSurfaceArrays(grid, cellData, layout);
+  let volume: VolumeArrays | null = null;
+  if (opts.includeVolume && layout) {
+    phase('volume');
+    volume = buildVolumeArrays(grid, layout, sp, surface.positions, surface.birth, noise);
+  }
+  return {
+    cellData,
+    surface,
+    volume,
+    layout,
+    shardTexData: built.data,
+    shardInfo: built.shardInfo,
+    shardMaxB: built.shardMaxB,
+    shardMode: layout ? 1 : 0,
+  };
+}
+
+/**
+ * Разворачивает принадлежность ячеек осколкам (`layout.shardOf`) на вершины
+ * геометрии глобуса через `geometry.vertexCellId`.
+ *
+ * Именно этот массив уходит в текстуру индекса осколка: все вершины одной
+ * ячейки (центр веера и её углы) обязаны получить ОДИН индекс, иначе
+ * треугольники ячейки растягиваются через всю планету.
+ */
+export function expandVertexShardIndices(layout: ShardLayout | null,
+  vertexCellId: Uint32Array): Uint32Array {
+  const out = new Uint32Array(vertexCellId.length);
+  if (!layout) return out;
+  const cellCount = layout.shardOf.length;
+  for (let i = 0; i < vertexCellId.length; i++) {
+    const cell = vertexCellId[i] as number;
+    out[i] = cell < cellCount ? (layout.shardOf[cell] as number) : 0;
+  }
+  return out;
+}
+
+/** Параметры осколков из состояния FX (дефолты — как в спайке). */
+export function shardParamsFromState(state: FxRuntimeState): ShardParams {
+  return {
+    count: Math.max(2, Math.min(MAX_SHARDS, Math.round(state.shardCount))),
+    dist: state.shardDist ?? 'power',
+    sep: state.separation,
+    thick: state.shardThick ?? 0.14,
+    jag: state.shardJag ?? 0.5,
+    loss: state.shardLoss ?? 0,
+    seedText: state.seedText,
+  };
+}
+
+// ===========================================================================
 // 3. Разлёт осколков (uSep): визуал и анимация без пересборки геометрии
 // ===========================================================================
 
@@ -677,6 +1235,9 @@ interface FxUniforms {
   shardMode: WebGLUniformLocation | null;
   shardCount: WebGLUniformLocation | null;
   shardTex: WebGLUniformLocation | null;
+  shardIdTex: WebGLUniformLocation | null;
+  shardIdW: WebGLUniformLocation | null;
+  shardIdReady: WebGLUniformLocation | null;
   palette: WebGLUniformLocation | null;
   hueShift: WebGLUniformLocation | null;
   texMode: WebGLUniformLocation | null;
@@ -686,23 +1247,65 @@ interface FxUniforms {
   reliefScale: WebGLUniformLocation | null;
 }
 
+/** Ширина целочисленной текстуры индексов осколков (ровно десятки строк). */
+const SHARD_ID_TEX_WIDTH = 1024;
+
+/** Трансформ поверхности по клеточному индексу осколка. */
+function surfaceShardTransformGLSL(): string {
+  return SHARD_TRANSFORM_GLSL + '\n' + SHARD_CELL_INDEX_GLSL + '\n';
+}
+
 /** Хуки плагина: декорируют surface-шейдеры глобуса и гоняют uniform-ы FX. */
 export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
   let uniforms: FxUniforms | null = null;
   let shardTexture: WebGLTexture | null = null;
   let shardTextureKey = '';
+  let shardIdTexture: WebGLTexture | null = null;
+  let shardIdTextureKey = '';
+  let shardIdTexWidth = SHARD_ID_TEX_WIDTH;
+  let shardIdAvailable = false;
+  let layout: ShardLayout | null = null;
+  let layoutKey = '';
+  let shardTexData: Float32Array | null = null;
+  let readyGrid: PlanetGrid | null = null;
+  let readyGeometry: GlobeGeometry | null = null;
+  let lastGridRef: PlanetGrid | null = null;
+  let lastGeometryRef: GlobeGeometry | null = null;
+
+  const currentGrid = (): PlanetGrid | null => readyGrid ?? state.grid ?? null;
+  const currentGeometry = (): GlobeGeometry | null => readyGeometry ?? state.geometry ?? null;
+
+  /** Канонический layout осколков: клеточный при наличии сетки, иначе процедурный. */
+  const ensureShardLayout = (): ShardLayout | null => {
+    const sp = shardParamsFromState(state);
+    const grid = currentGrid();
+    if (grid !== lastGridRef) {
+      // Новая сетка — прошлый layout и текстуры недействительны.
+      lastGridRef = grid;
+      layout = null;
+      layoutKey = '';
+      shardTextureKey = '';
+      shardIdTextureKey = '';
+      shardIdAvailable = false;
+    }
+    const key = (grid ? 'grid' + grid.v + ':' + grid.cellCount : 'proc') +
+      '|' + sp.count + '|' + sp.dist + '|' + sp.seedText;
+    if (layout && layoutKey === key) return layout;
+    layout = grid ? computeShardLayout(grid, sp) : buildProceduralShardLayout(sp);
+    layoutKey = key;
+    const built = buildShardTextureData(layout, sp.loss);
+    shardTexData = built.data;
+    return layout;
+  };
 
   const ensureShardTexture = (gl: WebGL2RenderingContext): void => {
-    const key = state.shardCount + '|' + state.seedText + '|' + String(state.shardMode);
+    ensureShardLayout();
+    if (!shardTexData) return;
+    const key = layoutKey + '|loss' + (state.shardLoss ?? 0);
     if (shardTexture && shardTextureKey === key) return;
-    const layout = buildProceduralShardLayout({
-      count: Math.max(2, Math.min(MAX_SHARDS, Math.round(state.shardCount))),
-      dist: 'power', sep: 0, thick: 0.14, jag: 0.5, loss: 0, seedText: state.seedText,
-    });
-    const built = buildShardTextureData(layout, 0);
     if (!shardTexture) shardTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, shardTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, MAX_SHARDS, 4, 0, gl.RGBA, gl.FLOAT, built.data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, MAX_SHARDS, 4, 0, gl.RGBA, gl.FLOAT, shardTexData);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -711,25 +1314,69 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
     shardTextureKey = key;
   };
 
+  /**
+   * Текстура клеточного индекса осколка по вершинам (R32UI).
+   *
+   * Данные — expandVertexShardIndices(layout, geometry.vertexCellId): вершины
+   * одной ячейки получают одинаковый индекс, поэтому треугольники веера
+   * ячейки двигаются одним осколком. Возвращает false, если сетки/геометрии
+   * ещё нет или размер не влезает в лимиты контекста (тогда шейдер уходит на
+   * резервное квантование нормали).
+   */
+  const ensureShardIdTexture = (gl: WebGL2RenderingContext): boolean => {
+    const geometryNow = currentGeometry();
+    const layoutNow = ensureShardLayout();
+    if (!layoutNow || !geometryNow || !geometryNow.vertexCellId || !geometryNow.vertexCellId.length) {
+      shardIdAvailable = false;
+      return false;
+    }
+    if (geometryNow !== lastGeometryRef) {
+      lastGeometryRef = geometryNow;
+      shardIdTextureKey = '';
+      shardIdAvailable = false;
+    }
+    const key = layoutKey + '|v' + geometryNow.v + '|n' + geometryNow.vertexCellId.length;
+    if (shardIdTexture && shardIdTextureKey === key) return shardIdAvailable;
+    const perVertex = expandVertexShardIndices(layoutNow, geometryNow.vertexCellId);
+    const width = SHARD_ID_TEX_WIDTH;
+    const height = Math.max(1, Math.ceil(perVertex.length / width));
+    const maxSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    if (!(width <= maxSize) || !(height <= maxSize)) {
+      shardIdAvailable = false;
+      shardIdTextureKey = key;
+      return false;
+    }
+    // Хвост последней строки добивается нулями: texImage2D требует полный
+    // прямоугольник width×height.
+    const padded = new Uint32Array(width * height);
+    padded.set(perVertex, 0);
+    if (!shardIdTexture) shardIdTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, shardIdTexture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, width, height, 0,
+      gl.RED_INTEGER, gl.UNSIGNED_INT, padded);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    shardIdTexWidth = width;
+    shardIdTextureKey = key;
+    shardIdAvailable = true;
+    return true;
+  };
+
   return {
     decorateSurfaceShaders(src: { vs: string; fs: string }): { vs: string; fs: string } {
       // Vertex: трансформ осколков Шакураса поверх позиций planet-globe-v1.
       let vs = src.vs;
       vs = replaceOnce(vs, 'void main() {',
-        SHARD_TRANSFORM_GLSL + '\nuniform float uShardCount;\n' +
-        '// planet-globe-v1 не несёт aShard: осколок квантуется по направлению.\n' +
-        'float fxShardIndex(vec3 p) {\n' +
-        '  vec3 q = floor(normalize(p) * max(uShardCount, 1.0) * 0.5) + 0.5;\n' +
-        '  return floor(fract(sin(dot(q, vec3(12.9898, 78.233, 37.719))) * 43758.5453) * uShardCount);\n' +
-        '}\n' +
-        'vec3 fxShardPosition(vec3 p) {\n' +
-        '  if (uShardMode < 0.5) return p;\n' +
-        '  return shardTransform(p, fxShardIndex(p));\n' +
-        '}\n' +
+        surfaceShardTransformGLSL() +
         'out vec3 vObjDir;\n' +
         'out float vRadius;\n' +
         'void main() {\n' +
-        '  vec3 fxPos = fxShardPosition(aPos);',
+        '  // Клеточный индекс: все вершины веера ячейки — один осколок.\n' +
+        '  vec3 fxPos = fxShardPosition(aPos, aNormal.xyz);',
         'surface.vs main');
       vs = replaceOnce(vs, 'vec4 wp = uModel * vec4(aPos, 1.0);',
         'vec4 wp = uModel * vec4(fxPos, 1.0);', 'surface.vs worldPos');
@@ -772,6 +1419,9 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
         shardMode: gl.getUniformLocation(program, 'uShardMode'),
         shardCount: gl.getUniformLocation(program, 'uShardCount'),
         shardTex: gl.getUniformLocation(program, 'uShardTex'),
+        shardIdTex: gl.getUniformLocation(program, 'uShardIdTex'),
+        shardIdW: gl.getUniformLocation(program, 'uShardIdW'),
+        shardIdReady: gl.getUniformLocation(program, 'uShardIdReady'),
         palette: gl.getUniformLocation(program, 'uPalette'),
         hueShift: gl.getUniformLocation(program, 'uHueShift'),
         texMode: gl.getUniformLocation(program, 'uTexMode'),
@@ -782,13 +1432,27 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
       };
     },
 
+    /** Геометрия готова: дальше индекс осколка берётся из vertexCellId. */
+    onGeometryReady(_gl: WebGL2RenderingContext, grid: PlanetGrid, geometry: GlobeGeometry): void {
+      readyGrid = grid;
+      readyGeometry = geometry;
+      // Новая сетка/геометрия — layout и текстуры индексов пересоберутся
+      // лениво, в ближайшем onSurfaceDraw (см. ensureShardLayout).
+    },
+
     onSurfaceDraw(gl: WebGL2RenderingContext, program: WebGLProgram): void {
       if (!uniforms) return;
       gl.useProgram(program);
       ensureShardTexture(gl);
+      const cellIndexReady = state.shardMode ? ensureShardIdTexture(gl) : false;
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, shardTexture);
       if (uniforms.shardTex) gl.uniform1i(uniforms.shardTex, 2);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, shardIdTexture);
+      if (uniforms.shardIdTex) gl.uniform1i(uniforms.shardIdTex, 3);
+      if (uniforms.shardIdW) gl.uniform1i(uniforms.shardIdW, shardIdTexWidth);
+      if (uniforms.shardIdReady) gl.uniform1f(uniforms.shardIdReady, cellIndexReady ? 1 : 0);
       if (uniforms.sep) gl.uniform1f(uniforms.sep, state.separation);
       if (uniforms.shardMode) gl.uniform1f(uniforms.shardMode, state.shardMode ? 1 : 0);
       if (uniforms.shardCount) gl.uniform1f(uniforms.shardCount, Math.max(2, Math.min(MAX_SHARDS, state.shardCount)));
@@ -803,6 +1467,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
           ((s & 255) / 255) * 8, (((s >>> 8) & 255) / 255) * 8, (((s >>> 16) & 255) / 255) * 8);
       }
       if (uniforms.reliefScale) gl.uniform1f(uniforms.reliefScale, Math.max(0.001, state.reliefScale));
+      gl.activeTexture(gl.TEXTURE0);
     },
   };
 }
