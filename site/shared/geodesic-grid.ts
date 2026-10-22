@@ -264,15 +264,28 @@ function build(v: number): PlanetGrid {
 
   function getVertex(x: number, y: number, z: number, face: number, i: number, j: number): number {
     normalize3(x, y, z, tmp);
-    const key = (tmp[0] as number).toFixed(9) + ',' + (tmp[1] as number).toFixed(9) + ',' + (tmp[2] as number).toFixed(9);
-    const found = byKey.get(key);
-    if (found !== undefined) {
-      if (candidateIsSmaller(face, i, j, addrFaceRaw[found] as number, addrIRaw[found] as number, addrJRaw[found] as number)) {
-        addrFaceRaw[found] = face;
-        addrIRaw[found] = i;
-        addrJRaw[found] = j;
+    // Внутренние вершины грани (i > 0 && j > 0 && i + j < v) топологически не могут
+    // совпадать с вершинами других граней икосаэдра — строковый ключ нужен только на границе.
+    if (i === 0 || j === 0 || i + j === v) {
+      const key = (tmp[0] as number).toFixed(9) + ',' + (tmp[1] as number).toFixed(9) + ',' + (tmp[2] as number).toFixed(9);
+      const found = byKey.get(key);
+      if (found !== undefined) {
+        if (candidateIsSmaller(face, i, j, addrFaceRaw[found] as number, addrIRaw[found] as number, addrJRaw[found] as number)) {
+          addrFaceRaw[found] = face;
+          addrIRaw[found] = i;
+          addrJRaw[found] = j;
+        }
+        return found;
       }
-      return found;
+      const id = vertexCount++;
+      centersRaw[id * 3] = tmp[0] as number;
+      centersRaw[id * 3 + 1] = tmp[1] as number;
+      centersRaw[id * 3 + 2] = tmp[2] as number;
+      addrFaceRaw[id] = face;
+      addrIRaw[id] = i;
+      addrJRaw[id] = j;
+      byKey.set(key, id);
+      return id;
     }
     const id = vertexCount++;
     centersRaw[id * 3] = tmp[0] as number;
@@ -281,21 +294,22 @@ function build(v: number): PlanetGrid {
     addrFaceRaw[id] = face;
     addrIRaw[id] = i;
     addrJRaw[id] = j;
-    byKey.set(key, id);
     return id;
   }
 
   const trianglesRaw = new Uint32Array(expectedTriangles * 3);
   let triCursor = 0;
+  const stride = v + 1;
+  const local = new Int32Array(stride * stride);
   ico.faces.forEach(function (faceIdx, faceNo) {
     const A = ico.verts[faceIdx[0] as number] as number[];
     const B = ico.verts[faceIdx[1] as number] as number[];
     const C = ico.verts[faceIdx[2] as number] as number[];
-    const local = new Map<number, number>();
+    local.fill(-1);
     function P(i: number, j: number): number {
-      const key = i * (v + 1) + j;
-      const cached = local.get(key);
-      if (cached !== undefined) return cached;
+      const key = i * stride + j;
+      const cached = local[key] as number;
+      if (cached >= 0) return cached;
       const wa = (v - i - j) / v, wb = i / v, wc = j / v;
       const id = getVertex(
         (A[0] as number) * wa + (B[0] as number) * wb + (C[0] as number) * wc,
@@ -303,7 +317,7 @@ function build(v: number): PlanetGrid {
         (A[2] as number) * wa + (B[2] as number) * wb + (C[2] as number) * wc,
         faceNo, i, j,
       );
-      local.set(key, id);
+      local[key] = id;
       return id;
     }
     for (let i = 0; i < v; i++) {
@@ -388,19 +402,24 @@ function build(v: number): PlanetGrid {
 
   const areasRaw = new Float32Array(cellCount);
   const angles = new Float64Array(6);
+  const t1 = [0, 0, 0];
   for (c = 0; c < cellCount; c++) {
     const start = cellCornerStartRaw[c] as number;
     const end = cellCornerStartRaw[c + 1] as number;
     const cx = centersRaw[c * 3] as number, cy = centersRaw[c * 3 + 1] as number, cz = centersRaw[c * 3 + 2] as number;
     const ax = Math.abs(cx) < 0.9 ? 1 : 0, ay = Math.abs(cx) < 0.9 ? 0 : 1;
-    const t1 = normalize3(cy * 0 - cz * ay, cz * ax - cx * 0, cx * ay - cy * ax, [0, 0, 0]);
-    const t2 = [cy * (t1[2] as number) - cz * (t1[1] as number), cz * (t1[0] as number) - cx * (t1[2] as number), cx * (t1[1] as number) - cy * (t1[0] as number)];
+    normalize3(cy * 0 - cz * ay, cz * ax - cx * 0, cx * ay - cy * ax, t1);
+    const t1x = t1[0] as number, t1y = t1[1] as number, t1z = t1[2] as number;
+    const t2x = cy * t1z - cz * t1y;
+    const t2y = cz * t1x - cx * t1z;
+    const t2z = cx * t1y - cy * t1x;
     let k: number;
     for (k = start; k < end; k++) {
       const corner = (cellCornersRaw[k] as number) * 3;
+      const crx = corners[corner] as number, cry = corners[corner + 1] as number, crz = corners[corner + 2] as number;
       angles[k - start] = Math.atan2(
-        (corners[corner] as number) * (t2[0] as number) + (corners[corner + 1] as number) * (t2[1] as number) + (corners[corner + 2] as number) * (t2[2] as number),
-        (corners[corner] as number) * (t1[0] as number) + (corners[corner + 1] as number) * (t1[1] as number) + (corners[corner + 2] as number) * (t1[2] as number),
+        crx * t2x + cry * t2y + crz * t2z,
+        crx * t1x + cry * t1y + crz * t1z,
       );
     }
     // Insertion sort сегмента из 5/6 углов по заранее посчитанным углам.
@@ -496,14 +515,48 @@ function reorderCells(raw: RawGrid): PlanetGrid {
   const oldChunk = new Uint32Array(count);
   for (c = 0; c < count; c++) oldChunk[c] = (groupList[oldGroup[c] as number] as Group).ordinal;
 
-  const order = new Array<number>(count);
-  for (c = 0; c < count; c++) order[c] = c;
-  order.sort(function (p, q) {
-    return (oldChunk[p] as number) - (oldChunk[q] as number) ||
-      (raw.addrI[p] as number) - (raw.addrI[q] as number) ||
-      (raw.addrJ[p] as number) - (raw.addrJ[q] as number) ||
-      p - q;
-  });
+  // Counting bucket sort по oldChunk[c] + стабильная сортировка вставками внутри
+  // каждого малого чанка (~145 ячеек, уже почти отсортированных по addrI/addrJ).
+  const groupCount = groups.length;
+  const chunkCounts = new Uint32Array(groupCount);
+  for (c = 0; c < count; c++) {
+    const ch = oldChunk[c] as number;
+    chunkCounts[ch] = (chunkCounts[ch] as number) + 1;
+  }
+  const chunkOffsets = new Uint32Array(groupCount + 1);
+  let runningOffset = 0;
+  for (let gi = 0; gi < groupCount; gi++) {
+    chunkOffsets[gi] = runningOffset;
+    runningOffset += chunkCounts[gi] as number;
+  }
+  chunkOffsets[groupCount] = runningOffset;
+  const chunkWrite = new Uint32Array(chunkOffsets);
+  const order = new Uint32Array(count);
+  for (c = 0; c < count; c++) {
+    const ch = oldChunk[c] as number;
+    const pos = chunkWrite[ch] as number;
+    chunkWrite[ch] = pos + 1;
+    order[pos] = c;
+  }
+  const addrIRaw = raw.addrI;
+  const addrJRaw = raw.addrJ;
+  for (let gi = 0; gi < groupCount; gi++) {
+    const start = chunkOffsets[gi] as number;
+    const end = chunkOffsets[gi + 1] as number;
+    for (let i = start + 1; i < end; i++) {
+      const curr = order[i] as number;
+      const currKey = ((addrIRaw[curr] as number) << 16) | (addrJRaw[curr] as number);
+      let j = i - 1;
+      while (j >= start) {
+        const prev = order[j] as number;
+        const prevKey = ((addrIRaw[prev] as number) << 16) | (addrJRaw[prev] as number);
+        if (prevKey <= currKey) break;
+        order[j + 1] = prev;
+        j--;
+      }
+      order[j + 1] = curr;
+    }
+  }
   const newId = new Uint32Array(count);
   for (let pos = 0; pos < count; pos++) newId[order[pos] as number] = pos;
 
@@ -577,15 +630,16 @@ function attachChunks(grid: PlanetGrid): PlanetGrid {
     id: number; faceIndex: number; blockI: number; blockJ: number;
     blockCount: number; startCell: number; cellCount: number;
   }
+  const maxBlock = Math.floor(grid.v / CHUNK_BLOCK_STEPS) + 1;
   const baseDescriptors: BaseDesc[] = [];
-  const byKey = new Map<string, BaseDesc>();
+  const byKey = new Map<number, BaseDesc>();
   const cellBase = new Uint32Array(grid.cellCount);
   let c: number;
   for (c = 0; c < grid.cellCount; c++) {
     const face = grid.addrFace[c] as number;
     const qa = chunkBlockIndex(grid.addrI[c] as number);
     const qb = chunkBlockIndex(grid.addrJ[c] as number);
-    const key = face + '/' + qa + '/' + qb;
+    const key = (face * maxBlock + qa) * maxBlock + qb;
     let desc = byKey.get(key);
     if (!desc) {
       desc = {
