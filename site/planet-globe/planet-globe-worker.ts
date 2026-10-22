@@ -81,6 +81,8 @@ export interface PickMessage {
   token?: string;
   requestId?: string | number;
   direction?: number[];
+  /** Этап 7: выбор напрямую по каноническому индексу или адресу ячейки (?cell=). */
+  cell?: number | string;
   purpose?: string;
 }
 
@@ -833,14 +835,31 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
   }
 }
 
-function pickInfo(direction: number[]): Record<string, unknown> {
+function pickInfo(direction: number[], requestedCell?: number | string): Record<string, unknown> {
   if (!current) throw new Error('Планета ещё не сгенерирована');
   const grid = current.grid;
   const s = current.surface;
-  const len = Math.hypot(direction[0] as number, direction[1] as number, direction[2] as number) || 1;
-  const dir = [(direction[0] as number) / len, (direction[1] as number) / len, (direction[2] as number) / len];
   const started = performance.now();
-  const cell = GeodesicGrid.pick(grid, dir);
+  let cell = -1;
+  if (requestedCell !== undefined && requestedCell !== null && String(requestedCell).trim() !== '') {
+    const raw = String(requestedCell).trim();
+    if (/^\d+$/.test(raw)) {
+      const idx = Number(raw);
+      if (Number.isInteger(idx) && idx >= 0 && idx < grid.cellCount) cell = idx;
+    } else {
+      try {
+        const byAddr = GeodesicGrid.cellAtAddress(grid, raw);
+        if (Number.isInteger(byAddr) && byAddr >= 0 && byAddr < grid.cellCount) cell = byAddr;
+      } catch (_) {
+        cell = -1;
+      }
+    }
+  }
+  if (cell < 0) {
+    const len = Math.hypot(direction[0] as number, direction[1] as number, direction[2] as number) || 1;
+    const dir = [(direction[0] as number) / len, (direction[1] as number) / len, (direction[2] as number) / len];
+    cell = GeodesicGrid.pick(grid, dir);
+  }
   const pickMs = performance.now() - started;
   const center = [grid.centers[cell * 3] as number, grid.centers[cell * 3 + 1] as number, grid.centers[cell * 3 + 2] as number];
   const continentId = s.continentTop1Id[cell] as number;
@@ -1092,7 +1111,7 @@ async function routeMessage(message: WorkerMessage): Promise<void> {
         token: message.token, requestId: message.requestId, mode: mode, colors: colors,
       }, [colors.buffer as ArrayBuffer]);
     } else if (message.type === 'pick') {
-      const info = pickInfo(message.direction || [0, 0, 1]);
+      const info = pickInfo(message.direction || [0, 0, 1], message.cell);
       post('pick-result', {
         token: message.token, requestId: message.requestId,
         purpose: message.purpose || 'select', info: info,
