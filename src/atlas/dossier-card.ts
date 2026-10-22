@@ -1,6 +1,6 @@
 /* Map Atlas — досье системы/места, выбор записей и хэш-адреса. */
 
-import { PLACE_TYPES, escapeHtml, plural } from './config.ts';
+import { PLACE_TYPES, PLANET_GLOBE, escapeHtml, formatNumber, plural } from './config.ts';
 import type {
   AtlasKernel,
   DossierCardApi,
@@ -84,6 +84,42 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
     return '<span class="badge' + (extraClass ? ' ' + extraClass : '') + '">' + escapeHtml(text) + '</span>';
   }
 
+  /* ------------------------------------------------------------------ 3D-глобус (Этап 7) */
+
+  // На 3D-глобус ведём только те места, у которых есть процедурная поверхность:
+  // планеты и луны каталога, а также любое место с профилем в planet-generation.csv.
+  function isGlobeCapablePlace(place: PlaceRecord): boolean {
+    if (place.planetProfileStatus) return true;
+    var types = kernel.data.placeTypesOf(place);
+    return types.indexOf('planet') !== -1 || types.indexOf('moon') !== -1;
+  }
+
+  // Единый формат перехода из Атласа сектора на страницу планеты:
+  // /planet-globe/?place=<id>[&system=<systemId>].
+  function planetGlobeUrl(place: PlaceRecord): string {
+    var url = PLANET_GLOBE.route + '?place=' + encodeURIComponent(String(place.id));
+    if (place.systemId) url += '&system=' + encodeURIComponent(String(place.systemId));
+    return url;
+  }
+
+  function planetProfileStatusBadge(place: PlaceRecord): string {
+    var status = place.planetProfileStatus;
+    if (status === 'frozen') return badge('3D-профиль: L1 Frozen', 'globe-profile frozen');
+    if (status === 'review') return badge('3D-профиль: на проверке', 'globe-profile review');
+    if (status === 'draft') return badge('3D-профиль: черновик', 'globe-profile draft');
+    return badge('3D-глобус Голдберга', 'globe-profile');
+  }
+
+  // Краткая подпись под кнопкой: пресет и радиус из planet-generation.csv, иначе
+  // честное указание, что глобус соберётся процедурно из контракта c100-soft-v2.
+  function planetGlobeCaption(place: PlaceRecord): string {
+    var parts: string[] = [];
+    if (place.planetPresetId) parts.push('пресет ' + place.planetPresetId);
+    if (place.planetRadiusKm) parts.push('радиус ' + formatNumber(Math.round(place.planetRadiusKm)) + ' км');
+    if (!parts.length) return PLANET_GLOBE.defaultPresetLabel;
+    return parts.join(' · ');
+  }
+
   function renderDetail(): void {
     var planet = state.activePlanetId ? state.planetsById[state.activePlanetId] : null;
     var system = state.activeSystemId ? state.systemsById[state.activeSystemId] : null;
@@ -153,7 +189,11 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
       worlds.forEach(function (world) {
         html += '<div class="world-card" data-planet="' + escapeHtml(world.id) + '">' +
           '<div class="world-card-top"><span class="world-name">' + escapeHtml(world.name) + '</span>' +
-          '<span class="world-kind">' + escapeHtml(kernel.data.placeTypeLabel(world, true)) + '</span></div>' +
+          '<span class="world-kind">' + escapeHtml(kernel.data.placeTypeLabel(world, true)) + '</span>' +
+          (isGlobeCapablePlace(world)
+            ? '<a class="world-globe-link" href="' + escapeHtml(planetGlobeUrl(world)) +
+              '" title="Открыть 3D-глобус планеты">🌐 Глобус →</a>' : '') +
+          '</div>' +
           '<div class="world-meta">' +
           kernel.data.factionsOf(world).slice(0, 2).map(function (faction) {
             return '<span class="world-chip faction">' + escapeHtml(faction) + '</span>';
@@ -228,10 +268,19 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
     if (planet.canonical) html += badge('строгий канон', 'pdf-linked');
     if (planet.canonicalSystem) html += badge('WorldBox.system', 'pdf-linked');
     if (planet.parent) html += badge('родитель: ' + planet.parent);
+    if (isGlobeCapablePlace(planet)) html += planetProfileStatusBadge(planet);
     html += '</div>';
 
     html += '<div class="detail-note detail-description"><strong>Описание:</strong> ' +
       escapeHtml(planet.note || 'отсутствует.') + '</div>';
+
+    if (isGlobeCapablePlace(planet)) {
+      html += '<div class="detail-globe-cta">' +
+        '<a class="detail-globe-button" href="' + escapeHtml(planetGlobeUrl(planet)) + '">' +
+          '<span class="detail-globe-icon">🌐</span> Открыть 3D-глобус планеты →</a>' +
+        '<div class="detail-globe-caption">' + escapeHtml(planetGlobeCaption(planet)) + '</div>' +
+        '</div>';
+    }
 
     html += '<div class="detail-section-title"><span>СИСТЕМА</span></div>';
     html += '<div class="world-list">';
@@ -352,11 +401,24 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
   }
 
   function applyHash(): boolean {
-    var match = /^#\/([sp])\/(.+)$/.exec(window.location.hash || '');
-    if (!match) return false;
-    var id = decodeURIComponent(match[2]!);
-    if (match[1] === 's' && state.systemsById[id]) { selectSystem(id, { center: true }); return true; }
-    if (match[1] === 'p' && state.planetsById[id]) { selectPlanet(id, { center: true }); return true; }
+    var hash = window.location.hash || '';
+    var match = /^#\/([sp])\/(.+)$/.exec(hash);
+    // Обратные ссылки со страницы планеты: /sector/#system=<id> и /sector/#planet=<id>.
+    var named = /^#(system|planet)=(.+)$/.exec(hash);
+    var kind = match ? match[1]! : (named ? named[1]! : '');
+    var raw = match ? match[2]! : (named ? named[2]! : '');
+    if (!kind) return false;
+    var id = '';
+    try { id = decodeURIComponent(raw); } catch (err) { return false; }
+    if (!id) return false;
+    if ((kind === 's' || kind === 'system') && state.systemsById[id]) {
+      selectSystem(id, { center: true });
+      return true;
+    }
+    if ((kind === 'p' || kind === 'planet') && state.planetsById[id]) {
+      selectPlanet(id, { center: true });
+      return true;
+    }
     return false;
   }
 
@@ -381,6 +443,9 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
       if (!state.pinned) clearDetail();
     });
     el.detailContent.addEventListener('click', function (event) {
+      // Ссылка на 3D-глобус (и внешние источники) открывается обычным переходом:
+      // карточку-предпросмотр мы намеренно не превращаем в перехватчик навигации.
+      if ((event.target as Element).closest('a[href]')) return;
       var actionButton = (event.target as Element).closest<HTMLElement>('[data-action]');
       if (actionButton && actionButton.getAttribute('data-action') === 'center') {
         centerActiveDetail();
