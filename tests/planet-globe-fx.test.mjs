@@ -577,3 +577,16 @@ test('GPU-путь /planet-test/: wireGeometry без vertexCellId + state.grid 
   hooks.onDispose(gl);
 });
 
+test('onAfterSurfaceDraw: без загруженной геометрии ядро не рисуется в пустоте', () => {
+  const gl = makeFakeGl();
+  const hooks = PlanetFx.createFxHooks(fxState({ separation: 0.6, coreScale: 0.5 }));
+  hooks.onAfterSurfaceDraw(gl, {
+    mvp: new Float32Array(16), model: new Float32Array(16),
+    normalMat: new Float32Array(9), lightDir: new Float32Array([0.5, 0.3, 0.8]),
+    eyePos: new Float32Array([0, 0, 2.6]), timeSec: 1.5,
+  });
+  const draws = gl.calls.filter((c) => c.name === 'drawElements');
+  assert.equal(draws.length, 0, 'до загрузки геометрии поверхности ядро рисоваться не должно');
+});
+
+

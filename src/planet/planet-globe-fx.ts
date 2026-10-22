@@ -1763,6 +1763,10 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
       vs = replaceOnce(vs, 'gl_Position = uMvp * vec4(aPos, 1.0);',
         'gl_Position = uMvp * vec4(fxPos, 1.0);\n  vObjDir = normalize(aPos);\n  vRadius = length(aPos);',
         'surface.vs gl_Position');
+      vs = vs.replace(
+        'vec4 wpB = uModel * vec4(built, 1.0);\n    vWorldPos = wpB.xyz;\n    gl_Position = uMvp * vec4(built, 1.0);',
+        'vec3 fxBuilt = fxShardPosition(built, aNormal.xyz);\n    vec4 wpB = uModel * vec4(fxBuilt, 1.0);\n    vWorldPos = wpB.xyz;\n    gl_Position = uMvp * vec4(fxBuilt, 1.0);',
+      );
 
       // Fragment: диагностические палитры + декоративные фактуры + hue.
       let fs = src.fs;
@@ -1860,6 +1864,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
     onAfterSurfaceDraw(gl: WebGL2RenderingContext, frame: FxFrameContext): void {
       if (effectsFailed || !state.shardMode) return;
       if (!frame || !frame.mvp || !frame.model) return;
+      if (!currentGeometry()) return;
       if (!ensureShardLayout()) return;
       const visuals = separationVisuals(state.separation, state.shardMode, shardMaxB);
       const volumeVisible = state.separation > 0.0001 || shardMaxB > 0.0001;

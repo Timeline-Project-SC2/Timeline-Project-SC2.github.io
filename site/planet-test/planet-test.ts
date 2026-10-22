@@ -13,6 +13,7 @@
 
 import GeodesicGrid from '../shared/geodesic-grid.ts';
 import type { PlanetGrid } from '../shared/geodesic-grid.ts';
+import { getPresetRuntimeValues } from '../shared/planet-generation-contract.ts';
 import PlanetGlobe from '../shared/planet-globe.ts';
 import type { CellPolygon, GlobeGeometry, GlobeStats, PlanetGlobeHandle } from '../shared/planet-globe.ts';
 import type { GeographyProfileInput } from '../shared/planet-geography.ts';
@@ -94,11 +95,18 @@ const els = {
 };
 
 const PLANET_PRESETS: {
-  id: string; label: string; radiusKm: number; surfaceClass: string; seed: string;
+  id: string;
+  label: string;
+  radiusKm: number;
+  presetId: string;
+  surfaceClass: string;
+  seed: string;
 }[] = [
-    { id: 'shakuras', label: 'Шакурас · осколки', radiusKm: 5860, surfaceClass: 'temperate terrestrial', seed: 'shakuras' },
-    { id: 'korhal-iv', label: 'Корхал-IV · пустыня', radiusKm: 6521, surfaceClass: 'arid terrestrial', seed: 'korhal-iv' },
-    { id: 'aiur', label: 'Айур · джунгли', radiusKm: 7094, surfaceClass: 'living terrestrial', seed: 'aiur' },
+    { id: 'shakuras', label: 'Шакурас · осколки', radiusKm: 5860, presetId: 'earthlike_archipelago', surfaceClass: 'terrestrial', seed: 'shakuras' },
+    { id: 'korhal-iv', label: 'Корхал-IV · пустыня', radiusKm: 6521, presetId: 'desert_dry', surfaceClass: 'desert', seed: 'korhal-iv' },
+    { id: 'aiur', label: 'Айур · джунгли', radiusKm: 7094, presetId: 'earthlike_balanced', surfaceClass: 'terrestrial', seed: 'aiur' },
+    { id: 'char', label: 'Чар · вулканический', radiusKm: 5420, presetId: 'volcanic_active', surfaceClass: 'volcanic', seed: 'char' },
+    { id: 'kaldir', label: 'Калдир · ледяной', radiusKm: 5980, presetId: 'ice_world', surfaceClass: 'ice', seed: 'kaldir' },
   ];
 
 type TestFxState = FxRuntimeState & {
@@ -179,10 +187,12 @@ function targetRenderV(radiusKm: number): number {
 function profileFromControls(): GeographyProfileInput {
   const radiusKm = Math.max(300, Number(els.radius.value) || 5860);
   const seedRaw = els.seed.value.trim() || 'shakuras';
+  const preset = PLANET_PRESETS.find((p) => p.id === els.planet.value) || PLANET_PRESETS[0]!;
   const profile: GeographyProfileInput = {
-    planetId: 'stage1-' + els.planet.value,
-    presetId: els.planet.value,
-    surfaceClass: (PLANET_PRESETS.find((p) => p.id === els.planet.value) || PLANET_PRESETS[0] as { surfaceClass: string }).surfaceClass,
+    ...getPresetRuntimeValues(preset.presetId),
+    planetId: 'stage1-' + preset.id,
+    presetId: preset.presetId,
+    surfaceClass: preset.surfaceClass,
     radiusKm,
     geographyVersion: 'c100-soft-v2',
   };
@@ -487,6 +497,7 @@ function init(): void {
       els.seed.value = preset.seed;
       els.radius.value = String(preset.radiusKm);
       fxState.seedText = preset.seed;
+      generate();
     }
   });
   els.seed.addEventListener('input', () => { fxState.seedText = els.seed.value.trim() || 'shakuras'; });

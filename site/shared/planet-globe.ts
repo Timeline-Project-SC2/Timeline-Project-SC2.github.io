@@ -1132,10 +1132,10 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
         GL.drawElements(GL.TRIANGLES, (ranges[i] as { indexCount: number }).indexCount, GL.UNSIGNED_INT, (ranges[i] as { indexStart: number }).indexStart * 4);
       }
       GL.bindVertexArray(null);
-    }
 
-    if (opts.fx && opts.fx.onAfterSurfaceDraw) {
-      try { opts.fx.onAfterSurfaceDraw(GL, frameCtx); } catch (_) { /* плагин не ломает рендер */ }
+      if (opts.fx && opts.fx.onAfterSurfaceDraw) {
+        try { opts.fx.onAfterSurfaceDraw(GL, frameCtx); } catch (_) { /* плагин не ломает рендер */ }
+      }
     }
 
     if (selectionVao && selectionIndexCount) {
@@ -1156,7 +1156,7 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       GL.disable(GL.BLEND);
     }
 
-    if (atmosphereEnabled && atmoVao) {
+    if (atmosphereEnabled && atmoVao && geometry && vao) {
       GL.enable(GL.BLEND);
       GL.blendFunc(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA);
       GL.depthMask(false);
