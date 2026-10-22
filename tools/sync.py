@@ -292,7 +292,8 @@ def _strict_column(fieldnames, name):
 
 
 def _strict_cell_is_set(value):
-    return str(value or "").strip().casefold() not in ("", "none")
+    text = "" if value is None else str(value).strip()
+    return text.casefold() not in ("", "none")
 
 
 def strict_map_size(sources_cfg, overall_meta):
@@ -341,7 +342,8 @@ def validate_strict_table(label, rows, fieldnames, map_size, role=None):
     if id_col:
         seen_ids = {}
         for row_number, row in enumerate(rows, start=2):
-            value = str(row.get(id_col) or "").strip()
+            raw_value = row.get(id_col)
+            value = "" if raw_value is None else str(raw_value).strip()
             if not value:
                 continue
             if value in seen_ids:
@@ -393,7 +395,7 @@ def validate_strict_table(label, rows, fieldnames, map_size, role=None):
                 )
             elif map_size is not None and not 0 <= value <= map_size:
                 errors.append(
-                    f"{label}: запись {row_number}: {coordinate}={text} выходит "
+                    f"{label}: запись {row_number}: {coordinate}={value:g} выходит "
                     f"за диапазон 0..{map_size:g}"
                 )
 
@@ -652,7 +654,9 @@ def main(argv=None):
         action="store_true",
         help="проверить координаты, конфликты привязки и дубли ID до записи снимков",
     )
-    args = parser.parse_args(argv)
+    # Неизвестные аргументы исторически игнорировались; сохраняем это поведение
+    # для вызовов main() из тестов и внешних инструментов.
+    args, _unknown_args = parser.parse_known_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN")
     sources_cfg = load_json(SOURCES)
