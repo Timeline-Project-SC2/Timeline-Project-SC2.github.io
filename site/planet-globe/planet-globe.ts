@@ -30,6 +30,31 @@ import type {
   WorkerReadyResponse,
   WorkerResponse,
 } from './planet-globe-worker.ts';
+import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
+import { generateLocalMap } from '../../src/local-map/local-map-worker.ts';
+import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
+import type { LocalMapWorkerResponse } from '../../src/local-map/local-map-worker.ts';
+import {
+  STRUCTURE_FRAGMENT_SHADER,
+  STRUCTURE_VERTEX_SHADER,
+  TERRAIN_FRAGMENT_SHADER,
+  TERRAIN_VERTEX_SHADER,
+} from '../../src/local-map/local-map-shaders.ts';
+
+type Stage8StructureRenderer = StructureRenderer & {
+  enqueueWorkerData?: (data: LocalMapWorkerResponse, budgetMs?: number) => void;
+  processPendingUpload?: (budgetMs?: number) => boolean;
+  isUploading?: () => boolean;
+  getUploadProgress?: () => number;
+  compilePrograms?: () => { terrainProgram: WebGLProgram; structureProgram: WebGLProgram };
+  renderFrame?: (viewProj: Float32Array, opts?: Record<string, unknown>) => void;
+  dispose?: () => void;
+};
+
+interface LocalMapPrograms {
+  terrainProgram: WebGLProgram;
+  structureProgram: WebGLProgram;
+}
 
 function must<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -85,6 +110,25 @@ const els = {
   frameOver100: must<HTMLElement>('frameOver100'),
   heap: must<HTMLElement>('heap'),
   switchHistory: must<HTMLElement>('switchHistory'),
+  diveLocalMap: must<HTMLButtonElement>('diveLocalMapBtn'),
+  localMapStage: must<HTMLElement>('localMapStage'),
+  localMapCanvas: must<HTMLCanvasElement>('localMapCanvas'),
+  exitLocalMap: must<HTMLButtonElement>('exitLocalMapBtn'),
+  localMapTitle: must<HTMLElement>('localMapTitle'),
+  localScale: must<HTMLSelectElement>('localScaleSel'),
+  resetLocalCam: must<HTMLButtonElement>('resetLocalCamBtn'),
+  localNeighborNav: must<HTMLElement>('localNeighborNav'),
+  breadcrumbPatchWrap: must<HTMLElement>('breadcrumbPatchWrap'),
+  breadcrumbPatchSep: must<HTMLElement>('breadcrumbPatchSep'),
+  breadcrumbPatch: must<HTMLElement>('breadcrumbPatch'),
+  localGenMs: must<HTMLElement>('localGenMs'),
+  localUploadProgress: must<HTMLProgressElement>('localUploadProgress'),
+  localUploadLabel: must<HTMLElement>('localUploadLabel'),
+  localInstanceCount: must<HTMLElement>('localInstanceCount'),
+  localBuildableFraction: must<HTMLElement>('localBuildableFraction'),
+  localFogStatus: must<HTMLElement>('localFogStatus'),
+  localInvariantStatus: must<HTMLElement>('localInvariantStatus'),
+  localMapStatus: must<HTMLElement>('localMapStatus'),
 };
 
 const PREFERRED_SURFACE_CLASS: Record<string, string> = {
@@ -148,6 +192,32 @@ let selectedPlace: CsvRow | null = null;
 let pendingInitialCell: string | null = new URLSearchParams(window.location.search).get('cell');
 let globe: PlanetGlobeHandle | null = null;
 let webglAvailable = true;
+let lastPatchReady: WorkerPatchReadyResponse | null = null;
+let localMapGl: WebGL2RenderingContext | null = null;
+let localMapRenderer: Stage8StructureRenderer | null = null;
+let localMapPrograms: LocalMapPrograms | null = null;
+let localMapProgramsOwnedByRenderer = false;
+let localMapActive = false;
+let localMapFrameId = 0;
+let localMapEntrySeq = 0;
+let localMapHideTimer = 0;
+let localMapData: LocalMapWorkerResponse | null = null;
+let localMapGenerationMs = 0;
+let localMapBuildableFraction = 0;
+let localMapInstanceCount = 0;
+let localMapWidthKm = 1.2;
+let localMapRadiusM = 600;
+let localMapHudLastAt = 0;
+let localMapCanvasEventsInstalled = false;
+let localCameraYaw = -0.65;
+let localCameraPitch = 0.82;
+let localCameraDistance = 0;
+let localCameraTarget: [number, number, number] = [0, 0, 20];
+let localPointerMode: 'orbit' | 'pan' | null = null;
+let localPointerId: number | null = null;
+let localPointerLast = { x: 0, y: 0 };
+let localPointers = new Map<number, { x: number; y: number }>();
+let localPinchDistance = 0;
 
 function setStatus(text: string, kind: string): void {
   els.status.textContent = text || '';
@@ -188,6 +258,602 @@ function escapeHtml(s: unknown): string {
     };
     return map[c] as string;
   });
+}
+
+const LOCAL_MAP_SCALE_STEPS = [1.2, 2.5, 5, 10, 20, 39, 78, 156, 312, 625, 1250] as const;
+const LOCAL_MAP_FOV = 50 * Math.PI / 180;
+type LocalVec3 = [number, number, number];
+
+function parseSeedUint32(value: string): number {
+  const seed = value.trim();
+  if (/^[0-9a-fA-F]{16}$/.test(seed)) return Number.parseInt(seed.slice(-8), 16) >>> 0;
+  let hash = 2166136261;
+  for (const byte of new TextEncoder().encode(seed || 'timeline-project')) {
+    hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function clampLocal(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeLocalVec3(value: LocalVec3): LocalVec3 {
+  const length = Math.hypot(value[0], value[1], value[2]);
+  if (!(length > 0) || !Number.isFinite(length)) return [0, 0, 1];
+  return [value[0] / length, value[1] / length, value[2] / length];
+}
+
+function crossLocalVec3(a: LocalVec3, b: LocalVec3): LocalVec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function dotLocalVec3(a: LocalVec3, b: LocalVec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function perspectiveLocal(fovY: number, aspect: number, near: number, far: number): Float32Array {
+  const f = 1 / Math.tan(fovY / 2);
+  const nf = 1 / (near - far);
+  const out = new Float32Array(16);
+  out[0] = f / aspect;
+  out[5] = f;
+  out[10] = (far + near) * nf;
+  out[11] = -1;
+  out[14] = 2 * far * near * nf;
+  return out;
+}
+
+function lookAtLocal(eye: LocalVec3, center: LocalVec3, up: LocalVec3): Float32Array {
+  const zAxis = normalizeLocalVec3([eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]]);
+  const xAxis = normalizeLocalVec3(crossLocalVec3(up, zAxis));
+  const yAxis = crossLocalVec3(zAxis, xAxis);
+  return new Float32Array([
+    xAxis[0], yAxis[0], zAxis[0], 0,
+    xAxis[1], yAxis[1], zAxis[1], 0,
+    xAxis[2], yAxis[2], zAxis[2], 0,
+    -dotLocalVec3(xAxis, eye), -dotLocalVec3(yAxis, eye), -dotLocalVec3(zAxis, eye), 1,
+  ]);
+}
+
+function multiplyLocalMat4(a: Float32Array, b: Float32Array): Float32Array {
+  const out = new Float32Array(16);
+  for (let column = 0; column < 4; column++) {
+    for (let row = 0; row < 4; row++) {
+      let sum = 0;
+      for (let k = 0; k < 4; k++) sum += (a[k * 4 + row] as number) * (b[column * 4 + k] as number);
+      out[column * 4 + row] = sum;
+    }
+  }
+  return out;
+}
+
+function createLocalShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
+  const shader = gl.createShader(type);
+  if (!shader) throw new Error('WebGL2 не создал шейдер локальной карты.');
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(shader) || 'неизвестная ошибка компиляции';
+    gl.deleteShader(shader);
+    throw new Error('Ошибка шейдера локальной карты: ' + log);
+  }
+  return shader;
+}
+
+function createLocalProgram(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: string): WebGLProgram {
+  const vertex = createLocalShader(gl, gl.VERTEX_SHADER, vertexSource);
+  let fragment: WebGLShader | null = null;
+  let program: WebGLProgram | null = null;
+  try {
+    fragment = createLocalShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+    program = gl.createProgram();
+    if (!program) throw new Error('WebGL2 не создал программу локальной карты.');
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error('Ошибка связывания программы локальной карты: ' + (gl.getProgramInfoLog(program) || 'неизвестная ошибка'));
+    }
+    return program;
+  } catch (error) {
+    if (program) gl.deleteProgram(program);
+    throw error;
+  } finally {
+    gl.deleteShader(vertex);
+    if (fragment) gl.deleteShader(fragment);
+  }
+}
+
+function compileLocalMapPrograms(gl: WebGL2RenderingContext): LocalMapPrograms {
+  const terrainProgram = createLocalProgram(gl, TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER);
+  try {
+    return {
+      terrainProgram,
+      structureProgram: createLocalProgram(gl, STRUCTURE_VERTEX_SHADER, STRUCTURE_FRAGMENT_SHADER),
+    };
+  } catch (error) {
+    gl.deleteProgram(terrainProgram);
+    throw error;
+  }
+}
+
+function setLocalMapStatus(text: string, kind: string): void {
+  els.localMapStatus.textContent = text;
+  els.localMapStatus.dataset.kind = kind;
+}
+
+function initializeLocalMapRenderer(): boolean {
+  let gl = localMapGl;
+  if (!gl || gl.isContextLost()) {
+    gl = els.localMapCanvas.getContext('webgl2', {
+      alpha: false,
+      antialias: true,
+      depth: true,
+      powerPreference: 'high-performance',
+    });
+    if (!gl) {
+      setLocalMapStatus('WebGL2 недоступен: локальную 3D-карту открыть нельзя.', 'error');
+      return false;
+    }
+    localMapGl = gl;
+  }
+  if (localMapRenderer && localMapPrograms && !gl.isContextLost()) return true;
+
+  const renderer = new StructureRenderer(gl) as Stage8StructureRenderer;
+  try {
+    renderer.initMeshLibrary(buildMeshLibrary());
+    if (typeof renderer.compilePrograms === 'function') {
+      try {
+        localMapPrograms = renderer.compilePrograms();
+        localMapProgramsOwnedByRenderer = true;
+      } catch (error) {
+        console.warn('StructureRenderer.compilePrograms не сработал, использую совместимые шейдеры:', error);
+        localMapPrograms = compileLocalMapPrograms(gl);
+        localMapProgramsOwnedByRenderer = false;
+      }
+    } else {
+      localMapPrograms = compileLocalMapPrograms(gl);
+      localMapProgramsOwnedByRenderer = false;
+    }
+    localMapRenderer = renderer;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    installLocalMapCanvasEvents();
+    return true;
+  } catch (error) {
+    renderer.dispose?.();
+    localMapRenderer = null;
+    localMapPrograms = null;
+    localMapProgramsOwnedByRenderer = false;
+    setLocalMapStatus((error as Error).message || 'Не удалось подготовить рендер локальной карты.', 'error');
+    return false;
+  }
+}
+
+function resizeLocalMapCanvas(): void {
+  const gl = localMapGl;
+  if (!gl) return;
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.6);
+  const width = Math.max(1, Math.round(rect.width * pixelRatio));
+  const height = Math.max(1, Math.round(rect.height * pixelRatio));
+  if (els.localMapCanvas.width !== width || els.localMapCanvas.height !== height) {
+    els.localMapCanvas.width = width;
+    els.localMapCanvas.height = height;
+    gl.viewport(0, 0, width, height);
+  }
+}
+
+function resetLocalCamera(): void {
+  localCameraYaw = -0.65;
+  localCameraPitch = 0.82;
+  localCameraTarget = [0, 0, 20];
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  const aspect = rect.height > 0 ? rect.width / rect.height : 1;
+  const fit = Math.max(0.45, Math.min(1, aspect || 1));
+  localCameraDistance = Math.max(2, (localMapRadiusM * 1.18) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+}
+
+function localViewProjection(): Float32Array {
+  if (!(localCameraDistance > 0)) resetLocalCamera();
+  const aspect = Math.max(0.1, els.localMapCanvas.width / Math.max(1, els.localMapCanvas.height));
+  const cosPitch = Math.cos(localCameraPitch);
+  const direction: LocalVec3 = [
+    cosPitch * Math.cos(localCameraYaw),
+    cosPitch * Math.sin(localCameraYaw),
+    Math.sin(localCameraPitch),
+  ];
+  const eye: LocalVec3 = [
+    localCameraTarget[0] + direction[0] * localCameraDistance,
+    localCameraTarget[1] + direction[1] * localCameraDistance,
+    localCameraTarget[2] + direction[2] * localCameraDistance,
+  ];
+  const view = lookAtLocal(eye, localCameraTarget, [0, 0, 1]);
+  const near = Math.max(0.1, localMapRadiusM * 0.0001);
+  const far = Math.max(10000, localCameraDistance * 6 + localMapRadiusM * 8);
+  return multiplyLocalMat4(perspectiveLocal(LOCAL_MAP_FOV, aspect, near, far), view);
+}
+
+function applyLocalPan(dx: number, dy: number): void {
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  const worldPerPixel = (2 * localCameraDistance * Math.tan(LOCAL_MAP_FOV / 2)) / Math.max(1, rect.height);
+  const right: LocalVec3 = [-Math.sin(localCameraYaw), Math.cos(localCameraYaw), 0];
+  const screenUp: LocalVec3 = [
+    -Math.sin(localCameraPitch) * Math.cos(localCameraYaw),
+    -Math.sin(localCameraPitch) * Math.sin(localCameraYaw),
+    Math.cos(localCameraPitch),
+  ];
+  localCameraTarget[0] += (-dx * right[0] + dy * screenUp[0]) * worldPerPixel;
+  localCameraTarget[1] += (-dx * right[1] + dy * screenUp[1]) * worldPerPixel;
+  localCameraTarget[2] += (-dx * right[2] + dy * screenUp[2]) * worldPerPixel;
+  const maxPan = localMapRadiusM * 0.75;
+  const panLength = Math.hypot(localCameraTarget[0], localCameraTarget[1]);
+  if (panLength > maxPan) {
+    localCameraTarget[0] *= maxPan / panLength;
+    localCameraTarget[1] *= maxPan / panLength;
+  }
+  localCameraTarget[2] = clampLocal(localCameraTarget[2], -localMapRadiusM * 0.25, localMapRadiusM * 0.5);
+}
+
+function currentLocalPinchDistance(): number {
+  const points = [...localPointers.values()];
+  if (points.length < 2) return 0;
+  const a = points[0] as { x: number; y: number };
+  const b = points[1] as { x: number; y: number };
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function installLocalMapCanvasEvents(): void {
+  if (localMapCanvasEventsInstalled) return;
+  localMapCanvasEventsInstalled = true;
+  const canvas = els.localMapCanvas;
+  canvas.addEventListener('contextmenu', (event: MouseEvent) => { event.preventDefault(); });
+  canvas.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0 && event.button !== 2) return;
+    event.preventDefault();
+    try { canvas.setPointerCapture(event.pointerId); } catch (_) { /* захват может быть недоступен */ }
+    localPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (localPointers.size >= 2) {
+      localPointerId = null;
+      localPointerMode = null;
+      localPinchDistance = currentLocalPinchDistance();
+      return;
+    }
+    localPointerId = event.pointerId;
+    localPointerLast = { x: event.clientX, y: event.clientY };
+    localPointerMode = event.button === 2 || event.shiftKey ? 'pan' : 'orbit';
+  });
+  canvas.addEventListener('pointermove', (event: PointerEvent) => {
+    const previous = localPointers.get(event.pointerId);
+    if (!previous) return;
+    localPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (localPointers.size >= 2) {
+      const distance = currentLocalPinchDistance();
+      if (localPinchDistance > 0 && distance > 0) {
+        localCameraDistance = clampLocal(localCameraDistance * localPinchDistance / distance,
+          Math.max(2, localMapRadiusM * 0.08), localMapRadiusM * 60);
+      }
+      localPinchDistance = distance;
+      return;
+    }
+    if (event.pointerId !== localPointerId || !localPointerMode) return;
+    const dx = event.clientX - localPointerLast.x;
+    const dy = event.clientY - localPointerLast.y;
+    localPointerLast = { x: event.clientX, y: event.clientY };
+    if (localPointerMode === 'orbit') {
+      localCameraYaw -= dx * 0.006;
+      localCameraPitch = clampLocal(localCameraPitch + dy * 0.005, 0.12, 1.48);
+    } else {
+      applyLocalPan(dx, dy);
+    }
+  });
+  const endPointer = (event: PointerEvent): void => {
+    localPointers.delete(event.pointerId);
+    try { if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); } catch (_) { /* уже освобождён */ }
+    if (localPointers.size < 2) localPinchDistance = 0;
+    if (event.pointerId === localPointerId || localPointers.size === 1) {
+      const remaining = localPointers.entries().next();
+      if (!remaining.done) {
+        const [id, point] = remaining.value;
+        localPointerId = id;
+        localPointerLast = { x: point.x, y: point.y };
+        localPointerMode = 'orbit';
+      } else {
+        localPointerId = null;
+        localPointerMode = null;
+      }
+    }
+  };
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('wheel', (event: WheelEvent) => {
+    event.preventDefault();
+    localCameraDistance = clampLocal(localCameraDistance * Math.exp(event.deltaY * 0.001),
+      Math.max(2, localMapRadiusM * 0.08), localMapRadiusM * 60);
+  }, { passive: false });
+  canvas.addEventListener('webglcontextlost', (event: Event) => {
+    event.preventDefault();
+    if (localMapFrameId) window.cancelAnimationFrame(localMapFrameId);
+    localMapFrameId = 0;
+    setLocalMapStatus('WebGL-контекст локальной карты потерян; ожидаю восстановления…', 'warn');
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    localMapRenderer = null;
+    localMapPrograms = null;
+    localMapProgramsOwnedByRenderer = false;
+    localMapGl = canvas.getContext('webgl2');
+    if (localMapActive && lastPatchReady) enterLocalMap(lastPatchReady, localMapWidthKm);
+  });
+}
+
+function setUniform3(gl: WebGL2RenderingContext, program: WebGLProgram, name: string, value: LocalVec3): void {
+  const location = gl.getUniformLocation(program, name);
+  if (location !== null) gl.uniform3f(location, value[0], value[1], value[2]);
+}
+
+function setUniform1f(gl: WebGL2RenderingContext, program: WebGLProgram, name: string, value: number): void {
+  const location = gl.getUniformLocation(program, name);
+  if (location !== null) gl.uniform1f(location, value);
+}
+
+function drawLocalMapFallback(viewProj: Float32Array): void {
+  const gl = localMapGl;
+  const renderer = localMapRenderer;
+  const programs = localMapPrograms;
+  if (!gl || !renderer || !programs || !renderer.ready) return;
+  const light = normalizeLocalVec3([0.46, -0.36, 0.81]);
+  const ambient: LocalVec3 = [0.28, 0.34, 0.39];
+  const fog: LocalVec3 = [0.025, 0.09, 0.13];
+  const fogStart = localMapRadiusM * 0.72;
+  const fogEnd = localMapRadiusM;
+
+  gl.useProgram(programs.terrainProgram);
+  const terrainView = gl.getUniformLocation(programs.terrainProgram, 'u_viewProj');
+  if (terrainView !== null) gl.uniformMatrix4fv(terrainView, false, viewProj);
+  setUniform3(gl, programs.terrainProgram, 'u_lightDir', light);
+  setUniform3(gl, programs.terrainProgram, 'u_ambientColor', ambient);
+  setUniform3(gl, programs.terrainProgram, 'u_fogColor', fog);
+  setUniform1f(gl, programs.terrainProgram, 'u_fogStart', fogStart);
+  setUniform1f(gl, programs.terrainProgram, 'u_fogEnd', fogEnd);
+  setUniform1f(gl, programs.terrainProgram, 'u_terrainSize', localMapRadiusM * 2);
+  const zoningUnit = gl.getUniformLocation(programs.terrainProgram, 'u_zoning_map');
+  if (zoningUnit !== null) gl.uniform1i(zoningUnit, 0);
+  const terraformUnit = gl.getUniformLocation(programs.terrainProgram, 'u_terraform_map');
+  if (terraformUnit !== null) gl.uniform1i(terraformUnit, 1);
+  renderer.drawTerrain(programs.terrainProgram);
+
+  gl.useProgram(programs.structureProgram);
+  const structureView = gl.getUniformLocation(programs.structureProgram, 'u_viewProj');
+  if (structureView !== null) gl.uniformMatrix4fv(structureView, false, viewProj);
+  setUniform3(gl, programs.structureProgram, 'u_lightDir', light);
+  setUniform3(gl, programs.structureProgram, 'u_ambientColor', ambient);
+  setUniform3(gl, programs.structureProgram, 'u_fogColor', fog);
+  setUniform1f(gl, programs.structureProgram, 'u_fogStart', fogStart);
+  setUniform1f(gl, programs.structureProgram, 'u_fogEnd', fogEnd);
+  renderer.drawStructures(programs.structureProgram);
+  gl.useProgram(null);
+}
+
+function localTotalInstances(data: LocalMapWorkerResponse): number {
+  const meta = data.meta as LocalMapWorkerResponse['meta'] & { totalInstances?: number };
+  if (Number.isFinite(meta.totalInstances)) return Math.max(0, Math.round(meta.totalInstances as number));
+  return Object.values(data.instanceBuffers).reduce((sum, pack) => sum + (pack ? pack.count : 0), 0);
+}
+
+function updateLocalMapHud(): void {
+  const renderer = localMapRenderer;
+  const data = localMapData;
+  const uploading = !!renderer && typeof renderer.isUploading === 'function' && renderer.isUploading();
+  let progress = uploading ? 0 : 1;
+  if (renderer && typeof renderer.getUploadProgress === 'function') {
+    const reported = renderer.getUploadProgress();
+    if (Number.isFinite(reported)) progress = clampLocal(reported, 0, 1);
+  }
+  els.localUploadProgress.value = progress;
+  els.localUploadProgress.textContent = Math.round(progress * 100) + '%';
+  els.localUploadLabel.textContent = uploading ? Math.round(progress * 100) + '% · загрузка' : 'Готово';
+  els.localGenMs.textContent = fmtMs(localMapGenerationMs);
+  els.localInstanceCount.textContent = fmtInt(data ? localTotalInstances(data) : localMapInstanceCount);
+  els.localBuildableFraction.textContent = fmtPct(localMapBuildableFraction, 1);
+  els.localFogStatus.textContent = 'активен · R ' + fmtInt(localMapRadiusM) + ' м';
+}
+
+function renderLocalMapFrame(): void {
+  localMapFrameId = 0;
+  if (!localMapActive) return;
+  localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
+  const gl = localMapGl;
+  const renderer = localMapRenderer;
+  if (!gl || !renderer || gl.isContextLost()) return;
+  resizeLocalMapCanvas();
+  if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
+  gl.clearColor(0.004, 0.018, 0.034, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  const viewProj = localViewProjection();
+  if (typeof renderer.renderFrame === 'function') {
+    renderer.renderFrame(viewProj, {
+      lightDir: new Float32Array([0.46, -0.36, 0.81]),
+      ambientColor: new Float32Array([0.28, 0.34, 0.39]),
+      fogColor: new Float32Array([0.025, 0.09, 0.13]),
+      fogStart: localMapRadiusM * 0.72,
+      fogEnd: localMapRadiusM,
+      radiusM: localMapRadiusM,
+    });
+  } else {
+    drawLocalMapFallback(viewProj);
+  }
+  if (performance.now() - localMapHudLastAt > 100) {
+    localMapHudLastAt = performance.now();
+    updateLocalMapHud();
+  }
+}
+
+function selectedLocalScale(value: number): number {
+  return LOCAL_MAP_SCALE_STEPS.find((step) => step === value) || 1.2;
+}
+
+function updateLocalNeighborButtons(patchReady: WorkerPatchReadyResponse | null): void {
+  const buttons = els.localNeighborNav.querySelectorAll<HTMLButtonElement>('button[data-slot]');
+  const neighbors = patchReady ? patchReady.patch.cells.slice(1) : [];
+  buttons.forEach((button) => {
+    const slot = Number(button.dataset.slot);
+    const cell = neighbors[slot];
+    if (!cell) {
+      button.disabled = true;
+      button.removeAttribute('data-cell');
+      button.textContent = 'Слот ' + String(slot);
+      button.setAttribute('aria-label', 'Соседняя ячейка, слот ' + String(slot));
+      return;
+    }
+    button.disabled = false;
+    button.dataset.cell = String(cell.cell);
+    button.textContent = 'Слот ' + String(slot) + ' · #' + String(cell.cell);
+    button.title = 'Каноническая ячейка ' + String(cell.cell);
+    button.setAttribute('aria-label', 'Перецентровка на соседнюю ячейку #' + String(cell.cell) + ', слот ' + String(slot));
+  });
+}
+
+function updateLocalBreadcrumb(visible: boolean): void {
+  els.breadcrumbPatchWrap.hidden = !visible;
+  els.breadcrumbPatchSep.hidden = !visible;
+  els.breadcrumbPatch.hidden = !visible;
+  if (visible) els.breadcrumbPatch.textContent = 'Участок';
+}
+
+function updateLocalMapUrl(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
+  const params = new URLSearchParams(window.location.search);
+  params.set('place', selectedPlace ? (selectedPlace.ID || '') : String(els.planetId.value || '2'));
+  params.set('cell', patchReady.canonicalAddress);
+  params.set('view', 'local');
+  params.set('scale', String(widthKm));
+  window.history.replaceState(null, '', window.location.pathname + '?' + params.toString() + window.location.hash);
+}
+
+function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
+  if (!patchReady.invariants.ok) {
+    setLocalMapStatus('Patch7 не прошёл проверки И-3; Dive-in заблокирован.', 'error');
+    return;
+  }
+  const centerCell = patchReady.patch.cells[0];
+  if (!centerCell) {
+    setLocalMapStatus('Patch7 не содержит центральную ячейку.', 'error');
+    return;
+  }
+  const scale = selectedLocalScale(Number(widthKm));
+  const shouldFlyToPatch = !localMapActive;
+  const requestId = ++localMapEntrySeq;
+  window.clearTimeout(localMapHideTimer);
+  localMapWidthKm = scale;
+  localMapRadiusM = Math.max(600, (scale * 1000) / 2);
+  els.localScale.value = String(scale);
+  setLocalMapStatus('Запускаю локальную генерацию и подлёт к центру Patch7…', 'info');
+
+  // Подлёт и CPU-генерация стартуют на одном первом кадре Dive-in.
+  window.requestAnimationFrame(() => {
+    if (requestId !== localMapEntrySeq) return;
+    if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.45, 750);
+
+    const startedAt = performance.now();
+    let localData: LocalMapWorkerResponse;
+    try {
+      localData = generateLocalMap({
+        patch: patchReady.patch,
+        seed: parseSeedUint32(els.seed.value),
+        placeId: Number(selectedPlace?.ID || 2),
+        radiusM: Math.max(600, (scale * 1000) / 2),
+      });
+    } catch (error) {
+      setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
+      return;
+    }
+    if (requestId !== localMapEntrySeq) return;
+
+    localMapData = localData;
+    const meta = localData.meta as LocalMapWorkerResponse['meta'] & {
+      genMs?: number;
+      totalInstances?: number;
+      buildableFraction?: number;
+    };
+    const measuredMs = performance.now() - startedAt;
+    localMapGenerationMs = Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs;
+    localMapInstanceCount = localTotalInstances(localData);
+    localMapBuildableFraction = Number.isFinite(meta.buildableFraction)
+      ? clampLocal(meta.buildableFraction as number, 0, 1)
+      : clampLocal(patchReady.buildableFraction, 0, 1);
+    if (!initializeLocalMapRenderer() || !localMapRenderer) return;
+
+    const renderer = localMapRenderer;
+    try {
+      if (typeof renderer.enqueueWorkerData === 'function') {
+        renderer.enqueueWorkerData(localData, 3.0);
+        setLocalMapStatus('Данные готовы; выполняю порционную GPU-заливку без блокировки кадров.', 'info');
+      } else {
+        renderer.onWorkerData(localData);
+        setLocalMapStatus('Локальная карта готова к управлению камерой.', 'ok');
+      }
+    } catch (error) {
+      setLocalMapStatus('Ошибка передачи локальных данных в WebGL2: ' + ((error as Error).message || String(error)), 'error');
+      return;
+    }
+
+    els.localMapTitle.textContent = patchReady.canonicalAddress + ' · patch_key ' + patchReady.keys.patchKey;
+    els.localMapTitle.title = 'Ячейка ' + patchReady.canonicalAddress + ' · ключ участка ' + patchReady.keys.patchKey;
+    els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
+      Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
+    els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
+    updateLocalNeighborButtons(patchReady);
+    updateLocalBreadcrumb(true);
+    updateLocalMapUrl(patchReady, scale);
+    document.body.classList.add('local-map-active');
+    els.localMapStage.hidden = false;
+    resetLocalCamera();
+    els.localMapStage.classList.remove('is-active');
+    void els.localMapStage.offsetWidth;
+    els.localMapStage.classList.add('is-active');
+    localMapActive = true;
+    localMapHudLastAt = 0;
+    updateLocalMapHud();
+    if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
+    els.localMapCanvas.focus({ preventScroll: true });
+  });
+}
+
+function exitLocalMap(): void {
+  localMapEntrySeq++;
+  localMapActive = false;
+  if (localMapFrameId) window.cancelAnimationFrame(localMapFrameId);
+  localMapFrameId = 0;
+  localPointers.clear();
+  localPointerId = null;
+  localPointerMode = null;
+  localPinchDistance = 0;
+  els.localMapStage.classList.remove('is-active');
+  document.body.classList.remove('local-map-active');
+  updateLocalBreadcrumb(false);
+  const params = new URLSearchParams(window.location.search);
+  params.delete('view');
+  params.delete('scale');
+  const query = params.toString();
+  window.history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+  if (globe) globe.setDistance(3.05);
+
+  if (localMapRenderer && typeof localMapRenderer.dispose === 'function') {
+    localMapRenderer.dispose();
+    localMapRenderer = null;
+    if (!localMapProgramsOwnedByRenderer && localMapPrograms && localMapGl) {
+      localMapGl.deleteProgram(localMapPrograms.terrainProgram);
+      localMapGl.deleteProgram(localMapPrograms.structureProgram);
+    }
+    localMapPrograms = null;
+    localMapProgramsOwnedByRenderer = false;
+    localMapData = null;
+  }
+  window.clearTimeout(localMapHideTimer);
+  localMapHideTimer = window.setTimeout(() => {
+    if (!localMapActive) els.localMapStage.hidden = true;
+  }, 460);
 }
 
 /* ------------------------------------------------------------- CSV */
@@ -255,6 +921,10 @@ function installPresets(rows: CsvRow[]): void {
   if (modeParam) els.colorMode.value = modeParam;
   const reliefParam = params.get('relief');
   if (reliefParam) els.relief.value = reliefParam;
+  const scaleParam = params.get('scale');
+  if (scaleParam && LOCAL_MAP_SCALE_STEPS.some((step) => String(step) === scaleParam)) {
+    els.localScale.value = scaleParam;
+  }
   syncSurfaceClassWithPreset();
   const surfaceParam = params.get('surface');
   if (surfaceParam) els.surfaceClass.value = surfaceParam;
@@ -367,7 +1037,11 @@ function updateUrl(profile: GeographyProfileInput): void {
   if (selectedPlace) params.set('place', selectedPlace.ID || '');
   if (prior.has('cell')) params.set('cell', prior.get('cell') || '');
   if (prior.has('system')) params.set('system', prior.get('system') || '');
-  window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
+  if (prior.get('view') === 'local') {
+    params.set('view', 'local');
+    params.set('scale', prior.get('scale') || els.localScale.value || '1.2');
+  }
+  window.history.replaceState(null, '', window.location.pathname + '?' + params.toString() + window.location.hash);
 }
 
 /* --------------------------------------------------------------- worker */
@@ -449,6 +1123,10 @@ function startGeneration(restart: boolean, reason: string): void {
     setStatus((err as Error).message || String(err), 'error');
     return;
   }
+  if (localMapActive) exitLocalMap();
+  lastPatchReady = null;
+  els.diveLocalMap.disabled = true;
+  updateLocalNeighborButtons(null);
   updateUrl(profile);
   const estimates = updateEstimates();
   if (restart) restartWorker(); else ensureWorker();
@@ -508,6 +1186,9 @@ function onWorkerMessage(event: MessageEvent): void {
         window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
         const inspector = document.getElementById('patchInspector');
         if (inspector) inspector.dataset.cell = String(msg.info.cell);
+        lastPatchReady = null;
+        els.diveLocalMap.disabled = true;
+        updateLocalNeighborButtons(null);
         const prefetch = document.getElementById('prefetchStatus');
         if (prefetch) prefetch.textContent = 'Каноническая ячейка ' + msg.info.address + ' выбрана; запрашиваю срез Patch7…';
         requestPatchExtract(msg.info.cell);
@@ -651,7 +1332,12 @@ function sendColorMode(): void {
 function sendPick(direction: number[], purpose: string): void {
   if (!worker || !displayedToken || !displayedSummary || pendingGpuReady) return;
   const id = ++requestSeq;
-  if (purpose === 'hover') latestHoverRequest = id; else latestPickRequest = id;
+  if (purpose === 'hover') latestHoverRequest = id; else {
+    latestPickRequest = id;
+    lastPatchReady = null;
+    els.diveLocalMap.disabled = true;
+    updateLocalNeighborButtons(null);
+  }
   const post: PickMessage = {
     type: 'pick',
     token: displayedToken,
@@ -817,6 +1503,24 @@ function setCycle(active: boolean): void {
 
 /* --------------------------------------------------------------- события */
 function initEvents(): void {
+  els.diveLocalMap.addEventListener('click', () => {
+    if (lastPatchReady && !els.diveLocalMap.disabled) {
+      enterLocalMap(lastPatchReady, Number(els.localScale.value));
+    }
+  });
+  els.exitLocalMap.addEventListener('click', exitLocalMap);
+  els.localScale.addEventListener('change', () => {
+    if (lastPatchReady && localMapActive) enterLocalMap(lastPatchReady, Number(els.localScale.value));
+  });
+  els.resetLocalCam.addEventListener('click', resetLocalCamera);
+  els.localNeighborNav.addEventListener('click', (event: MouseEvent) => {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest<HTMLButtonElement>('button[data-cell]');
+    const cell = Number(button && button.dataset.cell);
+    if (!button || button.disabled || !Number.isInteger(cell) || cell < 0) return;
+    setLocalMapStatus('Запрашиваю соседнюю ячейку #' + cell + ' и новый Patch7…', 'info');
+    requestCellPick(cell);
+  });
   const copyLink = document.getElementById('copyCellLinkBtn');
   copyLink?.addEventListener('click', () => {
     void navigator.clipboard.writeText(window.location.href).then(() => {
@@ -976,6 +1680,21 @@ function requestPatchExtract(cell: number): void {
   worker.postMessage(msg);
 }
 
+function requestCellPick(cell: number): void {
+  if (!worker || !displayedToken || !Number.isInteger(cell) || cell < 0) return;
+  lastPatchReady = null;
+  els.diveLocalMap.disabled = true;
+  updateLocalNeighborButtons(null);
+  const msg: PickMessage = {
+    type: 'pick',
+    token: displayedToken,
+    requestId: ++latestPickRequest,
+    cell: cell,
+    purpose: 'select',
+  };
+  worker.postMessage(msg);
+}
+
 function renderPrefetchReady(msg: WorkerPrefetchReadyResponse): void {
   const el = document.getElementById('prefetchStatus');
   if (!el) return;
@@ -989,6 +1708,10 @@ function renderPrefetchReady(msg: WorkerPrefetchReadyResponse): void {
 }
 
 function renderPatchReady(msg: WorkerPatchReadyResponse): void {
+  lastPatchReady = msg;
+  els.diveLocalMap.disabled = !msg.invariants.ok;
+  updateLocalNeighborButtons(msg);
+
   const planetKeyOut = document.getElementById('planetKeyOut');
   const regionKeyOut = document.getElementById('regionKeyOut');
   const cellKeyOut = document.getElementById('cellKeyOut');
@@ -1002,21 +1725,31 @@ function renderPatchReady(msg: WorkerPatchReadyResponse): void {
     prefetch.textContent = 'Срез Patch7 (' + msg.patch.version + ') для ' + msg.canonicalAddress + ' готов.';
   }
   const details = document.getElementById('patchDetails');
-  if (!details) return;
-  const riverInlets = msg.patch.river.inlets.length;
-  const riverOutlet = msg.patch.river.outlet
-    ? ('слот #' + msg.patch.river.outlet.slot + ' → ячейка ' + msg.patch.river.outlet.neighborCell)
-    : 'терминал / нет стока';
-  const checksCount = Object.values(msg.invariants.checks).filter(Boolean).length;
-  const totalChecks = Object.keys(msg.invariants.checks).length;
-  details.innerHTML =
-    '<div class="kv">' +
-      '<span>Центр Patch7 (v=' + escapeHtml(msg.patch.v) + ')</span><strong>#' + escapeHtml(msg.hexCenterCell) + ' (' + escapeHtml(msg.canonicalAddress) + ')</strong>' +
-      '<span>Охват кольца (7 ячеек)</span><strong>' + fmtNum(msg.spanMeters / 1000, 2) + ' км (' + fmtInt(msg.spanMeters) + ' м)</strong>' +
-      '<span>Площадка под базы (И-3.4)</span><strong>' + fmtPct(msg.buildableFraction, 1) + '</strong>' +
-      '<span>Речной граф кольца (И-3.3)</span><strong>входов: ' + riverInlets + ' · выход: ' + escapeHtml(riverOutlet) + '</strong>' +
-      '<span>Инварианты сшивки И-3</span><strong>' + (msg.invariants.ok ? 'OK' : 'ОШИБКА') + ' (' + checksCount + '/' + totalChecks + ')</strong>' +
-    '</div>';
+  if (details) {
+    const riverInlets = msg.patch.river.inlets.length;
+    const riverOutlet = msg.patch.river.outlet
+      ? ('слот #' + msg.patch.river.outlet.slot + ' → ячейка ' + msg.patch.river.outlet.neighborCell)
+      : 'терминал / нет стока';
+    const checksCount = Object.values(msg.invariants.checks).filter(Boolean).length;
+    const totalChecks = Object.keys(msg.invariants.checks).length;
+    details.innerHTML =
+      '<div class="kv">' +
+        '<span>Центр Patch7 (v=' + escapeHtml(msg.patch.v) + ')</span><strong>#' + escapeHtml(msg.hexCenterCell) + ' (' + escapeHtml(msg.canonicalAddress) + ')</strong>' +
+        '<span>Охват кольца (7 ячеек)</span><strong>' + fmtNum(msg.spanMeters / 1000, 2) + ' км (' + fmtInt(msg.spanMeters) + ' м)</strong>' +
+        '<span>Площадка под базы (И-3.4)</span><strong>' + fmtPct(msg.buildableFraction, 1) + '</strong>' +
+        '<span>Речной граф кольца (И-3.3)</span><strong>входов: ' + riverInlets + ' · выход: ' + escapeHtml(riverOutlet) + '</strong>' +
+        '<span>Инварианты сшивки И-3</span><strong>' + (msg.invariants.ok ? 'OK' : 'ОШИБКА') + ' (' + checksCount + '/' + totalChecks + ')</strong>' +
+      '</div>';
+  }
+  if (!msg.invariants.ok) {
+    setLocalMapStatus('Patch7 не прошёл проверки И-3; Dive-in заблокирован.', 'error');
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (localMapActive || params.get('view') === 'local') {
+    const scale = selectedLocalScale(Number(params.get('scale') || els.localScale.value));
+    enterLocalMap(msg, scale);
+  }
 }
 
 /* --------------------------------------------------------------- запуск */
