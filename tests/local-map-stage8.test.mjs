@@ -243,11 +243,28 @@ test('И-3.3: речное русло врезается от входных г�
 
 test('И-3.1: при переданном profile рельеф учитывает канал detail единого 3D-сэмплера', () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
+  assert.equal(PROFILE.geographyVersion, 'c100-soft-v2');
+  let samplerV2;
+  assert.doesNotThrow(() => {
+    samplerV2 = Contract.createPatchFieldSampler(PROFILE);
+  }, 'createPatchFieldSampler принимает профиль c100-soft-v2 без исключения');
+  assert.equal(PROFILE.geographyVersion, 'c100-soft-v2', 'входной профиль не мутируется');
+  assert.doesNotThrow(() => {
+    Contract.createPatchFieldSampler({ master_seed_hex: PROFILE.masterSeedHex, geography_version: 'c100-soft-v2' });
+  }, 'createPatchFieldSampler принимает snake_case geography_version = c100-soft-v2');
+  const samplerV1 = Contract.createPatchFieldSampler({ ...PROFILE, geographyVersion: 'c100-soft-v1' });
+  const centerDir = dryPatch.cells[0].center;
+  assert.deepEqual(
+    samplerV2.sampleFields(centerDir[0], centerDir[1], centerDir[2]),
+    samplerV1.sampleFields(centerDir[0], centerDir[1], centerDir[2]),
+    'сэмплер по c100-soft-v2 побитово совпадает с базовым c100-soft-v1',
+  );
+
   Worker.clearLocalMapCache();
   const plain = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'detail-plain' }));
   const detailed = Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'detail-profile',
-    profile: { ...PROFILE, geographyVersion: 'c100-soft-v1' },
+    profile: PROFILE,
   }));
 
   let differing = 0;
