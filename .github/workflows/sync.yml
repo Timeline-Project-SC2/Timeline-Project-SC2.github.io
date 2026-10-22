@@ -64,7 +64,7 @@ jobs:
             fi
             SHA=$(python3 -c "import json; d=json.load(open('data/upstream/manifest.json')); print(list(d.get('sources',{}).values())[0].get('sha','')[:7])")
             git commit -m "sync: upstream @ ${SHA}"
-            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/TimelineProjectSC2/TimelineProjectSC2.github.io"
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io"
             git fetch origin main
             git rebase origin/main
             git push origin HEAD
