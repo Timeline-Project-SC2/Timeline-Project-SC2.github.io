@@ -541,3 +541,39 @@ test('buildGeometry: поверхность и объём спайка согл�
     }
   }
 });
+
+test('GPU-путь /planet-test/: wireGeometry без vertexCellId + state.grid восстанавливает R32UI и объём', () => {
+  const gl = makeFakeGl();
+  const wireGeometry = { ...GEOMETRY };
+  delete wireGeometry.vertexCellId;
+  delete wireGeometry.cellIndexStart;
+
+  const state = fxState({
+    separation: 0.6,
+    coreScale: 0.5,
+    grid: GRID,
+    geometry: wireGeometry,
+  });
+  const hooks = PlanetFx.createFxHooks(state);
+  const program = { id: 0 };
+  // Даже если рендерер передал не-сетку вторым аргументом, state.grid не затирается.
+  hooks.onGeometryReady(gl, /** @type {any} */ (wireGeometry), wireGeometry);
+  hooks.onSurfaceProgram(gl, program);
+  hooks.onSurfaceDraw(gl, program);
+  hooks.onAfterSurfaceDraw(gl, {
+    mvp: new Float32Array(16), model: new Float32Array(16),
+    normalMat: new Float32Array(9), lightDir: new Float32Array([0.5, 0.3, 0.8]),
+    eyePos: new Float32Array([0, 0, 2.6]), timeSec: 1.5,
+  });
+
+  assert.ok(wireGeometry.vertexCellId instanceof Uint32Array, 'vertexCellId должен восстановиться из state.grid');
+  assert.deepEqual(wireGeometry.vertexCellId, GEOMETRY.vertexCellId);
+
+  const byName = (name) => gl.calls.filter((c) => c.name === name);
+  const idUpload = byName('texImage2D').find((c) => c.args[2] === gl.R32UI);
+  assert.ok(idUpload, 'текстура R32UI обязана заливаться и для wireGeometry');
+  const draws = byName('drawElements');
+  assert.equal(draws.length, 2, 'объём разломов и ядро обязаны отрисоваться на wireGeometry');
+  hooks.onDispose(gl);
+});
+
