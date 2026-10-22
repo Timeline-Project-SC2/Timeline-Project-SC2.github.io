@@ -1169,6 +1169,161 @@ export function randomFxTheme(masterSeedHex: string): FxTheme {
   };
 }
 
+
+// ===========================================================================
+// 4.1 Объём осколков (VS_VOLUME/FS_VOLUME) и раскалённое ядро (VS_CORE/FS_CORE)
+// ===========================================================================
+//
+// Восстановлено из 3728d4e:site/planet-test/planet-test.js: закрытая нижняя
+// оболочка осколка (1 − thick) и боковые стенки разломов между ячейками
+// разных осколков с затенением по глубине трещины, плюс процедурное
+// раскалённое ядро Шакураса между осколками. Каскад сборки (uBuild/uHide/
+// uCenterGrow) — зона поверхности, здесь его нет: объём виден только тогда,
+// когда осколки уже разошлись.
+
+/** Глубина трещины: 0 на кромке поверхности, 1 у дна (низ — всегда дно). */
+const VOLUME_DEPTH_GLSL = SHARD_TRANSFORM_GLSL + `
+uniform float uThick;
+float fxCrackDepth(vec3 p, float kind) {
+  if (kind > 0.5) return 1.0;
+  return clamp((1.0 - length(p)) / max(uThick, 0.001), 0.0, 1.0);
+}
+`;
+
+export const VS_VOLUME = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+layout(location=2) in float aEmissive;
+layout(location=5) in float aShard;
+layout(location=6) in float aKind; // 0 — стенка разлома, 1 — нижняя оболочка
+uniform mat4 uMvp;
+uniform mat4 uModel;
+uniform float uScale;
+${VOLUME_DEPTH_GLSL}
+out vec3 vColor;
+out float vEmissive;
+out float vCrack;
+out vec3 vWorldPos;
+out float vKind;
+void main() {
+  // Тот же трансформ осколка, что у поверхности: стенка не отрывается от своей ячейки.
+  vec3 bp = uShardMode > 0.5 ? shardTransform(aPos, aShard) : aPos;
+  vec3 p = bp * uScale;
+  vColor = aColor;
+  vEmissive = aEmissive;
+  vCrack = fxCrackDepth(aPos, aKind);
+  vKind = aKind;
+  vWorldPos = (uModel * vec4(p, 1.0)).xyz;
+  gl_Position = uMvp * vec4(p, 1.0);
+}
+`;
+
+export const FS_VOLUME = `#version 300 es
+precision highp float;
+in vec3 vColor;
+in float vEmissive;
+in float vCrack;
+in vec3 vWorldPos;
+in float vKind;
+uniform vec3 uSunDir;
+out vec4 fragColor;
+void main() {
+  // Плоская нормаль из производных мировой позиции — гранёная порода без
+  // атрибутов нормалей (как в спайке).
+  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+  if (!gl_FrontFacing) n = -n;
+  float diff = 0.32 + 0.68 * max(dot(n, normalize(uSunDir)), 0.0);
+  // Стенка темнеет к дну трещины, но разлом светится именно оттуда.
+  float depthShade = mix(1.0, 0.55, vCrack);
+  vec3 lava = mix(vec3(0.55, 0.08, 0.01), vec3(1.0, 0.55, 0.12), clamp(vEmissive, 0.0, 1.0));
+  lava += vec3(0.35, 0.30, 0.10) * max(vEmissive - 1.0, 0.0);
+  float glow = vKind > 0.5 ? (0.55 + 0.45 * vCrack) : vCrack;
+  vec3 col = vColor * diff * depthShade + lava * (vEmissive + glow * 0.35);
+  fragColor = vec4(col, 1.0);
+}
+`;
+
+export const VS_CORE = `#version 300 es
+layout(location=0) in vec3 aPos;
+uniform mat4 uMvp;
+uniform mat4 uModel;
+uniform float uScale;
+out vec3 vNormal;
+out vec3 vObj;
+void main() {
+  vObj = aPos;
+  vNormal = normalize(mat3(uModel) * normalize(aPos));
+  gl_Position = uMvp * vec4(aPos * uScale, 1.0);
+}
+`;
+
+export const FS_CORE = `#version 300 es
+precision highp float;
+in vec3 vNormal;
+in vec3 vObj;
+uniform vec3 uSunDir;
+out vec4 fragColor;
+// Декоративный GPU-шум только для вида лавовых трещин ядра (не авторитетный).
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+float vnoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n000 = hash13(i);
+  float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
+  float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
+  float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
+  float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
+  float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
+  float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
+  float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
+  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+             mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+void main() {
+  vec3 dir = normalize(vObj);
+  float n = vnoise(dir * 7.0) * 0.65 + vnoise(dir * 15.0) * 0.35;
+  float crack = 1.0 - smoothstep(0.0, 0.16, abs(n - 0.5));
+  float diff = 0.35 + 0.65 * max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
+  vec3 rock = vec3(0.10, 0.06, 0.05) * diff;
+  vec3 lava = mix(vec3(0.85, 0.25, 0.03), vec3(1.0, 0.72, 0.25), crack);
+  fragColor = vec4(rock + lava * crack * 1.6, 1.0);
+}
+`;
+
+/** Радиус раскалённого ядра по умолчанию (coreScale). */
+export const DEFAULT_CORE_SCALE = 0.55;
+
+/** UV-сфера для ядра, когда сетки планеты ещё нет. */
+function makeUvSphere(lonSegments: number, latSegments: number): { positions: Float32Array; indices: Uint32Array } {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  for (let lat = 0; lat <= latSegments; lat++) {
+    const v = lat / latSegments;
+    const phi = v * Math.PI;
+    const sp = Math.sin(phi);
+    const cp = Math.cos(phi);
+    for (let lon = 0; lon <= lonSegments; lon++) {
+      const u = lon / lonSegments;
+      const th = u * Math.PI * 2;
+      positions.push(Math.cos(th) * sp, cp, Math.sin(th) * sp);
+    }
+  }
+  const stride = lonSegments + 1;
+  for (let lat = 0; lat < latSegments; lat++) {
+    for (let lon = 0; lon < lonSegments; lon++) {
+      const a = lat * stride + lon;
+      const b = a + stride;
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
+}
+
 // ===========================================================================
 // 5. Адаптер к боевому глобусу: PlanetGlobeFxHooks для PlanetGlobeOptions.fx
 // ===========================================================================
@@ -1230,6 +1385,53 @@ function replaceOnce(source: string, needle: string, replacement: string, label:
   return source.slice(0, index) + replacement + source.slice(index + needle.length);
 }
 
+/** Компиляция и линковка программы объёма/ядра (WebGL2, один раз на контекст). */
+function compileProgram(gl: WebGL2RenderingContext, vsSource: string, fsSource: string): WebGLProgram {
+  const compile = (type: number, source: string): WebGLShader => {
+    const shader = gl.createShader(type) as WebGLShader;
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(shader) || '';
+      gl.deleteShader(shader);
+      throw new Error('шейдер не собрался: ' + log);
+    }
+    return shader;
+  };
+  const program = gl.createProgram() as WebGLProgram;
+  const vs = compile(gl.VERTEX_SHADER, vsSource);
+  const fs = compile(gl.FRAGMENT_SHADER, fsSource);
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(program) || '';
+    gl.deleteProgram(program);
+    throw new Error('программа не слинковалась: ' + log);
+  }
+  return program;
+}
+
+interface VolumeUniforms {
+  mvp: WebGLUniformLocation | null;
+  model: WebGLUniformLocation | null;
+  scale: WebGLUniformLocation | null;
+  thick: WebGLUniformLocation | null;
+  shardMode: WebGLUniformLocation | null;
+  sep: WebGLUniformLocation | null;
+  shardTex: WebGLUniformLocation | null;
+  sun: WebGLUniformLocation | null;
+}
+
+interface CoreUniforms {
+  mvp: WebGLUniformLocation | null;
+  model: WebGLUniformLocation | null;
+  scale: WebGLUniformLocation | null;
+  sun: WebGLUniformLocation | null;
+}
+
 interface FxUniforms {
   sep: WebGLUniformLocation | null;
   shardMode: WebGLUniformLocation | null;
@@ -1267,6 +1469,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
   let layout: ShardLayout | null = null;
   let layoutKey = '';
   let shardTexData: Float32Array | null = null;
+  let shardMaxB = 0;
   let readyGrid: PlanetGrid | null = null;
   let readyGeometry: GlobeGeometry | null = null;
   let lastGridRef: PlanetGrid | null = null;
@@ -1295,6 +1498,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
     layoutKey = key;
     const built = buildShardTextureData(layout, sp.loss);
     shardTexData = built.data;
+    shardMaxB = built.shardMaxB;
     return layout;
   };
 
@@ -1364,6 +1568,133 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
     shardIdTextureKey = key;
     shardIdAvailable = true;
     return true;
+  };
+
+  // ---- GPU-ресурсы объёма разломов и раскалённого ядра (Шаг 2) ----
+  let volProgram: WebGLProgram | null = null;
+  let volUniforms: VolumeUniforms | null = null;
+  let volVao: WebGLVertexArrayObject | null = null;
+  let volBuffers: WebGLBuffer[] = [];
+  let volIndexCount = 0;
+  let volKey = '';
+  let coreProgram: WebGLProgram | null = null;
+  let coreUniforms: CoreUniforms | null = null;
+  let coreVao: WebGLVertexArrayObject | null = null;
+  let coreBuffers: WebGLBuffer[] = [];
+  let coreIndexCount = 0;
+  let effectsFailed = false;
+
+  /** Плагин не должен ломать рендер: ошибка шейдера отключает эффекты, а не глобус. */
+  const failEffects = (err: unknown): void => {
+    if (effectsFailed) return;
+    effectsFailed = true;
+    console.error('PlanetGlobeFx: объём осколков и ядро отключены —', err);
+  };
+
+  const uploadFloatAttribute = (gl: WebGL2RenderingContext, buffer: WebGLBuffer,
+    location: number, size: number, data: Float32Array): void => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+  };
+
+  const clearVolume = (gl: WebGL2RenderingContext): void => {
+    for (const b of volBuffers) gl.deleteBuffer(b);
+    volBuffers = [];
+    if (volVao) gl.deleteVertexArray(volVao);
+    volVao = null;
+    volIndexCount = 0;
+    volKey = '';
+  };
+
+  const clearCore = (gl: WebGL2RenderingContext): void => {
+    for (const b of coreBuffers) gl.deleteBuffer(b);
+    coreBuffers = [];
+    if (coreVao) gl.deleteVertexArray(coreVao);
+    coreVao = null;
+    coreIndexCount = 0;
+  };
+
+  /**
+   * Объём осколков: закрытая нижняя оболочка (1 − thick) + стенки разломов.
+   * Пересобирается только при смене раскладки/толщины/рваности/потерь —
+   * разлёт (uSep) остаётся юниформом и анимация геометрию не пересобирает.
+   */
+  const ensureVolume = (gl: WebGL2RenderingContext): void => {
+    const grid = currentGrid();
+    const geometry = currentGeometry();
+    const layoutNow = ensureShardLayout();
+    if (!grid || !geometry || !layoutNow) return;
+    const sp = shardParamsFromState(state);
+    const key = layoutKey + '|t' + sp.thick + '|j' + sp.jag + '|l' + sp.loss;
+    if (volVao && volKey === key) return;
+    // birth объёма нужен только каскаду сборки поверхности, которого здесь нет.
+    const birth = new Float32Array(grid.cellCount);
+    const volume = buildVolumeArrays(grid, layoutNow, sp, geometry.positions, birth);
+    clearVolume(gl);
+    if (!volume || !volume.indexCount) return;
+    if (!volProgram) {
+      volProgram = compileProgram(gl, VS_VOLUME, FS_VOLUME);
+      volUniforms = {
+        mvp: gl.getUniformLocation(volProgram, 'uMvp'),
+        model: gl.getUniformLocation(volProgram, 'uModel'),
+        scale: gl.getUniformLocation(volProgram, 'uScale'),
+        thick: gl.getUniformLocation(volProgram, 'uThick'),
+        shardMode: gl.getUniformLocation(volProgram, 'uShardMode'),
+        sep: gl.getUniformLocation(volProgram, 'uSep'),
+        shardTex: gl.getUniformLocation(volProgram, 'uShardTex'),
+        sun: gl.getUniformLocation(volProgram, 'uSunDir'),
+      };
+    }
+    volVao = gl.createVertexArray();
+    gl.bindVertexArray(volVao);
+    const newBuffer = (): WebGLBuffer => {
+      const buffer = gl.createBuffer() as WebGLBuffer;
+      volBuffers.push(buffer);
+      return buffer;
+    };
+    uploadFloatAttribute(gl, newBuffer(), 0, 3, volume.positions);
+    uploadFloatAttribute(gl, newBuffer(), 1, 3, volume.colors);
+    uploadFloatAttribute(gl, newBuffer(), 2, 1, volume.emissive);
+    uploadFloatAttribute(gl, newBuffer(), 5, 1, volume.shard);
+    uploadFloatAttribute(gl, newBuffer(), 6, 1, volume.kind);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, newBuffer());
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, volume.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    volIndexCount = volume.indexCount;
+    volKey = key;
+  };
+
+  /** Ядро: первичная триангуляция сетки (как в спайке) или UV-сфера без сетки. */
+  const ensureCore = (gl: WebGL2RenderingContext): void => {
+    if (coreVao) return;
+    const grid = currentGrid();
+    const sphere = grid && grid.triangles ? null : makeUvSphere(32, 16);
+    const positions = grid && grid.triangles ? grid.centers : (sphere as { positions: Float32Array }).positions;
+    const indices = grid && grid.triangles ? grid.triangles : (sphere as { indices: Uint32Array }).indices;
+    if (!positions.length || !indices.length) return;
+    if (!coreProgram) {
+      coreProgram = compileProgram(gl, VS_CORE, FS_CORE);
+      coreUniforms = {
+        mvp: gl.getUniformLocation(coreProgram, 'uMvp'),
+        model: gl.getUniformLocation(coreProgram, 'uModel'),
+        scale: gl.getUniformLocation(coreProgram, 'uScale'),
+        sun: gl.getUniformLocation(coreProgram, 'uSunDir'),
+      };
+    }
+    coreVao = gl.createVertexArray();
+    gl.bindVertexArray(coreVao);
+    const newBuffer = (): WebGLBuffer => {
+      const buffer = gl.createBuffer() as WebGLBuffer;
+      coreBuffers.push(buffer);
+      return buffer;
+    };
+    uploadFloatAttribute(gl, newBuffer(), 0, 3, positions);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, newBuffer());
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    coreIndexCount = indices.length;
   };
 
   return {
@@ -1468,6 +1799,104 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
       }
       if (uniforms.reliefScale) gl.uniform1f(uniforms.reliefScale, Math.max(0.001, state.reliefScale));
       gl.activeTexture(gl.TEXTURE0);
+    },
+
+    /**
+     * После отрисовки поверхности: объём разломов и раскалённое ядро.
+     * Фоновый глобус к этому моменту уже залил depth, поэтому объём и ядро
+     * просто дорисовываются с обычным тестом глубины (без блендинга), а
+     * состояние GL восстанавливается до вызова — дальше глобус рисует
+     * выделение ячейки и атмосферу.
+     */
+    onAfterSurfaceDraw(gl: WebGL2RenderingContext, frame: FxFrameContext): void {
+      if (effectsFailed || !state.shardMode) return;
+      if (!frame || !frame.mvp || !frame.model) return;
+      if (!ensureShardLayout()) return;
+      const visuals = separationVisuals(state.separation, state.shardMode, shardMaxB);
+      const volumeVisible = state.separation > 0.0001 || shardMaxB > 0.0001;
+      if (!volumeVisible && !visuals.coreVisible) return;
+
+      const prevCull = gl.isEnabled(gl.CULL_FACE);
+      const prevBlend = gl.isEnabled(gl.BLEND);
+      const prevDepthMask = Boolean(gl.getParameter(gl.DEPTH_WRITEMASK));
+      const light = frame && frame.lightDir && frame.lightDir.length >= 3
+        ? frame.lightDir : new Float32Array([0.55, -0.35, 0.75]);
+      const lx = light[0] as number;
+      const ly = light[1] as number;
+      const lz = light[2] as number;
+
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.CULL_FACE);
+      gl.bindVertexArray(null);
+
+      try {
+        if (volumeVisible) {
+          ensureVolume(gl);
+          if (volProgram && volUniforms && volVao && volIndexCount > 0) {
+            ensureShardTexture(gl);
+            gl.useProgram(volProgram);
+            gl.uniformMatrix4fv(volUniforms.mvp, false, frame.mvp);
+            gl.uniformMatrix4fv(volUniforms.model, false, frame.model);
+            gl.uniform1f(volUniforms.scale, 1);
+            gl.uniform1f(volUniforms.thick, Math.max(0.001, state.shardThick ?? 0.14));
+            gl.uniform1f(volUniforms.shardMode, 1);
+            gl.uniform1f(volUniforms.sep, state.separation);
+            gl.uniform3f(volUniforms.sun, lx, ly, lz);
+            // Трансформы осколков — та же текстура, что у поверхности.
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, shardTexture);
+            gl.uniform1i(volUniforms.shardTex, 0);
+            gl.bindVertexArray(volVao);
+            gl.drawElements(gl.TRIANGLES, volIndexCount, gl.UNSIGNED_INT, 0);
+          }
+        }
+        if (visuals.coreVisible) {
+          ensureCore(gl);
+          if (coreProgram && coreUniforms && coreVao && coreIndexCount > 0) {
+            gl.useProgram(coreProgram);
+            gl.uniformMatrix4fv(coreUniforms.mvp, false, frame.mvp);
+            gl.uniformMatrix4fv(coreUniforms.model, false, frame.model);
+            gl.uniform1f(coreUniforms.scale, Math.max(0.05, state.coreScale ?? DEFAULT_CORE_SCALE));
+            gl.uniform3f(coreUniforms.sun, lx, ly, lz);
+            gl.bindVertexArray(coreVao);
+            gl.drawElements(gl.TRIANGLES, coreIndexCount, gl.UNSIGNED_INT, 0);
+          }
+        }
+      } catch (err) {
+        failEffects(err);
+      }
+
+      gl.bindVertexArray(null);
+      gl.useProgram(null);
+      gl.activeTexture(gl.TEXTURE0);
+      if (prevCull) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      if (prevBlend) gl.enable(gl.BLEND); else gl.disable(gl.BLEND);
+      gl.depthMask(prevDepthMask);
+    },
+
+    /** Освобождение всех GPU-ресурсов плагина. */
+    onDispose(gl: WebGL2RenderingContext): void {
+      clearVolume(gl);
+      clearCore(gl);
+      if (volProgram) gl.deleteProgram(volProgram);
+      if (coreProgram) gl.deleteProgram(coreProgram);
+      volProgram = null;
+      volUniforms = null;
+      coreProgram = null;
+      coreUniforms = null;
+      if (shardTexture) gl.deleteTexture(shardTexture);
+      if (shardIdTexture) gl.deleteTexture(shardIdTexture);
+      shardTexture = null;
+      shardTextureKey = '';
+      shardIdTexture = null;
+      shardIdTextureKey = '';
+      shardIdAvailable = false;
+      uniforms = null;
+      volKey = '';
+      effectsFailed = false;
     },
   };
 }
