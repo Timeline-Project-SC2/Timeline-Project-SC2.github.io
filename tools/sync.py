@@ -10,12 +10,14 @@ URL-источники обрабатываются в две фазы: снач
 При любой ошибке — ненулевой код выхода (workflow создаёт Issue).
 При отсутствии изменений — выход 0 без записи (нет пустых коммитов).
 """
+import argparse
 import copy
 import csv
 import datetime
 import hashlib
 import io
 import json
+import math
 import os
 import shutil
 import sys
@@ -277,18 +279,197 @@ def check_unique_ids(sid, rows, fieldnames):
             fail(f"source {sid}: duplicate id")
 
 
-def prepare_url_source(src, manifest):
+def configured_map_size(sources_cfg, overall_meta):
+    """Получить размер координатной сетки из sources.json или meta.json."""
+    containers = [sources_cfg, overall_meta]
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        candidates = [container.get("mapSize"), container.get("map_size")]
+        map_config = container.get("map")
+        if isinstance(map_config, dict):
+            candidates.extend(
+                [map_config.get("mapSize"), map_config.get("size")]
+            )
+        if container is sources_cfg:
+            for source in container.get("sources", []):
+                if isinstance(source, dict):
+                    candidates.extend(
+                        [source.get("mapSize"), source.get("map_size")]
+                    )
+        for candidate in candidates:
+            try:
+                size = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(size) and size > 0:
+                return size
+    return None
+
+
+def _nonempty_cell(value):
+    return value is not None and str(value).strip() != ""
+
+
+def _row_cell(row, column):
+    if column is None:
+        return None
+    if column in row:
+        return row[column]
+    wanted = str(column).strip().lower()
+    for key, value in row.items():
+        if str(key).strip().lower() == wanted:
+            return value
+    return None
+
+
+def _strict_table_role(role, target):
+    if role:
+        return role
+    target_stem = Path(str(target)).stem.lower()
+    return target_stem if target_stem in ("systems", "places") else role
+
+
+def _strict_id_column(role, fieldnames):
+    columns = {}
+    for field in fieldnames or []:
+        normalized = str(field).strip().lower()
+        if normalized:
+            columns.setdefault(normalized, field)
+
+    role = (role or "").lower()
+    if role == "places":
+        preferred = ("id",)
+    elif role == "systems":
+        preferred = ("id", "system_id")
+    elif role == "planet_generation":
+        preferred = ("place_id", "id")
+    else:
+        preferred = ("id", "system_id", "place_id")
+    return next((columns[name] for name in preferred if name in columns), None)
+
+
+def validate_strict_table(source_id, role, rows, fieldnames, map_size):
+    """Вернуть все ошибки строгой проверки одной синхронизируемой таблицы."""
+    try:
+        map_size = float(map_size) if map_size is not None else None
+    except (TypeError, ValueError):
+        map_size = None
+    if map_size is not None and not math.isfinite(map_size):
+        map_size = None
+
+    label = f"source {source_id}" + (f" ({role})" if role else "")
+    errors = []
+    id_column = _strict_id_column(role, fieldnames)
+    seen_ids = {}
+    x_column = next(
+        (field for field in (fieldnames or []) if str(field).strip().lower() == "x"),
+        None,
+    )
+    y_column = next(
+        (field for field in (fieldnames or []) if str(field).strip().lower() == "y"),
+        None,
+    )
+    system_id_column = next(
+        (
+            field
+            for field in (fieldnames or [])
+            if str(field).strip().lower() == "system_id"
+        ),
+        None,
+    )
+
+    has_coordinates = any(
+        _nonempty_cell(_row_cell(row, column))
+        for row in rows
+        for column in (x_column, y_column)
+    )
+    if has_coordinates and map_size is None:
+        errors.append(
+            f"{label}: mapSize не задан или некорректен в data/sources.json "
+            "и data/meta.json; нельзя проверить диапазон координат"
+        )
+    map_size_text = (
+        str(int(map_size)) if map_size is not None and float(map_size).is_integer()
+        else str(map_size)
+    )
+
+    for index, row in enumerate(rows, start=2):
+        row_label = f"строка {index}"
+        row_id = _row_cell(row, id_column)
+        if _nonempty_cell(row_id):
+            normalized_id = str(row_id).strip()
+            if normalized_id in seen_ids:
+                errors.append(
+                    f"{label}: строки {seen_ids[normalized_id]} и {index}: "
+                    f"дублирующийся непустой id «{normalized_id}»"
+                )
+            else:
+                seen_ids[normalized_id] = index
+
+        coordinates = {
+            "x": _row_cell(row, x_column),
+            "y": _row_cell(row, y_column),
+        }
+        for axis, raw_value in coordinates.items():
+            if not _nonempty_cell(raw_value):
+                continue
+            text_value = str(raw_value).strip()
+            try:
+                number = float(text_value)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{label}: {row_label}, поле {axis}: значение "
+                    f"«{text_value}» не является числом"
+                )
+                continue
+            if map_size is not None and (
+                not math.isfinite(number) or number < 0 or number > map_size
+            ):
+                errors.append(
+                    f"{label}: {row_label}, поле {axis}={text_value}: "
+                    f"координата вне диапазона 0..{map_size_text}"
+                )
+
+        if (role or "").lower() == "places":
+            system_id = _row_cell(row, system_id_column)
+            if _nonempty_cell(system_id) and any(
+                _nonempty_cell(value) for value in coordinates.values()
+            ):
+                x_value = (
+                    "" if coordinates["x"] is None else str(coordinates["x"]).strip()
+                )
+                y_value = (
+                    "" if coordinates["y"] is None else str(coordinates["y"]).strip()
+                )
+                errors.append(
+                    f"{label}: {row_label}: system_id «{str(system_id).strip()}» "
+                    "указан вместе с ручными координатами "
+                    f"(x=«{x_value}», y=«{y_value}»); очистите system_id "
+                    "или обе координаты"
+                )
+
+    return errors
+
+
+def prepare_url_source(src, manifest, strict=False, map_size=None):
     """Скачать и нормализовать URL-источник, ничего не записывая в data/."""
 
     sid = src["id"]
     role = src.get("role")
     target = src.get("target", f"data/{sid}.csv")
+    strict_role = _strict_table_role(role, target)
     target_path = ROOT / target
     enabled = src.get("enabled", True) is not False
 
     if not enabled:
         print(f"== source {sid} (url, disabled)")
         fieldnames, rows = read_local_csv_dataset(target_path)
+        strict_errors = (
+            validate_strict_table(sid, strict_role, rows, fieldnames, map_size)
+            if strict
+            else []
+        )
         return {
             "id": sid,
             "role": role,
@@ -299,6 +480,7 @@ def prepare_url_source(src, manifest):
             "text": None,
             "fieldnames": fieldnames,
             "rows": rows,
+            "strict_errors": strict_errors,
         }
 
     url = src.get("url")
@@ -314,9 +496,12 @@ def prepare_url_source(src, manifest):
         fail(f"source {sid}: empty response")
     if looks_like_html(data, headers):
         fail(
-            f"source {sid}: вместо CSV пришёл HTML — таблица не опубликована в интернете. "
-            f"Откройте таблицу → Файл → Поделиться → Опубликовать в интернете, "
-            f"выберите нужный лист и формат CSV, затем обновите url в data/sources.json"
+            f"source {sid}: вместо CSV пришёл HTML — возможно, таблица не опубликована "
+            "или ссылка требует доступа. Проверьте публикацию:\n"
+            "1. Откройте таблицу и выберите Файл → Поделиться → Опубликовать в интернете.\n"
+            "2. Выберите нужную вкладку и формат CSV, затем нажмите «Опубликовать».\n"
+            "3. Откройте URL источника в окне инкогнито: должна загружаться CSV-выгрузка, "
+            "а не страница входа или запроса доступа."
         )
 
     sha = hashlib.sha256(data).hexdigest()
@@ -349,7 +534,16 @@ def prepare_url_source(src, manifest):
         transformed_text, rows, fieldnames = transform_csv(
             text, src.get("transform", {}), None, None
         )
-        check_unique_ids(sid, rows, fieldnames)
+
+    if strict:
+        strict_errors = validate_strict_table(
+            sid, strict_role, rows, fieldnames, map_size
+        )
+    else:
+        strict_errors = []
+        if role != "planet_generation":
+            # Сохраняем прежнюю проверку дублей URL-источников в мягком режиме.
+            check_unique_ids(sid, rows, fieldnames)
 
     return {
         "id": sid,
@@ -361,6 +555,7 @@ def prepare_url_source(src, manifest):
         "text": transformed_text if changed else None,
         "fieldnames": fieldnames,
         "rows": rows,
+        "strict_errors": strict_errors,
     }
 
 
@@ -443,7 +638,22 @@ def apply_prepared_url_sources(prepared, manifest, overall_meta, enabled_source_
     return updated_manifest, updated_meta
 
 
-def main():
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Синхронизация данных карты")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "проверить числовые координаты и их диапазон, конфликты привязки "
+            "places.system_id с координатами и дубли непустых ID"
+        ),
+    )
+    return parser.parse_args([] if argv is None else argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    strict = args.strict
     token = os.environ.get("GITHUB_TOKEN")
     sources_cfg = load_json(SOURCES)
     sources = sources_cfg.get("sources", [])
@@ -454,13 +664,26 @@ def main():
     manifest = load_json(MANIFEST, {"sources": {}})
 
     overall_meta = load_json(META, {})
+    map_size = configured_map_size(sources_cfg, overall_meta) if strict else None
 
     url_sources = [
         src for src in sources if src.get("type", "github") == "url"
     ]
     prepared_url_sources = [
-        prepare_url_source(src, manifest) for src in url_sources
+        prepare_url_source(src, manifest, strict=strict, map_size=map_size)
+        for src in url_sources
     ]
+    if strict:
+        strict_errors = [
+            error
+            for item in prepared_url_sources
+            for error in item.get("strict_errors", [])
+        ]
+        if strict_errors:
+            fail(
+                "строгая проверка таблиц завершилась ошибками; снимки не изменены:\n- "
+                + "\n- ".join(strict_errors)
+            )
     validate_prepared_url_datasets(prepared_url_sources)
     enabled_source_ids = [
         src["id"] for src in sources if src.get("enabled", True) is not False
@@ -590,4 +813,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
