@@ -19,6 +19,7 @@ import type {
   MapLabel,
   MapPoint,
   PlaceRecord,
+  PlanetProfileStatus,
   SearchEntry,
   SystemRecord,
   TileManifest,
@@ -268,17 +269,54 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     return result;
   }
 
+  /* 3D-профиль планеты (Этап 7): строки `planet-generation.csv` сопоставляются
+   * с записями сектора по `place_id === String(place.id)`. Снимок профилей —
+   * источник истины только для четырёх полей 3D-профиля; отсутствие строки
+   * оставляет планету «процедурной» без статуса и ключа. */
+  function planetProfileStatusOf(value: unknown): PlanetProfileStatus | null {
+    var text = sheetValue(value).toLowerCase();
+    return text === 'draft' || text === 'review' || text === 'frozen' ? text : null;
+  }
+
+  function planetRadiusOf(value: unknown): number | null {
+    var radius = explicitMapNumber(value);
+    return radius !== null && radius > 0 ? radius : null;
+  }
+
+  function mergePlanetGenerationRows(places: PlaceRecord[], rows: SheetRow[]): PlaceRecord[] {
+    if (!places || !places.length || !rows || !rows.length) return places;
+    var byPlaceId: Record<string, SheetRow> = Object.create(null) as Record<string, SheetRow>;
+    rows.forEach(function (row) {
+      var placeId = sheetCell(row, 'place_id');
+      // Дубли вкладки запрещены `tools/sync.py --strict`; если они всё же есть,
+      // побеждает последняя строка — как и в порядке применения снимка.
+      if (placeId) byPlaceId[placeId] = row;
+    });
+    return places.map(function (place) {
+      var row = byPlaceId[String(place.id)];
+      if (!row) return place;
+      return Object.assign({}, place, {
+        planetProfileStatus: planetProfileStatusOf(row.profile_status),
+        planetPresetId: sheetCell(row, 'preset_id') || null,
+        planetRadiusKm: planetRadiusOf(row.radius_km),
+        planetGenerationKey: sheetCell(row, 'generation_key') || null
+      });
+    });
+  }
+
   function loadDataset(): Promise<AtlasDataset> {
     const inline = window.__MAP_DATA__;
     if (inline && inline.systems) {
       return Promise.all([
         fetchCSV('/data/systems.csv'),
-        fetchCSV('/data/places.csv')
+        fetchCSV('/data/places.csv'),
+        fetchCSV(CONFIG.data.dir + CONFIG.data.generation)
       ]).then(function (rows) {
         var planets = inline.planets || [];
         planets = planets.length
           ? mergeStandalonePoiRows(planets, rows[1])
           : rows[1].map(mapPlaceRow);
+        planets = mergePlanetGenerationRows(planets, rows[2]);
         return {
           meta: inline.meta || {},
           systems: mergeSystemTypes(inline.systems || [], rows[0]),
@@ -306,7 +344,8 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         fetchJSON<MapLabel[]>(dir + CONFIG.data.labels + suffix, []),
         wantsRaster ? fetchJSON<TileManifest | null>(CONFIG.tiles.manifest + suffix, null) : Promise.resolve(null),
         fetchCSV('/data/systems.csv' + suffix),
-        fetchCSV('/data/places.csv' + suffix)
+        fetchCSV('/data/places.csv' + suffix),
+        fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix)
       ]).then(function (parts) {
         var systems = parts[0];
         var planets = parts[1];
@@ -319,6 +358,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           planets = mergeStandalonePoiRows(planets || [], parts[6]);
         }
         systems = mergeSystemTypes(systems, parts[5]);
+        planets = mergePlanetGenerationRows(planets, parts[7]);
         return {
           meta: meta, systems: systems, planets: planets,
           overrides: parts[2], labels: parts[3], tiles: parts[4]

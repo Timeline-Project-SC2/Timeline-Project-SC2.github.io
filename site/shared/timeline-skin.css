@@ -371,6 +371,62 @@ body { text-shadow: 0 0 12px rgba(37, 234, 219, .03); }
 .detail-center-button { border-color: rgba(46,245,230,.27); background: rgba(2,18,16,.72); color: #8ce2dc; }
 .detail-center-button:hover { border-color: rgba(46,245,230,.62); background: rgba(22,114,107,.18); }
 .detail-position-note { color: #5f8d89; }
+
+/* Этап 7: переход из досье сектора на страницу 3D-глобуса планеты.
+   Кнопка живёт в закреплённой карточке; карточка-предпросмотр остаётся
+   pointer-events: none (syncDetailPreview в dossier-card.ts). */
+.detail-globe-cta {
+  margin: 12px 0 4px;
+  padding: 10px;
+  border: 1px solid rgba(45,238,224,.26);
+  background: linear-gradient(135deg, rgba(20,64,60,.42), rgba(1,11,10,.78));
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+}
+.detail-globe-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid rgba(46,245,230,.55);
+  background: rgba(18,84,78,.34);
+  color: #eafffd;
+  font: 600 12px/1.2 var(--sans);
+  letter-spacing: .045em;
+  text-align: center;
+  text-decoration: none;
+  text-transform: uppercase;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.detail-globe-button:hover,
+.detail-globe-button:focus-visible {
+  border-color: #2ef5e6;
+  background: rgba(46,245,230,.14);
+  box-shadow: 0 0 16px rgba(46,245,230,.22);
+  color: #f4fffe;
+}
+.detail-globe-icon { font-size: 14px; line-height: 1; text-shadow: 0 0 10px rgba(46,245,230,.55); }
+.detail-globe-caption { margin-top: 7px; color: #5f8d89; font: 10px/1.35 var(--mono); text-align: center; }
+.detail-badges .badge.globe-profile { color: #9ffff7; border-color: rgba(46,245,230,.40); }
+.detail-badges .badge.globe-profile.frozen { color: #bafff9; border-color: rgba(46,245,230,.62); background: rgba(46,245,230,.10); }
+.detail-badges .badge.globe-profile.review { color: #cfe9e6; border-color: rgba(46,245,230,.34); }
+.detail-badges .badge.globe-profile.draft { color: #a9b8b6; border-color: rgba(120,170,166,.34); background: rgba(120,170,166,.055); }
+.world-globe-link {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 2px 6px;
+  border: 1px solid rgba(46,245,230,.30);
+  background: rgba(2,18,16,.72);
+  color: #8ce2dc;
+  font: 10px/1.2 var(--mono);
+  text-decoration: none;
+  white-space: nowrap;
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  transition: border-color .16s ease, background .16s ease, color .16s ease;
+}
+.world-globe-link:hover,
+.world-globe-link:focus-visible { border-color: #2ef5e6; background: rgba(46,245,230,.12); color: #eafffd; }
 .detail-footer { color: #547f7c; }
 .detail-footer button,
 .source-links a {
