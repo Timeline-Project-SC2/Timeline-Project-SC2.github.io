@@ -57,6 +57,14 @@ body {
   color: #7fffd4;
 }
 
+.panel h2 {
+  margin: 12px 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7fffd4;
+}
+
 .panel .panel-toggle {
   flex: 0 0 auto;
   width: 38px;
@@ -89,6 +97,7 @@ body {
 .panel input[type="range"] { width: 100%; accent-color: #1ac9bc; margin: 0; }
 
 .panel input[type="text"],
+.panel input[type="number"],
 .panel select {
   width: 100%;
   box-sizing: border-box;
@@ -97,6 +106,13 @@ body {
   background: rgba(127, 255, 212, 0.06);
   border: 1px solid rgba(127, 255, 212, 0.22);
   padding: 5px 6px;
+}
+
+.panel input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #1ac9bc;
+  justify-self: start;
 }
 
 .panel .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
