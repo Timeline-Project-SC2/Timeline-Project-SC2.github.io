@@ -1258,9 +1258,6 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
       GL.uniform3f(U.uSunDir as WebGLUniformLocation | null, sunDir[0] as number, sunDir[1] as number, sunDir[2] as number);
       GL.uniform3f(U.uCamPos as WebGLUniformLocation | null, camPos[0] as number, camPos[1] as number, camPos[2] as number);
       GL.uniform1f(U.uBorder as WebGLUniformLocation | null, bordersEnabled ? 1 : 0);
-      GL.uniform1f(U.uBuild as WebGLUniformLocation | null, buildP);
-      GL.uniform1f(U.uHide as WebGLUniformLocation | null, hideValue);
-      GL.uniform1f(U.uCenterGrow as WebGLUniformLocation | null, centerGrowValue);
       GL.uniform3f(U.uViewDir as WebGLUniformLocation | null, viewDirObj[0] as number, viewDirObj[1] as number, viewDirObj[2] as number);
       if (opts.fx && opts.fx.onSurfaceDraw && surfaceProgram) {
         opts.fx.onSurfaceDraw(GL, surfaceProgram);
