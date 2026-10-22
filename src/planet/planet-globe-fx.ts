@@ -1577,6 +1577,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
   let volBuffers: WebGLBuffer[] = [];
   let volIndexCount = 0;
   let volKey = '';
+  let volGeometryRef: GlobeGeometry | null = null;
   let coreProgram: WebGLProgram | null = null;
   let coreUniforms: CoreUniforms | null = null;
   let coreVao: WebGLVertexArrayObject | null = null;
@@ -1627,13 +1628,22 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
     const layoutNow = ensureShardLayout();
     if (!grid || !geometry || !layoutNow) return;
     const sp = shardParamsFromState(state);
+    // Рельеф меняется вместе с геометрией: новый объект — новая кромка стенок.
+    if (geometry !== volGeometryRef) {
+      volGeometryRef = geometry;
+      volKey = '';
+    }
     const key = layoutKey + '|t' + sp.thick + '|j' + sp.jag + '|l' + sp.loss;
-    if (volVao && volKey === key) return;
+    // Ключ запоминается и при пустой сборке: не пересобираем объём каждый кадр.
+    if (volKey === key) return;
     // birth объёма нужен только каскаду сборки поверхности, которого здесь нет.
     const birth = new Float32Array(grid.cellCount);
     const volume = buildVolumeArrays(grid, layoutNow, sp, geometry.positions, birth);
     clearVolume(gl);
-    if (!volume || !volume.indexCount) return;
+    if (!volume || !volume.indexCount) {
+      volKey = key;
+      return;
+    }
     if (!volProgram) {
       volProgram = compileProgram(gl, VS_VOLUME, FS_VOLUME);
       volUniforms = {
@@ -1896,6 +1906,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
       shardIdAvailable = false;
       uniforms = null;
       volKey = '';
+      volGeometryRef = null;
       effectsFailed = false;
     },
   };

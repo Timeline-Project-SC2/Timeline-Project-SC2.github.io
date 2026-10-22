@@ -333,6 +333,95 @@ test('shardParamsFromState: дефолты опциональных полей �
 });
 
 // ---------------------------------------------------------------------------
+// 4.1. GPU-путь хуков на записывающем mock WebGL2 (браузера в тестах нет)
+// ---------------------------------------------------------------------------
+function makeFakeGl() {
+  const calls = [];
+  const GL = {
+    MAX_TEXTURE_SIZE: 0x0D33, DEPTH_WRITEMASK: 0x0B72, COMPILE_STATUS: 0x8B81,
+    LINK_STATUS: 0x8B82, VERTEX_SHADER: 0x8B31, FRAGMENT_SHADER: 0x8B30,
+    TEXTURE_2D: 0x0DE1, RGBA32F: 0x8814, R32UI: 0x8236, RGBA: 0x1908,
+    RED_INTEGER: 0x8D94, FLOAT: 0x1406, UNSIGNED_INT: 0x1405, UNSIGNED_BYTE: 0x1401,
+    ARRAY_BUFFER: 0x8892, ELEMENT_ARRAY_BUFFER: 0x8893, STATIC_DRAW: 0x88E4,
+    TRIANGLES: 0x0004, TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800,
+    TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803, NEAREST: 0x2600,
+    CLAMP_TO_EDGE: 0x812F, UNPACK_ALIGNMENT: 0x0CF5, TEXTURE0: 0x84C0,
+    TEXTURE2: 0x84C2, TEXTURE3: 0x84C3, CULL_FACE: 0x0B44, BLEND: 0x0BE2,
+    DEPTH_TEST: 0x0B71, BACK: 0x0405,
+  };
+  let nextId = 1;
+  const handle = () => ({ id: nextId++ });
+  const record = (name) => (...args) => {
+    calls.push({ name, args });
+    if (name === 'createTexture' || name === 'createShader' || name === 'createProgram'
+      || name === 'createBuffer' || name === 'createVertexArray') return handle();
+    if (name === 'getUniformLocation') return handle();
+    if (name === 'getShaderParameter' || name === 'getProgramParameter') return true;
+    if (name === 'getShaderInfoLog' || name === 'getProgramInfoLog') return '';
+    if (name === 'isEnabled') return false;
+    if (name === 'getParameter') {
+      return args[0] === GL.DEPTH_WRITEMASK ? true : 4096;
+    }
+    return undefined;
+  };
+  const names = ['createTexture', 'bindTexture', 'texImage2D', 'texParameteri', 'pixelStorei',
+    'deleteTexture', 'createShader', 'shaderSource', 'compileShader', 'getShaderParameter',
+    'getShaderInfoLog', 'deleteShader', 'createProgram', 'attachShader', 'linkProgram',
+    'getProgramParameter', 'getProgramInfoLog', 'deleteProgram', 'getUniformLocation',
+    'createVertexArray', 'bindVertexArray', 'deleteVertexArray', 'createBuffer', 'bindBuffer',
+    'bufferData', 'deleteBuffer', 'enableVertexAttribArray', 'vertexAttribPointer', 'useProgram',
+    'uniform1f', 'uniform1i', 'uniform3f', 'uniformMatrix4fv', 'drawElements', 'isEnabled',
+    'enable', 'disable', 'depthMask', 'cullFace', 'activeTexture', 'getParameter'];
+  const gl = { ...GL, calls };
+  for (const name of names) gl[name] = record(name);
+  return gl;
+}
+
+test('GPU-путь: индекс осколка, объём разломов, ядро и освобождение ресурсов', () => {
+  const gl = makeFakeGl();
+  const hooks = PlanetFx.createFxHooks(fxState({ separation: 0.6, coreScale: 0.5 }));
+  const program = { id: 0 };
+  hooks.onGeometryReady(gl, GRID, GEOMETRY);
+  hooks.onSurfaceProgram(gl, program);
+  hooks.onSurfaceDraw(gl, program);
+  hooks.onAfterSurfaceDraw(gl, {
+    mvp: new Float32Array(16), model: new Float32Array(16),
+    normalMat: new Float32Array(9), lightDir: new Float32Array([0.5, 0.3, 0.8]),
+    eyePos: new Float32Array([0, 0, 2.6]), timeSec: 1.5,
+  });
+
+  const byName = (name) => gl.calls.filter((c) => c.name === name);
+  // Текстура клеточного индекса: R32UI, ширина 1024, строк — по числу вершин.
+  const idUpload = byName('texImage2D').find((c) => c.args[2] === gl.R32UI);
+  assert.ok(idUpload, 'нет заливки текстуры индексов осколков');
+  assert.equal(idUpload.args[3], 1024);
+  assert.equal(idUpload.args[4], Math.ceil(GEOMETRY.vertexCount / 1024));
+  // texImage2D(target, level, internalformat, width, height, border, format, type, data)
+  assert.equal(idUpload.args[6], gl.RED_INTEGER);
+  assert.equal(idUpload.args[7], gl.UNSIGNED_INT);
+  assert.equal(idUpload.args[8].length, 1024 * idUpload.args[4]);
+  // Трансформы осколков: 64×4 RGBA32F.
+  const shardUpload = byName('texImage2D').find((c) => c.args[2] === gl.RGBA32F);
+  assert.ok(shardUpload, 'нет заливки текстуры трансформов осколков');
+  assert.equal(shardUpload.args[3], PlanetFx.MAX_SHARDS);
+  assert.equal(shardUpload.args[4], 4);
+
+  const draws = byName('drawElements');
+  assert.equal(draws.length, 2, 'ожидались две отрисовки: объём осколков и ядро');
+  for (const draw of draws) assert.ok(draw.args[1] > 0);
+  // Ядро — первичная триангуляция сетки.
+  assert.equal(draws[1].args[1], GRID.triangles.length);
+  const programs = byName('linkProgram').length;
+  assert.equal(programs, 2, 'поверхность + две программы эффектов не должны дублироваться');
+
+  hooks.onDispose(gl);
+  assert.equal(byName('deleteProgram').length, 2);
+  assert.equal(byName('deleteVertexArray').length, 2);
+  assert.ok(byName('deleteTexture').length >= 2);
+  assert.ok(byName('deleteBuffer').length >= 8);
+});
+
+// ---------------------------------------------------------------------------
 // 5. Объём осколков: геометрия разломов и шов с поверхностью
 // ---------------------------------------------------------------------------
 test('buildVolumeArrays: индексы, виды вершин и точный шов кромки', () => {
