@@ -640,7 +640,7 @@ def parse_args(argv=None):
             "places.system_id с координатами и дубли непустых ID"
         ),
     )
-    return parser.parse_args(argv)
+    return parser.parse_args([] if argv is None else argv)
 
 
 def main(argv=None):
@@ -805,4 +805,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
