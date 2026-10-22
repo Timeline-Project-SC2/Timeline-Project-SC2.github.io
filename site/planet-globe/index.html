@@ -13,6 +13,10 @@
     <a href="../sector/">Сектор Копрулу</a><span aria-hidden="true">→</span>
     <a id="breadcrumbSystem" href="../sector/">Система</a><span aria-hidden="true">→</span>
     <span id="breadcrumbPlanet" aria-current="page">Планета</span>
+    <span id="breadcrumbPatchWrap" hidden>
+      <span id="breadcrumbPatchSep" hidden aria-hidden="true">→</span>
+      <span id="breadcrumbPatch" hidden aria-current="page">Участок</span>
+    </span>
     <a id="backToSectorBtn" href="../sector/">← В сектор к планете</a>
   </nav>
   <main class="stage" aria-label="Глобус планеты">
@@ -23,6 +27,50 @@
       <p>Генерация и статистика работают; 3D, вращение и клик по ячейке в fallback-режиме недоступны.</p>
     </div>
     <div class="stars" aria-hidden="true"></div>
+    <div id="localMapStage" class="local-map-stage" hidden aria-label="3D локальная карта участка планеты">
+      <canvas id="localMapCanvas" tabindex="0" aria-label="3D локальная карта выбранного участка планеты: рельеф, терраформинг и инстансированные постройки. Перетаскивание — орбита/панорама, колесо — масштаб."></canvas>
+      <header class="local-map-bar" aria-label="Управление локальной картой">
+        <button id="exitLocalMapBtn" type="button">← На глобус планеты</button>
+        <div class="local-map-heading">
+          <span class="local-map-kicker">ЛОКАЛЬНЫЙ УЧАСТОК · PATCH7</span>
+          <h2 id="localMapTitle">Участок не выбран</h2>
+        </div>
+        <label class="local-scale-control" for="localScaleSel">
+          <span>Видимая ширина</span>
+          <select id="localScaleSel" aria-label="Видимая ширина участка, км">
+            <option value="1.2" selected>1,2 км · база и рельеф</option>
+            <option value="2.5">2,5 км</option>
+            <option value="5">5 км</option>
+            <option value="10">10 км</option>
+            <option value="20">20 км</option>
+            <option value="39">39 км</option>
+            <option value="78">78 км</option>
+            <option value="156">156 км</option>
+            <option value="312">312 км</option>
+            <option value="625">625 км</option>
+            <option value="1250">1250 км</option>
+          </select>
+        </label>
+        <button id="resetLocalCamBtn" type="button">Сброс камеры</button>
+      </header>
+      <nav id="localNeighborNav" class="local-neighbor-nav" aria-label="Перецентровка проекции на соседнюю ячейку кольца Patch7">
+        <button type="button" data-slot="0" aria-label="Соседняя ячейка, слот 0" disabled>Слот 0</button>
+        <button type="button" data-slot="1" aria-label="Соседняя ячейка, слот 1" disabled>Слот 1</button>
+        <button type="button" data-slot="2" aria-label="Соседняя ячейка, слот 2" disabled>Слот 2</button>
+        <button type="button" data-slot="3" aria-label="Соседняя ячейка, слот 3" disabled>Слот 3</button>
+        <button type="button" data-slot="4" aria-label="Соседняя ячейка, слот 4" disabled>Слот 4</button>
+        <button type="button" data-slot="5" aria-label="Соседняя ячейка, слот 5" disabled>Слот 5</button>
+      </nav>
+      <div id="localMapHud" aria-live="polite" aria-label="Состояние локальной карты">
+        <div>Генерация <b id="localGenMs">—</b></div>
+        <div class="local-upload-hud">GPU-заливка <progress id="localUploadProgress" max="1" value="0">0%</progress><b id="localUploadLabel">Ожидание</b></div>
+        <div>3D-инстансы построек <b id="localInstanceCount">0</b></div>
+        <div>Суша под застройку <b id="localBuildableFraction">—</b></div>
+        <div>Круговой туман <b id="localFogStatus">активен</b></div>
+        <div>Инварианты И-3 <b id="localInvariantStatus">ожидание</b></div>
+        <div id="localMapStatus" role="status">Локальная карта готовится…</div>
+      </div>
+    </div>
   </main>
 
   <aside class="panel" aria-label="Параметры планеты">
@@ -147,6 +195,7 @@
             <div><span>planet_key</span><code id="planetKeyOut">—</code></div><div><span>region_key</span><code id="regionKeyOut">—</code></div>
             <div><span>cell_key</span><code id="cellKeyOut">—</code></div><div><span>patch_key</span><code id="patchKeyOut">—</code></div>
           </div>
+          <button id="diveLocalMapBtn" class="primary dive-btn" type="button" disabled>🏙️ Погрузиться на локальную карту участка (Dive-in) →</button>
           <button id="copyCellLinkBtn" type="button">Скопировать ссылку на ячейку / участок</button>
           <p id="prefetchStatus" class="hint" role="status">Подготовка данных по запросу</p>
           <div id="patchDetails"></div>
