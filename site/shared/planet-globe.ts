@@ -914,7 +914,8 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     }
     if (opts.fx && opts.fx.onGeometryReady) {
       // Сетка живёт в воркере (pick); плагин добирает её через своё состояние.
-      try { opts.fx.onGeometryReady(GL, geometry as unknown as PlanetGrid, geometry); } catch (_) { /* плагин не ломает рендер */ }
+      const maybeGrid = (geometry as unknown as { grid?: PlanetGrid }).grid ?? (null as unknown as PlanetGrid);
+      try { opts.fx.onGeometryReady(GL, maybeGrid, geometry); } catch (_) { /* плагин не ломает рендер */ }
     }
   }
   function processPendingUpload(): void {

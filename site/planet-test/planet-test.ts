@@ -11,6 +11,8 @@
    PR 6.1: каскадная сборка uBuild, центробежное замещение, контролы осколков
    и 10-секундная телеметрия кадра. */
 
+import GeodesicGrid from '../shared/geodesic-grid.ts';
+import type { PlanetGrid } from '../shared/geodesic-grid.ts';
 import PlanetGlobe from '../shared/planet-globe.ts';
 import type { CellPolygon, GlobeGeometry, GlobeStats, PlanetGlobeHandle } from '../shared/planet-globe.ts';
 import type { GeographyProfileInput } from '../shared/planet-geography.ts';
@@ -200,6 +202,16 @@ function ensureWorker(): Worker {
   return worker;
 }
 
+const gridCache = new Map<number, PlanetGrid>();
+
+function getGridForRenderV(v: number): PlanetGrid {
+  const cached = gridCache.get(v);
+  if (cached) return cached;
+  const built = GeodesicGrid.build(v);
+  gridCache.set(v, built);
+  return built;
+}
+
 function onWorkerMessage(event: MessageEvent): void {
   const msg = (event.data || {}) as WorkerResponse;
   if (msg.token && msg.token !== workerToken) return;
@@ -212,6 +224,7 @@ function onWorkerMessage(event: MessageEvent): void {
     if (msg.requestId !== activeRequestId) return;
     displayedSummary = msg.summary;
     fxState.reliefScale = msg.geometry.reliefScale || 1;
+    fxState.grid = getGridForRenderV(msg.geometry.v);
     fxState.geometry = msg.geometry as unknown as GlobeGeometry;
     if (globe) globe.setGeometry(msg.geometry as unknown as GlobeGeometry);
     renderSummary(msg.summary);

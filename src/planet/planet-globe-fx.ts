@@ -1475,7 +1475,36 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
   let lastGridRef: PlanetGrid | null = null;
   let lastGeometryRef: GlobeGeometry | null = null;
 
-  const currentGrid = (): PlanetGrid | null => readyGrid ?? state.grid ?? null;
+  const isPlanetGrid = (candidate: unknown): candidate is PlanetGrid => {
+    const g = candidate as PlanetGrid | null | undefined;
+    return Boolean(
+      g &&
+      Number.isInteger(g.cellCount) &&
+      g.centers &&
+      g.corners &&
+      g.cellCorners &&
+      g.cellCornerStart &&
+      g.neighbors,
+    );
+  };
+
+  const deriveVertexCellId = (grid: PlanetGrid, vertexCount: number): Uint32Array => {
+    const F = grid.cellCount;
+    const out = new Uint32Array(vertexCount);
+    for (let c = 0; c < F && c < vertexCount; c++) out[c] = c;
+    let slot = F;
+    for (let c = 0; c < F; c++) {
+      const start = grid.cellCornerStart[c] as number;
+      const sides = (grid.cellCornerStart[c + 1] as number) - start;
+      for (let k = 0; k < sides && slot < vertexCount; k++) {
+        out[slot++] = c;
+      }
+    }
+    return out;
+  };
+
+  const currentGrid = (): PlanetGrid | null =>
+    isPlanetGrid(readyGrid) ? readyGrid : (isPlanetGrid(state.grid) ? state.grid : null);
   const currentGeometry = (): GlobeGeometry | null => readyGeometry ?? state.geometry ?? null;
 
   /** Канонический layout осколков: клеточный при наличии сетки, иначе процедурный. */
@@ -1530,7 +1559,17 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
   const ensureShardIdTexture = (gl: WebGL2RenderingContext): boolean => {
     const geometryNow = currentGeometry();
     const layoutNow = ensureShardLayout();
-    if (!layoutNow || !geometryNow || !geometryNow.vertexCellId || !geometryNow.vertexCellId.length) {
+    if (!layoutNow || !geometryNow) {
+      shardIdAvailable = false;
+      return false;
+    }
+    if (!geometryNow.vertexCellId || !geometryNow.vertexCellId.length) {
+      const gridNow = currentGrid();
+      if (gridNow && gridNow.cellCount === geometryNow.cellCount && geometryNow.vertexCount > 0) {
+        geometryNow.vertexCellId = deriveVertexCellId(gridNow, geometryNow.vertexCount);
+      }
+    }
+    if (!geometryNow.vertexCellId || !geometryNow.vertexCellId.length) {
       shardIdAvailable = false;
       return false;
     }
@@ -1775,7 +1814,7 @@ export function createFxHooks(state: FxRuntimeState): PlanetGlobeFxController {
 
     /** Геометрия готова: дальше индекс осколка берётся из vertexCellId. */
     onGeometryReady(_gl: WebGL2RenderingContext, grid: PlanetGrid, geometry: GlobeGeometry): void {
-      readyGrid = grid;
+      readyGrid = isPlanetGrid(grid) ? grid : null;
       readyGeometry = geometry;
       // Новая сетка/геометрия — layout и текстуры индексов пересоберутся
       // лениво, в ближайшем onSurfaceDraw (см. ensureShardLayout).
