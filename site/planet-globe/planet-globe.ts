@@ -34,6 +34,7 @@ import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
 import {
   generateHorizonSkirt,
   generateLocalMap,
+  mapNeighborCellsToSlots,
   planetCurvatureDropM,
 } from '../../src/local-map/local-map-worker.ts';
 import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
@@ -58,6 +59,36 @@ type Stage8StructureRenderer = StructureRenderer & {
   setHorizonSkirt?: (skirt: HorizonSkirtData | null) => void;
   dispose?: () => void;
 };
+
+/* ------------------------------------------------- СТЫК С ВОРКЕРОМ 4 (Stage-8.7)
+   Модуль site/planet-globe/local-map-quick-nav.ts создаёт Воркер 4 и в этой
+   ветке его ещё нет. Контракт на стыке (символ в символ) зафиксирован ниже,
+   интеграция уже написана; после слияния его PR достаточно заменить шим на
+   импорт: import { createLocalMapQuickNav } from './local-map-quick-nav'; */
+
+/** Подсказка для одной из 6 граней активного гекса. */
+export interface QuickNavHintInput {
+  readonly slot: number;
+  readonly cell: number;
+  /** Экранные координаты середины грани, CSS px канваса #localMapCanvas. */
+  readonly x: number;
+  readonly y: number;
+  /** Экранный угол нормали грани «наружу»: 0 = вправо (+X), радианы. */
+  readonly angleRad: number;
+}
+
+export interface LocalMapQuickNav {
+  update(hints: readonly QuickNavHintInput[], visible: boolean): void;
+  dispose(): void;
+}
+
+/** ВРЕМЕННЫЙ ШИМ (удалить после слияния PR Воркера 4): модуля ещё нет. */
+function createLocalMapQuickNavShim(
+  _host: HTMLElement,
+  _onPick: (slot: number, cell: number) => void,
+): LocalMapQuickNav | null {
+  return null;
+}
 
 /** Stage-8: состояние плавной анимации локальной камеры (Dive-in / перелёт к соседу). */
 interface LocalCameraAnim {
@@ -1262,6 +1293,123 @@ function updateLocalMapHud(): void {
   }
 }
 
+/* --------------------------------------------- Квик-навигация по граням (Stage-8.7) */
+
+/** Апофема активного гекса в долях R_patch — та же, что в шейдере рельефа. */
+const LOCAL_HEX_FACE_APOTHEM_RATIO = 0.8054;
+/** Шаг слотов: грани активного гекса смотрят на k · π/3 от оси +X (восток). */
+const LOCAL_HEX_SLOT_STEP_RAD = Math.PI / 3;
+
+let localMapQuickNav: LocalMapQuickNav | null = null;
+let localQuickNavInitialized = false;
+
+/** Освобождает оверлей квик-навигации при выходе из локальной карты. */
+function disposeLocalMapQuickNav(): void {
+  const nav = localMapQuickNav;
+  localMapQuickNav = null;
+  localQuickNavInitialized = false;
+  if (!nav) return;
+  try { nav.dispose(); } catch (_) { /* модуль мог не успеть инициализироваться */ }
+}
+
+/**
+ * Создаёт модуль квик-навигации один раз на сессию локальной карты.
+ * Хост — вся сцена #localMapStage; выбор гекса идёт тем же путём, что у кнопок
+ * «СОСЕДИ PATCH7» (requestLocalNeighbor → latest-wins переход).
+ */
+function ensureLocalMapQuickNav(): LocalMapQuickNav | null {
+  if (localMapQuickNav) return localMapQuickNav;
+  if (localQuickNavInitialized) return null;
+  localQuickNavInitialized = true;
+  localMapQuickNav = createLocalMapQuickNavShim(els.localMapStage, (slot: number, cell: number) => {
+    if (requestLocalNeighborByCellId(cell)) return;
+    setLocalMapStatus(
+      'Квик-навигация: ячейка #' + String(cell) + ' (слот ' + String(slot) + ') отсутствует в активном Patch7.',
+      'warn',
+    );
+  });
+  return localMapQuickNav;
+}
+
+/**
+ * Проекция локальной точки участка в CSS-пиксели канваса #localMapCanvas.
+ * Канвас занимает всю сцену (inset: 0), поэтому CSS px канваса = CSS px сцены.
+ */
+function projectLocalPointToCss(
+  viewProj: Float32Array,
+  x: number,
+  y: number,
+  z: number,
+): { x: number; y: number } | null {
+  const w = (viewProj[3] as number) * x + (viewProj[7] as number) * y + (viewProj[11] as number) * z + (viewProj[15] as number);
+  if (!(w > 1e-6)) return null;
+  const cx = (viewProj[0] as number) * x + (viewProj[4] as number) * y + (viewProj[8] as number) * z + (viewProj[12] as number);
+  const cy = (viewProj[1] as number) * x + (viewProj[5] as number) * y + (viewProj[9] as number) * z + (viewProj[13] as number);
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return null;
+  return {
+    x: (cx / w * 0.5 + 0.5) * rect.width,
+    y: (0.5 - cy / w * 0.5) * rect.height,
+  };
+}
+
+/**
+ * Подсказки для 6 соседей активного гекса: середина грани в CSS px канваса и
+ * экранный угол нормали «наружу» (0 = вправо, +X, положительное направление —
+ * по часовой стрелке в координатах CSS, ось Y вниз).
+ */
+function buildLocalQuickNavHints(viewProj: Float32Array): QuickNavHintInput[] {
+  const patchReady = activePatchReady;
+  if (!patchReady || !localMapActive) return [];
+  const patch = patchReady.patch;
+  const slots = mapNeighborCellsToSlots(patch);
+  const radiusM = localMapRadiusM;
+  if (!(radiusM > 0)) return [];
+  const apothemM = LOCAL_HEX_FACE_APOTHEM_RATIO * radiusM;
+  const planetRadiusM = localSkirtData ? localSkirtData.planetRadiusM : patch.frame.radiusM;
+  const curvatureDropM = planetCurvatureDropM(planetRadiusM, apothemM);
+  const hints: QuickNavHintInput[] = [];
+  for (let slot = 0; slot < slots.length; slot++) {
+    const cell = slots[slot];
+    if (!cell) continue;
+    const nx = Math.cos(slot * LOCAL_HEX_SLOT_STEP_RAD);
+    const ny = Math.sin(slot * LOCAL_HEX_SLOT_STEP_RAD);
+    const ax = nx * apothemM;
+    const ay = ny * apothemM;
+    // Та же поверхность, что видит шейдер: рельеф участка минус сферическое проседание.
+    const az = localTerrainHeightAt(localMapData, ax, ay, radiusM) - curvatureDropM;
+    const base = projectLocalPointToCss(viewProj, ax, ay, az);
+    if (!base) continue;
+    const tip = projectLocalPointToCss(
+      viewProj,
+      ax + nx * apothemM * 0.25,
+      ay + ny * apothemM * 0.25,
+      az,
+    );
+    if (!tip) continue;
+    const dx = tip.x - base.x;
+    const dy = tip.y - base.y;
+    if (!(Math.hypot(dx, dy) > 1e-3)) continue;
+    hints.push({ slot, cell: cell.cell, x: base.x, y: base.y, angleRad: Math.atan2(dy, dx) });
+  }
+  return hints;
+}
+
+/**
+ * Обновляет подсказки на каждом кадре. Видимость — открытая локальная карта без
+ * догрузки патча; в обычном режиме оверлей не рисуется вовсе.
+ */
+function updateLocalMapQuickNav(viewProj: Float32Array): void {
+  const nav = ensureLocalMapQuickNav();
+  if (!nav) return;
+  const visible = localMapActive && !localPatchLoading && activePatchReady !== null;
+  if (!visible) {
+    nav.update([], false);
+    return;
+  }
+  nav.update(buildLocalQuickNavHints(viewProj), true);
+}
+
 function renderLocalMapFrame(): void {
   localMapFrameId = 0;
   if (!localMapActive) return;
@@ -1319,6 +1467,9 @@ function renderLocalMapFrame(): void {
   } else {
     drawLocalMapFallback(viewProj);
   }
+  // Stage-8.7: подсказки 6 граней активного гекса считаются по актуальной
+  // матрице кадра — после ре-бейзинга они сразу попадают на новую сцену.
+  updateLocalMapQuickNav(viewProj);
   if (performance.now() - localMapHudLastAt > 100) {
     localMapHudLastAt = performance.now();
     updateLocalMapHud();
@@ -1801,6 +1952,8 @@ function exitLocalMap(): void {
   discardStagedLocalPatch();
   localPatchLoading = false;
   localClickCandidate = null;
+  // Stage-8.7: оверлей квик-навигации живёт только пока открыта локальная карта.
+  disposeLocalMapQuickNav();
   localPointers.clear();
   localPointerId = null;
   localPointerMode = null;
