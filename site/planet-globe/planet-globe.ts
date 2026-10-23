@@ -255,6 +255,10 @@ let localCameraAnim: LocalCameraAnim | null = null;
 let localSkirtData: HorizonSkirtData | null = null;
 /** Ожидаемый перелёт к соседу: азимут действителен только для своей ячейки. */
 let pendingNeighborFly: { cell: number; azimuth: number } | null = null;
+/** Пока запрошен новый Patch7, не запускаем второй переход по грани. */
+let localPatchLoading = false;
+let lastGlobeSyncAt = -Infinity;
+let localClickCandidate: { pointerId: number; x: number; y: number } | null = null;
 let localPointerMode: 'orbit' | 'pan' | null = null;
 let localPointerId: number | null = null;
 let localPointerLast = { x: 0, y: 0 };
@@ -305,6 +309,7 @@ function escapeHtml(s: unknown): string {
 const LOCAL_MAP_SCALE_STEPS = [1.2, 2.5, 5, 10, 20, 39, 78, 156, 312, 625, 1250] as const;
 const LOCAL_MAP_FOV = 50 * Math.PI / 180;
 type LocalVec3 = [number, number, number];
+type LocalPatchCell = WorkerPatchReadyResponse['patch']['cells'][number];
 
 function parseSeedUint32(value: string): number {
   const seed = value.trim();
@@ -432,7 +437,8 @@ function initializeLocalMapRenderer(): boolean {
   let gl = localMapGl;
   if (!gl || gl.isContextLost()) {
     gl = els.localMapCanvas.getContext('webgl2', {
-      alpha: false,
+      alpha: true,
+      premultipliedAlpha: false,
       antialias: true,
       depth: true,
       powerPreference: 'high-performance',
@@ -582,20 +588,24 @@ function applyLocalCameraAnim(now: number): void {
   if (t >= 1) localCameraAnim = null;
 }
 
-function localViewProjection(): Float32Array {
-  if (!(localCameraDistance > 0)) resetLocalCamera();
-  const aspect = Math.max(0.1, els.localMapCanvas.width / Math.max(1, els.localMapCanvas.height));
+function localCameraEye(): LocalVec3 {
   const cosPitch = Math.cos(localCameraPitch);
   const direction: LocalVec3 = [
     cosPitch * Math.cos(localCameraYaw),
     cosPitch * Math.sin(localCameraYaw),
     Math.sin(localCameraPitch),
   ];
-  const eye: LocalVec3 = [
+  return [
     localCameraTarget[0] + direction[0] * localCameraDistance,
     localCameraTarget[1] + direction[1] * localCameraDistance,
     localCameraTarget[2] + direction[2] * localCameraDistance,
   ];
+}
+
+function localViewProjection(): Float32Array {
+  if (!(localCameraDistance > 0)) resetLocalCamera();
+  const aspect = Math.max(0.1, els.localMapCanvas.width / Math.max(1, els.localMapCanvas.height));
+  const eye = localCameraEye();
   const view = lookAtLocal(eye, localCameraTarget, [0, 0, 1]);
   const near = Math.max(0.1, localMapRadiusM * 0.0001);
   // Stage-8: дальняя плоскость обязана вмещать все 6 колец до горизонта
@@ -607,6 +617,119 @@ function localViewProjection(): Float32Array {
     localCameraDistance * 6 + localMapRadiusM * 8,
   );
   return multiplyLocalMat4(perspectiveLocal(LOCAL_MAP_FOV, aspect, near, far), view);
+}
+
+/** Ближайший по азимуту сосед в касательном кадре активного Patch7. */
+function nearestLocalNeighbor(azimuth: number): LocalPatchCell | null {
+  const patch = activePatchReady?.patch;
+  if (!patch) return null;
+  const { east, north } = patch.frame;
+  let nearest: LocalPatchCell | null = null;
+  let nearestDelta = Infinity;
+  for (const neighbor of patch.cells.slice(1)) {
+    const dir = neighbor.center;
+    const u = dir[0] * east[0] + dir[1] * east[1] + dir[2] * east[2];
+    const v = dir[0] * north[0] + dir[1] * north[1] + dir[2] * north[2];
+    const neighborAzimuth = Math.atan2(u, v);
+    const delta = Math.abs(Math.atan2(
+      Math.sin(azimuth - neighborAzimuth),
+      Math.cos(azimuth - neighborAzimuth),
+    ));
+    if (delta < nearestDelta) {
+      nearestDelta = delta;
+      nearest = neighbor;
+    }
+  }
+  return nearest;
+}
+
+/** Запускает единый latest-wins переход на соседний канонический гекс. */
+function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
+  if (!localMapActive || localPatchLoading || !activePatchReady || !worker || !displayedToken) return;
+  localCameraTarget[0] = 0;
+  localCameraTarget[1] = 0;
+  pendingNeighborFly = { cell: neighbor.cell, azimuth };
+  localPatchLoading = true;
+  cancelLocalCameraAnim();
+  setLocalMapStatus('Перехожу на соседний гекс #' + String(neighbor.cell) + '…', 'info');
+  requestCellPick(neighbor.cell);
+}
+
+/**
+ * Направление на сфере для фонового глобуса. В покое оно совпадает с центром
+ * Patch7; орбита и панорама добавляют небольшой угловой сдвиг в касательном
+ * кадре, поэтому планета поворачивается вместе с локальным гекс-столом.
+ */
+function localGlobeDirection(): LocalVec3 | null {
+  const patch = activePatchReady?.patch;
+  if (!patch) return null;
+  const { origin, east, north } = patch.frame;
+  const yawOffset = (localCameraYaw - LOCAL_REST_YAW) * 0.22;
+  const pitchOffset = (localCameraPitch - LOCAL_REST_PITCH) * 0.22;
+  const cosPitch = Math.cos(pitchOffset);
+  const sinPitch = Math.sin(pitchOffset);
+  const cosYaw = Math.cos(yawOffset);
+  const sinYaw = Math.sin(yawOffset);
+  const panScale = 0.12 / Math.max(1, localMapRadiusM);
+  const panU = localCameraTarget[0] * panScale;
+  const panV = localCameraTarget[1] * panScale;
+  return normalizeLocalVec3([
+    origin[0] * cosPitch * cosYaw + east[0] * (cosPitch * sinYaw + panU) + north[0] * (sinPitch + panV),
+    origin[1] * cosPitch * cosYaw + east[1] * (cosPitch * sinYaw + panU) + north[1] * (sinPitch + panV),
+    origin[2] * cosPitch * cosYaw + east[2] * (cosPitch * sinYaw + panU) + north[2] * (sinPitch + panV),
+  ]);
+}
+
+/** Синхронизирует живой глобус с локальной камерой не чаще одного раза в 60 мс. */
+function syncGlobeWithLocalCamera(): void {
+  if (!localMapActive || !globe || !activePatchReady) return;
+  const now = performance.now();
+  if (now - lastGlobeSyncAt < 60) return;
+  const direction = localGlobeDirection();
+  if (!direction) return;
+  lastGlobeSyncAt = now;
+  const distanceRatio = localCameraDistance / Math.max(1, localMapRadiusM);
+  const globeDist = 1.38 + clampLocal(distanceRatio / 5.2, 0, 1) * (1.85 - 1.38);
+  globe.flyToDirection(direction, globeDist, 90);
+}
+
+/** Строит луч через экранную точку и выбирает соседний гекс на плоскости участка. */
+function pickLocalNeighborAt(clientX: number, clientY: number): void {
+  if (!localMapActive || localPatchLoading || !activePatchReady || !(localCameraDistance > 0)) return;
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return;
+  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+  const aspect = rect.width / rect.height;
+  const cosPitch = Math.cos(localCameraPitch);
+  const viewDirection: LocalVec3 = [
+    cosPitch * Math.cos(localCameraYaw),
+    cosPitch * Math.sin(localCameraYaw),
+    Math.sin(localCameraPitch),
+  ];
+  const right: LocalVec3 = [-Math.sin(localCameraYaw), Math.cos(localCameraYaw), 0];
+  const screenUp: LocalVec3 = [
+    -Math.sin(localCameraPitch) * Math.cos(localCameraYaw),
+    -Math.sin(localCameraPitch) * Math.sin(localCameraYaw),
+    Math.cos(localCameraPitch),
+  ];
+  const tanHalfFov = Math.tan(LOCAL_MAP_FOV / 2);
+  const ray = normalizeLocalVec3([
+    -viewDirection[0] + right[0] * ndcX * tanHalfFov * aspect + screenUp[0] * ndcY * tanHalfFov,
+    -viewDirection[1] + right[1] * ndcX * tanHalfFov * aspect + screenUp[1] * ndcY * tanHalfFov,
+    -viewDirection[2] + right[2] * ndcX * tanHalfFov * aspect + screenUp[2] * ndcY * tanHalfFov,
+  ]);
+  if (Math.abs(ray[2]) < 1e-8) return;
+  const eye = localCameraEye();
+  const rayDistance = (localCameraTarget[2] - eye[2]) / ray[2];
+  if (!(rayDistance > 0) || !Number.isFinite(rayDistance)) return;
+  const wx = eye[0] + ray[0] * rayDistance;
+  const wy = eye[1] + ray[1] * rayDistance;
+  const distance = Math.hypot(wx, wy);
+  if (!(distance > localMapRadiusM * 0.84 && distance < localMapRadiusM * 2.6)) return;
+  const azimuth = Math.atan2(wx, wy);
+  const neighbor = nearestLocalNeighbor(azimuth);
+  if (neighbor) requestLocalNeighbor(neighbor, azimuth);
 }
 
 function applyLocalPan(dx: number, dy: number): void {
@@ -621,13 +744,18 @@ function applyLocalPan(dx: number, dy: number): void {
   localCameraTarget[0] += (-dx * right[0] + dy * screenUp[0]) * worldPerPixel;
   localCameraTarget[1] += (-dx * right[1] + dy * screenUp[1]) * worldPerPixel;
   localCameraTarget[2] += (-dx * right[2] + dy * screenUp[2]) * worldPerPixel;
-  const maxPan = localMapRadiusM * 0.75;
+  const maxPan = localMapRadiusM * 1.35;
   const panLength = Math.hypot(localCameraTarget[0], localCameraTarget[1]);
   if (panLength > maxPan) {
     localCameraTarget[0] *= maxPan / panLength;
     localCameraTarget[1] *= maxPan / panLength;
   }
   localCameraTarget[2] = clampLocal(localCameraTarget[2], -localMapRadiusM * 0.25, localMapRadiusM * 0.5);
+  if (panLength > localMapRadiusM * 0.88 && !localPatchLoading) {
+    const azimuth = Math.atan2(localCameraTarget[0], localCameraTarget[1]);
+    const neighbor = nearestLocalNeighbor(azimuth);
+    if (neighbor) requestLocalNeighbor(neighbor, azimuth);
+  }
 }
 
 function currentLocalPinchDistance(): number {
@@ -646,6 +774,7 @@ function installLocalMapCanvasEvents(): void {
   canvas.addEventListener('pointerdown', (event: PointerEvent) => {
     if (event.button !== 0 && event.button !== 2) return;
     event.preventDefault();
+    localClickCandidate = null;
     cancelLocalCameraAnim();   // ручное управление прерывает перелёт камеры
     try { canvas.setPointerCapture(event.pointerId); } catch (_) { /* захват может быть недоступен */ }
     localPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -658,16 +787,23 @@ function installLocalMapCanvasEvents(): void {
     localPointerId = event.pointerId;
     localPointerLast = { x: event.clientX, y: event.clientY };
     localPointerMode = event.button === 2 || event.shiftKey ? 'pan' : 'orbit';
+    if (event.button === 0 && !event.shiftKey) {
+      localClickCandidate = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    }
   });
   canvas.addEventListener('pointermove', (event: PointerEvent) => {
     const previous = localPointers.get(event.pointerId);
     if (!previous) return;
+    if (localClickCandidate?.pointerId === event.pointerId &&
+      Math.hypot(event.clientX - localClickCandidate.x, event.clientY - localClickCandidate.y) >= 6) {
+      localClickCandidate = null;
+    }
     localPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (localPointers.size >= 2) {
       const distance = currentLocalPinchDistance();
       if (localPinchDistance > 0 && distance > 0) {
         localCameraDistance = clampLocal(localCameraDistance * localPinchDistance / distance,
-          Math.max(2, localMapRadiusM * 0.08), localMapRadiusM * 60);
+          Math.max(2, localMapRadiusM * 0.08), localMapRadiusM * 5.2);
       }
       localPinchDistance = distance;
       return;
@@ -684,6 +820,10 @@ function installLocalMapCanvasEvents(): void {
     }
   });
   const endPointer = (event: PointerEvent): void => {
+    const isShortLeftClick = event.type === 'pointerup' &&
+      localClickCandidate?.pointerId === event.pointerId &&
+      Math.hypot(event.clientX - localClickCandidate.x, event.clientY - localClickCandidate.y) < 6;
+    localClickCandidate = null;
     localPointers.delete(event.pointerId);
     try { if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); } catch (_) { /* уже освобождён */ }
     if (localPointers.size < 2) localPinchDistance = 0;
@@ -699,14 +839,20 @@ function installLocalMapCanvasEvents(): void {
         localPointerMode = null;
       }
     }
+    if (isShortLeftClick) pickLocalNeighborAt(event.clientX, event.clientY);
   };
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', endPointer);
   canvas.addEventListener('wheel', (event: WheelEvent) => {
     event.preventDefault();
+    const maxClusterDist = localMapRadiusM * 5.2;
+    if (event.deltaY > 0 && localCameraDistance >= maxClusterDist * 0.95) {
+      exitLocalMap();
+      return;
+    }
     cancelLocalCameraAnim();   // зум колесом прерывает перелёт камеры
     localCameraDistance = clampLocal(localCameraDistance * Math.exp(event.deltaY * 0.001),
-      Math.max(2, localMapRadiusM * 0.08), localMapRadiusM * 60);
+      Math.max(2, localMapRadiusM * 0.08), maxClusterDist);
   }, { passive: false });
   canvas.addEventListener('webglcontextlost', (event: Event) => {
     event.preventDefault();
@@ -743,8 +889,8 @@ function drawLocalMapFallback(viewProj: Float32Array): void {
   const skirt = localSkirtData;
   const fog: LocalVec3 = skirt ? [...LOCAL_SKIRT_FOG_COLOR] : [0.025, 0.09, 0.13];
   const horizon: LocalVec3 = skirt ? [...LOCAL_HORIZON_COLOR] : [0.025, 0.09, 0.13];
-  const fogStart = skirt ? localMapRadiusM * 1.05 : localMapRadiusM * 0.72;
-  const fogEnd = skirt ? skirt.outerRadiusM * 0.94 : localMapRadiusM;
+  const fogStart = skirt ? skirt.outerRadiusM * 0.72 : localMapRadiusM * 0.85;
+  const fogEnd = skirt ? skirt.outerRadiusM * 0.98 : localMapRadiusM;
 
   gl.useProgram(programs.terrainProgram);
   const terrainView = gl.getUniformLocation(programs.terrainProgram, 'u_viewProj');
@@ -814,10 +960,10 @@ function renderLocalMapFrame(): void {
   if (!gl || !renderer || gl.isContextLost()) return;
   resizeLocalMapCanvas();
   if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
-  const clearFog = localSkirtData ? LOCAL_SKIRT_FOG_COLOR : [0.025, 0.09, 0.13] as const;
-  gl.clearColor(clearFog[0], clearFog[1], clearFog[2], 1);
+  gl.clearColor(0, 0, 0, 0);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   applyLocalCameraAnim(performance.now());
+  syncGlobeWithLocalCamera();
   const viewProj = localViewProjection();
   if (typeof renderer.renderFrame === 'function') {
     const skirt = localSkirtData;
@@ -827,27 +973,15 @@ function renderLocalMapFrame(): void {
       fogColor: skirt
         ? new Float32Array(LOCAL_SKIRT_FOG_COLOR)
         : new Float32Array([0.025, 0.09, 0.13]),
-      fogStart: skirt ? localMapRadiusM * 1.05 : localMapRadiusM * 0.72,
-      fogEnd: skirt ? skirt.outerRadiusM * 0.94 : localMapRadiusM,
+      fogStart: skirt ? skirt.outerRadiusM * 0.72 : localMapRadiusM * 0.85,
+      fogEnd: skirt ? skirt.outerRadiusM * 0.98 : localMapRadiusM,
       radiusM: localMapRadiusM,
     };
     if (skirt) {
-      const aspect = els.localMapCanvas.width / Math.max(1, els.localMapCanvas.height);
-      const camHeightM = Math.max(
-        1,
-        localCameraTarget[2] + localCameraDistance * Math.sin(localCameraPitch),
-      );
       renderOptions.planetRadiusM = skirt.planetRadiusM;
       renderOptions.focusRadiusM = localMapRadiusM;
       renderOptions.hexSizeM = skirt.hexSpacingM;
       renderOptions.horizonColor = new Float32Array(LOCAL_HORIZON_COLOR);
-      renderOptions.camera = {
-        pitch: localCameraPitch,
-        yaw: localCameraYaw,
-        fovY: LOCAL_MAP_FOV,
-        aspect: Math.max(0.1, aspect),
-        heightM: camHeightM,
-      };
     }
     renderer.renderFrame(viewProj, renderOptions);
   } else {
@@ -1022,6 +1156,8 @@ function renderLocalMapFromPatch(
   }
 
   activePatchReady = patchReady;
+  localPatchLoading = false;
+  lastGlobeSyncAt = -Infinity;
   const shortFaceCoord = extractShortFaceCoord(patchReady.canonicalAddress);
   const planetName = selectedPlace?.name || 'Планета';
   els.localMapTitle.textContent =
@@ -1093,6 +1229,9 @@ function exitLocalMap(): void {
   localSkirtData = null;
   localCameraAnim = null;
   pendingNeighborFly = null;
+  localPatchLoading = false;
+  localClickCandidate = null;
+  lastGlobeSyncAt = -Infinity;
   localPointers.clear();
   localPointerId = null;
   localPointerMode = null;
@@ -1101,7 +1240,11 @@ function exitLocalMap(): void {
   document.body.classList.remove('local-map-active');
   updateLocalBreadcrumb(false);
   syncBrowserUrl({ localView: false });
-  if (globe) globe.setDistance(3.05);
+  if (globe) {
+    // Сохраняем текущий ракурс и плавно возвращаем орбитальную дистанцию:
+    // при zoom-out из кластера нет скачка камеры под исчезающим оверлеем.
+    globe.flyToDirection(globe.getCameraState().viewDirection, 3.05, 650);
+  }
 
   if (localMapRenderer && typeof localMapRenderer.dispose === 'function') {
     localMapRenderer.dispose();
@@ -1438,6 +1581,8 @@ function ensureWorker(): Worker {
   worker = new Worker('planet-globe-worker.js');
   worker.onmessage = onWorkerMessage;
   worker.onerror = function (event: ErrorEvent): void {
+    localPatchLoading = false;
+    pendingNeighborFly = null;
     activeRequest = null;
     pendingGpuReady = null;
     if (globe) globe.setAdaptiveQualityHold(false);
@@ -1519,6 +1664,8 @@ function startGeneration(restart: boolean, reason: string): void {
   latestPatchRequest++;
   lastPatchReady = null;
   activePatchReady = null;
+  localPatchLoading = false;
+  pendingNeighborFly = null;
   els.diveLocalMap.disabled = true;
   updateLocalNeighborButtons(null);
   updateUrl(profile);
@@ -1584,6 +1731,8 @@ function onWorkerMessage(event: MessageEvent): void {
         if (prefetch) prefetch.textContent = 'Каноническая ячейка ' + msg.info.address + ' выбрана; запрашиваю срез Patch7…';
         requestPatchExtract(msg.info.cell);
       } else {
+        localPatchLoading = false;
+        pendingNeighborFly = null;
         pendingInitialLocalView = false;
         syncBrowserUrl({ cell: null, localView: false });
       }
@@ -1605,6 +1754,10 @@ function onWorkerMessage(event: MessageEvent): void {
     return;
   }
   if (msg.type === 'error') {
+    if (msg.requestId === latestPickRequest || msg.requestId === latestPatchRequest) {
+      localPatchLoading = false;
+      pendingNeighborFly = null;
+    }
     if (activeRequest && msg.requestId && msg.requestId !== activeRequest.id) return;
     if (msg.requestId === latestPickRequest || msg.requestId === latestHoverRequest) return;
     activeRequest = null;
@@ -2169,6 +2322,7 @@ function requestPatchExtract(cell: number): void {
 
 function requestCellPick(cell: number): void {
   if (!worker || !displayedToken || !Number.isInteger(cell) || cell < 0) return;
+  if (localMapActive) localPatchLoading = true;
   latestPatchRequest++;
   lastPatchReady = null;
   els.diveLocalMap.disabled = true;
@@ -2231,6 +2385,8 @@ function renderPatchReady(msg: WorkerPatchReadyResponse): void {
       '</div>';
   }
   if (!msg.invariants.ok) {
+    localPatchLoading = false;
+    pendingNeighborFly = null;
     pendingInitialLocalView = false;
     if (localMapActive) exitLocalMap();
     else syncBrowserUrl({ localView: false });
@@ -2278,6 +2434,8 @@ function init(): void {
         latestPatchRequest++;
         lastPatchReady = null;
         activePatchReady = null;
+        localPatchLoading = false;
+        pendingNeighborFly = null;
         pendingInitialLocalView = false;
         els.diveLocalMap.disabled = true;
         updateLocalNeighborButtons(null);
