@@ -58,6 +58,8 @@ jobs:
                    data/planet-generation.csv; do
             test -s ".publish/$f" || { echo "нет файла: $f"; exit 1; }
           done
+      - name: Побитовая эквивалентность FULL EQ (verify:hashes)
+        run: npm run verify:hashes
 
   scripts:
     name: Скрипты сайта
