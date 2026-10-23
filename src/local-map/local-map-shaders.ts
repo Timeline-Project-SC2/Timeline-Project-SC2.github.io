@@ -143,6 +143,8 @@ precision highp int;
 
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
+layout(location = 2) in float a_waterMask;
+layout(location = 3) in vec2 a_ringLocal;
 
 uniform mat4 u_viewProj;
 uniform float u_fogStart;
@@ -155,8 +157,12 @@ out vec3 v_normal;
 out vec2 v_uv;         // для сэмплинга зон
 out float v_fog;
 out vec3 v_viewVec;    // вектор от точки поверхности к камере (для Fresnel и блика воды)
+out float v_waterMask; // байтовая маска кольцевой ячейки, нормализованная в 0..1
+out vec2 v_ringLocal;  // локальные XY ячейки для batch-draw без per-cell uniform
 
 void main() {
+  v_waterMask = a_waterMask;
+  v_ringLocal = a_ringLocal;
   // v_worldPos хранит ИСХОДНУЮ гипсометрическую высоту a_position.z: вода
   // (z <= 0) и изолинии считаются над уровнем моря, а не по просевшему z.
   v_worldPos  = a_position;
@@ -201,6 +207,8 @@ in vec3  v_normal;
 in vec2  v_uv;
 in float v_fog;
 in vec3  v_viewVec;
+in float v_waterMask;
+in vec2  v_ringLocal;
 
 uniform usampler2D u_zoning_map;     // RG8UI
 uniform sampler2D  u_terraform_map;  // R8
@@ -210,7 +218,9 @@ uniform vec3  u_fogColor;
 uniform vec3  u_horizonColor;        // цвет атмосферного лимба у горизонта
 uniform float u_fogStart;
 uniform float u_fogEnd;
-uniform float u_isSkirt;             // 1.0 — планетарная юбка, 0.0 — центр
+uniform float u_isSkirt;             // 1.0 — планетарная юбка, 0.0 — центр/кольца
+uniform float u_ringLevel;           // 0 — центр/юбка, 1..5 — кольцевой LOD
+uniform float u_ringFade;            // 0 — полная детализация, 1 — дальнее кольцо
 uniform float u_focusRadiusM;        // радиус детального участка R_patch
 uniform float u_hexSizeM;            // шаг гексов d_hex в метрах
 
@@ -283,18 +293,27 @@ void sampleZoningBilinear(vec3 naturalColor, out vec3 zoneColor, out float zoneW
 }
 
 void main() {
+  bool isCentral = u_isSkirt < 0.5 && u_ringLevel < 0.5;
+  bool isRing = u_isSkirt < 0.5 && u_ringLevel >= 0.5;
+  float ringFade = isRing ? clamp(u_ringFade, 0.0, 1.0) : 0.0;
   float dist = length(v_worldPos.xy);
   // Апофема активного центрального гекса и гексагональная метрика (ориентация clusterHexMetric: yx).
   float hexApothem = u_focusRadiusM * 0.8054;
   float centerHexDist = hexMetric2D(v_worldPos.yx);
+  float ringHexDist = isRing ? hexMetric2D(v_ringLocal.yx) : 0.0;
 
   // Центральный участок обрезается строгим правильным шестиугольником:
   // 6 прямых сторон активного гекса (с микрозапасом 1.003 для бесшовного
   // перекрытия с воротником юбки) и страховочное круговое отсечение 0.935·R_patch.
-  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.935) {
+  if (isCentral && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.935) {
     discard;
   }
-  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && centerHexDist > hexApothem * 1.003) {
+  if (isCentral && u_focusRadiusM > 1.0 && centerHexDist > hexApothem * 1.003) {
+    discard;
+  }
+  // Каждая кольцевая сетка покрывает квадрат вокруг собственного центра;
+  // общий гексагональный срез убирает перекрытия соседних LOD-ячеек.
+  if (isRing && u_focusRadiusM > 1.0 && ringHexDist > hexApothem * 1.003) {
     discard;
   }
 
@@ -305,7 +324,7 @@ void main() {
   float minNeighborTf1 = 1.0;
   float minNeighborTf2 = 1.0;
   float maxNeighborTf3 = 0.0;
-  if (u_isSkirt < 0.5) {
+  if (isCentral) {
     rawTerraform = texture(u_terraform_map, v_uv).r;
     float tfE1 = textureOffset(u_terraform_map, v_uv, ivec2( 1,  0)).r;
     float tfW1 = textureOffset(u_terraform_map, v_uv, ivec2(-1,  0)).r;
@@ -349,6 +368,8 @@ void main() {
   float blur = (u_focusRadiusM > 1.0 && u_fogEnd * 0.92 > clearHexRadius)
     ? smoothstep(clearHexRadius, u_fogEnd * 0.92, centerHexDist)
     : ((u_focusRadiusM > 1.0 && centerHexDist > clearHexRadius) ? 1.0 : 0.0);
+  // Единый LOD-fade сглаживает нормали, рябь и макроцвет до общей дымки юбки.
+  blur = max(blur, ringFade * 0.85);
 
   // Признак водного зеркала дополнительно проверяет сырую маску терраформинга
   // в центре и неизменность мировой высоты на юбке: пологая суша не может
@@ -358,18 +379,21 @@ void main() {
     : vec3(0.0, 0.0, 1.0);
   float normalHoriz = length(v_normal.xy);
   float zStep = abs(dFdx(v_worldPos.z)) + abs(dFdy(v_worldPos.z));
-  bool waterMirrorSurface = (u_isSkirt < 0.5)
+  bool ringWater = isRing && v_waterMask > 0.5;
+  bool waterMirrorSurface = isCentral
     ? (rawTerraform < 0.002 && zStep < 0.02)
-    : (normalHoriz < 0.00002 && zStep < 0.005);
+    : isRing
+      ? (ringWater && zStep < 0.005)
+      : (normalHoriz < 0.00002 && zStep < 0.005);
   bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015) && waterMirrorSurface;
 
   // Stage-8.6: распознавание рек на любой высоте по явному маркеру воды
   // в terraform_map (байт 0 → rawTerraform < 0.002) и влажная галечно-песчаная
   // пойма вдоль водных текселей (0.002 <= rawTerraform < 0.012).
-  bool isExplicitWaterTexel = (u_isSkirt < 0.5) && (rawTerraform < 0.002);
-  bool isRiverStream = isExplicitWaterTexel && (v_worldPos.z > 0.05) && !isFlatWaterMirror;
+  bool isExplicitWaterTexel = (isCentral && rawTerraform < 0.002) || ringWater;
+  bool isRiverStream = isCentral && isExplicitWaterTexel && (v_worldPos.z > 0.05) && !isFlatWaterMirror;
   float riverBankMask = 0.0;
-  if (u_isSkirt < 0.5 && zone == 0u && !isFlatWaterMirror && !isExplicitWaterTexel && v_worldPos.z > 0.05) {
+  if (isCentral && zone == 0u && !isFlatWaterMirror && !isExplicitWaterTexel && v_worldPos.z > 0.05) {
     bool isBankBand = (rawTerraform >= 0.002) && (rawTerraform < 0.012);
     float nearWaterEdge = max(
       1.0 - smoothstep(0.0016, 0.0052, minNeighborTf1),
@@ -386,7 +410,9 @@ void main() {
   // Stage-8.6: пять отчётливых гипсометрических поясов суши
   // (пляж → низинный луг → предгорья → высокогорные скалы → снежные пики).
   float altM = max(0.0, v_worldPos.z);
-  float beltJitter = (terrainValueNoise(v_worldPos.xy / max(u_focusRadiusM, 600.0) * 2.6) - 0.5) * 18.0;
+  float beltJitter = (!isRing || u_ringLevel < 4.5)
+    ? (terrainValueNoise(v_worldPos.xy / max(u_focusRadiusM, 600.0) * 2.6) - 0.5) * 18.0
+    : 0.0;
   float effAltM = max(0.0, altM + beltJitter);
   float beachAltM = max(0.0, altM + beltJitter * smoothstep(2.2, 16.0, altM) * 0.32);
   float slopeSteep = clamp(1.0 - safeNormal.z, 0.0, 1.0);
@@ -422,19 +448,21 @@ void main() {
     : 1.0;
   float contourLine  = (isFlatWaterMirror || isRiverStream)
     ? 0.0
-    : (1.0 - smoothstep(0.0, 0.045, contourPhase)) * contourFade * (1.0 - u_isSkirt);
+    : (1.0 - smoothstep(0.0, 0.045, contourPhase)) * contourFade * (isCentral ? 1.0 : 0.0);
   naturalColor      *= (1.0 - 0.05 * contourLine);
 
   // 3 каскада процедурной текстуры поверхности суши (v_worldPos.z > 0.0)
   // в нормированных мировых координатах (единое поле для центра и юбки).
   // Ровное водное зеркало (в том числе озеро выше seaLevel) сухопутной
   // текстуры не получает вовсе.
-  if (v_worldPos.z > 0.0 && !isFlatWaterMirror) {
+  if (v_worldPos.z > 0.0 && !isFlatWaterMirror && (!isRing || u_ringLevel < 4.5)) {
     vec2 surfCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
     const mat2 OCTAVE_ROT = mat2(0.80, 0.60, -0.60, 0.80);
     float vegBeltMask = smoothstep(6.0, 11.5, beachAltM) * (1.0 - smoothstep(158.0, 190.0, effAltM));
     float highRockMask = smoothstep(160.0, 195.0, effAltM) * (1.0 - snowCover * 0.85);
 
+    // Кольца 3–4 сохраняют макрорельеф, но не тратят ALU на микро- и meso-зерно.
+    if (!isRing || u_ringLevel < 2.5) {
     // 1. Ближний каскад: микрозерно травы и дернины в растительных поясах,
     //    нейтральное минерально-фирновое зерно на песке, скалах и снежниках.
     float microFade = 1.0 - smoothstep(0.0, 0.52, blur);
@@ -479,6 +507,7 @@ void main() {
       * smoothstep(0.32, 0.70, mesoPatch);
     float couloirDepth = mix(0.22, 0.38, highRockMask) * (1.0 - snowCover * 0.55);
     naturalColor *= 1.0 - couloirDepth * couloir * boostedSlopeRock * mesoFade;
+    }
 
     // 3. Дальний каскад: крупномасштабная светотень котловин без затирания
     //    5 высотных поясов и воздушная перспектива горных хребтов.
@@ -505,7 +534,7 @@ void main() {
   // сетки 64×64 — мягкие проплешины и тропинки тёплого грунта.
   vec3 zoneColor = naturalColor;
   float zoneWeight = 0.0;
-  if (u_isSkirt < 0.5) {
+  if (isCentral) {
     sampleZoningBilinear(naturalColor, zoneColor, zoneWeight);
     vec2 padCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
     float padPatch = terrainValueNoise(padCoord * 9.5 + vec2(3.8, 12.4));
@@ -536,7 +565,7 @@ void main() {
   float shoreWave = (terrainValueNoise(shoreUv * 3.4 + vec2(4.1, -2.7)) - 0.5) * 1.8
                   + (terrainValueNoise(shoreUv * 9.8 + vec2(-7.3, 5.4)) - 0.5) * 0.7;
   float effectiveShoreZ = v_worldPos.z + shoreWave * smoothstep(0.0, 5.0, v_worldPos.z);
-  bool coastalBand = (u_isSkirt >= 0.5 || rawTerraform < 0.002);
+  bool coastalBand = isRing ? ringWater : (u_isSkirt >= 0.5 || rawTerraform < 0.002);
   bool isCoastalShore = coastalBand && (effectiveShoreZ < 4.8);
 
   // И-3.2/И-3.3 и Stage-8.6: объёмная глубокая вода с батиметрией, двухоктавной
@@ -544,7 +573,7 @@ void main() {
   float waterSurfaceMask = 0.0;
   float waterSpecTerm = 0.0;
   vec3 waterSurfaceNormal = vec3(0.0, 0.0, 1.0);
-  if (zone == 0u && (v_worldPos.z <= 0.0 || isFlatWaterMirror || isCoastalShore || isRiverStream)) {
+  if (zone == 0u && (v_worldPos.z <= 0.0 || ringWater || isFlatWaterMirror || isCoastalShore || isRiverStream)) {
     float depthBelowZero = max(0.0, -v_worldPos.z);
     float waterBlend = isFlatWaterMirror ? 1.0 : smoothstep(0.0, 3.0, depthBelowZero);
 
@@ -554,7 +583,7 @@ void main() {
     float bathyShelf = terrainValueNoise(shoreUv * 2.35 + vec2(-4.8, 7.1)) * 6.0;
     float openSeaProgress = smoothstep(0.08, 2.40, dist / max(u_focusRadiusM, 600.0));
     float centerHexShoalFade = 1.0 - smoothstep(hexApothem * 0.62, hexApothem * 0.92, centerHexDist);
-    float nearLandInHex = (u_isSkirt < 0.5)
+    float nearLandInHex = isCentral
       ? smoothstep(0.003, 0.0075, maxNeighborTf3) * centerHexShoalFade
       : 0.0;
     float surfShoal = 1.0 - smoothstep(0.0, 1.75, effectiveShoreZ);
@@ -584,9 +613,13 @@ void main() {
 
     // Двухоктавная скрещённая микро-рябь волн (18.0 и 42.0), модулирующая
     // нормаль водной глади, мягкий солнечный блик и Fresnel-отражение неба.
+    // Кольцо 5 оставляет только базовый градиент глубины без микро-ALU.
+    float waveOct2 = 0.0;
+    float waterSpec = 0.0;
+    if (!isRing || u_ringLevel < 4.5) {
     const mat2 WAVE_ROT = mat2(0.80, -0.60, 0.60, 0.80);
     float waveOct1 = terrainValueNoise(shoreUv * 18.0);
-    float waveOct2 = terrainValueNoise(shoreUv * 42.0);
+    waveOct2 = terrainValueNoise(shoreUv * 42.0);
     float waveCross1 = terrainValueNoise((WAVE_ROT * shoreUv) * 18.0 + vec2(6.3, -4.1));
     float waveCross2 = terrainValueNoise((WAVE_ROT * shoreUv) * 42.0 + vec2(-9.2, 5.7));
     float waveRipple = (waveOct1 - 0.5) * 0.36 + (waveCross1 - 0.5) * 0.32
@@ -623,13 +656,14 @@ void main() {
     vec3 halfVec = (dot(halfSum, halfSum) > 1e-6) ? normalize(halfSum) : vec3(0.0, 0.0, 1.0);
     float NoH = max(dot(waterSurfaceNormal, halfVec), 1e-4);
     float horizonSpecFade = 1.0 - smoothstep(0.65, 0.98, v_fog);
-    float waterSpec = (pow(NoH, 44.0) * 0.24 + pow(NoH, 160.0) * 0.26)
-                    * mix(0.55, 1.0, rippleFade) * horizonSpecFade;
+    waterSpec = (pow(NoH, 44.0) * 0.24 + pow(NoH, 160.0) * 0.26)
+              * mix(0.55, 1.0, rippleFade) * horizonSpecFade;
+    }
 
     float riverWater = isRiverStream
       ? (1.0 - smoothstep(0.0014, 0.0021, rawTerraform) * 0.24)
       : 0.0;
-    float shoreWater = isFlatWaterMirror
+    float shoreWater = (isFlatWaterMirror || ringWater)
       ? 1.0
       : max(max(waterBlend, riverWater), 1.0 - smoothstep(0.0, 1.8, effectiveShoreZ));
     float waterOpacity = mix(0.86, 0.99, smoothstep(1.5, 10.0, waterDepthM));
@@ -639,6 +673,7 @@ void main() {
 
     // Тонкая светлая пенная кромка прибоя вдоль полосы 0.0 < effectiveShoreZ < 1.6.
     if (!isFlatWaterMirror && !isRiverStream && coastalBand
+        && (!isRing || u_ringLevel < 2.5)
         && effectiveShoreZ > 0.0 && effectiveShoreZ < 1.6) {
       float foamNoise = terrainValueNoise(shoreUv * 28.0 + vec2(3.7, -6.2)) * 0.62 + waveOct2 * 0.38;
       float foamEnvelope = smoothstep(0.02, 0.36, effectiveShoreZ)
@@ -648,7 +683,7 @@ void main() {
     }
 
     // Влажный тёмно-песчаный накат и сухая песчаная полоса пляжа выше прибоя.
-    if (!isFlatWaterMirror && !isRiverStream && coastalBand) {
+    if (!isFlatWaterMirror && !isRiverStream && coastalBand && (!isRing || u_ringLevel < 4.5)) {
       float wetSwash = smoothstep(0.9, 1.8, effectiveShoreZ)
         * (1.0 - smoothstep(2.0, 3.0, effectiveShoreZ));
       float beachBand = smoothstep(1.8, 3.0, effectiveShoreZ)
@@ -662,7 +697,7 @@ void main() {
   // поверх непрерывного ландшафта, без светящихся фасок и сетки соседей.
   float hexGlow = 0.0;
   float hexCoreLine = 0.0;
-  if (u_focusRadiusM > 1.0) {
+  if (isCentral && u_focusRadiusM > 1.0) {
     hexGlow = smoothstep(hexApothem * 0.975, hexApothem * 0.998, centerHexDist)
       * (1.0 - smoothstep(hexApothem * 0.998, hexApothem * 1.022, centerHexDist));
     hexCoreLine = smoothstep(hexApothem * 0.991, hexApothem * 0.999, centerHexDist)
@@ -677,7 +712,7 @@ void main() {
   vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8))
             + vec3(1.0, 0.96, 0.88) * waterSpecTerm;
 
-  if (u_focusRadiusM > 1.0) {
+  if (isCentral && u_focusRadiusM > 1.0) {
     vec3 hexRimColor = mix(vec3(0.22, 0.78, 0.88), vec3(0.92, 0.97, 1.0), hexCoreLine);
     float hexRimWeight = clamp(hexGlow * 0.18 + hexCoreLine * 0.58, 0.0, 0.68);
     lit = mix(lit, hexRimColor, hexRimWeight);

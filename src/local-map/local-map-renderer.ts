@@ -37,6 +37,35 @@ import type {
 } from './local-map-worker.ts';
 import type { MeshData, MeshLibrary } from './local-map-mesh.ts';
 
+/**
+ * Структурное расширение wire-контракта Stage-8.7. Воркер добавляет эти поля
+ * независимо; рендерер не импортирует value-константы из модуля воркера.
+ */
+export type RingLevel = 1 | 2 | 3 | 4 | 5;
+
+export interface RingCellLike {
+  readonly cell: number;
+  readonly ring: RingLevel;
+  readonly center: readonly [number, number, number];
+  readonly offsetM: readonly [number, number];
+  readonly hfRes: number;
+  readonly heightfield: Float32Array;
+  readonly waterMask: Uint8Array;
+  readonly minHeightM: number;
+  readonly maxHeightM: number;
+}
+
+export type LocalMapRendererWorkerResponse = LocalMapWorkerResponse & {
+  readonly ringCells?: readonly RingCellLike[];
+};
+
+export interface LocalMapRingStats {
+  /** Число активных ячеек колец 1…5. */
+  cells: number;
+  /** Занятые ими байты в общих position/normal/local/water/index-буферах. */
+  bytes: number;
+}
+
 /** Хард-кап инстансов на модуль (зеркало контракта воркера: MAX_INSTANCES). */
 export const MAX_INSTANCES_PER_MODULE = 4096;
 /** Байт на инстанс: 8 float (a_inst_pos_yaw + a_inst_scale_tint). */
@@ -116,18 +145,101 @@ const DEFAULT_FOG_COLOR: readonly [number, number, number] = [0.68, 0.75, 0.82];
 const DEFAULT_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
 const FOG_START_RATIO = 0.72;
 const FOG_END_RATIO = 0.98;
+const LOCAL_STRIDE_BYTES = 2 * Float32Array.BYTES_PER_ELEMENT;
 
 /** Стадии staged-догрузки (Патч 8). */
 const STAGE_TEXTURES = 0;
 const STAGE_POSITIONS = 1;
 const STAGE_NORMALS = 2;
 const STAGE_INSTANCES = 3;
+const STAGE_RING_INDICES = 4;
+const STAGE_RING_POSITIONS = 5;
+const STAGE_RING_NORMALS = 6;
+const STAGE_RING_WATER = 7;
 const STAGE_COUNT = 4;
+const STAGE_COUNT_WITH_RINGS = 8;
+
+/** Контракт LOD Stage-8.7: индекс соответствует номеру кольца. */
+const RING_LEVELS = 5;
+const RING_HF_RES: readonly number[] = Object.freeze([256, 64, 32, 16, 8, 4]);
+const RING_SLOT_BASE: readonly number[] = Object.freeze([0, 0, 6, 18, 36, 60]);
+const VERTEX_STRIDE_BYTES = 3 * Float32Array.BYTES_PER_ELEMENT;
+const INDEX_STRIDE_BYTES = Uint32Array.BYTES_PER_ELEMENT;
+
+interface RingSlotLayout {
+  readonly level: RingLevel;
+  readonly vertexOffset: number;
+  readonly indexOffset: number;
+}
+
+interface RingDrawItem {
+  readonly cell: RingCellLike;
+  readonly level: RingLevel;
+  readonly res: number;
+  /** Абсолютные смещения в общих буферах центрального меша и колец. */
+  readonly vertexOffset: number;
+  readonly indexOffset: number;
+  readonly indexCount: number;
+}
+
+function buildRingSlotLayout(): readonly RingSlotLayout[] {
+  const slots: RingSlotLayout[] = [];
+  let vertexOffset = 0;
+  let indexOffset = 0;
+  for (let level = 1; level <= RING_LEVELS; level++) {
+    const res = RING_HF_RES[level] as number;
+    for (let slot = 0; slot < level * 6; slot++) {
+      slots.push({ level: level as RingLevel, vertexOffset, indexOffset });
+      vertexOffset += res * res;
+      indexOffset += (res - 1) * (res - 1) * 6;
+    }
+  }
+  return slots;
+}
+
+const RING_SLOT_LAYOUT = buildRingSlotLayout();
+const RING_VERTEX_CAPACITY = RING_SLOT_LAYOUT.reduce(
+  (sum, slot) => {
+    const res = RING_HF_RES[slot.level] as number;
+    return sum + res * res;
+  }, 0,
+);
+const RING_INDEX_CAPACITY = RING_SLOT_LAYOUT.reduce(
+  (sum, slot) => {
+    const res = RING_HF_RES[slot.level] as number;
+    return sum + (res - 1) * (res - 1) * 6;
+  }, 0,
+);
+
+/** Записывает CCW-квады сетки в общий Uint32-индексный буфер. */
+function writeGridIndices(
+  target: Uint32Array,
+  targetOffset: number,
+  res: number,
+  vertexOffset: number,
+  fromRow: number,
+  toRow: number,
+): void {
+  const quadsPerRow = res - 1;
+  let ptr = targetOffset;
+  for (let y = fromRow; y < toRow; y++) {
+    for (let x = 0; x < quadsPerRow; x++) {
+      const tl = vertexOffset + y * res + x;
+      const tr = tl + 1;
+      const bl = tl + res;
+      const br = bl + 1;
+      target[ptr++] = tl; target[ptr++] = bl; target[ptr++] = tr;
+      target[ptr++] = tr; target[ptr++] = bl; target[ptr++] = br;
+    }
+  }
+}
 
 interface PendingUpload {
-  data: LocalMapWorkerResponse;
+  data: LocalMapRendererWorkerResponse;
   /** Размер сетки рельефа payload-а (для позиций/нормалей). */
   readonly res: number;
+  readonly rings: readonly RingDrawItem[];
+  readonly totalStages: number;
   stage: number;
   /** Курсор строк сетки на стадиях positions/normals. */
   row: number;
@@ -136,6 +248,9 @@ interface PendingUpload {
   moduleIndex: number;
   /** Курсор инстансов текущего модуля (в инстансах, не в байтах). */
   moduleInstance: number;
+  /** Текущая ячейка и строка на стадиях порционной заливки колец. */
+  ringIndex: number;
+  ringRow: number;
 }
 
 interface LocalMapModuleBuffers {
@@ -155,9 +270,16 @@ export class StructureRenderer {
   private terrainVAO: WebGLVertexArrayObject | null;
   private terrainPosBuf: WebGLBuffer | null;
   private terrainNormBuf: WebGLBuffer | null;
+  private terrainWaterBuf: WebGLBuffer | null;
+  private terrainLocalBuf: WebGLBuffer | null;
   private terrainIdxBuf: WebGLBuffer | null;
   private terrainRes: number;
   private terrainIndexCount: number;
+  /** Общие с буферами центра слоты колец; VAO остаётся неизменным. */
+  private ringStorageAllocated: boolean;
+  private activeRings: readonly RingDrawItem[];
+  private ringBytes: number;
+  private indexScratch: Uint32Array;
   private texZoning: WebGLTexture | null;
   private texTerraform: WebGLTexture | null;
   private instanceVBOs: Record<string, LocalMapInstanceVbo>;
@@ -190,9 +312,15 @@ export class StructureRenderer {
     this.terrainVAO = null;
     this.terrainPosBuf = null;
     this.terrainNormBuf = null;
+    this.terrainWaterBuf = null;
+    this.terrainLocalBuf = null;
     this.terrainIdxBuf = null;
     this.terrainRes = 0;
     this.terrainIndexCount = 0;
+    this.ringStorageAllocated = false;
+    this.activeRings = [];
+    this.ringBytes = 0;
+    this.indexScratch = new Uint32Array(0);
     this.texZoning = null;
     this.texTerraform = null;
     this.instanceVBOs = {};    // { moduleId: { vbo, count } }
@@ -271,21 +399,33 @@ export class StructureRenderer {
   }
 
   // ---- Патч 8: постановка данных воркера в очередь порционной догрузки ----
-  enqueueWorkerData(data: LocalMapWorkerResponse, budgetMs: number = DEFAULT_UPLOAD_BUDGET_MS): void {
+  enqueueWorkerData(data: LocalMapRendererWorkerResponse, budgetMs: number = DEFAULT_UPLOAD_BUDGET_MS): void {
     // latest-wins: новый участок вытесняет незавершённую догрузку предыдущего.
     const res = data.meta.hfRes;
     const moduleIds = Object.keys(data.instanceBuffers);
+    this.meta = data.meta;
+    this.ensureTerrainVao(res);
+    const rings = this.createRingDrawItems(data.ringCells ?? []);
+    if (rings.length > 0) this.ensureRingStorage();
+    this.activeRings = rings;
+    this.ringBytes = rings.reduce(
+      (sum, item) => sum + item.res * item.res * (VERTEX_STRIDE_BYTES * 2 + LOCAL_STRIDE_BYTES + 1)
+        + item.indexCount * INDEX_STRIDE_BYTES,
+      0,
+    );
     this.pending = {
       data,
       res,
+      rings,
+      totalStages: rings.length > 0 ? STAGE_COUNT_WITH_RINGS : STAGE_COUNT,
       stage: STAGE_TEXTURES,
       row: 0,
       moduleIds,
       moduleIndex: 0,
       moduleInstance: 0,
+      ringIndex: 0,
+      ringRow: 0,
     };
-    this.meta = data.meta;
-    this.ensureTerrainVao(res);
     // До завершения очередной порции кадр не рисует недогруженный участок.
     this.ready = false;
     // Кадровый бюджет запоминается и применяется в processPendingUpload(),
@@ -328,8 +468,16 @@ export class StructureRenderer {
       const total = pending.moduleIds.length;
       const moduleFraction = total > 0 ? pending.moduleIndex / total : 1;
       fraction = moduleFraction;
+    } else if (pending.stage >= STAGE_RING_INDICES) {
+      const total = pending.rings.length;
+      const item = pending.rings[pending.ringIndex];
+      const rows = item
+        ? (pending.stage === STAGE_RING_INDICES ? item.res - 1 : item.res)
+        : 1;
+      const cellFraction = item ? pending.ringRow / Math.max(1, rows) : 0;
+      fraction = total > 0 ? (pending.ringIndex + cellFraction) / total : 1;
     }
-    const value = (pending.stage + fraction) / STAGE_COUNT;
+    const value = (pending.stage + fraction) / pending.totalStages;
     return value < 0 ? 0 : value > 1 ? 1 : value;
   }
 
@@ -337,8 +485,13 @@ export class StructureRenderer {
     return { ...this.stats };
   }
 
+  /** Фактически занятые активными кольцами ресурсы для приёмочного гейта G6.3. */
+  getRingStats(): LocalMapRingStats {
+    return { cells: this.activeRings.length, bytes: this.ringBytes };
+  }
+
   // ---- Приём данных от Worker (синхронная совместимость) ----
-  onWorkerData(data: LocalMapWorkerResponse): void {
+  onWorkerData(data: LocalMapRendererWorkerResponse): void {
     this.enqueueWorkerData(data, Infinity);
     this.processPendingUpload(Infinity);
   }
@@ -355,17 +508,7 @@ export class StructureRenderer {
 
     // Индексный буфер статичен для сетки res×res: Uint32Array, UNSIGNED_INT.
     const indices = new Uint32Array(this.terrainIndexCount);
-    let ptr = 0;
-    for (let y = 0; y < quadsPerRow; y++) {
-      for (let x = 0; x < quadsPerRow; x++) {
-        const tl = y * res + x;
-        const tr = tl + 1;
-        const bl = tl + res;
-        const br = bl + 1;
-        indices[ptr++] = tl; indices[ptr++] = bl; indices[ptr++] = tr;
-        indices[ptr++] = tr; indices[ptr++] = bl; indices[ptr++] = br;
-      }
-    }
+    writeGridIndices(indices, 0, res, 0, 0, quadsPerRow);
 
     const vao = gl.createVertexArray();
     this.terrainVAO = vao;
@@ -383,12 +526,98 @@ export class StructureRenderer {
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
 
+    // Байтовая водная маска колец: normalized UNSIGNED_BYTE → float 0..1.
+    // Центральная часть остаётся нулевой и использует прежнюю terraform-текстуру.
+    this.terrainWaterBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, res * res, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+
+    // Локальные XY нужны гексагональному срезу при batch-draw целого кольца.
+    this.terrainLocalBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainLocalBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, res * res * LOCAL_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 0, 0);
+
     this.terrainIdxBuf = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
     this.stats.terrainVaoCreates++;
+  }
+
+  /**
+   * Раскладывает ячейки по стабильным слотам 6·ring. Порядок payload не влияет
+   * на GPU-адреса: сортировка по (ring, cell) убирает мерцание при latest-wins.
+   */
+  private createRingDrawItems(cells: readonly RingCellLike[]): readonly RingDrawItem[] {
+    const sorted = cells.slice().sort((a, b) => a.ring - b.ring || a.cell - b.cell);
+    const usedByRing = [0, 0, 0, 0, 0, 0];
+    const items: RingDrawItem[] = [];
+    const centralVertexCount = this.terrainRes * this.terrainRes;
+    for (const cell of sorted) {
+      const level = cell.ring;
+      const res = Math.floor(cell.hfRes);
+      const maxRes = RING_HF_RES[level];
+      const slot = usedByRing[level] as number;
+      if (!maxRes || res < 2 || res > maxRes || slot >= level * 6) continue;
+      if (cell.heightfield.length < res * res || cell.waterMask.length < res * res) continue;
+      const layout = RING_SLOT_LAYOUT[(RING_SLOT_BASE[level] as number) + slot];
+      if (!layout) continue;
+      usedByRing[level] = slot + 1;
+      items.push({
+        cell,
+        level,
+        res,
+        vertexOffset: centralVertexCount + layout.vertexOffset,
+        indexOffset: this.terrainIndexCount + layout.indexOffset,
+        indexCount: (res - 1) * (res - 1) * 6,
+      });
+    }
+    return items;
+  }
+
+  /**
+   * Один раз расширяет уже существующие terrainPosBuf/NormBuf/IdxBuf. VAO и
+   * сами WebGLBuffer-объекты не пересоздаются; последующие участки идут только
+   * через bufferSubData независимо от числа видимых колец.
+   */
+  private ensureRingStorage(): void {
+    if (this.ringStorageAllocated) return;
+    const gl = this.gl;
+    const res = this.terrainRes;
+    const centralVertexCount = res * res;
+    const totalVertices = centralVertexCount + RING_VERTEX_CAPACITY;
+    const totalIndices = this.terrainIndexCount + RING_INDEX_CAPACITY;
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainPosBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, totalVertices * VERTEX_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainNormBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, totalVertices * VERTEX_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, totalVertices, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainLocalBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, totalVertices * LOCAL_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+
+    const indices = new Uint32Array(totalIndices);
+    writeGridIndices(indices, 0, res, 0, 0, res - 1);
+    for (const slot of RING_SLOT_LAYOUT) {
+      const slotRes = RING_HF_RES[slot.level] as number;
+      writeGridIndices(
+        indices,
+        this.terrainIndexCount + slot.indexOffset,
+        slotRes,
+        centralVertexCount + slot.vertexOffset,
+        0,
+        slotRes - 1,
+      );
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    this.ringStorageAllocated = true;
   }
 
   /** Одна порция staged-догрузки. `true` — очередь исчерпана. */
@@ -433,8 +662,18 @@ export class StructureRenderer {
       return false;
     }
 
+    if (pending.stage >= STAGE_RING_INDICES) {
+      return this.uploadNextRingChunk(pending.stage);
+    }
+
     // STAGE_INSTANCES: порционная заливка instance VBO по модулям.
     if (!this.uploadNextInstanceChunk(data.instanceBuffers)) return false;
+    if (pending.rings.length > 0) {
+      pending.stage = STAGE_RING_INDICES;
+      pending.ringIndex = 0;
+      pending.ringRow = 0;
+      return false;
+    }
     return true;
   }
 
@@ -500,6 +739,154 @@ export class StructureRenderer {
         scratch[out++] = 1.0 / len;
       }
     }
+  }
+
+  /** Позиции кольцевой ячейки в метрах общего касательного кадра активного гекса. */
+  private fillRingPositions(
+    item: RingDrawItem,
+    radiusM: number,
+    from: number,
+    lines: number,
+  ): void {
+    const { cell, res } = item;
+    const cellSize = (2 * radiusM) / res;
+    const [offsetX, offsetY] = cell.offsetM;
+    const scratch = this.scratch;
+    let out = 0;
+    for (let y = from; y < from + lines; y++) {
+      for (let x = 0; x < res; x++) {
+        const i = y * res + x;
+        scratch[out++] = offsetX + (x - res / 2) * cellSize;
+        scratch[out++] = offsetY + (y - res / 2) * cellSize;
+        // heightfield уже содержит метрическую высоту; center — канонический
+        // идентификатор на сфере, а не дополнительное смещение касательного меша.
+        scratch[out++] = cell.heightfield[i] as number;
+      }
+    }
+  }
+
+  /** Локальные XY для гексагонального среза без uniform на каждую ячейку. */
+  private fillRingLocal(item: RingDrawItem, radiusM: number, from: number, lines: number): void {
+    const res = item.res;
+    const cellSize = (2 * radiusM) / res;
+    const scratch = this.scratch;
+    let out = 0;
+    for (let y = from; y < from + lines; y++) {
+      for (let x = 0; x < res; x++) {
+        scratch[out++] = (x - res / 2) * cellSize;
+        scratch[out++] = (y - res / 2) * cellSize;
+      }
+    }
+  }
+
+  /** Нормали кольцевой ячейки по центральным конечным разностям её heightfield. */
+  private fillRingNormals(
+    item: RingDrawItem,
+    radiusM: number,
+    from: number,
+    lines: number,
+  ): void {
+    const { cell, res } = item;
+    const cellSize = (2 * radiusM) / res;
+    const heightfield = cell.heightfield;
+    const scratch = this.scratch;
+    let out = 0;
+    for (let y = from; y < from + lines; y++) {
+      for (let x = 0; x < res; x++) {
+        const i = y * res + x;
+        const hL = x > 0 ? heightfield[i - 1] as number : heightfield[i] as number;
+        const hR = x < res - 1 ? heightfield[i + 1] as number : heightfield[i] as number;
+        const hD = y > 0 ? heightfield[i - res] as number : heightfield[i] as number;
+        const hU = y < res - 1 ? heightfield[i + res] as number : heightfield[i] as number;
+        const nx = (hL - hR) / (2 * cellSize);
+        const ny = (hD - hU) / (2 * cellSize);
+        const len = Math.hypot(nx, ny, 1.0);
+        scratch[out++] = nx / len;
+        scratch[out++] = ny / len;
+        scratch[out++] = 1.0 / len;
+      }
+    }
+  }
+
+  /** Одна порция индексов, позиций, нормалей или водной маски ячейки. */
+  private uploadNextRingChunk(stage: number): boolean {
+    const pending = this.pending;
+    if (!pending) return true;
+    const gl = this.gl;
+    if (pending.ringIndex >= pending.rings.length) {
+      if (stage === STAGE_RING_WATER) return true;
+      pending.stage = stage === STAGE_RING_INDICES
+        ? STAGE_RING_POSITIONS
+        : stage === STAGE_RING_POSITIONS ? STAGE_RING_NORMALS : STAGE_RING_WATER;
+      pending.ringIndex = 0;
+      pending.ringRow = 0;
+      return false;
+    }
+
+    const item = pending.rings[pending.ringIndex] as RingDrawItem;
+    const res = item.res;
+    const isIndices = stage === STAGE_RING_INDICES;
+    const isWater = stage === STAGE_RING_WATER;
+    const rowCount = isIndices ? res - 1 : res;
+    const rowBytes = isIndices
+      ? (res - 1) * 6 * INDEX_STRIDE_BYTES
+      : isWater ? res : res * VERTEX_STRIDE_BYTES;
+    const rowsPerChunk = Math.max(1, Math.floor(UPLOAD_CHUNK_BYTES / Math.max(1, rowBytes)));
+    const from = pending.ringRow;
+    const to = Math.min(rowCount, from + rowsPerChunk);
+    const lines = to - from;
+
+    if (isIndices) {
+      const indexCount = lines * (res - 1) * 6;
+      if (this.indexScratch.length < indexCount) this.indexScratch = new Uint32Array(indexCount);
+      writeGridIndices(this.indexScratch, 0, res, item.vertexOffset, from, to);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuf);
+      gl.bufferSubData(
+        gl.ELEMENT_ARRAY_BUFFER,
+        (item.indexOffset + from * (res - 1) * 6) * INDEX_STRIDE_BYTES,
+        this.indexScratch.subarray(0, indexCount),
+      );
+    } else if (isWater) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
+      gl.bufferSubData(
+        gl.ARRAY_BUFFER,
+        item.vertexOffset + from * res,
+        item.cell.waterMask.subarray(from * res, to * res),
+      );
+    } else {
+      const floatCount = lines * res * 3;
+      if (this.scratch.length < floatCount) this.scratch = new Float32Array(floatCount);
+      if (stage === STAGE_RING_POSITIONS) {
+        this.fillRingPositions(item, pending.data.meta.radiusM, from, lines);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainPosBuf);
+      } else {
+        this.fillRingNormals(item, pending.data.meta.radiusM, from, lines);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainNormBuf);
+      }
+      gl.bufferSubData(
+        gl.ARRAY_BUFFER,
+        (item.vertexOffset + from * res) * VERTEX_STRIDE_BYTES,
+        this.scratch.subarray(0, floatCount),
+      );
+      if (stage === STAGE_RING_POSITIONS) {
+        const localFloatCount = lines * res * 2;
+        this.fillRingLocal(item, pending.data.meta.radiusM, from, lines);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainLocalBuf);
+        gl.bufferSubData(
+          gl.ARRAY_BUFFER,
+          (item.vertexOffset + from * res) * LOCAL_STRIDE_BYTES,
+          this.scratch.subarray(0, localFloatCount),
+        );
+        this.stats.stagedSubDataCalls++;
+      }
+    }
+    this.stats.stagedSubDataCalls++;
+    pending.ringRow = to;
+    if (pending.ringRow >= rowCount) {
+      pending.ringIndex++;
+      pending.ringRow = 0;
+    }
+    return false;
   }
 
   /**
@@ -642,7 +1029,7 @@ export class StructureRenderer {
     // polygon offset уводит её назад по глубине, чтобы центральный рельеф
     // гарантированно выигрывал без z-fighting на совпадающих высотах.
     gl.enable(gl.POLYGON_OFFSET_FILL);
-    gl.polygonOffset(1.0, 1.0);
+    gl.polygonOffset(RING_LEVELS + 1, (RING_LEVELS + 1) * 2);
     gl.bindVertexArray(this.skirtVAO);
     gl.drawElements(gl.TRIANGLES, this.skirtIndexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
@@ -730,6 +1117,54 @@ export class StructureRenderer {
   }
 
   // ---- Render Loop ----
+  /**
+   * Порядок 5 → 1, один draw на непрерывный диапазон уровня. При контрактном
+   * RING_HF_RES все 6·level ячеек смежны, поэтому пять колец стоят пять draws.
+   */
+  private drawRingTerrain(shaderProgram: WebGLProgram): void {
+    if (!this.ready || this.activeRings.length === 0) return;
+    const gl = this.gl;
+    gl.useProgram(shaderProgram);
+    gl.uniform1f(this.uniform(shaderProgram, 'u_isSkirt'), 0.0);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.bindVertexArray(this.terrainVAO);
+    for (let level = RING_LEVELS; level >= 1; level--) {
+      let runOffset = 0;
+      let runCount = 0;
+      let runEnd = 0;
+      for (const item of this.activeRings) {
+        if (item.level !== level) continue;
+        if (runCount === 0) {
+          gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), level);
+          gl.uniform1f(
+            this.uniform(shaderProgram, 'u_ringFade'),
+            (level - 1) / (RING_LEVELS - 1),
+          );
+          // Дальнее кольцо глубже, центральный патч рисуется без смещения.
+          gl.polygonOffset(level, level * 2);
+          runOffset = item.indexOffset;
+        } else if (item.indexOffset !== runEnd) {
+          gl.drawElements(
+            gl.TRIANGLES, runCount, gl.UNSIGNED_INT, runOffset * INDEX_STRIDE_BYTES,
+          );
+          runOffset = item.indexOffset;
+          runCount = 0;
+        }
+        runCount += item.indexCount;
+        runEnd = item.indexOffset + item.indexCount;
+      }
+      if (runCount > 0) {
+        gl.drawElements(
+          gl.TRIANGLES, runCount, gl.UNSIGNED_INT, runOffset * INDEX_STRIDE_BYTES,
+        );
+      }
+    }
+    gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), 0.0);
+    gl.uniform1f(this.uniform(shaderProgram, 'u_ringFade'), 0.0);
+  }
+
   drawTerrain(shaderProgram: WebGLProgram): void {
     if (!this.ready) return;
     const gl = this.gl;
@@ -771,7 +1206,7 @@ export class StructureRenderer {
     gl.bindVertexArray(null);
   }
 
-  /** Полный кадр локальной карты: купол неба → юбка 6 колец → рельеф → постройки. */
+  /** Полный кадр: небо → кольца 5…1 → центр → юбка → постройки. */
   renderFrame(viewProj: Float32Array, options: LocalMapRenderOptions = {}): void {
     const gl = this.gl;
     const { terrainProgram, structureProgram } = this.compilePrograms();
@@ -783,10 +1218,14 @@ export class StructureRenderer {
     // Абсолютные метры тумана (Stage-8) имеют приоритет над ratio-вариантами.
     const fogStart = Number.isFinite(options.fogStart)
       ? (options.fogStart as number)
-      : radiusM * (options.fogStartRatio ?? FOG_START_RATIO);
+      : this.skirt && options.fogStartRatio === undefined
+        ? this.skirt.outerRadiusM * 0.64
+        : radiusM * (options.fogStartRatio ?? FOG_START_RATIO);
     const fogEnd = Number.isFinite(options.fogEnd)
       ? (options.fogEnd as number)
-      : radiusM * (options.fogEndRatio ?? FOG_END_RATIO);
+      : this.skirt && options.fogEndRatio === undefined
+        ? this.skirt.outerRadiusM * FOG_END_RATIO
+        : radiusM * (options.fogEndRatio ?? FOG_END_RATIO);
     const terrainSize = 2 * radiusM;
     const planetRadiusM = options.planetRadiusM ?? this.skirt?.planetRadiusM ?? 0;
     const focusRadiusM = options.focusRadiusM ?? radiusM;
@@ -833,6 +1272,8 @@ export class StructureRenderer {
     gl.uniform1f(this.uniform(terrainProgram, 'u_hexSizeM'), hexSizeM);
     gl.uniform1i(this.uniform(terrainProgram, 'u_zoning_map'), 0);
     gl.uniform1i(this.uniform(terrainProgram, 'u_terraform_map'), 1);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_ringLevel'), 0.0);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_ringFade'), 0.0);
 
     // Текстуры читает только центральный участок; ветка юбки в шейдере
     // игнорирует их, поэтому CLAMP_TO_EDGE не растягивает зоны на горизонт.
@@ -841,14 +1282,27 @@ export class StructureRenderer {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.texTerraform);
 
-    if (this.skirt && this.skirtVAO) {
-      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
-      this.drawSkirt(terrainProgram);
+    if (this.ready && this.activeRings.length > 0) {
+      // Stage-8.7: кольца 5 → 1 → центральный патч → сферическая юбка.
+      this.drawRingTerrain(terrainProgram);
       gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      this.drawTerrain(terrainProgram);
+      if (this.skirt && this.skirtVAO) {
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
+        this.drawSkirt(terrainProgram);
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      }
     } else {
-      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      // Без колец сохраняется прежний порядок Stage-8.6 и его wire-контракт.
+      if (this.skirt && this.skirtVAO) {
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
+        this.drawSkirt(terrainProgram);
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      } else {
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      }
+      this.drawTerrain(terrainProgram);
     }
-    this.drawTerrain(terrainProgram);
 
     // 3. 3D-структуры (с тем же сферическим проседанием).
     gl.useProgram(structureProgram);
@@ -905,6 +1359,8 @@ export class StructureRenderer {
 
     this.pending = null;
     this.meta = null;
+    this.activeRings = [];
+    this.ringBytes = 0;
     this.ready = false;
   }
 
@@ -912,13 +1368,18 @@ export class StructureRenderer {
     const gl = this.gl;
     if (this.terrainPosBuf) gl.deleteBuffer(this.terrainPosBuf);
     if (this.terrainNormBuf) gl.deleteBuffer(this.terrainNormBuf);
+    if (this.terrainWaterBuf) gl.deleteBuffer(this.terrainWaterBuf);
+    if (this.terrainLocalBuf) gl.deleteBuffer(this.terrainLocalBuf);
     if (this.terrainIdxBuf) gl.deleteBuffer(this.terrainIdxBuf);
     if (this.terrainVAO) gl.deleteVertexArray(this.terrainVAO);
     this.terrainPosBuf = null;
     this.terrainNormBuf = null;
+    this.terrainWaterBuf = null;
+    this.terrainLocalBuf = null;
     this.terrainIdxBuf = null;
     this.terrainVAO = null;
     this.terrainRes = 0;
     this.terrainIndexCount = 0;
+    this.ringStorageAllocated = false;
   }
 }
