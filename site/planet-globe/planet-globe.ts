@@ -79,9 +79,17 @@ interface LocalCameraAnim {
 /** Палитра атмосферы планетарного горизонта (Stage-8.3): светлая дневная горная дымка. */
 const LOCAL_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
 const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.66, 0.74, 0.82];
-/** Рабочий панорамный наклон и азимут камеры локальной карты (Stage-8.3: ~17.8°). */
+/** Рабочий панорамный наклон камеры локальной карты (Stage-8.3: ~17.8°). */
 const LOCAL_REST_PITCH = 0.31;
-const LOCAL_REST_YAW = -0.65;
+/**
+ * Stage-8.6: азимут покоя локальной камеры строго на настоящий Север (+Y).
+ * Вектор взгляда камеры равен `(-cos(yaw), -sin(yaw))` в координатах
+ * `(east, north) = (+X, +Y)`, поэтому при `yaw = -π/2` взгляд направлен в `(0, +1)`:
+ * глаз стоит на Юге и смотрит на Север. Верх кадра = Север (`С`), право = Восток (`В`),
+ * лево = Запад (`З`), низ = Юг (`Ю`) — экран 1-в-1 совпадает с подписями
+ * `С / СВ / В / ЮВ / Ю / ЮЗ / З / СЗ` кнопок «СОСЕДИ PATCH7» и с ориентацией глобуса.
+ */
+const LOCAL_REST_YAW = -Math.PI / 2;
 /** Stage-8.2: фаза 1 (подлёт глобуса к гексу) удерживается 320 мс, после чего
  *  сцена проявляется и камера начинает спуск до уровня участка. */
 const LOCAL_DIVE_REVEAL_DELAY_MS = 320;
@@ -265,7 +273,7 @@ let localMapWidthKm = 1.2;
 let localMapRadiusM = LOCAL_PATCH_BASE_RADIUS_M;
 let localMapHudLastAt = 0;
 let localMapCanvasEventsInstalled = false;
-let localCameraYaw = -0.65;
+let localCameraYaw = LOCAL_REST_YAW;
 let localCameraPitch = 0.82;
 let localCameraDistance = 0;
 let localCameraTarget: [number, number, number] = [0, 0, 20];
@@ -645,7 +653,9 @@ function startLocalDiveInAnim(): void {
  * easeInOutCubic. Новая цель toTarget считается как в resetLocalCamera —
  * высота центра heightfield нового патча плюс сдвиг вперёд
  * `localMapRadiusM * 0.14` вдоль текущего localCameraYaw; fromTarget
- * стартует со стороны предыдущего гекса (1.05·R против азимута перехода).
+ * стартует со стороны предыдущего гекса — Stage-8.6: ровно на шаг центров
+ * соседних гексов `d_hex = 1.15 · R_patch` против азимута перехода, поэтому
+ * камера въезжает в новый гекс тем же шагом, что и сетка Patch7.
  * Пользовательский yaw сохраняется (fromYaw = toYaw = localCameraYaw):
  * камера не принуждается крутиться обратно к LOCAL_REST_YAW.
  */
@@ -656,7 +666,8 @@ function startLocalNeighborFlyAnim(azimuth: number): void {
   const toTarget = defaultLocalCameraTarget(localCameraYaw, localMapWidthKm);
   // Азимут перехода считаем как atan2(east, north); предыдущий гекс лежит
   // строго против направления перехода относительно нового центра.
-  const offset = localMapRadiusM * 1.05;
+  // Stage-8.6: смещение равно шагу центров соседних гексов d_hex = 1.15 · R_patch.
+  const offset = localMapRadiusM * 1.15;
   const fromTarget: LocalVec3 = [
     -Math.sin(azimuth) * offset,
     -Math.cos(azimuth) * offset,
@@ -1306,7 +1317,13 @@ function renderLocalMapFromPatch(
   document.body.classList.add('local-map-active');
   els.localMapStage.hidden = false;
   resizeLocalMapCanvas();
-  resetLocalCamera();
+  // Stage-8.6: при переходе к соседней ячейке ракурс предыдущего гекса
+  // сохраняется уже на ПЕРВОМ кадре нового патча — сброс в покой выполняется
+  // только при свежем Dive-in или при устаревшем/чужом ожидании перелёта.
+  // Иначе пользователь видел лишний кадр скачка камеры до finishLocalMapEntry.
+  const neighborArrival = pendingNeighborFly !== null &&
+    pendingNeighborFly.cell === patchReady.hexCenterCell;
+  if (!neighborArrival) resetLocalCamera();
   updateLocalMapHud();
   // Кадровый цикл стартует сразу: порционная GPU-заливка идёт уже во время
   // фазы 1, а сцена проявляется только к началу спуска камеры.
@@ -1328,15 +1345,22 @@ function finishLocalMapEntry(requestId: number, shouldFlyToPatch: boolean): void
   if (requestId !== localMapEntrySeq || !localMapActive || !activePatchReady) return;
   els.localMapStage.hidden = false;
   resizeLocalMapCanvas();
-  resetLocalCamera();
+  // Stage-8.6: ожидание перелёта валидно только для прибывшей ячейки.
+  const neighborFly = pendingNeighborFly && pendingNeighborFly.cell === activePatchReady.hexCenterCell
+    ? pendingNeighborFly
+    : null;
+  // Сброс в покой нужен только там, где камера действительно стартует заново
+  // (свежий Dive-in или устаревшее ожидание) — иначе переход к соседу
+  // обходится без единого кадра скачка ракурса.
   if (shouldFlyToPatch) {
+    resetLocalCamera();
     startLocalDiveInAnim();
-  } else if (pendingNeighborFly && pendingNeighborFly.cell === activePatchReady.hexCenterCell) {
+  } else if (neighborFly) {
     // Перелёт к соседнему гексу: цель приезжает со стороны предыдущего гекса.
-    // Stage-8.4: resetLocalCamera() выше сбросил камеру в покой — возвращаем
-    // состояние, сохранённое в requestLocalNeighbor до перехода, чтобы перелёт
-    // начинался без рывка и не терял пользовательский yaw/pitch/zoom.
-    const { azimuth, prevTargetOffset, prevYaw, prevPitch, prevDist } = pendingNeighborFly;
+    // Stage-8.4/8.6: камера сохраняет состояние, записанное в requestLocalNeighbor
+    // (или в обработчике «СОСЕДИ PATCH7») до перехода, — пользовательский
+    // yaw/pitch/zoom не теряется, кадр не дёргается.
+    const { azimuth, prevTargetOffset, prevYaw, prevPitch, prevDist } = neighborFly;
     if (prevTargetOffset) {
       localCameraTarget = [prevTargetOffset[0], prevTargetOffset[1], prevTargetOffset[2]];
     }
@@ -1345,6 +1369,8 @@ function finishLocalMapEntry(requestId: number, shouldFlyToPatch: boolean): void
     if (prevDist !== undefined && prevDist > 0) localCameraDistance = prevDist;
     pendingNeighborFly = null;
     startLocalNeighborFlyAnim(azimuth);
+  } else {
+    resetLocalCamera();
   }
   els.localMapStage.classList.remove('is-active');
   void els.localMapStage.offsetWidth;
@@ -2317,6 +2343,10 @@ function initEvents(): void {
       };
     }
     cancelLocalCameraAnim();
+    // Stage-8.6: кнопка «СОСЕДИ PATCH7» идёт тем же путём, что и
+    // requestLocalNeighbor, — флаг загрузки выставляется сразу перед запросом,
+    // чтобы enterLocalMap не принял прибывший патч за смену масштаба.
+    localPatchLoading = true;
     setLocalMapStatus('Запрашиваю соседнюю ячейку #' + cell + ' и новый Patch7…', 'info');
     requestCellPick(cell);
   });
