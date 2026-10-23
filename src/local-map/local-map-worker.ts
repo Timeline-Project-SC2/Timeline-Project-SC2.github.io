@@ -1120,7 +1120,8 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
   const detailLattice = sampler ? sampleDetailLattice(patch, sampler, radiusM) : null;
   const riverHalfWidthM = Math.max(cellSize * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
-  const riverDepthM = Math.max(6, radiusM * RIVER_DEPTH_RATIO);
+  // Stage-8.6: русло остаётся читаемой долиной даже на региональной карте.
+  const riverDepthM = Math.max(10, radiusM * RIVER_DEPTH_RATIO * 1.8);
   const segments = riverSegments(patch, radiusM, riverHalfWidthM);
   const noiseScale = (3.5 + Math.log2(Math.max(1, radiusM / 600)) * 0.65) / Math.max(radiusM, 1);
   // Stage-8.5: гладкая интерполяция Patch7 (без граней Вороного) и бюджет
@@ -1151,7 +1152,6 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
       // попал соответствующий тексель маски (иначе сухие соседи разрешали бы
       // застройку на континентальном озере).
       if (isWaterCell(cell, patch.seaLevel) || cell.streamWeight > 0) spawnMask[idx] = 0;
-      if (spawnMask[idx] === 1) buildablePoints++;
 
       let height: number;
       if (isWaterCell(cell, patch.seaLevel)) {
@@ -1190,13 +1190,21 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
           )
           : fbmT;
         height = baseM + (landBudgetM - tiltM) * reliefT;
-        // И-3.3: плавный врез русла от входных граней к центру и к выходной грани.
+        // И-3.3/Stage-8.6: плавный врез русла от входных граней к центру и к
+        // выходной грани. Водное стрежневое русло получает явный водный маркер
+        // даже над seaLevel: иначе шейдер красил бы углубление как траву.
         const carve = riverCarveFactor(wx, wy, segments, riverHalfWidthM);
         if (carve > 0) height -= riverDepthM * carve;
-        // Stage-8.5: суша всегда отличается от воды (минимум TERRAFORM_LAND_MIN).
-        terraformMap[idx] = Math.max(TERRAFORM_LAND_MIN, terraformMap[idx] as number);
+        if (carve >= 0.45) {
+          terraformMap[idx] = 0;
+          spawnMask[idx] = 0;
+        } else {
+          // Stage-8.5: суша всегда отличается от воды (минимум TERRAFORM_LAND_MIN).
+          terraformMap[idx] = Math.max(TERRAFORM_LAND_MIN, terraformMap[idx] as number);
+        }
       }
 
+      if (spawnMask[idx] === 1) buildablePoints++;
       heightfield[idx] = height;
     }
   }
@@ -1537,22 +1545,74 @@ function smoothPatchBaseElevation(
   const c0 = neighborSlots[k0] as PatchCell;
   const c1 = neighborSlots[(k0 + 1) % SKIRT_RING_COUNT] as PatchCell;
   const angularBlend = smooth01(slot - Math.floor(slot));
-  const neighborBlend = smooth01((r - collarEndM) / (2.4 * radiusPatchM));
+  // Центры соседних ячеек лежат уже на 1.15 R_patch. К 2.5 R_patch
+  // соответствующий азимут полностью принадлежит соседу, без круглой лужи.
+  const neighborBlend = smooth01((r - collarEndM) / (1.35 * radiusPatchM));
   const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
-  const canon = (cell: PatchCell): number => isWaterCell(cell, patch.seaLevel)
-    ? waterLevelOf(cell, patch.seaLevel) : baseElevationOf(cell);
-  const centerWater = isWaterCell(center, patch.seaLevel);
-  // Озеро гарантированно держит зеркало до 1.8 R, затем водность меняется
-  // непрерывно, а не переключается булевым флагом на границе соседней ячейки.
-  const waterBlend = centerWater
-    ? smooth01((r - 1.8 * radiusPatchM) / (2.4 * radiusPatchM)) : neighborBlend;
-  return {
-    elevation: mix(centerCanonElev, mix(canon(c0), canon(c1), angularBlend), neighborBlend),
-    water: mix(Number(centerWater), mix(Number(isWaterCell(c0, patch.seaLevel)),
-      Number(isWaterCell(c1, patch.seaLevel)), angularBlend), waterBlend),
-    waterLevel: mix(waterLevelOf(center, patch.seaLevel),
-      mix(waterLevelOf(c0, patch.seaLevel), waterLevelOf(c1, patch.seaLevel), angularBlend), waterBlend),
+  const isOcean = (cell: PatchCell): boolean =>
+    cell.elevation < patch.seaLevel && cell.lakeWeight === 0;
+  const isLake = (cell: PatchCell): boolean => cell.lakeWeight > 0;
+  // Океан несёт честную отрицательную отметку дна, а не зеркало seaLevel.
+  // Минимум -0.035 единицы (~ -31.5 м) предотвращает ложный зелёный берег
+  // из-за мелких численных колебаний прямо на уровне моря.
+  const signedCanon = (cell: PatchCell): number => {
+    if (isLake(cell)) return waterLevelOf(cell, patch.seaLevel);
+    if (isOcean(cell)) return Math.min(cell.elevation, patch.seaLevel - 0.035);
+    return baseElevationOf(cell);
   };
+  const centerIsLake = isLake(center) && centerCanonElev > patch.seaLevel;
+  // Дальняя задержка водности требуется лишь континентальному озеру: она
+  // удерживает его зеркало за воротником. Океан и суша синхронно переходят к
+  // соседу по единому neighborBlend, не вырезая круглый бассейн вокруг центра.
+  const waterBlend = centerIsLake
+    ? smooth01((r - 1.8 * radiusPatchM) / (2.4 * radiusPatchM))
+    : neighborBlend;
+  const waterOf = (cell: PatchCell): number => Number(isOcean(cell) || isLake(cell));
+  const waterSurfaceOf = (cell: PatchCell): number =>
+    isLake(cell) ? waterLevelOf(cell, patch.seaLevel) : patch.seaLevel;
+  return {
+    elevation: mix(signedCanon(center), mix(signedCanon(c0), signedCanon(c1), angularBlend), neighborBlend),
+    water: mix(waterOf(center), mix(waterOf(c0), waterOf(c1), angularBlend), waterBlend),
+    waterLevel: mix(waterSurfaceOf(center),
+      mix(waterSurfaceOf(c0), waterSurfaceOf(c1), angularBlend), waterBlend),
+  };
+}
+
+/** Мягкое продолжение русла в соседних ячейках юбки горизонта. */
+function skirtRiverCarveFactor(
+  patch: LocalMapPatch,
+  neighborSlots: readonly PatchCell[],
+  x: number,
+  y: number,
+  r: number,
+  radiusPatchM: number,
+  riverHalfWidthM: number,
+): number {
+  const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
+  if (r <= collarEndM || !(riverHalfWidthM > 0)) return 0;
+  let carve = 0;
+  for (let k = 0; k < neighborSlots.length; k++) {
+    const cell = neighborSlots[k] as PatchCell;
+    const linkedByRiver = cell.streamWeight > 0
+      || patch.river.inlets.some((edge) => edge.neighborCell === cell.cell)
+      || patch.river.outlet?.neighborCell === cell.cell;
+    if (!linkedByRiver) continue;
+    const angle = (k * Math.PI) / 3;
+    const along = x * Math.cos(angle) + y * Math.sin(angle);
+    if (along < collarEndM * 0.72) continue;
+    const cross = -x * Math.sin(angle) + y * Math.cos(angle);
+    // Небольшой детерминированный меандр не даёт реке превращаться в прямую
+    // радиальную царапину, но остаётся в пределах расширенной полуширины.
+    const meander = Math.sin(along / Math.max(radiusPatchM, 1) * 4.7 + k * 1.91)
+      * riverHalfWidthM * 0.42;
+    const distance = Math.abs(cross - meander);
+    const halfWidth = riverHalfWidthM * 1.4;
+    if (distance >= halfWidth) continue;
+    const t = 1 - distance / halfWidth;
+    const radial = smooth01((r - collarEndM) / (0.55 * radiusPatchM));
+    carve = Math.max(carve, radial * t * t * (3 - 2 * t));
+  }
+  return carve;
 }
 
 /**
@@ -1628,6 +1688,7 @@ function skirtPlanetaryHeight(
   y: number,
   r: number,
   cellSeed: number,
+  planetSeed: number,
   noiseScale: number,
   elevLattice: SkirtElevationLattice | null,
   elevCalibration: number,
@@ -1637,15 +1698,35 @@ function skirtPlanetaryHeight(
   centerCanonElev: number,
   localReliefAmpM: number,
 ): number {
-  // Stage-8.4: масштаб и опорная высота разгоняются на первых 3–4 кольцах.
   const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
+  const center = patch.cells[0] as PatchCell;
+  const centerIsOcean = center.elevation < patch.seaLevel && center.lakeWeight === 0;
+  // Центральный океан точно сшивается с ровным heightfield до края воротника.
+  // За ним начинает проявляться знаковая батиметрия соседних секторов.
+  if (centerIsOcean && r <= collarEndM) return 0;
+
+  // Stage-8.6: cellSeed нужен лишь в воротнике для бесшовной стыковки с
+  // активным гексом. За воротником fBm/ridged и тектоническая маска получают
+  // общий для всей планеты seed, поэтому горизонт не меняет характер при
+  // переходе на соседнюю ячейку.
+  const collarNoiseBlend = smooth01((r - SKIRT_INNER_RADIUS_RATIO * radiusPatchM)
+    / Math.max(1, collarEndM - SKIRT_INNER_RADIUS_RATIO * radiusPatchM));
+  const blendNoise = (fromCell: number, fromPlanet: number): number =>
+    fromCell * (1 - collarNoiseBlend) + fromPlanet * collarNoiseBlend;
   const coordScale = 1 + (planetCoordScale - 1)
     * smooth01((r - collarEndM) / (3.2 * radiusPatchM));
   const base = smoothPatchBaseElevation(patch, neighborSlots, centerCanonElev, radiusPatchM, x, y, r);
+  const baseElevM = (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+  const water = clampScalar(base.water, 0, 1);
+  const landWeight = clampScalar(1 - water, 0, 1) * smooth01((baseElevM + 18) / 28);
   const distRatio = clampScalar((r - radiusPatchM) / (outerRadiusM - radiusPatchM), 0, 1);
-  const fbmNear = fBm(x * noiseScale, y * noiseScale, cellSeed, 5) * LAND_FBM_AMPLITUDE_M;
-  const fbmFar = (
-    0.5 + (fBm(x * noiseScale * 0.35, y * noiseScale * 0.35, cellSeed, 3) - 0.5) * 0.85
+  const fbmNear = blendNoise(
+    fBm(x * noiseScale, y * noiseScale, cellSeed, 5),
+    fBm(x * noiseScale, y * noiseScale, planetSeed, 5),
+  ) * LAND_FBM_AMPLITUDE_M;
+  const fbmFar = blendNoise(
+    0.5 + (fBm(x * noiseScale * 0.35, y * noiseScale * 0.35, cellSeed, 3) - 0.5) * 0.85,
+    0.5 + (fBm(x * noiseScale * 0.35, y * noiseScale * 0.35, planetSeed, 3) - 0.5) * 0.85,
   ) * LAND_FBM_AMPLITUDE_M;
   const fbmM = fbmNear * (1 - distRatio) + fbmFar * distRatio;
   const detailFade = 1 - smooth01(distRatio);
@@ -1653,98 +1734,73 @@ function skirtPlanetaryHeight(
     ? (sampleSkirtLatticeAt(elevLattice.detail, outerRadiusM, x, y) * 0.5 + 0.5) * PROFILE_DETAIL_AMPLITUDE_M
     : 0.5 * PROFILE_DETAIL_AMPLITUDE_M) * detailFade;
 
-  const water = base.water;
-  // И-3.2: зеркало воды в ближней зоне считается ровно той же формулой, что и
-  // в generateLocalMap (тождество берега), поэтому континентальное озеро выше
-  // seaLevel держит свой уровень и за шестигранным воротником, не проваливаясь
-  // к z = 0.
+  // И-3.2: континентальное озеро сохраняет положительное зеркало. У океана
+  // waterMirrorM == 0, а ниже используется реальная отрицательная отметка дна.
   const waterMirrorM = (base.waterLevel - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
-
-  // Stage-8.5.1: калиброванная высота макро-решётки нужна ДО блока mountainM —
-  // именно по ней видно, где за пределами водного Patch7 из океана реально
-  // выходит суша (2–4 кольца юбки, где канонический якорь ещё говорит «вода»).
   const latticeX = (x * coordScale) / planetCoordScale;
   const latticeY = (y * coordScale) / planetCoordScale;
   const calibratedM = elevLattice
     ? (sampleSkirtLatticeAt(elevLattice.elevation, outerRadiusM, latticeX, latticeY)
       + elevCalibration - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
-    : (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
-  // Локальная доля суши: якорь Patch7 (1 - water) ИЛИ калиброванная высота
-  // решётки над зеркалом. Водное зеркало (calibratedM <= waterMirrorM) обязано
-  // остаться идеально плоским, поэтому эффективная доля суши там равна 1 - water.
-  const effectiveLand = elevLattice
-    ? Math.max(1 - water, smooth01((calibratedM - waterMirrorM - 2) / 35))
-    : (1 - water);
+    : baseElevM;
 
-  // Stage-8.3: гребневые горные хребты только на суше и только за пределами
-  // активного гекса (r > collarEndM). Огибающая плавно выводит рельеф из
-  // природной долины в предгорья на 2.8 · R_patch и слегка (на 30%) гасит
-  // пики к самому горизонту.
-  //
-  // Stage-8.5: гребни больше НЕ образуют замкнутое кольцо на 360° вокруг
-  // активного гекса («стадионный вал»). Их высота определяется реальной
-  // возвышенностью и уклоном направления — калиброванным каналом `elevation`
-  // макро-решётки (без профиля — гладким якорём Patch7), — а направленная
-  // тектоническая маска с высоким порогом оставляет широкие открытые
-  // равнинные сектора. Амплитуда `peakAmpM` масштабируется от настоящего
-  // перепада высот патча и размаха канала `detail`, поэтому вокруг равнинного
-  // гекса простирается равнина, а отдельные гряды стоят лишь на тех азимутах,
-  // где рельеф планеты действительно поднят.
-  // На воде горный рельеф строго ноль — зеркало Stage-8.2.1 не трогаем.
-  // Stage-8.5.1: критерий «суша» — не только якорь Patch7 (`water < 1`), но и
-  // effectiveLand: берег, поднимающийся из океана за пределами водного Patch7,
-  // получает живой прибрежный рельеф холмов и гряд.
   let mountainM = 0;
-  if (effectiveLand > 0.01 && r > collarEndM) {
+  if (landWeight > 0.01 && r > collarEndM) {
     const mountainEnvelope = smooth01((r - collarEndM) / (2.8 * radiusPatchM))
       * (1 - 0.30 * smooth01((r - 6.0 * radiusPatchM) / (outerRadiusM - 6.0 * radiusPatchM)));
-    // Реальная возвышенность направления, м над seaLevel.
     const macroElevM = calibratedM;
     const centerElevM = (centerCanonElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
-    // Низина и шельф гор не дают вовсе, пологая равнина — отдельные гряды,
-    // поднятое направление — полноценные хребты.
     const upliftT = smooth01((macroElevM - 40) / 260);
-    // Превышение направления над центром патча — наклон рельефа планеты:
-    // спуск к бассейну гасит гребни, подъём от него — усиливает.
     const riseT = smooth01((macroElevM - centerElevM + 110) / 320);
     const reliefMask = upliftT * (0.35 + 0.65 * riseT);
-    const ridgeVal = ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, cellSeed ^ 0x5A17C3, 5);
-    // Stage-8.5: тектоническая маска стала вдвое крупнее по масштабу (0.05
-    // вместо 0.14) и выше по порогу (0.52/0.32 вместо 0.34/0.38): сектора
-    // равнин широкие и непрерывные, а гребни собраны в отдельные хребты, а не
-    // в сплошное кольцо вокруг активного гекса.
-    const macroBasin = valueNoise2D(
-      x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, cellSeed ^ 0x3391B7,
+    const ridgeVal = blendNoise(
+      ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, cellSeed ^ 0x5A17C3, 5),
+      ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, planetSeed ^ 0x5A17C3, 5),
+    );
+    const macroBasin = blendNoise(
+      valueNoise2D(x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, cellSeed ^ 0x3391B7),
+      valueNoise2D(x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, planetSeed ^ 0x3391B7),
     );
     const basinMask = smooth01((macroBasin - 0.52) / 0.32);
-    // Stage-8.5: амплитуда — реальный перепад высот Patch7 (Stage-8.5.1: и
-    // размах положительных высот макро-решётки морского патча) и `detail`.
     const peakAmpM = Math.min(320, Math.max(60, localReliefAmpM));
     mountainM = peakAmpM * mountainEnvelope * reliefMask * basinMask * Math.pow(ridgeVal, 1.35);
   }
 
-  // Stage-8.5.1: гребни подмешиваются к суше с весом effectiveLand — на
-  // идеально ровном водном зеркале их строго ноль.
-  const landHeight = (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
-    + fbmM + detailM + mountainM * effectiveLand;
-  const nearHeight = waterMirrorM * water + landHeight * (1 - water);
-  if (r <= radiusPatchM || !elevLattice) return nearHeight;
+  // Положительный сухопутный шум никогда не поднимает океанское дно: при
+  // water -> 1 или baseElevM < -18 его вес плавно уходит к нулю.
+  const landNoiseM = (fbmM + detailM + mountainM) * landWeight;
+  const nearWaterHeightM = waterMirrorM > 0 ? waterMirrorM : Math.min(baseElevM, 0);
+  const landHeight = baseElevM + landNoiseM;
+  const nearHeight = nearWaterHeightM * water + landHeight * (1 - water);
 
-  // Калибровка сэмпла макро-решётки относительно центра патча: непрерывное
-  // поле elevation продолжает канонический якорь центральной ячейки
-  // (waterLevelOf для воды, baseElevationOf для суши), а не абсолютную
-  // некалиброванную высоту сэмплера (см. calibratedM выше).
-  const shoreBlend = smooth01(Math.max(0, calibratedM - waterMirrorM) / 45);
-  const waterHeight = Math.max(waterMirrorM, calibratedM) + (fbmM + detailM) * shoreBlend;
-  // Stage-8.5.1: доля суши в точке — ещё и калиброванная высота макро-решётки
-  // (effectiveLand). Берег, выходящий из океана за пределами водного Patch7,
-  // получает живой прибрежный рельеф холмов и гряд, а само водное зеркало
-  // (calibratedM <= waterMirrorM) остаётся идеально плоским: там
-  // effectiveLand == 1 - water и высота в точности равна waterMirrorM.
-  const latticeLandHeight = calibratedM + fbmM + detailM + mountainM * effectiveLand;
-  const latticeHeight = waterHeight * (1 - effectiveLand) + latticeLandHeight * effectiveLand;
-  const latticeBlend = smooth01((r - collarEndM) / (3.4 * radiusPatchM));
-  return nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
+  let height = nearHeight;
+  if (r > radiusPatchM && elevLattice) {
+    // Для отрицательного океанского сэмпла не используем Math.max(0, ...):
+    // дно опускается ниже seaLevel сразу за воротником и остаётся видимым как
+    // настоящая батиметрия до горизонта. Положительное зеркало озера — особый
+    // случай и по-прежнему удерживается выше нуля.
+    const waterHeight = waterMirrorM > 0
+      ? waterMirrorM
+      : (calibratedM < 0
+        ? calibratedM * smooth01((r - collarEndM) / (0.8 * radiusPatchM))
+        : Math.min(baseElevM, 0));
+    const latticeLandHeight = calibratedM + landNoiseM;
+    const latticeHeight = waterHeight * water + latticeLandHeight * (1 - water);
+    const latticeBlend = smooth01((r - collarEndM) / (3.4 * radiusPatchM));
+    height = nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
+  }
+
+  // Русло продолжается за активный гекс во 2–3 кольца соседей. На зеркале
+  // континентального озера его не вырезаем: инвариант Stage-8.2.1 важнее.
+  if (waterMirrorM <= 0) {
+    const riverHalfWidthM = Math.max((4 * radiusPatchM) / HEIGHTFIELD_RES,
+      radiusPatchM * RIVER_HALF_WIDTH_RATIO);
+    const riverDepthM = Math.max(10, radiusPatchM * RIVER_DEPTH_RATIO * 1.8);
+    height -= skirtRiverCarveFactor(
+      patch, neighborSlots, x, y, r, radiusPatchM, riverHalfWidthM,
+    ) * riverDepthM;
+  }
+  return height;
 }
 
 /**
@@ -1809,6 +1865,10 @@ export function generateHorizonSkirt(
     ? sampleSkirtElevationLattice(patch, sampler, outerRadiusM, planetCoordScale)
     : null;
   const cellSeed = (request.seed ^ Math.imul((patch.centerCell + 1) >>> 0, 0x9E3779B1)) >>> 0;
+  // Stage-8.6: шум горизонта принадлежит планете/placeId, а не случайному
+  // идентификатору активной ячейки; cellSeed смешивается только в воротнике.
+  const planetSeed = (request.seed
+    ^ Math.imul((request.placeId + 1) >>> 0, 0x85EBCA6B)) >>> 0;
   const noiseScale = (3.5 + Math.log2(Math.max(1, radiusPatchM / 600)) * 0.65) / Math.max(radiusPatchM, 1);
 
   // И-3.2: калибровка канала `elevation` макро-решётки относительно центра
@@ -1822,7 +1882,12 @@ export function generateHorizonSkirt(
   const rawCenterElev = elevLattice
     ? sampleSkirtLatticeAt(elevLattice.elevation, outerRadiusM, 0, 0)
     : centerCanonElev;
-  const elevCalibration = centerCanonElev - rawCenterElev;
+  // Калибровка нужна только озеру над seaLevel. Применять её к океану
+  // запрещено: она поднимала сырое морское дно на сотни метров и вместе с
+  // круглой водной маской оставляла в центре ложный бассейн.
+  const elevCalibration = (centerCell.lakeWeight > 0 && centerCanonElev > patch.seaLevel)
+    ? centerCanonElev - rawCenterElev
+    : 0;
 
   // Stage-8.5: амплитуда горных гребней — от реального перепада высот патча и
   // размаха канала `detail`, а не от визуального радиуса участка.
@@ -1878,14 +1943,14 @@ export function generateHorizonSkirt(
         } else {
           const blend = smooth01((hexDist - blendStartM) / blendSpanM);
           const planetaryZ = skirtPlanetaryHeight(
-            patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
+            patch, radiusPatchM, x, y, r, cellSeed, planetSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
             planetCoordScale, neighborSlots, centerCanonElev, localReliefAmpM,
           );
           z = innerZ + (planetaryZ - innerZ) * blend;
         }
       } else {
         z = skirtPlanetaryHeight(
-          patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
+          patch, radiusPatchM, x, y, r, cellSeed, planetSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
           planetCoordScale, neighborSlots, centerCanonElev, localReliefAmpM,
         );
       }
