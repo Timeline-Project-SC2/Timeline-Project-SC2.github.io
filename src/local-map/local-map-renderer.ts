@@ -62,7 +62,7 @@ export type LocalMapRendererWorkerResponse = LocalMapWorkerResponse & {
 export interface LocalMapRingStats {
   /** Число активных ячеек колец 1…5. */
   cells: number;
-  /** Занятые ими байты в общих position/normal/water/index-буферах рельефа. */
+  /** Занятые ими байты в общих position/normal/local/water/index-буферах. */
   bytes: number;
 }
 
@@ -145,7 +145,7 @@ const DEFAULT_FOG_COLOR: readonly [number, number, number] = [0.68, 0.75, 0.82];
 const DEFAULT_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
 const FOG_START_RATIO = 0.72;
 const FOG_END_RATIO = 0.98;
-const ZERO_RING_OFFSET = new Float32Array([0, 0, 0]);
+const LOCAL_STRIDE_BYTES = 2 * Float32Array.BYTES_PER_ELEMENT;
 
 /** Стадии staged-догрузки (Патч 8). */
 const STAGE_TEXTURES = 0;
@@ -180,7 +180,6 @@ interface RingDrawItem {
   readonly vertexOffset: number;
   readonly indexOffset: number;
   readonly indexCount: number;
-  readonly offsetUniform: Float32Array;
 }
 
 function buildRingSlotLayout(): readonly RingSlotLayout[] {
@@ -272,6 +271,7 @@ export class StructureRenderer {
   private terrainPosBuf: WebGLBuffer | null;
   private terrainNormBuf: WebGLBuffer | null;
   private terrainWaterBuf: WebGLBuffer | null;
+  private terrainLocalBuf: WebGLBuffer | null;
   private terrainIdxBuf: WebGLBuffer | null;
   private terrainRes: number;
   private terrainIndexCount: number;
@@ -313,6 +313,7 @@ export class StructureRenderer {
     this.terrainPosBuf = null;
     this.terrainNormBuf = null;
     this.terrainWaterBuf = null;
+    this.terrainLocalBuf = null;
     this.terrainIdxBuf = null;
     this.terrainRes = 0;
     this.terrainIndexCount = 0;
@@ -408,7 +409,7 @@ export class StructureRenderer {
     if (rings.length > 0) this.ensureRingStorage();
     this.activeRings = rings;
     this.ringBytes = rings.reduce(
-      (sum, item) => sum + item.res * item.res * (VERTEX_STRIDE_BYTES * 2 + 1)
+      (sum, item) => sum + item.res * item.res * (VERTEX_STRIDE_BYTES * 2 + LOCAL_STRIDE_BYTES + 1)
         + item.indexCount * INDEX_STRIDE_BYTES,
       0,
     );
@@ -533,6 +534,13 @@ export class StructureRenderer {
     gl.enableVertexAttribArray(2);
     gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, true, 0, 0);
 
+    // Локальные XY нужны гексагональному срезу при batch-draw целого кольца.
+    this.terrainLocalBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainLocalBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, res * res * LOCAL_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 0, 0);
+
     this.terrainIdxBuf = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
@@ -567,7 +575,6 @@ export class StructureRenderer {
         vertexOffset: centralVertexCount + layout.vertexOffset,
         indexOffset: this.terrainIndexCount + layout.indexOffset,
         indexCount: (res - 1) * (res - 1) * 6,
-        offsetUniform: new Float32Array([cell.offsetM[0], cell.offsetM[1], 0]),
       });
     }
     return items;
@@ -592,6 +599,8 @@ export class StructureRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, totalVertices * VERTEX_STRIDE_BYTES, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
     gl.bufferData(gl.ARRAY_BUFFER, totalVertices, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainLocalBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, totalVertices * LOCAL_STRIDE_BYTES, gl.DYNAMIC_DRAW);
 
     const indices = new Uint32Array(totalIndices);
     writeGridIndices(indices, 0, res, 0, 0, res - 1);
@@ -756,6 +765,20 @@ export class StructureRenderer {
     }
   }
 
+  /** Локальные XY для гексагонального среза без uniform на каждую ячейку. */
+  private fillRingLocal(item: RingDrawItem, radiusM: number, from: number, lines: number): void {
+    const res = item.res;
+    const cellSize = (2 * radiusM) / res;
+    const scratch = this.scratch;
+    let out = 0;
+    for (let y = from; y < from + lines; y++) {
+      for (let x = 0; x < res; x++) {
+        scratch[out++] = (x - res / 2) * cellSize;
+        scratch[out++] = (y - res / 2) * cellSize;
+      }
+    }
+  }
+
   /** Нормали кольцевой ячейки по центральным конечным разностям её heightfield. */
   private fillRingNormals(
     item: RingDrawItem,
@@ -845,6 +868,17 @@ export class StructureRenderer {
         (item.vertexOffset + from * res) * VERTEX_STRIDE_BYTES,
         this.scratch.subarray(0, floatCount),
       );
+      if (stage === STAGE_RING_POSITIONS) {
+        const localFloatCount = lines * res * 2;
+        this.fillRingLocal(item, pending.data.meta.radiusM, from, lines);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainLocalBuf);
+        gl.bufferSubData(
+          gl.ARRAY_BUFFER,
+          (item.vertexOffset + from * res) * LOCAL_STRIDE_BYTES,
+          this.scratch.subarray(0, localFloatCount),
+        );
+        this.stats.stagedSubDataCalls++;
+      }
     }
     this.stats.stagedSubDataCalls++;
     pending.ringRow = to;
@@ -995,7 +1029,7 @@ export class StructureRenderer {
     // polygon offset уводит её назад по глубине, чтобы центральный рельеф
     // гарантированно выигрывал без z-fighting на совпадающих высотах.
     gl.enable(gl.POLYGON_OFFSET_FILL);
-    gl.polygonOffset(1.0, 1.0);
+    gl.polygonOffset(RING_LEVELS + 1, (RING_LEVELS + 1) * 2);
     gl.bindVertexArray(this.skirtVAO);
     gl.drawElements(gl.TRIANGLES, this.skirtIndexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
@@ -1083,34 +1117,52 @@ export class StructureRenderer {
   }
 
   // ---- Render Loop ----
-  /** Кольцевые ячейки используют тот же VAO и независимые диапазоны индексов. */
+  /**
+   * Порядок 5 → 1, один draw на непрерывный диапазон уровня. При контрактном
+   * RING_HF_RES все 6·level ячеек смежны, поэтому пять колец стоят пять draws.
+   */
   private drawRingTerrain(shaderProgram: WebGLProgram): void {
     if (!this.ready || this.activeRings.length === 0) return;
     const gl = this.gl;
     gl.useProgram(shaderProgram);
     gl.uniform1f(this.uniform(shaderProgram, 'u_isSkirt'), 0.0);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.bindVertexArray(this.terrainVAO);
     for (let level = RING_LEVELS; level >= 1; level--) {
+      let runOffset = 0;
+      let runCount = 0;
+      let runEnd = 0;
       for (const item of this.activeRings) {
         if (item.level !== level) continue;
-        gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), level);
-        gl.uniform1f(
-          this.uniform(shaderProgram, 'u_ringFade'),
-          (level - 1) / (RING_LEVELS - 1),
-        );
-        gl.uniform3fv(this.uniform(shaderProgram, 'u_ringOffsetM'), item.offsetUniform);
+        if (runCount === 0) {
+          gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), level);
+          gl.uniform1f(
+            this.uniform(shaderProgram, 'u_ringFade'),
+            (level - 1) / (RING_LEVELS - 1),
+          );
+          // Дальнее кольцо глубже, центральный патч рисуется без смещения.
+          gl.polygonOffset(level, level * 2);
+          runOffset = item.indexOffset;
+        } else if (item.indexOffset !== runEnd) {
+          gl.drawElements(
+            gl.TRIANGLES, runCount, gl.UNSIGNED_INT, runOffset * INDEX_STRIDE_BYTES,
+          );
+          runOffset = item.indexOffset;
+          runCount = 0;
+        }
+        runCount += item.indexCount;
+        runEnd = item.indexOffset + item.indexCount;
+      }
+      if (runCount > 0) {
         gl.drawElements(
-          gl.TRIANGLES,
-          item.indexCount,
-          gl.UNSIGNED_INT,
-          item.indexOffset * INDEX_STRIDE_BYTES,
+          gl.TRIANGLES, runCount, gl.UNSIGNED_INT, runOffset * INDEX_STRIDE_BYTES,
         );
       }
     }
     gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), 0.0);
     gl.uniform1f(this.uniform(shaderProgram, 'u_ringFade'), 0.0);
-    gl.uniform3fv(this.uniform(shaderProgram, 'u_ringOffsetM'), ZERO_RING_OFFSET);
   }
 
   drawTerrain(shaderProgram: WebGLProgram): void {
@@ -1154,7 +1206,7 @@ export class StructureRenderer {
     gl.bindVertexArray(null);
   }
 
-  /** Полный кадр локальной карты: купол неба → юбка 6 колец → рельеф → постройки. */
+  /** Полный кадр: небо → кольца 5…1 → центр → юбка → постройки. */
   renderFrame(viewProj: Float32Array, options: LocalMapRenderOptions = {}): void {
     const gl = this.gl;
     const { terrainProgram, structureProgram } = this.compilePrograms();
@@ -1166,10 +1218,14 @@ export class StructureRenderer {
     // Абсолютные метры тумана (Stage-8) имеют приоритет над ratio-вариантами.
     const fogStart = Number.isFinite(options.fogStart)
       ? (options.fogStart as number)
-      : radiusM * (options.fogStartRatio ?? FOG_START_RATIO);
+      : this.skirt && options.fogStartRatio === undefined
+        ? this.skirt.outerRadiusM * 0.64
+        : radiusM * (options.fogStartRatio ?? FOG_START_RATIO);
     const fogEnd = Number.isFinite(options.fogEnd)
       ? (options.fogEnd as number)
-      : radiusM * (options.fogEndRatio ?? FOG_END_RATIO);
+      : this.skirt && options.fogEndRatio === undefined
+        ? this.skirt.outerRadiusM * FOG_END_RATIO
+        : radiusM * (options.fogEndRatio ?? FOG_END_RATIO);
     const terrainSize = 2 * radiusM;
     const planetRadiusM = options.planetRadiusM ?? this.skirt?.planetRadiusM ?? 0;
     const focusRadiusM = options.focusRadiusM ?? radiusM;
@@ -1218,7 +1274,6 @@ export class StructureRenderer {
     gl.uniform1i(this.uniform(terrainProgram, 'u_terraform_map'), 1);
     gl.uniform1f(this.uniform(terrainProgram, 'u_ringLevel'), 0.0);
     gl.uniform1f(this.uniform(terrainProgram, 'u_ringFade'), 0.0);
-    gl.uniform3fv(this.uniform(terrainProgram, 'u_ringOffsetM'), ZERO_RING_OFFSET);
 
     // Текстуры читает только центральный участок; ветка юбки в шейдере
     // игнорирует их, поэтому CLAMP_TO_EDGE не растягивает зоны на горизонт.
@@ -1227,16 +1282,27 @@ export class StructureRenderer {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.texTerraform);
 
-    this.drawRingTerrain(terrainProgram);
-
-    if (this.skirt && this.skirtVAO) {
-      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
-      this.drawSkirt(terrainProgram);
+    if (this.ready && this.activeRings.length > 0) {
+      // Stage-8.7: кольца 5 → 1 → центральный патч → сферическая юбка.
+      this.drawRingTerrain(terrainProgram);
       gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      this.drawTerrain(terrainProgram);
+      if (this.skirt && this.skirtVAO) {
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
+        this.drawSkirt(terrainProgram);
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      }
     } else {
-      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      // Без колец сохраняется прежний порядок Stage-8.6 и его wire-контракт.
+      if (this.skirt && this.skirtVAO) {
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
+        this.drawSkirt(terrainProgram);
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      } else {
+        gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+      }
+      this.drawTerrain(terrainProgram);
     }
-    this.drawTerrain(terrainProgram);
 
     // 3. 3D-структуры (с тем же сферическим проседанием).
     gl.useProgram(structureProgram);
@@ -1303,11 +1369,13 @@ export class StructureRenderer {
     if (this.terrainPosBuf) gl.deleteBuffer(this.terrainPosBuf);
     if (this.terrainNormBuf) gl.deleteBuffer(this.terrainNormBuf);
     if (this.terrainWaterBuf) gl.deleteBuffer(this.terrainWaterBuf);
+    if (this.terrainLocalBuf) gl.deleteBuffer(this.terrainLocalBuf);
     if (this.terrainIdxBuf) gl.deleteBuffer(this.terrainIdxBuf);
     if (this.terrainVAO) gl.deleteVertexArray(this.terrainVAO);
     this.terrainPosBuf = null;
     this.terrainNormBuf = null;
     this.terrainWaterBuf = null;
+    this.terrainLocalBuf = null;
     this.terrainIdxBuf = null;
     this.terrainVAO = null;
     this.terrainRes = 0;

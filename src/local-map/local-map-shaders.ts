@@ -144,6 +144,7 @@ precision highp int;
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in float a_waterMask;
+layout(location = 3) in vec2 a_ringLocal;
 
 uniform mat4 u_viewProj;
 uniform float u_fogStart;
@@ -157,9 +158,11 @@ out vec2 v_uv;         // для сэмплинга зон
 out float v_fog;
 out vec3 v_viewVec;    // вектор от точки поверхности к камере (для Fresnel и блика воды)
 out float v_waterMask; // байтовая маска кольцевой ячейки, нормализованная в 0..1
+out vec2 v_ringLocal;  // локальные XY ячейки для batch-draw без per-cell uniform
 
 void main() {
   v_waterMask = a_waterMask;
+  v_ringLocal = a_ringLocal;
   // v_worldPos хранит ИСХОДНУЮ гипсометрическую высоту a_position.z: вода
   // (z <= 0) и изолинии считаются над уровнем моря, а не по просевшему z.
   v_worldPos  = a_position;
@@ -205,6 +208,7 @@ in vec2  v_uv;
 in float v_fog;
 in vec3  v_viewVec;
 in float v_waterMask;
+in vec2  v_ringLocal;
 
 uniform usampler2D u_zoning_map;     // RG8UI
 uniform sampler2D  u_terraform_map;  // R8
@@ -217,7 +221,6 @@ uniform float u_fogEnd;
 uniform float u_isSkirt;             // 1.0 — планетарная юбка, 0.0 — центр/кольца
 uniform float u_ringLevel;           // 0 — центр/юбка, 1..5 — кольцевой LOD
 uniform float u_ringFade;            // 0 — полная детализация, 1 — дальнее кольцо
-uniform vec3  u_ringOffsetM;         // центр ячейки в общем касательном кадре, м
 uniform float u_focusRadiusM;        // радиус детального участка R_patch
 uniform float u_hexSizeM;            // шаг гексов d_hex в метрах
 
@@ -297,9 +300,7 @@ void main() {
   // Апофема активного центрального гекса и гексагональная метрика (ориентация clusterHexMetric: yx).
   float hexApothem = u_focusRadiusM * 0.8054;
   float centerHexDist = hexMetric2D(v_worldPos.yx);
-  float ringHexDist = isRing
-    ? hexMetric2D((v_worldPos.xy - u_ringOffsetM.xy).yx)
-    : 0.0;
+  float ringHexDist = isRing ? hexMetric2D(v_ringLocal.yx) : 0.0;
 
   // Центральный участок обрезается строгим правильным шестиугольником:
   // 6 прямых сторон активного гекса (с микрозапасом 1.003 для бесшовного
