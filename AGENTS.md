@@ -74,7 +74,7 @@ npm run lint                                    # проверка ESLint по �
 npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
 
 # Модульные и интеграционные тесты (Node.js и Python)
-npm test                                        # явный прогон всех 8 тестовых файлов Node (--test)
+npm test                                        # явный прогон всех 13 тестовых файлов Node (--test, последовательно: --test-concurrency=1)
 npm run test:py                                 # прогон Python-тестов (unittest discover -s tests -p 'test_*.py')
 
 # Верификация публикации, контракта планет и синхронизации данных
