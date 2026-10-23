@@ -104,6 +104,24 @@ export interface PlanetCoreExports extends PlanetNoiseCoreExports {
     centerCount: number, vertexCount: number): void;
 }
 
+/** Счётчики фактических созданий экземпляров ядер (Stage-8.8.1, A-3).
+ *  Публичный инструмент границ: тест `tests/planet-core-boundary.test.mjs`
+ *  доказывает, что импорт модулей главного потока не создаёт арену.
+ *  Инкремент — в конструкторе, т.е. ровно один раз на WebAssembly.Instance. */
+export interface PlanetCoreCreationCounters {
+  /** Сколько раз создан полный PlanetCore (арена >= 24 МиБ). */
+  full: number;
+  /** Сколько раз создано компактное PlanetNoiseCore (< 4 КиБ). */
+  noise: number;
+}
+
+const creationCounters: PlanetCoreCreationCounters = { full: 0, noise: 0 };
+
+/** Счётчики созданий ядер только для чтения (живой объект). */
+export function getPlanetCoreCreationCounters(): Readonly<PlanetCoreCreationCounters> {
+  return creationCounters;
+}
+
 export abstract class PlanetCoreBase<E extends PlanetNoiseCoreExports> {
   readonly exports: E;
   protected cursor: number;
@@ -217,6 +235,7 @@ export abstract class PlanetCoreBase<E extends PlanetNoiseCoreExports> {
 export class PlanetNoiseCore extends PlanetCoreBase<PlanetNoiseCoreExports> {
   constructor() {
     super(PLANET_NOISE_WASM_BASE64, 'PlanetNoiseCore');
+    creationCounters.noise++;
   }
 
   uploadTable(table: Uint8Array): number {
@@ -266,6 +285,7 @@ export class PlanetCore extends PlanetCoreBase<PlanetCoreExports> {
   constructor() {
     super(PLANET_CORE_WASM_BASE64, 'PlanetCore');
     this.ensure(24 * 1024 * 1024);
+    creationCounters.full++;
   }
 
   protected override resetArena(): void {
@@ -964,9 +984,24 @@ export class PlanetCore extends PlanetCoreBase<PlanetCoreExports> {
   }
 }
 
-const sharedPlanetCore = new PlanetCore();
+// Ленивый синглтон (Stage-8.8.1, A-3): на верхнем уровне модуля НЕТ
+// `new PlanetCore()`. Полный Wasm-модуль (~42 КиБ) компилируется синхронно и
+// резервирует арену >= 24 МиБ только при первом реальном обращении, то есть в
+// воркере (`site/planet-globe/planet-globe-worker.ts`) или в Node-тестах.
+// Главный поток при импорте рендерера/географии/поверхности не платит ни
+// компиляцией, ни ареной; счётчик `getPlanetCoreCreationCounters().full`
+// остаётся 0 (см. `tests/planet-core-boundary.test.mjs`).
+// Поведение для существующих вызовов сохранено: возвращается тот же
+// единственный экземпляр на всё время жизни модуля.
+let sharedPlanetCore: PlanetCore | null = null;
 
 export function getSharedPlanetCore(): PlanetCore {
+  if (sharedPlanetCore === null) sharedPlanetCore = new PlanetCore();
+  return sharedPlanetCore;
+}
+
+/** Уже созданный синглтон или null — без побочного эффекта создания. */
+export function peekSharedPlanetCore(): PlanetCore | null {
   return sharedPlanetCore;
 }
 

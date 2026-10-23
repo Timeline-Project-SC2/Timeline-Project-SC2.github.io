@@ -15,7 +15,12 @@
    expandVertexColors, побитово повторяющее JS-округление.
 
    География и pick остаются авторитетно на CPU: рендер только
-   сообщает направление луча, ячейку находит `GeodesicGrid.pick`. */
+   сообщает направление луча, ячейку находит `GeodesicGrid.pick`.
+
+   Stage-8.8.1 (A-3): импорт этого модуля НЕ создаёт Wasm-арену. Полное
+   ядро (>= 24 МиБ) поднимается лениво и только в воркере — при первом
+   вызове упаковщика геометрии; главный поток работает на данных, уже
+   переданных worker'ом (см. «ГРАНИЦА МОДУЛЯ» ниже). */
 
 import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
@@ -207,6 +212,23 @@ const COLOR_MODES: { key: string; label: string }[] = [
   { key: 'mountains', label: 'Горы и швы' },
 ];
 
+/* ------------------------------------------------------- ГРАНИЦА МОДУЛЯ
+   Stage-8.8.1 (A-3). Модуль сознательно разделён на два слоя, и только
+   второй касается полного Wasm-ядра:
+
+   1) СЛОЙ ДАННЫХ И РЕНДЕРА (главный поток):
+      buildCellColors, buildEquirectPreview, reliefDelta, cellPolygon,
+      listGeometryTransferables, createPlanetGlobe. Всё считается по сетке
+      и `SurfaceResult`, которые уже пришли из воркера; pick идёт через
+      `GeodesicGrid.pick`. Ни одна функция этого слоя не вызывает getCore(),
+      поэтому арена >= 24 МиБ на главном потоке не создаётся ни при импорте,
+      ни при отрисовке.
+
+   2) СЛОЙ УПАКОВКИ ГЕОМЕТРИИ (только воркер):
+      buildVertexColors (expandVertexColors) и buildGlobeGeometry (globePack).
+      Это единственные потребители полного ядра в модуле; вызываются из
+      `site/planet-globe/planet-globe-worker.ts` и из Node-стендов.
+      Ядро поднимается лениво — в момент первого вызова, а не при импорте. */
 function getCore(): PlanetCore {
   return getSharedPlanetCore();
 }
@@ -349,6 +371,8 @@ function buildCellColors(surface: SurfaceResult, mode?: string): Float32Array {
   return out;
 }
 
+/** @workerOnly Полное Wasm-ядро (expandVertexColors). На главный поток не
+ *  вызывать: цвет вершины приезжает из воркера готовым в `geometry.colors`. */
 function buildVertexColors(surface: SurfaceResult, vertexCellId: Uint32Array, mode?: string, cellCount?: number): Uint8Array {
   const cellColors = buildCellColors(surface, mode || 'biome');
   const centerCount = cellCount == null ? surface.cellCount : cellCount;
@@ -365,6 +389,10 @@ function assertGeometryInputs(grid: PlanetGrid, surface: SurfaceResult): void {
   }
 }
 
+/** @workerOnly Полное Wasm-ядро (globePack: позиции f32×3 + наклонные
+ *  нормали i16×4, вершина 24 Б). Единственный потребитель —
+ *  `site/planet-globe/planet-globe-worker.ts`; рендерер получает результаты
+ *  transferable-массивами через `setGeometry`/`transitionGeometry`. */
 function buildGlobeGeometry(grid: PlanetGrid, surface: SurfaceResult, options?: GlobeGeometryOptions | null): GlobeGeometry {
   const opts = options || {};
   assertGeometryInputs(grid, surface);
@@ -769,6 +797,9 @@ interface PendingUpload {
   indexBuffer: WebGLBuffer | null;
 }
 
+/** Главный поток. Полного ядра не касается: геометрия, цвета и индексы уже
+ *  посчитаны воркером, а pick/полигон ячейки строятся на CPU из сетки
+ *  (`cellPolygon`), поэтому создание глобуса не поднимает Wasm-арену. */
 function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptions | null): PlanetGlobeHandle | null {
   const opts = options || {};
   if (!canvas || !canvas.getContext) return null;
