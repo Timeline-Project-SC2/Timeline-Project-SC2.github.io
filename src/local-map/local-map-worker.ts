@@ -1057,11 +1057,20 @@ interface SkirtElevationLattice {
   readonly detail: Float32Array;
 }
 
-/** Макро-решётка базовой высоты и детализации на квадрате [-R_skirt, +R_skirt]. */
+/**
+ * Макро-решётка базовой высоты и детализации на квадрате [-R_skirt, +R_skirt].
+ * Stage-8.3: узлы решётки опрашиваются в планетарных координатах
+ * `(x · planetCoordScale, y · planetCoordScale)`, где `planetCoordScale` —
+ * отношение физического шага гексов планеты (`hexSpacingMeters`, ~60 км для
+ * Земли v=128) к визуальному шагу юбки (`1.15 · radiusM`). Поэтому решётка
+ * 25×25 охватывает реальные 6 колец канонических ячеек вокруг активного
+ * гекса при любом `radiusM`, а не крошечный пятачок в центре одной ячейки.
+ */
 function sampleSkirtElevationLattice(
   patch: LocalMapPatch,
   sampler: FieldSampler,
   extentM: number,
+  planetCoordScale = 1,
 ): SkirtElevationLattice {
   const nodes = SKIRT_LATTICE_STEPS + 1;
   const elevation = new Float32Array(nodes * nodes);
@@ -1071,7 +1080,7 @@ function sampleSkirtElevationLattice(
     const y = (j / SKIRT_LATTICE_STEPS - 0.5) * 2 * extentM;
     for (let i = 0; i < nodes; i++) {
       const x = (i / SKIRT_LATTICE_STEPS - 0.5) * 2 * extentM;
-      const dir = localPointToDirection(patch, x, y);
+      const dir = localPointToDirection(patch, x * planetCoordScale, y * planetCoordScale);
       const fields = sampler.sampleFields(dir[0], dir[1], dir[2], scratch);
       const index = j * nodes + i;
       const detailValue = fields[5] as number;
@@ -1115,8 +1124,19 @@ function skirtPlanetaryHeight(
   elevLattice: SkirtElevationLattice | null,
   elevCalibration: number,
   outerRadiusM: number,
+  planetCoordScale = 1,
 ): number {
-  const dir = localPointToDirection(patch, x, y);
+  // Stage-8.3: внутри радиуса участка и плотного воротника (r <= collarEndM,
+  // полоса hexDist <= blendEndM) координаты НЕ растягиваются (coordScale = 1) —
+  // выбор канонической ячейки там бит-в-бит совпадает с generateLocalMap, и
+  // шестигранная сшивка Stage-8.2/8.2.1 остаётся точной до миллиметров. За
+  // воротником масштаб плавно (на 0.85 · R_patch) выходит на планетарный, и
+  // все 6 соседних ячеек Patch7 реально формируют рельеф даже при radiusM = 600.
+  const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
+  const coordScale = r > collarEndM
+    ? 1 + (planetCoordScale - 1) * smooth01((r - collarEndM) / (0.85 * radiusPatchM))
+    : 1;
+  const dir = localPointToDirection(patch, x * coordScale, y * coordScale);
   const cell = nearestPatchCell(patch, dir);
   const distRatio = clampScalar((r - radiusPatchM) / (outerRadiusM - radiusPatchM), 0, 1);
   const fbmNear = fBm(x * noiseScale, y * noiseScale, cellSeed, 5) * LAND_FBM_AMPLITUDE_M;
@@ -1198,9 +1218,17 @@ export function generateHorizonSkirt(
   const outerRadiusM = SKIRT_OUTER_SPACING_RATIO * hexSpacingM;
   const planetRadiusM = SKIRT_PLANET_RADIUS_SPACING_RATIO * outerRadiusM;
 
+  // Stage-8.3: физический шаг центров соседних гексов на глобусе (~60 км для
+  // Земли v=128) против визуального шага юбки (690 м при radiusPatchM = 600 м).
+  // Коэффициент растяжения касательных координат за пределами воротника:
+  // макро-решётка и выбор соседних ячеек видят настоящую планету, а не
+  // увеличенный в десятки раз центр одной-единственной ячейки.
+  const planetHexSpacingM = hexSpacingMeters(patch.frame.radiusM);
+  const planetCoordScale = Math.max(1, planetHexSpacingM / Math.max(hexSpacingM, 1));
+
   const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
   const elevLattice = sampler
-    ? sampleSkirtElevationLattice(patch, sampler, outerRadiusM)
+    ? sampleSkirtElevationLattice(patch, sampler, outerRadiusM, planetCoordScale)
     : null;
   const cellSeed = (request.seed ^ Math.imul((patch.centerCell + 1) >>> 0, 0x9E3779B1)) >>> 0;
   const noiseScale = (3.5 + Math.log2(Math.max(1, radiusPatchM / 600)) * 0.65) / Math.max(radiusPatchM, 1);
@@ -1267,12 +1295,14 @@ export function generateHorizonSkirt(
           const blend = smooth01((hexDist - blendStartM) / blendSpanM);
           const planetaryZ = skirtPlanetaryHeight(
             patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
+            planetCoordScale,
           );
           z = innerZ + (planetaryZ - innerZ) * blend;
         }
       } else {
         z = skirtPlanetaryHeight(
           patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
+          planetCoordScale,
         );
       }
 
