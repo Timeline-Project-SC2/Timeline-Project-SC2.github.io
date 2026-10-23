@@ -122,6 +122,10 @@ export interface PlanetGlobeOptions {
   onPickDirection?: (dir: number[]) => void;
   onPickMiss?: () => void;
   onZoomChange?: (distance: number) => void;
+  /** Stage-8.2: колесо мыши «вглубь» (deltaY < 0) при дистанции у нижней
+   *  границы (targetDistance <= MIN_DISTANCE * 1.03) — сигнал «погрузиться»
+   *  на локальный уровень выбранной ячейки. Не чаще одного раза в 500 мс. */
+  onZoomDive?: () => void;
   /** Этап 7 (intent-based prefetch): debounced-уведомление (180 мс) об изменении
    *  ракурса/дистанции камеры (колесо, pinch, drag, flyToDirection). viewDirection —
    *  единичный вектор сферы в центре экрана, zoomRatio = 0 (далеко) … 1 (вплотную). */
@@ -816,8 +820,12 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
   let yaw = -0.65, pitch = 0.38;
   let yawVelocity = 0, pitchVelocity = 0;
   // Этап 7: пределы дистанции камеры и zoomRatio для onCameraIntent.
-  const MIN_DISTANCE = 1.35, MAX_DISTANCE = 6.0;
+  // Stage-8.2: нижний предел 1.15 — камера подлетает заметно ближе к гексу
+  // перед переходом на локальный уровень участка.
+  const MIN_DISTANCE = 1.15, MAX_DISTANCE = 6.0;
   let distance = 3.05, targetDistance = 3.05;
+  /** Stage-8.2: защита onZoomDive от повторного спама (не чаще 500 мс). */
+  let lastZoomDiveAt = -Infinity;
   let autoRotate = opts.autoRotate !== false;
   let bordersEnabled = opts.borders !== false;
   let atmosphereEnabled = opts.atmosphere !== false;
@@ -1464,6 +1472,15 @@ function createPlanetGlobe(canvas: HTMLCanvasElement, options?: PlanetGlobeOptio
     const factor = Math.exp(clamp(e.deltaY, -240, 240) * 0.0016);
     targetDistance = clamp(targetDistance * factor, MIN_DISTANCE, MAX_DISTANCE);
     scheduleCameraIntent();
+    // Stage-8.2: зум колёсиком вглубь на упоре дистанции — сигнал погружения
+    // на локальный уровень выбранной ячейки (защита от спама 500 мс).
+    if (e.deltaY < 0 && targetDistance <= MIN_DISTANCE * 1.03 && typeof opts.onZoomDive === 'function') {
+      const now = performance.now();
+      if (now - lastZoomDiveAt >= 500) {
+        lastZoomDiveAt = now;
+        try { opts.onZoomDive(); } catch (_) { /* noop */ }
+      }
+    }
     if (typeof opts.onZoomChange === 'function') {
       try { opts.onZoomChange(targetDistance); } catch (_) { /* noop */ }
     }

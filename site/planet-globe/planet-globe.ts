@@ -71,6 +71,9 @@ interface LocalCameraAnim {
   toDist: number;
   fromTarget: LocalVec3;
   toTarget: LocalVec3;
+  /** Stage-8.2: плавная кривая easeInOutCubic для двухфазного спуска
+   *  (по умолчанию — easeOutCubic для перелётов внутри локальной карты). */
+  easeInOut?: boolean;
 }
 
 /** Палитра атмосферы планетарного горизонта (Stage-8). */
@@ -79,6 +82,11 @@ const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.16, 0.31, 0.
 /** Рабочий панорамный наклон и азимут камеры локальной карты. */
 const LOCAL_REST_PITCH = 0.44;
 const LOCAL_REST_YAW = -0.65;
+/** Stage-8.2: фаза 1 (подлёт глобуса к гексу) удерживается 320 мс, после чего
+ *  сцена проявляется и камера начинает спуск до уровня участка. */
+const LOCAL_DIVE_REVEAL_DELAY_MS = 320;
+/** Stage-8.2: длительность фазы 2 — плавного спуска до уровня гекса. */
+const LOCAL_DIVE_ANIM_MS = 1150;
 
 interface LocalMapPrograms {
   terrainProgram: WebGLProgram;
@@ -239,6 +247,8 @@ let localMapActive = false;
 let localMapFrameId = 0;
 let localMapEntrySeq = 0;
 let localMapHideTimer = 0;
+/** Stage-8.2: таймер отложенного проявления сцены (фаза 2 двухфазного спуска). */
+let localRevealTimer = 0;
 let localMapData: LocalMapWorkerResponse | null = null;
 let localMapGenerationMs = 0;
 let localMapBuildableFraction = 0;
@@ -257,7 +267,6 @@ let localSkirtData: HorizonSkirtData | null = null;
 let pendingNeighborFly: { cell: number; azimuth: number } | null = null;
 /** Пока запрошен новый Patch7, не запускаем второй переход по грани. */
 let localPatchLoading = false;
-let lastGlobeSyncAt = -Infinity;
 let localClickCandidate: { pointerId: number; x: number; y: number } | null = null;
 let localPointerMode: 'orbit' | 'pan' | null = null;
 let localPointerId: number | null = null;
@@ -437,7 +446,8 @@ function initializeLocalMapRenderer(): boolean {
   let gl = localMapGl;
   if (!gl || gl.isContextLost()) {
     gl = els.localMapCanvas.getContext('webgl2', {
-      alpha: true,
+      // Stage-8.2: непрозрачный канвас — за горизонтом не просвечивает глобус.
+      alpha: false,
       premultipliedAlpha: false,
       antialias: true,
       depth: true,
@@ -520,12 +530,22 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
+/** Stage-8.2: симметричная плавная кривая спуска (мягкий вход и выход). */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 /** Прерывает плавную анимацию камеры (любое ручное действие пользователя). */
 function cancelLocalCameraAnim(): void {
   localCameraAnim = null;
 }
 
-/** Dive-in с глобуса: 900 мс спуска с суборбитального ракурса к рабочей панораме. */
+/**
+ * Stage-8.2, фаза 2 двухфазного спуска: камера стартует высоко над участком
+ * (fromDist = 4.8x, крутой взгляд сверху вниз ~75°) и за 1150 мс по кривой
+ * easeInOutCubic мягко опускается и выравнивается над уровнем выделенного гекса
+ * (LOCAL_REST_PITCH ≈ 25°).
+ */
 function startLocalDiveInAnim(): void {
   const targetDist = localCameraDistance > 0 ? localCameraDistance : localMapRadiusM;
   const target: LocalVec3 = [
@@ -533,15 +553,16 @@ function startLocalDiveInAnim(): void {
   ];
   localCameraAnim = {
     startAt: performance.now(),
-    durationMs: 900,
-    fromYaw: LOCAL_REST_YAW - 0.32,
+    durationMs: LOCAL_DIVE_ANIM_MS,
+    fromYaw: LOCAL_REST_YAW - 0.24,
     toYaw: LOCAL_REST_YAW,
-    fromPitch: 1.24,
+    fromPitch: 1.30,
     toPitch: LOCAL_REST_PITCH,
-    fromDist: targetDist * 3.2,
+    fromDist: targetDist * 4.8,
     toDist: targetDist,
-    fromTarget: target,
+    fromTarget: [0, 0, target[2] + localMapRadiusM * 0.18],
     toTarget: target,
+    easeInOut: true,
   };
 }
 
@@ -576,7 +597,7 @@ function applyLocalCameraAnim(now: number): void {
   const anim = localCameraAnim;
   if (!anim) return;
   const t = clampLocal((now - anim.startAt) / anim.durationMs, 0, 1);
-  const e = easeOutCubic(t);
+  const e = anim.easeInOut ? easeInOutCubic(t) : easeOutCubic(t);
   localCameraYaw = lerpLocal(anim.fromYaw, anim.toYaw, e);
   localCameraPitch = lerpLocal(anim.fromPitch, anim.toPitch, e);
   localCameraDistance = lerpLocal(anim.fromDist, anim.toDist, e);
@@ -655,44 +676,6 @@ function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
   requestCellPick(neighbor.cell);
 }
 
-/**
- * Направление на сфере для фонового глобуса. В покое оно совпадает с центром
- * Patch7; орбита и панорама добавляют небольшой угловой сдвиг в касательном
- * кадре, поэтому планета поворачивается вместе с локальным гекс-столом.
- */
-function localGlobeDirection(): LocalVec3 | null {
-  const patch = activePatchReady?.patch;
-  if (!patch) return null;
-  const { origin, east, north } = patch.frame;
-  const yawOffset = (localCameraYaw - LOCAL_REST_YAW) * 0.22;
-  const pitchOffset = (localCameraPitch - LOCAL_REST_PITCH) * 0.22;
-  const cosPitch = Math.cos(pitchOffset);
-  const sinPitch = Math.sin(pitchOffset);
-  const cosYaw = Math.cos(yawOffset);
-  const sinYaw = Math.sin(yawOffset);
-  const panScale = 0.12 / Math.max(1, localMapRadiusM);
-  const panU = localCameraTarget[0] * panScale;
-  const panV = localCameraTarget[1] * panScale;
-  return normalizeLocalVec3([
-    origin[0] * cosPitch * cosYaw + east[0] * (cosPitch * sinYaw + panU) + north[0] * (sinPitch + panV),
-    origin[1] * cosPitch * cosYaw + east[1] * (cosPitch * sinYaw + panU) + north[1] * (sinPitch + panV),
-    origin[2] * cosPitch * cosYaw + east[2] * (cosPitch * sinYaw + panU) + north[2] * (sinPitch + panV),
-  ]);
-}
-
-/** Синхронизирует живой глобус с локальной камерой не чаще одного раза в 60 мс. */
-function syncGlobeWithLocalCamera(): void {
-  if (!localMapActive || !globe || !activePatchReady) return;
-  const now = performance.now();
-  if (now - lastGlobeSyncAt < 60) return;
-  const direction = localGlobeDirection();
-  if (!direction) return;
-  lastGlobeSyncAt = now;
-  const distanceRatio = localCameraDistance / Math.max(1, localMapRadiusM);
-  const globeDist = 1.38 + clampLocal(distanceRatio / 5.2, 0, 1) * (1.85 - 1.38);
-  globe.flyToDirection(direction, globeDist, 90);
-}
-
 /** Строит луч через экранную точку и выбирает соседний гекс на плоскости участка. */
 function pickLocalNeighborAt(clientX: number, clientY: number): void {
   if (!localMapActive || localPatchLoading || !activePatchReady || !(localCameraDistance > 0)) return;
@@ -758,6 +741,17 @@ function applyLocalPan(dx: number, dy: number): void {
   }
 }
 
+/** Stage-8.2: нижний предел зума локальной камеры — до самого уровня земли и
+ *  построек (0.045 * R_patch, но не ближе 2 м). */
+function localMinCameraDistance(): number {
+  return Math.max(2, localMapRadiusM * 0.045);
+}
+
+/** Stage-8.2: верхний предел зума — отдаление выше сферического горизонта. */
+function localMaxCameraDistance(): number {
+  return localMapRadiusM * 5.8;
+}
+
 function currentLocalPinchDistance(): number {
   const points = [...localPointers.values()];
   if (points.length < 2) return 0;
@@ -803,7 +797,7 @@ function installLocalMapCanvasEvents(): void {
       const distance = currentLocalPinchDistance();
       if (localPinchDistance > 0 && distance > 0) {
         localCameraDistance = clampLocal(localCameraDistance * localPinchDistance / distance,
-          Math.max(2, localMapRadiusM * 0.08), localMapRadiusM * 5.2);
+          localMinCameraDistance(), localMaxCameraDistance());
       }
       localPinchDistance = distance;
       return;
@@ -845,14 +839,15 @@ function installLocalMapCanvasEvents(): void {
   canvas.addEventListener('pointercancel', endPointer);
   canvas.addEventListener('wheel', (event: WheelEvent) => {
     event.preventDefault();
-    const maxClusterDist = localMapRadiusM * 5.2;
+    const maxClusterDist = localMaxCameraDistance();
+    // Дальнейшее отдаление колесом на верхнем пределе — возврат на глобус.
     if (event.deltaY > 0 && localCameraDistance >= maxClusterDist * 0.95) {
       exitLocalMap();
       return;
     }
     cancelLocalCameraAnim();   // зум колесом прерывает перелёт камеры
     localCameraDistance = clampLocal(localCameraDistance * Math.exp(event.deltaY * 0.001),
-      Math.max(2, localMapRadiusM * 0.08), maxClusterDist);
+      localMinCameraDistance(), maxClusterDist);
   }, { passive: false });
   canvas.addEventListener('webglcontextlost', (event: Event) => {
     event.preventDefault();
@@ -960,10 +955,11 @@ function renderLocalMapFrame(): void {
   if (!gl || !renderer || gl.isContextLost()) return;
   resizeLocalMapCanvas();
   if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
-  gl.clearColor(0, 0, 0, 0);
+  // Stage-8.2: непрозрачный цвет космоса/горизонта вместо прозрачной очистки —
+  // за локальной сценой не должен просвечивать уменьшенный глобус.
+  gl.clearColor(0.015, 0.045, 0.075, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   applyLocalCameraAnim(performance.now());
-  syncGlobeWithLocalCamera();
   const viewProj = localViewProjection();
   if (typeof renderer.renderFrame === 'function') {
     const skirt = localSkirtData;
@@ -1082,7 +1078,9 @@ function renderLocalMapFromPatch(
 ): void {
   const centerCell = patchReady.patch.cells[0];
   if (!centerCell || requestId !== localMapEntrySeq) return;
-  if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.45, 750);
+  // Stage-8.2, фаза 1: стремительное сближение поверхности планеты с выбранным
+  // гексом за 420 мс (параллельно идёт CPU-генерация локального участка).
+  if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.16, 420);
 
   const startedAt = performance.now();
   let localData: LocalMapWorkerResponse;
@@ -1157,7 +1155,6 @@ function renderLocalMapFromPatch(
 
   activePatchReady = patchReady;
   localPatchLoading = false;
-  lastGlobeSyncAt = -Infinity;
   const shortFaceCoord = extractShortFaceCoord(patchReady.canonicalAddress);
   const planetName = selectedPlace?.name || 'Планета';
   els.localMapTitle.textContent =
@@ -1175,10 +1172,31 @@ function renderLocalMapFromPatch(
   els.localMapStage.hidden = false;
   resizeLocalMapCanvas();
   resetLocalCamera();
+  updateLocalMapHud();
+  // Кадровый цикл стартует сразу: порционная GPU-заливка идёт уже во время
+  // фазы 1, а сцена проявляется только к началу спуска камеры.
+  if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
+  window.clearTimeout(localRevealTimer);
+  localRevealTimer = window.setTimeout(
+    () => finishLocalMapEntry(requestId, shouldFlyToPatch),
+    shouldFlyToPatch ? LOCAL_DIVE_REVEAL_DELAY_MS : 0,
+  );
+}
+
+/**
+ * Stage-8.2, фаза 2: проявляет `#localMapStage` и запускает плавный спуск
+ * камеры до уровня выделенного гекса (или мгновенный перелёт к соседу внутри
+ * уже открытой локальной карты — без задержки 320 мс).
+ */
+function finishLocalMapEntry(requestId: number, shouldFlyToPatch: boolean): void {
+  localRevealTimer = 0;
+  if (requestId !== localMapEntrySeq || !localMapActive || !activePatchReady) return;
+  els.localMapStage.hidden = false;
+  resizeLocalMapCanvas();
+  resetLocalCamera();
   if (shouldFlyToPatch) {
-    // Dive-in с глобуса: суборбитальный спуск 900 мс к панорамной камере.
     startLocalDiveInAnim();
-  } else if (pendingNeighborFly && pendingNeighborFly.cell === patchReady.hexCenterCell) {
+  } else if (pendingNeighborFly && pendingNeighborFly.cell === activePatchReady.hexCenterCell) {
     // Перелёт к соседнему гексу: цель приезжает со стороны предыдущего гекса.
     const { azimuth } = pendingNeighborFly;
     pendingNeighborFly = null;
@@ -1189,7 +1207,6 @@ function renderLocalMapFromPatch(
   els.localMapStage.classList.add('is-active');
   localMapHudLastAt = 0;
   updateLocalMapHud();
-  if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
   els.localMapCanvas.focus({ preventScroll: true });
 }
 
@@ -1226,12 +1243,13 @@ function exitLocalMap(): void {
   pendingInitialLocalView = false;
   if (localMapFrameId) window.cancelAnimationFrame(localMapFrameId);
   localMapFrameId = 0;
+  window.clearTimeout(localRevealTimer);
+  localRevealTimer = 0;
   localSkirtData = null;
   localCameraAnim = null;
   pendingNeighborFly = null;
   localPatchLoading = false;
   localClickCandidate = null;
-  lastGlobeSyncAt = -Infinity;
   localPointers.clear();
   localPointerId = null;
   localPointerMode = null;
@@ -1241,9 +1259,12 @@ function exitLocalMap(): void {
   updateLocalBreadcrumb(false);
   syncBrowserUrl({ localView: false });
   if (globe) {
-    // Сохраняем текущий ракурс и плавно возвращаем орбитальную дистанцию:
-    // при zoom-out из кластера нет скачка камеры под исчезающим оверлеем.
-    globe.flyToDirection(globe.getCameraState().viewDirection, 3.05, 650);
+    // Stage-8.2: глобус один раз доворачивается к центру активной ячейки и
+    // плавно отводит камеру до орбитальной дистанции 2.85 под исчезающим
+    // непрозрачным оверлеем (без ежекадровой синхронизации камер).
+    const exitCell = activePatchReady ? activePatchReady.patch.cells[0] : null;
+    const centerDir = exitCell ? exitCell.center : globe.getCameraState().viewDirection;
+    globe.flyToDirection(centerDir, 2.85, 680);
   }
 
   if (localMapRenderer && typeof localMapRenderer.dispose === 'function') {
@@ -2424,6 +2445,13 @@ function init(): void {
         finalizeReady(pending.msg, pending.request);
       },
       onPickDirection: function (direction: number[]) { sendPick(direction, 'select'); },
+      onZoomDive: function (): void {
+        // Stage-8.2: колесо вглубь на упоре дистанции глобуса — двухфазный
+        // спуск на локальный уровень уже выбранного и готового участка.
+        if (localMapActive || els.diveLocalMap.disabled) return;
+        if (!lastPatchReady || !lastPatchReady.invariants.ok) return;
+        enterLocalMap(lastPatchReady, Number(els.localScale.value));
+      },
       onHoverDirection: function (direction: number[]) {
         const now = performance.now();
         if (now - lastHoverSentAt < 90) return;
