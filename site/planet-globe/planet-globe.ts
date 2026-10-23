@@ -253,7 +253,8 @@ let localCameraDistance = 0;
 let localCameraTarget: [number, number, number] = [0, 0, 20];
 let localCameraAnim: LocalCameraAnim | null = null;
 let localSkirtData: HorizonSkirtData | null = null;
-let pendingNeighborAzimuth: number | null = null;
+/** Ожидаемый перелёт к соседу: азимут действителен только для своей ячейки. */
+let pendingNeighborFly: { cell: number; azimuth: number } | null = null;
 let localPointerMode: 'orbit' | 'pan' | null = null;
 let localPointerId: number | null = null;
 let localPointerLast = { x: 0, y: 0 };
@@ -1038,10 +1039,10 @@ function renderLocalMapFromPatch(
   if (shouldFlyToPatch) {
     // Dive-in с глобуса: суборбитальный спуск 900 мс к панорамной камере.
     startLocalDiveInAnim();
-  } else if (pendingNeighborAzimuth !== null) {
+  } else if (pendingNeighborFly && pendingNeighborFly.cell === patchReady.hexCenterCell) {
     // Перелёт к соседнему гексу: цель приезжает со стороны предыдущего гекса.
-    const azimuth = pendingNeighborAzimuth;
-    pendingNeighborAzimuth = null;
+    const { azimuth } = pendingNeighborFly;
+    pendingNeighborFly = null;
     startLocalNeighborFlyAnim(azimuth);
   }
   els.localMapStage.classList.remove('is-active');
@@ -1065,8 +1066,8 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
   }
   const scale = selectedLocalScale(Number(widthKm));
   const shouldFlyToPatch = !localMapActive;
-  // Свежий Dive-in не должен подхватывать азимут несостоявшегося перелёта.
-  if (shouldFlyToPatch) pendingNeighborAzimuth = null;
+  // Свежий Dive-in не должен подхватывать перелёт несостоявшегося соседнего запроса.
+  if (shouldFlyToPatch) pendingNeighborFly = null;
   const requestId = ++localMapEntrySeq;
   window.clearTimeout(localMapHideTimer);
   localMapWidthKm = scale;
@@ -1088,7 +1089,7 @@ function exitLocalMap(): void {
   localMapFrameId = 0;
   localSkirtData = null;
   localCameraAnim = null;
-  pendingNeighborAzimuth = null;
+  pendingNeighborFly = null;
   localPointers.clear();
   localPointerId = null;
   localPointerMode = null;
@@ -1939,7 +1940,7 @@ function initEvents(): void {
       const dir = neighbor.center;
       const u = dir[0] * east[0] + dir[1] * east[1] + dir[2] * east[2];
       const v = dir[0] * north[0] + dir[1] * north[1] + dir[2] * north[2];
-      pendingNeighborAzimuth = Math.atan2(u, v);
+      pendingNeighborFly = { cell, azimuth: Math.atan2(u, v) };
     }
     cancelLocalCameraAnim();
     setLocalMapStatus('Запрашиваю соседнюю ячейку #' + cell + ' и новый Patch7…', 'info');

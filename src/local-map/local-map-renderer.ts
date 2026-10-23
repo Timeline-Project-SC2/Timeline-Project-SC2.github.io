@@ -628,9 +628,15 @@ export class StructureRenderer {
     if (!this.skirtVAO || this.skirtIndexCount === 0) return;
     const gl = this.gl;
     gl.useProgram(program);
+    // В зоне воротника юбка перекрывается с центральным мешем: небольшой
+    // polygon offset уводит её назад по глубине, чтобы центральный рельеф
+    // гарантированно выигрывал без z-fighting на совпадающих высотах.
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 1.0);
     gl.bindVertexArray(this.skirtVAO);
     gl.drawElements(gl.TRIANGLES, this.skirtIndexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
   private disposeSkirt(): void {

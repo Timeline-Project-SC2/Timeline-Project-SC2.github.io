@@ -503,6 +503,8 @@ function createMockGl() {
     depthMask() {},
     enable() {},
     disable() {},
+    POLYGON_OFFSET_FILL: 0x8037,
+    polygonOffset() {},
   };
   return { gl, calls };
 }
