@@ -14,8 +14,10 @@
  *   --set=drainage_mean_cells=72 --set=biome_soft_width_cells=2
  */
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
 import { PRESETS as CONTRACT_PRESETS, getPresetGeographyValues } from '../site/shared/planet-generation-contract.ts';
@@ -349,6 +351,26 @@ const biomeAggregate = PlanetSurface.BIOME_DEFINITIONS.map((definition, index) =
     (entry) => entry.biomes.fractions[index]?.top1AreaFraction)),
 }));
 
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const baselinePath = path.join(rootDir, 'baseline-2026-10-20.json');
+let baselineEntry = null;
+if (existsSync(baselinePath)) {
+  try {
+    const baselineJson = JSON.parse(readFileSync(baselinePath, 'utf8'));
+    baselineEntry = baselineJson.results?.find((r) => r.v === options.v)?.cpu || null;
+  } catch (_) { /* ignore */ }
+}
+
+const target855Ms = 855;
+const target855DeltaMs = round(totalMedianMs - target855Ms, 1);
+const target855DeltaPercent = round(((totalMedianMs - target855Ms) / target855Ms) * 100, 2);
+
+const baselineMeshMs = baselineEntry?.meshBuildMs ? round(baselineEntry.meshBuildMs, 1) : null;
+const baselineMeshDeltaMs = baselineMeshMs !== null ? round(meshMedianMs - baselineMeshMs, 1) : null;
+const baselineMeshDeltaPercent = baselineMeshMs !== null && baselineMeshMs > 0
+  ? round(((meshMedianMs - baselineMeshMs) / baselineMeshMs) * 100, 2)
+  : null;
+
 const result = {
   mode: options.mode,
   preset: options.preset,
@@ -373,6 +395,21 @@ const result = {
     meshMedian: meshMedianMs,
     surfaceMedian: surfaceMedianMs,
     totalMedian: totalMedianMs,
+    target855Ms: {
+      targetMs: 855,
+      deltaMs: target855DeltaMs,
+      deltaPercent: target855DeltaPercent,
+      formatted: `${target855DeltaMs >= 0 ? '+' : ''}${target855DeltaMs} ms (${target855DeltaPercent >= 0 ? '+' : ''}${target855DeltaPercent}%)`,
+      nonBlocking: true,
+      note: 'Порог 855 мс не блокирующий (аудит §8.11; мягкий наблюдаемый показатель)',
+    },
+    baseline: baselineEntry ? {
+      file: 'baseline-2026-10-20.json',
+      meshBuildMs: baselineMeshMs,
+      meshDeltaMs: baselineMeshDeltaMs,
+      meshDeltaPercent: baselineMeshDeltaPercent,
+      formattedMesh: `mesh: ${baselineMeshDeltaMs >= 0 ? '+' : ''}${baselineMeshDeltaMs} ms (${baselineMeshDeltaPercent >= 0 ? '+' : ''}${baselineMeshDeltaPercent}%)`,
+    } : null,
     surfaceDistribution: distribution(seedSummaries.map((entry) => entry.surfaceMs)),
     totalDistribution: distribution(seedSummaries.map((entry) => entry.totalMs)),
     meshBuildsSharedInEnsemble: options.mode === 'ensemble',
@@ -450,6 +487,13 @@ const result = {
 const serialized = `${JSON.stringify(result, null, 2)}\n`;
 if (options.output) writeFileSync(options.output, serialized, 'utf8');
 process.stdout.write(serialized);
+
+const sign855 = target855DeltaMs >= 0 ? '+' : '';
+const signPct855 = target855DeltaPercent >= 0 ? '+' : '';
+const baselineInfo = baselineEntry
+  ? `, baseline mesh ${baselineMeshMs} ms -> ${meshMedianMs} ms (${baselineMeshDeltaMs >= 0 ? '+' : ''}${baselineMeshDeltaMs} ms, ${baselineMeshDeltaPercent >= 0 ? '+' : ''}${baselineMeshDeltaPercent}%)`
+  : '';
+process.stderr.write(`[bench_planet_stage5] v=${options.v}: total median ${totalMedianMs} ms vs target 855 ms (${sign855}${target855DeltaMs} ms, ${signPct855}${target855DeltaPercent}%)${baselineInfo} [non-blocking §8.11]\n`);
 
 const hardChecks = options.mode === 'gate'
   ? Object.values(checks)
