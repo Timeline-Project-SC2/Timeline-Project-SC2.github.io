@@ -252,9 +252,11 @@ for (let bi = 0; bi < BIOME_COUNT; bi++) {
   BIOME_COLOR_B[bi] = col[2] as number;
 }
 
-const sharedCore = getSharedPlanetCore();
+// Лениво (Stage-8.8.1, A-3): хост вызывается только изнутри функций,
+// которые реально считают поля/поверхность. Импорт модуля ядро не создаёт —
+// ядро поднимается при первом обращении в воркере/Node, не на уровне модуля.
 function getCore(): PlanetCore {
-  return sharedCore;
+  return getSharedPlanetCore();
 }
 
 function clamp(x: number, lo: number, hi: number): number {
