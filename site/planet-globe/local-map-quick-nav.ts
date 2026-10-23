@@ -55,15 +55,12 @@ const QUICK_NAV_STYLES = `
   border: 0;
   border-radius: 50%;
   color: #00ff66;
-  background: radial-gradient(circle, rgba(0, 255, 102, 0.1), rgba(0, 255, 102, 0) 72%);
+  background: radial-gradient(circle, rgba(0, 20, 8, 0.34), rgba(0, 14, 6, 0.12) 28%, transparent 72%);
   opacity: 0;
   visibility: hidden;
   pointer-events: auto;
   touch-action: manipulation;
   cursor: pointer;
-  mix-blend-mode: screen;
-  filter: drop-shadow(0 0 2px rgba(0, 255, 102, 0.95))
-    drop-shadow(0 0 7px rgba(0, 255, 102, 0.62));
   -webkit-tap-highlight-color: transparent;
 }
 [${QUICK_NAV_HOST_ATTRIBUTE}] .lmqn-button:disabled {
@@ -90,6 +87,14 @@ const QUICK_NAV_STYLES = `
   shape-rendering: geometricPrecision;
   pointer-events: none;
 }
+[${QUICK_NAV_HOST_ATTRIBUTE}] .lmqn-chevron-outline {
+  fill: none;
+  stroke: rgba(0, 23, 9, 0.96);
+  stroke-width: 3.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
 [${QUICK_NAV_HOST_ATTRIBUTE}] .lmqn-chevron {
   fill: none;
   stroke: currentColor;
@@ -97,6 +102,9 @@ const QUICK_NAV_STYLES = `
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+  mix-blend-mode: screen;
+  filter: drop-shadow(0 0 2px rgba(0, 255, 102, 0.95))
+    drop-shadow(0 0 7px rgba(0, 255, 102, 0.62));
 }
 [${QUICK_NAV_HOST_ATTRIBUTE}] .lmqn-scanline {
   position: absolute;
@@ -236,6 +244,11 @@ export function createLocalMapQuickNav(
     glyph.setAttribute('aria-hidden', 'true');
     glyph.setAttribute('focusable', 'false');
     for (const pathData of ['M 4 5 L 14 16 L 4 27', 'M 11 5 L 21 16 L 11 27']) {
+      const outline = document.createElementNS(SVG_NAMESPACE, 'path');
+      outline.classList.add('lmqn-chevron-outline');
+      outline.setAttribute('d', pathData);
+      glyph.append(outline);
+
       const path = document.createElementNS(SVG_NAMESPACE, 'path');
       path.classList.add('lmqn-chevron');
       path.setAttribute('d', pathData);
