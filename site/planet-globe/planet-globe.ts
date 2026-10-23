@@ -34,17 +34,16 @@ import type {
   WorkerResponse,
 } from './planet-globe-worker.ts';
 import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
-import {
-  generateHorizonSkirt,
-  generateLocalMap,
-  mapNeighborCellsToSlots,
-  planetCurvatureDropM,
-} from '../../src/local-map/local-map-worker.ts';
+// Stage-8.10b (A-12b): чистые геометрические хелперы — из нового модуля
+// без ядра. generateLocalMap / generateHorizonSkirt грузятся лениво через
+// динамический import() (см. loadLocalMapWorkerModule ниже).
+import { mapNeighborCellsToSlots, planetCurvatureDropM } from '../../src/local-map/local-map-geometry.ts';
 import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
 import type {
   HorizonSkirtData,
   LocalMapWorkerResponse,
 } from '../../src/local-map/local-map-worker.ts';
+import type { LocalMapWorkerLazyModule } from './local-map-worker-lazy.js';
 import {
   STRUCTURE_FRAGMENT_SHADER,
   STRUCTURE_VERTEX_SHADER,
@@ -305,6 +304,30 @@ let localMapActive = false;
 let localMapFrameId = 0;
 let localMapEntrySeq = 0;
 let localMapHideTimer = 0;
+/**
+ * Stage-8.10b (A-12b): промис модуля генерации локальной карты кэширует
+ * загрузку чанка. Первый Dive-in динамически импортирует
+ * local-map-worker-lazy.js (чанк с полным Wasm-ядром planet-core),
+ * повторный Dive-in чанк НЕ перезагружает — import() вызывается ровно
+ * один раз на странице. Ошибка загрузки не ломает глобус: она
+ * сообщается через setLocalMapStatus, и рендерер планеты продолжает
+ * работу.
+ */
+let localMapWorkerModulePromise: Promise<LocalMapWorkerLazyModule> | null = null;
+
+/** Загрузывает (и кэширует) модуль генерации локальной карты. */
+function loadLocalMapWorkerModule(): Promise<LocalMapWorkerLazyModule> {
+  localMapWorkerModulePromise ??= import('./local-map-worker-lazy.js').then((_module) => {
+    const loaded = (globalThis as typeof globalThis & {
+      LocalMapWorkerLazyModule?: LocalMapWorkerLazyModule;
+    }).LocalMapWorkerLazyModule;
+    if (!loaded) {
+      throw new Error('Чанк локальной карты не выставил API глобуса LocalMapWorkerLazyModule');
+    }
+    return loaded;
+  });
+  return localMapWorkerModulePromise;
+}
 /** Stage-8.2: таймер отложенного проявления сцены (фаза 2 двухфазного спуска). */
 let localRevealTimer = 0;
 let localMapData: LocalMapWorkerResponse | null = null;
@@ -1885,17 +1908,33 @@ function processStagedLocalPatch(): void {
   commitLocalPatchSwap(staged);
 }
 
-function renderLocalMapFromPatch(
+async function renderLocalMapFromPatch(
   patchReady: WorkerPatchReadyResponse,
   scale: number,
   shouldFlyToPatch: boolean,
   requestId: number,
-): void {
+): Promise<void> {
   const centerCell = patchReady.patch.cells[0];
   if (!centerCell || requestId !== localMapEntrySeq) return;
   // Stage-8.2, фаза 1: стремительное сближение поверхности планеты с выбранным
   // гексом за 420 мс (параллельно идёт CPU-генерация локального участка).
   if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.16, 420);
+
+  // Stage-8.10b (A-12b): генерация локальной карты грузится отдельным чанком
+  // при первом Dive-in. Ошибка загрузки сообщается в статус, глобус
+  // продолжает работать — без вечного «Загрузка…».
+  let localMapWorker: LocalMapWorkerLazyModule;
+  try {
+    localMapWorker = await loadLocalMapWorkerModule();
+  } catch (error) {
+    setLocalMapStatus(
+      'Не удалось загрузить модуль локальной карты: '
+      + ((error as Error).message || String(error)),
+      'error',
+    );
+    return;
+  }
+  if (requestId !== localMapEntrySeq) return;
 
   const startedAt = performance.now();
   let localData: LocalMapWorkerResponse;
@@ -1914,7 +1953,7 @@ function renderLocalMapFromPatch(
     ...(currentProfile ? { profile: currentProfile } : {}),
   };
   try {
-    localData = generateLocalMap(mapRequest);
+    localData = await localMapWorker.generateLocalMap(mapRequest);
   } catch (error) {
     setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
     return;
@@ -1924,7 +1963,7 @@ function renderLocalMapFromPatch(
   // Stage-8: планетарная юбка 6 колец с бесшовным воротником по heightfield.
   let skirtData: HorizonSkirtData | null = null;
   try {
-    skirtData = generateHorizonSkirt(mapRequest, localData.heightfield);
+    skirtData = await localMapWorker.generateHorizonSkirt(mapRequest, localData.heightfield);
   } catch (error) {
     console.warn('generateHorizonSkirt не сработал, рисую плоскую карту:', error);
     skirtData = null;

@@ -227,6 +227,14 @@ class TimelinePublishPipeline {
       (_match: string, quote: string, ref: string) =>
         `new Worker(${quote}${this.hashedReference(ref, sourceRelative)}${quote}`,
     );
+    // Stage-8.10b (A-12b): динамические import() со статическими записями на
+    // publishable-ассеты переписываются на hashed-имена (external в esbuild
+    // оставляет import() в бандле для браузера).
+    output = output.replace(
+      /import\(\s*(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1\s*\)/g,
+      (_match: string, quote: string, ref: string) =>
+        `import(${quote}${this.hashedReference(ref, sourceRelative)}${quote})`,
+    );
     return output;
   }
 
@@ -244,6 +252,12 @@ class TimelinePublishPipeline {
       }
     }
     for (const match of source.matchAll(/new\s+Worker\(\s*(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1/g)) {
+      if (match[2]) addReference(match[2]);
+    }
+    // Stage-8.10b (A-12b): динамические import() — ленивые чанки
+    // (например local-map-worker-lazy.js) финализируются до переписывания
+    // ссылки на hashed-имя.
+    for (const match of source.matchAll(/import\(\s*(['"])([^'"]+\.(?:js|mts|ts))(?:\?[^'"]*)?\1\s*\)/g)) {
       if (match[2]) addReference(match[2]);
     }
     return [...dependencies];
@@ -270,6 +284,11 @@ class TimelinePublishPipeline {
       sourcemap: false,
       target: 'es2022',
       write: false,
+      // Stage-8.10b (A-12b): ленивый чанк генерации локальной карты
+      // импортируется динамически из страницы (planet-globe.ts) и
+      // публикуется как отдельный hashed-ассет — esbuild не инлайнит его
+      // в главный бандл, а оставляет import() для браузера.
+      external: ['./local-map-worker-lazy.js'],
     };
     // Entry, который сам ставит window/globalThis API, нельзя перезаписывать namespace esbuild.
     if (globalName && !assignsOwnBrowserGlobal) buildOptions.globalName = globalName;

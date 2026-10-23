@@ -9,6 +9,7 @@ import { CONTRACT, getPresetRuntimeValues } from './planet-generation-contract.t
 import PlanetNoise, { buildSimplexTable } from './planet-noise.ts';
 import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
+import { EARTH_CANONICAL_V, GEOGRAPHY_VERSION } from './planet-geography-constants.ts';
 
 export interface GeographyProfile {
   masterSeedHex: string;
@@ -193,14 +194,14 @@ const NOISE_VERSION = GENERATION_CONTRACT.default_versions.noise_version as stri
 // Этот модуль реализует именно legacy-поля/C100 v1; полный v2 собирается
 // PlanetSurface поверх него. Версия обязана оставаться в supported_versions
 // канонического контракта, а не молча становиться его дефолтной v2.
-const GEOGRAPHY_VERSION = 'c100-soft-v1';
+// Stage-8.10b (A-12b): константа живёт в planet-geography-constants.ts без
+// ядра, чтобы загрузчик мог брать её без Wasm-байтов.
 if ((GENERATION_CONTRACT.supported_versions.geography_version as readonly string[]).indexOf(GEOGRAPHY_VERSION) < 0) {
   throw new Error('PlanetGeography: контракт не поддерживает ' + GEOGRAPHY_VERSION);
 }
 const PRESET_VERSION = GENERATION_CONTRACT.default_versions.preset_version as string;
 const SURFACE_CLASSES = GENERATION_CONTRACT.surface_classes.slice();
 const EARTH_RADIUS_KM = 6371;
-const EARTH_CANONICAL_V = 128;
 const PLATE_COUNT = 7;
 // Профильная continent_variation задаёт целевой разброс уже эффективных
 // масс. Барьеры и bias-балансировка частично регрессируют распределение

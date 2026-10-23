@@ -58,6 +58,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -187,10 +189,10 @@ function heightfieldIndexFor(instance, radiusM) {
 // 1. Непрерывность рельефа и рек по И-3
 // ---------------------------------------------------------------------------
 
-test('И-3.2: высоты суши привязаны к filledElevation/seaLevel канонических ячеек', () => {
+test('И-3.2: высоты суши привязаны к filledElevation/seaLevel канонических ячеек', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const res = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'anchors' }));
+  const res = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'anchors' }));
 
   const landMax = Worker.LAND_FBM_AMPLITUDE_M;
   let landChecked = 0;
@@ -215,10 +217,10 @@ test('И-3.2: высоты суши привязаны к filledElevation/seaLev
   assert.ok(landChecked > 0, 'в сухом патче есть проверенные точки суши');
 });
 
-test('И-3.2: океаническая/озёрная вода держит зеркало waterLevelOf и запрещает спавн', () => {
+test('И-3.2: океаническая/озёрная вода держит зеркало waterLevelOf и запрещает спавн', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   Worker.clearLocalMapCache();
-  const res = Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'water' }));
+  const res = await Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'water' }));
 
   const mirror = (Contract.waterLevelOf(waterPatch.cells[0], waterPatch.seaLevel) - waterPatch.seaLevel) * M_PER_UNIT;
   for (let i = 0; i < res.heightfield.length; i += 97) {
@@ -237,17 +239,17 @@ test('И-3.2: океаническая/озёрная вода держит зе
   }
 });
 
-test('И-3.3: речное русло врезается от входных граней через центр к выходной', () => {
+test('И-3.3: речное русло врезается от входных граней через центр к выходной', async () => {
   assert.ok(riverPatch, 'нужен речной центр с притоком и выходом');
   assert.ok(riverPatch.river.outlet, 'у речного центра есть выходная грань');
   assert.ok(riverPatch.river.inlets.length > 0, 'у речного центра есть входные грани');
 
   Worker.clearLocalMapCache();
   const strict = { spawnRule: STRICT_RULE };
-  const withRiver = Worker.generateLocalMap(requestFor(riverPatch, { ...strict, patchKey: 'river' }));
+  const withRiver = await Worker.generateLocalMap(requestFor(riverPatch, { ...strict, patchKey: 'river' }));
   // Двойник без русла: строгое правило спавна гасит терраформинг целиком,
   // поэтому карты отличаются ТОЛЬКО врезом русла.
-  const twin = Worker.generateLocalMap(requestFor(stripRiver(riverPatch), { ...strict, patchKey: 'river-twin' }));
+  const twin = await Worker.generateLocalMap(requestFor(stripRiver(riverPatch), { ...strict, patchKey: 'river-twin' }));
 
   assert.equal(withRiver.meta.buildableFraction, 0, 'строгое правило запрещает спавн всюду');
   assert.equal(twin.meta.buildableFraction, 0, 'двойник тоже без спавна');
@@ -283,18 +285,16 @@ test('И-3.3: речное русло врезается от входных г�
   assert.ok(outer > 0, 'на периферии карты вреза нет');
 });
 
-test('И-3.1: при переданном profile рельеф учитывает канал detail единого 3D-сэмплера', () => {
+test('И-3.1: при переданном profile рельеф учитывает канал detail единого 3D-сэмплера', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   assert.equal(PROFILE.geographyVersion, 'c100-soft-v2');
-  let samplerV2;
-  assert.doesNotThrow(() => {
-    samplerV2 = Contract.createPatchFieldSampler(PROFILE);
-  }, 'createPatchFieldSampler принимает профиль c100-soft-v2 без исключения');
+  // Stage-8.10b (A-12b): createPatchFieldSampler ассинхронный (ленивый
+  // динамический импорт ядра). «Без исключения» проверяется через await:
+  // отклонение промиса проваливает тест.
+  const samplerV2 = await Contract.createPatchFieldSampler(PROFILE);
   assert.equal(PROFILE.geographyVersion, 'c100-soft-v2', 'входной профиль не мутируется');
-  assert.doesNotThrow(() => {
-    Contract.createPatchFieldSampler({ master_seed_hex: PROFILE.masterSeedHex, geography_version: 'c100-soft-v2' });
-  }, 'createPatchFieldSampler принимает snake_case geography_version = c100-soft-v2');
-  const samplerV1 = Contract.createPatchFieldSampler({ ...PROFILE, geographyVersion: 'c100-soft-v1' });
+  await Contract.createPatchFieldSampler({ master_seed_hex: PROFILE.masterSeedHex, geography_version: 'c100-soft-v2' });
+  const samplerV1 = await Contract.createPatchFieldSampler({ ...PROFILE, geographyVersion: 'c100-soft-v1' });
   const centerDir = dryPatch.cells[0].center;
   assert.deepEqual(
     samplerV2.sampleFields(centerDir[0], centerDir[1], centerDir[2]),
@@ -303,8 +303,8 @@ test('И-3.1: при переданном profile рельеф учитывае�
   );
 
   Worker.clearLocalMapCache();
-  const plain = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'detail-plain' }));
-  const detailed = Worker.generateLocalMap(requestFor(dryPatch, {
+  const plain = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'detail-plain' }));
+  const detailed = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'detail-profile',
     profile: PROFILE,
   }));
@@ -330,10 +330,10 @@ test('И-3.1: при переданном profile рельеф учитывае�
   }
 });
 
-test('И-3.4: инстансы стоят только в точках buildingSpawnMask === 1 и на рельефе', () => {
+test('И-3.4: инстансы стоят только в точках buildingSpawnMask === 1 и на рельефе', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const res = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'spawn' }));
+  const res = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'spawn' }));
   const mask = Contract.buildBuildingSpawnMask(dryPatch, HF_RES);
 
   const instances = [];
@@ -362,10 +362,10 @@ test('И-3.4: инстансы стоят только в точках buildingS
   }
 });
 
-test('meta Этапа 8: диагностика генерации заполнена, гейт G4 (genMs <= 150 мс) пройден', () => {
+test('meta Этапа 8: диагностика генерации заполнена, гейт G4 (genMs <= 150 мс) пройден', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const res = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'meta' }));
+  const res = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'meta' }));
   const meta = res.meta;
 
   assert.equal(meta.radiusM, RADIUS_M);
@@ -396,12 +396,12 @@ test('meta Этапа 8: диагностика генерации заполн�
   assert.ok(Math.abs(meta.maxHeightM - max) < 1e-3, 'meta.maxHeightM — реальный максимум рельефа');
 });
 
-test('LRU-кэш участков: 8 записей, клонирование буферов, getCachedLocalMap/clearLocalMapCache', () => {
+test('LRU-кэш участков: 8 записей, клонирование буферов, getCachedLocalMap/clearLocalMapCache', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   Worker.clearLocalMapCache();
   assert.equal(Worker.localMapCacheSize(), 0, 'кэш пуст после очистки');
 
-  const first = Worker.generateLocalMap(requestFor(waterPatch, { placeId: 0, patchKey: 'lru-0' }));
+  const first = await Worker.generateLocalMap(requestFor(waterPatch, { placeId: 0, patchKey: 'lru-0' }));
   const key = Worker.localMapCacheKey(requestFor(waterPatch, { placeId: 0, patchKey: 'lru-0' }));
   assert.equal(key, `lru-0:${RADIUS_M}:12345:0`, 'ключ участка соответствует контракту');
 
@@ -418,7 +418,7 @@ test('LRU-кэш участков: 8 записей, клонирование б
 
   // Девятая запись вытесняет самую старую (LRU на 8 записей).
   for (let i = 1; i <= 8; i++) {
-    Worker.generateLocalMap(requestFor(waterPatch, { placeId: i, patchKey: `lru-${i}` }));
+    await Worker.generateLocalMap(requestFor(waterPatch, { placeId: i, patchKey: `lru-${i}` }));
   }
   assert.equal(Worker.localMapCacheSize(), Worker.LOCAL_MAP_CACHE_LIMIT, 'ёмкость кэша — 8 записей');
   assert.equal(Worker.getCachedLocalMap(key), undefined, 'самая старая запись вытеснена');
@@ -554,10 +554,10 @@ function createMockGl() {
 const meshLibrary = Mesh.buildMeshLibrary();
 const MODULE_COUNT = Object.keys(meshLibrary).length;
 
-test('StructureRenderer: VAO рельефа и модулей создаются ровно один раз (Патч 8)', () => {
+test('StructureRenderer: VAO рельефа и модулей создаются ровно один раз (Патч 8)', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const payload = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'gpu-a' }));
+  const payload = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'gpu-a' }));
   const { gl, calls } = createMockGl();
   const renderer = new RendererModule.StructureRenderer(gl);
 
@@ -587,7 +587,7 @@ test('StructureRenderer: VAO рельефа и модулей создаются
   // Повторные участки не пересоздают VAO и идут через bufferSubData.
   const subDataBefore = calls.bufferSubData.length;
   for (let i = 0; i < 3; i++) {
-    renderer.onWorkerData(Worker.generateLocalMap(requestFor(dryPatch, {
+    renderer.onWorkerData(await Worker.generateLocalMap(requestFor(dryPatch, {
       patchKey: `gpu-a-${i}`, seed: 12345 + i,
     })));
   }
@@ -605,10 +605,10 @@ test('StructureRenderer: VAO рельефа и модулей создаются
   assert.equal(renderer.ready, false, 'после dispose рендер выключен');
 });
 
-test('StructureRenderer: порционная догрузка по бюджету и прогресс 0..1', () => {
+test('StructureRenderer: порционная догрузка по бюджету и прогресс 0..1', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const payload = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'gpu-b' }));
+  const payload = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'gpu-b' }));
   const { gl, calls } = createMockGl();
   const renderer = new RendererModule.StructureRenderer(gl);
   renderer.initMeshLibrary(meshLibrary);
@@ -644,10 +644,10 @@ test('StructureRenderer: порционная догрузка по бюджет
   assert.equal(renderer.processPendingUpload(Infinity), true, 'неограниченный бюджет завершает загрузку');
 });
 
-test('StructureRenderer: compilePrograms, renderFrame и dispose работают на mock WebGL2', () => {
+test('StructureRenderer: compilePrograms, renderFrame и dispose работают на mock WebGL2', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const payload = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'gpu-c' }));
+  const payload = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'gpu-c' }));
   const { gl, calls } = createMockGl();
   const renderer = new RendererModule.StructureRenderer(gl);
   renderer.initMeshLibrary(meshLibrary);
@@ -692,7 +692,7 @@ test('StructureRenderer: compilePrograms, renderFrame и dispose работаю�
   assert.equal(calls.draws.length, drawsBefore, 'после dispose ничего не рисуется');
 });
 
-test('шейдеры Этапа 8: тонирование водных низин, строгое начало #version 300 es и точность usampler2D', () => {
+test('шейдеры Этапа 8: тонирование водных низин, строгое начало #version 300 es и точность usampler2D', async () => {
   const terrain = Shaders.TERRAIN_FRAGMENT_SHADER;
   for (const [label, shader] of [
     ['STRUCTURE_VERTEX_SHADER', Shaders.STRUCTURE_VERTEX_SHADER],
@@ -772,10 +772,10 @@ test('шейдеры Этапа 8: тонирование водных низи�
   assert.ok(Shaders.STRUCTURE_VERTEX_SHADER.includes('a_inst_scale_tint'), 'per-instance атрибут location 3');
 });
 
-test('localMapTransferables: все буферы ответа передаются zero-copy', () => {
+test('localMapTransferables: все буферы ответа передаются zero-copy', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   Worker.clearLocalMapCache();
-  const res = Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'transfer' }));
+  const res = await Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'transfer' }));
   const transferables = Worker.localMapTransferables(res);
   assert.equal(transferables.length, 3, 'heightfield, zoneMap, terraformMap');
   assert.ok(transferables.includes(res.heightfield.buffer));
@@ -787,7 +787,7 @@ test('localMapTransferables: все буферы ответа передаютс
 // 3. Stage-8.2: непрерывная сферическая юбка горизонта (145 × 85) и купол неба
 // ---------------------------------------------------------------------------
 
-test('hexMetric2D: единая гексагональная метрика — расстояние до прямых граней гекса', () => {
+test('hexMetric2D: единая гексагональная метрика — расстояние до прямых граней гекса', async () => {
   // Для гекса с апофемой 1: вершины на описанной окружности r = 2/√3,
   // центры граней — на расстоянии 1 по нормалям граней (30° и 90°).
   assert.ok(Math.abs(Worker.hexMetric2D(2 / Math.sqrt(3), 0) - 1) < 1e-12, 'вершина на луче 0°: r = 2/√3');
@@ -831,7 +831,7 @@ test('hexMetric2D: единая гексагональная метрика — 
   }
 });
 
-test('mapNeighborCellsToSlots: slot 0..5 ↔ 6 соседних ячеек без дубликатов', () => {
+test('mapNeighborCellsToSlots: slot 0..5 ↔ 6 соседних ячеек без дубликатов', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   const slots = Worker.mapNeighborCellsToSlots(dryPatch);
   assert.equal(slots.length, 6, 'ровно 6 слотов кластера');
@@ -888,12 +888,12 @@ function skirtRadiusAt(skirt, i, j) {
 }
 
 /** Участок и непрерывная юбка вокруг него (dryPatch — фиксированная фикстура). */
-function buildSkirt(patchKey) {
+async function buildSkirt(patchKey) {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
   const request = requestFor(dryPatch, { patchKey, profile: PROFILE });
-  const local = Worker.generateLocalMap(request);
-  return { request, local, skirt: Worker.generateHorizonSkirt(request, local.heightfield) };
+  const local = await Worker.generateLocalMap(request);
+  return { request, local, skirt: await Worker.generateHorizonSkirt(request, local.heightfield) };
 }
 
 /**
@@ -954,8 +954,8 @@ function buildContinentalLakePatch(basePatch) {
   };
 }
 
-test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85 и геометрия горизонта', () => {
-  const { skirt } = buildSkirt('skirt-continuous-grid');
+test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85 и геометрия горизонта', async () => {
+  const { skirt } = await buildSkirt('skirt-continuous-grid');
 
   // Контракт сетки: 145 × 85 = 12 325 вершин и 96 × 56 × 6 = 32 256 индексов.
   assert.equal(Worker.SKIRT_ANGULAR_SEGMENTS, 144);
@@ -1064,8 +1064,8 @@ test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85
   }
 });
 
-test('Stage-8.2 HorizonSkirt: бесшовная гексагональная сшивка высот воротника', () => {
-  const { local, skirt } = buildSkirt('skirt-continuous-seam');
+test('Stage-8.2 HorizonSkirt: бесшовная гексагональная сшивка высот воротника', async () => {
+  const { local, skirt } = await buildSkirt('skirt-continuous-seam');
   const res = HF_RES;
   const A = SKIRT_CENTER_APOTHEM_M;
   const blendStart = Worker.SKIRT_COLLAR_BLEND_START_RATIO * A;   // 1.005 · A
@@ -1217,15 +1217,15 @@ test('Stage-8.2 HorizonSkirt: бесшовная гексагональная с
   }
 
   // 5. Юбка строится и без профиля планеты, и без переданного heightfield.
-  const noProfile = Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-profile' }));
+  const noProfile = await Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-profile' }));
   assert.equal(noProfile.positions.length, SKIRT_VERTEX_COUNT * 3, 'без профиля — та же сетка');
   assert.equal(noProfile.indices.length, 72576, 'без профиля — те же индексы');
-  const noCollar = Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-collar' }), undefined);
+  const noCollar = await Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-collar' }), undefined);
   assert.equal(noCollar.positions.length, SKIRT_VERTEX_COUNT * 3, 'без heightfield — та же сетка');
   assert.equal(noCollar.indices.length, 72576, 'без heightfield — те же индексы');
 });
 
-test('Stage-8.2.1: континентальное озеро выше seaLevel проходит воротник юбки без обрыва к z = 0', () => {
+test('Stage-8.2.1: континентальное озеро выше seaLevel проходит воротник юбки без обрыва к z = 0', async () => {
   const patch = buildContinentalLakePatch(dryPatch);
   const invariants = Contract.verifyPatchInvariants(patch);
   assert.equal(invariants.ok, true, `фикстура озера валидна по И-3: ${JSON.stringify(invariants.checks)}`);
@@ -1247,7 +1247,7 @@ test('Stage-8.2.1: континентальное озеро выше seaLevel �
     profile: PROFILE,
     patchKey: 'continental-lake',
   };
-  const local = Worker.generateLocalMap(request);
+  const local = await Worker.generateLocalMap(request);
 
   // 1. Локальный участок целиком под водой озера и держит зеркало waterLevelOf.
   assert.equal(local.meta.waterFraction, 1, 'вся локальная карта — вода озера');
@@ -1273,7 +1273,7 @@ test('Stage-8.2.1: континентальное озеро выше seaLevel �
   // 4. Шестигранный воротник (кольца 0..10 юбки горизонта) не обваливается к
   //    z = 0: высота непрерывно продолжает зеркало озера (~ +253 м), без
   //    250-метрового обрыва на границе выделенного гекса.
-  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
   const lastCollarRing = Worker.SKIRT_COLLAR_RINGS;
   let minZ = Infinity;
   let maxZ = -Infinity;
@@ -1312,8 +1312,8 @@ test('Stage-8.2.1: континентальное озеро выше seaLevel �
   Worker.clearLocalMapCache();
 });
 
-test('Stage-8.2 HorizonSkirt: GPU-путь непрерывной юбки на mock WebGL2', () => {
-  const { local, skirt } = buildSkirt('skirt-continuous-gpu');
+test('Stage-8.2 HorizonSkirt: GPU-путь непрерывной юбки на mock WebGL2', async () => {
+  const { local, skirt } = await buildSkirt('skirt-continuous-gpu');
   const rp = skirt.planetRadiusM;
 
   // GPU-путь: до setHorizonSkirt инварианты Патча 8 не нарушены.
@@ -1421,7 +1421,7 @@ test('Stage-8.2 HorizonSkirt: GPU-путь непрерывной юбки на 
 // 4. Stage-8.3: планетарный масштаб юбки, гребневые хребты и природная долина
 // ---------------------------------------------------------------------------
 
-test('Stage-8.3: малый радиус 600 м — планетарный масштаб, горно-долинный рельеф и природная долина', () => {
+test('Stage-8.3: малый радиус 600 м — планетарный масштаб, горно-долинный рельеф и природная долина', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   const smallRadiusM = 600;
   Worker.clearLocalMapCache();
@@ -1433,8 +1433,8 @@ test('Stage-8.3: малый радиус 600 м — планетарный ма�
     profile: PROFILE,
     patchKey: 'stage83-small-radius',
   };
-  const local = Worker.generateLocalMap(request);
-  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+  const local = await Worker.generateLocalMap(request);
+  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
 
   // 1. Шестигранный воротник сшит с heightfield безошибочно: планетарное
   //    растяжение координат включается только за пределами воротника.
@@ -1551,7 +1551,7 @@ test('Stage-8.3: малый радиус 600 м — планетарный ма�
 });
 
 
-test('Stage-8.4: первые четыре кольца без радиальных и угловых ступенек Patch7', () => {
+test('Stage-8.4: первые четыре кольца без радиальных и угловых ступенек Patch7', async () => {
   // Контрастные соседи выявляют скачок nearestPatchCell даже без макро-решётки.
   const patch = structuredClone(dryPatch);
   patch.cells.forEach((cell, i) => {
@@ -1560,7 +1560,7 @@ test('Stage-8.4: первые четыре кольца без радиальн�
     cell.lakeWeight = 0;
   });
   const radiusM = 600;
-  const skirt = Worker.generateHorizonSkirt({
+  const skirt = await Worker.generateHorizonSkirt({
     patch, radiusM, seed: 12345, placeId: 7, patchKey: 'stage84-contrast',
   });
   const uniformPatch = structuredClone(patch);
@@ -1568,7 +1568,7 @@ test('Stage-8.4: первые четыре кольца без радиальн�
     cell.elevation = uniformPatch.seaLevel + 0.15;
     cell.filledElevation = cell.elevation;
   });
-  const uniform = Worker.generateHorizonSkirt({
+  const uniform = await Worker.generateHorizonSkirt({
     patch: uniformPatch, radiusM, seed: 12345, placeId: 7, patchKey: 'stage84-uniform',
   });
   // Вычитаем одинаковые fBm и горные гребни: проверяем именно якорь Patch7,
@@ -1596,7 +1596,7 @@ test('Stage-8.4: первые четыре кольца без радиальн�
 // 6. Stage-8.5: явный водный маркер terraform_map — ложная вода исключена
 // ---------------------------------------------------------------------------
 
-test('Stage-8.5: terraform_map кодирует воду нулём, а сушу байтом >= 2 (нет ложной воды)', () => {
+test('Stage-8.5: terraform_map кодирует воду нулём, а сушу байтом >= 2 (нет ложной воды)', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   assert.ok(waterPatch, 'нужен полностью водный патч');
   assert.equal(Worker.TERRAFORM_LAND_MIN, 2, 'минимальная подложка суши — 2');
@@ -1619,7 +1619,7 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   for (const scaleKm of [10, 60, 600, 1250]) {
     const radiusM = Math.max(600, (scaleKm * 1000) / 2);
     Worker.clearLocalMapCache();
-    const dry = Worker.generateLocalMap(
+    const dry = await Worker.generateLocalMap(
       requestFor(dryPatch, { radiusM, patchKey: `stage85-dry-${scaleKm}` }),
     );
     assert.equal(dry.terraformMap.length, Worker.TERRAFORM_RES * Worker.TERRAFORM_RES);
@@ -1640,7 +1640,7 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
 
   // 3. Полностью водный патч: каждый тексель — явный маркер воды 0.
   Worker.clearLocalMapCache();
-  const water = Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'stage85-water' }));
+  const water = await Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'stage85-water' }));
   assert.equal(water.meta.waterFraction, 1, 'водный патч целиком под водой');
   for (let i = 0; i < water.terraformMap.length; i++) {
     assert.equal(water.terraformMap[i], 0, `водный тексель ${i} terraform_map равен 0`);
@@ -1650,7 +1650,7 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   //    «Корхал IV»): водное зеркало несёт маркер 0, а не «нулевую альфу суши».
   const lakePatch = buildContinentalLakePatch(dryPatch);
   Worker.clearLocalMapCache();
-  const lake = Worker.generateLocalMap({
+  const lake = await Worker.generateLocalMap({
     patch: lakePatch,
     seed: 12345,
     placeId: 7,
@@ -1667,7 +1667,7 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   //    суша сухих соседей — >= 2, промежуточных значений нет.
   Worker.clearLocalMapCache();
   const lakeWideRadiusM = 625000;
-  const lakeWide = Worker.generateLocalMap({
+  const lakeWide = await Worker.generateLocalMap({
     patch: lakePatch,
     seed: 12345,
     placeId: 7,
@@ -1711,11 +1711,11 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   //    TERRAFORM_LAND_MIN, поэтому в точках без терраформинга heightfield
   //    совпадает с природным даже при полностью разрешающей маске спавна.
   Worker.clearLocalMapCache();
-  const strict = Worker.generateLocalMap(
+  const strict = await Worker.generateLocalMap(
     requestFor(dryPatch, { spawnRule: STRICT_RULE, patchKey: 'stage85-alpha-strict' }),
   );
   Worker.clearLocalMapCache();
-  const mixed = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'stage85-alpha-mixed' }));
+  const mixed = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'stage85-alpha-mixed' }));
   const cornerIdx = 3 * HF_RES + 3;   // гауссов профиль здесь уже на подложке 2
   assert.equal(mixed.terraformMap[cornerIdx], Worker.TERRAFORM_LAND_MIN, 'угловой тексель — подложка 2');
   assert.ok(
@@ -1735,7 +1735,7 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   Worker.clearLocalMapCache();
 });
 
-test('Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах', () => {
+test('Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах', async () => {
   // Фикстуры: геометрия канонического патча v=16 (dryPatch) сохраняется, а
   // высоты ячеек задаются детерминированно; русло снято, чтобы инварианты И-3
   // держались и рельеф юбки определялся только географией ячеек.
@@ -1761,14 +1761,14 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   };
 
   const outerRing = SKIRT_RADIAL_COUNT - 1;
-  const ringOf = (label, patch, radiusM, profile, ring) => {
+  const ringOf = async (label, patch, radiusM, profile, ring) => {
     Worker.clearLocalMapCache();
     const request = {
       patch, radiusM, seed: 12345, placeId: 7, patchKey: label,
       ...(profile ? { profile } : {}),
     };
-    const local = Worker.generateLocalMap(request);
-    const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+    const local = await Worker.generateLocalMap(request);
+    const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
     const heights = [];
     for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) heights.push(skirtVertex(skirt, i, ring)[2]);
     return { skirt, heights, radiusM };
@@ -1798,7 +1798,7 @@ test('Stage-8.5: юбка без кругового вала — гребни т
     true,
     `фикстура равнины валидна по И-3: ${JSON.stringify(Contract.verifyPatchInvariants(plainPatch).checks)}`,
   );
-  const plainRange = rangeOf(ringOf('stage85-skirt-plain', plainPatch, 600, null, outerRing).heights);
+  const plainRange = rangeOf((await ringOf('stage85-skirt-plain', plainPatch, 600, null, outerRing)).heights);
   assert.ok(
     plainRange < Worker.LAND_FBM_AMPLITUDE_M,
     `вокруг равнинного гекса нет кругового вала: размах ${plainRange.toFixed(0)} м < ${Worker.LAND_FBM_AMPLITUDE_M} м (один fBm)`,
@@ -1808,7 +1808,7 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   //    там, где возвышенность направления настоящая, а не «вокруг гекса».
   const upliftPatch = variantPatch([0.40, 0.55]);
   assert.equal(Contract.verifyPatchInvariants(upliftPatch).ok, true, 'фикстура поднятого рельефа валидна');
-  const upliftRange = rangeOf(ringOf('stage85-skirt-uplift', upliftPatch, 600, null, outerRing).heights);
+  const upliftRange = rangeOf((await ringOf('stage85-skirt-uplift', upliftPatch, 600, null, outerRing)).heights);
   assert.ok(
     upliftRange > plainRange + 80,
     `на поднятом направлении гребни растут: ${upliftRange.toFixed(0)} м против ${plainRange.toFixed(0)} м у равнины`,
@@ -1816,8 +1816,8 @@ test('Stage-8.5: юбка без кругового вала — гребни т
 
   // 3. peakAmpM больше не масштабируется визуальным radiusPatchM: одно и то же
   //    кольцо юбки одного патча даёт сопоставимый размах и на 600 м, и на 30 км.
-  const smallRing = ringOf('stage85-skirt-small', dryPatch, 600, PROFILE, outerRing);
-  const bigRing = ringOf('stage85-skirt-big', dryPatch, 30000, PROFILE, outerRing);
+  const smallRing = await ringOf('stage85-skirt-small', dryPatch, 600, PROFILE, outerRing);
+  const bigRing = await ringOf('stage85-skirt-big', dryPatch, 30000, PROFILE, outerRing);
   const smallRange = rangeOf(smallRing.heights);
   const bigRange = rangeOf(bigRing.heights);
   assert.ok(
@@ -1833,7 +1833,7 @@ test('Stage-8.5: юбка без кругового вала — гребни т
     `на внешнем кольце есть открытый равнинный сектор ${smallPlainDeg.toFixed(0)}° >= 30°`,
   );
   const midRingIndex = 46;
-  const midRing = ringOf('stage85-skirt-mid', dryPatch, 600, PROFILE, midRingIndex);
+  const midRing = await ringOf('stage85-skirt-mid', dryPatch, 600, PROFILE, midRingIndex);
   const midRadiusM = skirtRadiusAt(midRing.skirt, 0, midRingIndex);
   assert.ok(
     midRadiusM > 3 * 600 && midRadiusM < 4.5 * 600,
@@ -1849,13 +1849,13 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   //    масштабах побеждает `patch.frame.radiusM`, на крупнейших остаётся
   //    нижняя граница 3.6·R_outer (иначе R_outer > R_planet и сферическое
   //    проседание в касательной плоскости вырождается).
-  const skirtAt = (label, radiusM) => {
+  const skirtAt = async (label, radiusM) => {
     Worker.clearLocalMapCache();
     const request = requestFor(dryPatch, { radiusM, patchKey: label });
-    const local = Worker.generateLocalMap(request);
-    return Worker.generateHorizonSkirt(request, local.heightfield);
+    const local = await Worker.generateLocalMap(request);
+    return await Worker.generateHorizonSkirt(request, local.heightfield);
   };
-  const microSkirt = skirtAt('stage85-radius-micro', 5000);
+  const microSkirt = await skirtAt('stage85-radius-micro', 5000);
   assert.ok(
     Math.abs(microSkirt.planetRadiusM - dryPatch.frame.radiusM) < 1e-6,
     `на масштабе 10 км R_planet = frame.radiusM (${microSkirt.planetRadiusM} м)`,
@@ -1865,7 +1865,7 @@ test('Stage-8.5: юбка без кругового вала — гребни т
     microDropM < 1000,
     `кривизна настоящей планеты плавная: Δz на масштабе 10 км = ${(microDropM / 1000).toFixed(2)} км < 1 км`,
   );
-  const wideSkirt = skirtAt('stage85-radius-wide', 625000);
+  const wideSkirt = await skirtAt('stage85-radius-wide', 625000);
   assert.ok(
     Math.abs(wideSkirt.planetRadiusM - 3.6 * wideSkirt.outerRadiusM) < 1e-3,
     `на масштабе 1250 км действует нижняя граница 3.6·R_outer (${wideSkirt.planetRadiusM} м)`,
@@ -1874,7 +1874,7 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   Worker.clearLocalMapCache();
 });
 
-test('Stage-8.5: базовая высота суши интерполируется по Patch7 гладко, без рёбер Вороного', () => {
+test('Stage-8.5: базовая высота суши интерполируется по Patch7 гладко, без рёбер Вороного', async () => {
   const maxGridStep = (heightfield) => {
     let maxStep = 0;
     for (let y = 0; y < HF_RES; y++) {
@@ -1897,7 +1897,7 @@ test('Stage-8.5: базовая высота суши интерполирует
   for (const radiusM of [30000, 156000, 312500, 625000]) {
     for (const withProfile of [false, true]) {
       Worker.clearLocalMapCache();
-      const local = Worker.generateLocalMap(requestFor(dryPatch, {
+      const local = await Worker.generateLocalMap(requestFor(dryPatch, {
         radiusM,
         patchKey: `stage85-smooth-${radiusM}-${withProfile ? 'p' : 'n'}`,
         ...(withProfile ? { profile: PROFILE } : {}),
@@ -1917,7 +1917,7 @@ test('Stage-8.5: базовая высота суши интерполирует
   // Гладкость не куплена уплощением: на крупном масштабе реальный перепад
   // высот между ячейками Patch7 обязан оставаться в heightfield.
   Worker.clearLocalMapCache();
-  const wide = Worker.generateLocalMap(requestFor(dryPatch, {
+  const wide = await Worker.generateLocalMap(requestFor(dryPatch, {
     radiusM: 625000, patchKey: 'stage85-smooth-wide',
   }));
   const reliefM = wide.meta.maxHeightM - wide.meta.minHeightM;
@@ -2019,16 +2019,16 @@ function slotRayIndices(slot) {
   );
 }
 
-test('Stage-8.5.1: морской патч — рельеф прибрежной суши юбки и ровное зеркало воротника', () => {
+test('Stage-8.5.1: морской патч — рельеф прибрежной суши юбки и ровное зеркало воротника', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   const coastalSeaPatch = buildCoastalSeaPatch(waterPatch);
   assert.equal(Contract.verifyPatchInvariants(coastalSeaPatch).ok, true, 'прибрежная фикстура валидна по И-3');
   const radiusM = 600;
   Worker.clearLocalMapCache();
   const request = requestFor(coastalSeaPatch, { radiusM, patchKey: 'stage851-coastal-sea', profile: PROFILE });
-  const local = Worker.generateLocalMap(request);
+  const local = await Worker.generateLocalMap(request);
   assert.equal(local.meta.waterFraction, 1, 'в малом активном гексе центр — океан');
-  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
 
   // 1. Воротник центрального океана точно продолжает seaLevel независимо от
   // того, какой сосед начинает вступать в силу сразу за ним.
@@ -2086,23 +2086,23 @@ test('Stage-8.5.1: морской патч — рельеф прибрежной
 // 9. Stage-8.6: синхронизация соседних ячеек и водный маркер русла
 // ---------------------------------------------------------------------------
 
-test('Stage-8.6: синхронизация соседних ячеек (суша ↔ океан) и водный маркер речного русла', () => {
+test('Stage-8.6: синхронизация соседних ячеек (суша ↔ океан) и водный маркер речного русла', async () => {
   assert.ok(waterPatch, 'нужен Patch7 для прибрежной пары');
   assert.ok(riverPatch, 'нужен Patch7 с руслом');
   const radiusM = 600;
   const coastalSeaPatch = buildCoastalSeaPatch(waterPatch);
   const coastalLandPatch = buildCoastalLandPatch(waterPatch);
 
-  const build = (patch, patchKey) => {
+  const build = async (patch, patchKey) => {
     Worker.clearLocalMapCache();
     const request = requestFor(patch, { radiusM, patchKey });
-    const local = Worker.generateLocalMap(request);
-    return Worker.generateHorizonSkirt(request, local.heightfield);
+    const local = await Worker.generateLocalMap(request);
+    return await Worker.generateHorizonSkirt(request, local.heightfield);
   };
 
   // С океанской ячейки луч в сторону сухого соседа поднимается настоящей
   // сушей, а с сухой ячейки луч к океану опускается ниже seaLevel.
-  const seaSkirt = build(coastalSeaPatch, 'stage86-ocean-to-land');
+  const seaSkirt = await build(coastalSeaPatch, 'stage86-ocean-to-land');
   const seaLandSlot = Worker.mapNeighborCellsToSlots(coastalSeaPatch)
     .findIndex((cell) => cell.elevation > coastalSeaPatch.seaLevel);
   assert.ok(seaLandSlot >= 0, 'у океанского центра есть сухопутный сосед');
@@ -2113,7 +2113,7 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
   )[2];
   assert.ok(seaToLandZ > 15, `океан → суша поднимается выше 15 м (${seaToLandZ.toFixed(1)} м)`);
 
-  const landSkirt = build(coastalLandPatch, 'stage86-land-to-ocean');
+  const landSkirt = await build(coastalLandPatch, 'stage86-land-to-ocean');
   const landOceanSlot = Worker.mapNeighborCellsToSlots(coastalLandPatch)
     .findIndex((cell) => cell.elevation < coastalLandPatch.seaLevel && cell.lakeWeight === 0);
   assert.ok(landOceanSlot >= 0, 'у сухопутного центра есть океанский сосед');
@@ -2128,7 +2128,7 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
   // а не только уменьшенной высотой. Реальный spawnMask потребляет этот же
   // запрет: ни один инстанс не может попасть в тексель стрежня.
   Worker.clearLocalMapCache();
-  const river = Worker.generateLocalMap(requestFor(riverPatch, { patchKey: 'stage86-river-marker' }));
+  const river = await Worker.generateLocalMap(requestFor(riverPatch, { patchKey: 'stage86-river-marker' }));
   const waterCore = [];
   let raisedWaterCore = 0;
   for (let idx = 0; idx < river.terraformMap.length; idx++) {
@@ -2154,7 +2154,7 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
 // Stage-8.7: кольца соседних областей вокруг активного гекса (worker 1 из 5)
 // ---------------------------------------------------------------------------
 
-test('Stage-8.7: contract ringCells — состав, нет дубликатов, hfRes монотонно убывает', () => {
+test('Stage-8.7: contract ringCells — состав, нет дубликатов, hfRes монотонно убывает', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   assert.equal(Worker.RING_LEVELS, 5);
   assert.equal(Worker.MAX_RING_CELLS, 91);
@@ -2165,7 +2165,7 @@ test('Stage-8.7: contract ringCells — состав, нет дубликато�
     assert.ok(res[i] < res[i - 1], `RING_HF_RES[${i}] < RING_HF_RES[${i - 1}]`);
   }
   Worker.clearLocalMapCache();
-  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+  const response = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-contract', profile: PROFILE, neighborRings: 5,
   }));
   assert.ok(response.ringCells, 'ringCells при neighborRings=5');
@@ -2197,10 +2197,10 @@ test('Stage-8.7: contract ringCells — состав, нет дубликато�
   assert.equal(seen.size, 90);
 });
 
-test('Stage-8.7: ring-1 точность — центры и смещения совпадают с 6 соседями Patch7', () => {
+test('Stage-8.7: ring-1 точность — центры и смещения совпадают с 6 соседями Patch7', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+  const response = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-ring1', profile: PROFILE, neighborRings: 1,
   }));
   assert.equal(response.ringCells.length, 6);
@@ -2220,14 +2220,14 @@ test('Stage-8.7: ring-1 точность — центры и смещения с
   }
 });
 
-test('Stage-8.7: детерминированность — два вызова дают побайтово одинаковые ringCells', () => {
+test('Stage-8.7: детерминированность — два вызова дают побайтово одинаковые ringCells', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const a = Worker.generateLocalMap(requestFor(dryPatch, {
+  const a = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-det-a', profile: PROFILE, neighborRings: 5,
   }));
   Worker.clearLocalMapCache();
-  const b = Worker.generateLocalMap(requestFor(dryPatch, {
+  const b = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-det-b', profile: PROFILE, neighborRings: 5,
   }));
   assert.equal(a.ringCells.length, b.ringCells.length);
@@ -2242,10 +2242,10 @@ test('Stage-8.7: детерминированность — два вызова 
   }
 });
 
-test('Stage-8.7: бюджет — ringGenMs <= 20 мс, ring-буферы <= 512 КБ', () => {
+test('Stage-8.7: бюджет — ringGenMs <= 20 мс, ring-буферы <= 512 КБ', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+  const response = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-budget', profile: PROFILE, neighborRings: 5,
   }));
   assert.ok(response.meta.ringGenMs >= 0 && response.meta.ringGenMs <= 20,
@@ -2257,10 +2257,10 @@ test('Stage-8.7: бюджет — ringGenMs <= 20 мс, ring-буферы <= 512
   assert.ok(bytes <= 512 * 1024, `ring-буферы: ${(bytes / 1024).toFixed(1)} КБ <= 512 КБ`);
 });
 
-test('Stage-8.7: waterMask — 1 там, где heightfield ниже seaLevel', () => {
+test('Stage-8.7: waterMask — 1 там, где heightfield ниже seaLevel', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+  const response = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-water', profile: PROFILE, neighborRings: 5,
   }));
   for (const cell of response.ringCells) {
@@ -2271,14 +2271,14 @@ test('Stage-8.7: waterMask — 1 там, где heightfield ниже seaLevel', 
   }
 });
 
-test('Stage-8.7: neighborRings=0 — основной ответ побайтово совпадает с ringCells=5 (И-3.3)', () => {
+test('Stage-8.7: neighborRings=0 — основной ответ побайтово совпадает с ringCells=5 (И-3.3)', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const a = Worker.generateLocalMap(requestFor(dryPatch, {
+  const a = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-eq-a', profile: PROFILE, neighborRings: 0,
   }));
   Worker.clearLocalMapCache();
-  const b = Worker.generateLocalMap(requestFor(dryPatch, {
+  const b = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-eq-b', profile: PROFILE, neighborRings: 5,
   }));
   assert.equal(a.ringCells, undefined, 'rings=0 не имеет ringCells');
@@ -2298,16 +2298,16 @@ test('Stage-8.7: neighborRings=0 — основной ответ побайто�
   }
 });
 
-test('Stage-8.7: кэш и clone — fingerprint включает neighborRings, ringCells клонируются', () => {
+test('Stage-8.7: кэш и clone — fingerprint включает neighborRings, ringCells клонируются', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   // fingerprint включает neighborRings: rings=5 и rings=0 с тем же patchKey
   // не должны делить записи кэша.
   Worker.clearLocalMapCache();
-  const withRings = Worker.generateLocalMap(requestFor(dryPatch, {
+  const withRings = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-cache', profile: PROFILE, neighborRings: 5,
   }));
   assert.ok(withRings.ringCells, 'rings=5 имеет ringCells');
-  const withoutRings = Worker.generateLocalMap(requestFor(dryPatch, {
+  const withoutRings = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-cache', profile: PROFILE, neighborRings: 0,
   }));
   assert.equal(withoutRings.ringCells, undefined, 'rings=0 не читает ringCells из кэша rings=5');
@@ -2328,13 +2328,141 @@ test('Stage-8.7: кэш и clone — fingerprint включает neighborRings,
     'transferables включают 2 буфера на каждую ячейку кольца');
 });
 
-test('Stage-8.7: без профиля ringCells отсутствуют (нет 3D-сэмпера)', () => {
+test('Stage-8.7: без профиля ringCells отсутствуют (нет 3D-сэмпера)', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
-  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+  const response = await Worker.generateLocalMap(requestFor(dryPatch, {
     patchKey: 'stage87-noprofile', neighborRings: 5,
   }));
   assert.equal(response.ringCells, undefined);
   assert.equal(response.meta.ringCellCount, undefined);
   assert.equal(response.meta.ringGenMs, undefined);
+});
+
+/* ---------------------------------------------------------------
+   Stage-8.10b (A-12b): разрыв цепочки локальной карты
+   -------------------------------------------------------------
+   Ядро (planet-core / planet-geography) больше не статически
+   импортируется главным потоком страницы: генерация грузится
+   ленивым чанком через динамический import(). Побайтовая
+   эквивалентность generateLocalMap / generateHorizonSkirt — через
+   golden-хэш фиксированного профиля и ячейки (проверено против
+   сборки до правки A-12b, machine-noise исключена: genMs/ringGenMs).
+   --------------------------------------------------------------- */
+
+/** Детерминированный SHA-256 по всем буферам ответа и юбке (без timing). */
+function goldenDigestOf(local, skirt) {
+  const hash = createHash('sha256');
+  const writeBytes = (label, view) => {
+    hash.update(label);
+    hash.update(Buffer.from(view.buffer, view.byteOffset, view.byteLength));
+  };
+  const writeJson = (label, value) => {
+    hash.update(label);
+    hash.update(JSON.stringify(value));
+  };
+  writeBytes('heightfield', local.heightfield);
+  writeBytes('zoneMap', local.zoneMap);
+  writeBytes('terraformMap', local.terraformMap);
+  for (const key of Object.keys(local.instanceBuffers).sort()) {
+    const pack = local.instanceBuffers[key];
+    if (!pack) continue;
+    writeBytes('instance:' + key, pack.buffer);
+    writeJson('instance-count:' + key, pack.count);
+  }
+  if (local.ringCells) {
+    for (const cell of local.ringCells) {
+      writeJson('ring-meta', [cell.cell, cell.ring, cell.center, cell.offsetM, cell.hfRes, cell.minHeightM, cell.maxHeightM]);
+      writeBytes('ring-hf:' + cell.cell, cell.heightfield);
+      writeBytes('ring-water:' + cell.cell, cell.waterMask);
+    }
+  }
+  const meta = { ...local.meta };
+  delete meta.genMs;
+  delete meta.ringGenMs;
+  writeJson('meta', meta);
+  writeBytes('skirt-positions', skirt.positions);
+  writeBytes('skirt-normals', skirt.normals);
+  writeBytes('skirt-indices', skirt.indices);
+  writeJson('skirt-scalars', [
+    skirt.innerRadiusM, skirt.outerRadiusM, skirt.planetRadiusM, skirt.hexSpacingM, skirt.ringCount,
+  ]);
+  return hash.digest('hex');
+}
+
+test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)', async () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const request = requestFor(dryPatch, {
+    patchKey: 'golden-eq',
+    profile: PROFILE,
+    neighborRings: 2,
+  });
+  const local = await Worker.generateLocalMap(request);
+  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+  assert.equal(
+    goldenDigestOf(local, skirt),
+    'c2bffd4ecb77754049db610012405e449dce79521458046e7718817bfc84d771',
+    'генерация локальной карты побайтово эквивалентна таковой до правки A-12b',
+  );
+});
+
+test('Stage-8.10b: ленивый чанк выставляет API глобуса и генерирует golden-ответ', async () => {
+  await import('../site/planet-globe/local-map-worker-lazy.ts');
+  const loaded = globalThis.LocalMapWorkerLazyModule;
+  assert.ok(loaded, 'чанк обязан выставить globalThis.LocalMapWorkerLazyModule');
+  assert.equal(typeof loaded?.generateLocalMap, 'function');
+  assert.equal(typeof loaded?.generateHorizonSkirt, 'function');
+  Worker.clearLocalMapCache();
+  const request = requestFor(dryPatch, {
+    patchKey: 'golden-eq',
+    profile: PROFILE,
+    neighborRings: 2,
+  });
+  const local = await loaded.generateLocalMap(request);
+  const skirt = await loaded.generateHorizonSkirt(request, local.heightfield);
+  assert.equal(
+    goldenDigestOf(local, skirt),
+    'c2bffd4ecb77754049db610012405e449dce79521458046e7718817bfc84d771',
+    'генерация через ленивый чанк побайтово совпадает с golden-хэшем',
+  );
+});
+
+test('Stage-8.10b: загрузчик страницы кэширует промис модуля — динамический import() ровно один', () => {
+  const page = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
+  // Кэш-переменная модуля: повторный Dive-in не вызывает новый import().
+  assert.match(
+    page,
+    /let localMapWorkerModulePromise: Promise<LocalMapWorkerLazyModule> \| null = null;/,
+    'загрузчик хранит промис модуля в переменной модуля',
+  );
+  assert.match(
+    page,
+    /localMapWorkerModulePromise \?\?= import\('\.\/local-map-worker-lazy\.js'\)/,
+    'промис кэшируется через ??= — импорт выполняется ровно один раз',
+  );
+  // Счётчик вызовов динамического import: ровно одна статическая запись.
+  const dynamicImports = page.match(/import\('\.\/local-map-worker-lazy\.js'\)/g) ?? [];
+  assert.equal(dynamicImports.length, 1, 'динамический import() чанка встречается ровно один раз');
+  // Точка :1917 стала асинхронной и ждёт загрузчик; guard после каждого await.
+  assert.match(page, /async function renderLocalMapFromPatch/);
+  assert.match(page, /localMapWorker = await loadLocalMapWorkerModule\(\)/);
+  const guardsAfterAwait = page.match(/if \(requestId !== localMapEntrySeq\) return;/g) ?? [];
+  assert.ok(guardsAfterAwait.length >= 3, 'guard по localMapEntrySeq стоит после каждого await');
+  // Ошибка загрузки чанка сообщается через setLocalMapStatus.
+  assert.match(page, /setLocalMapStatus\(\s*'Не удалось загрузить модуль локальной карты: '/);
+  // Чистые хелперы — из local-map-geometry.ts, а не через модуль генерации.
+  assert.match(
+    page,
+    /import \{ mapNeighborCellsToSlots, planetCurvatureDropM \} from '\.\.\/\.\.\/src\/local-map\/local-map-geometry\.ts';/,
+  );
+  // В странице не осталось value-import из local-map-worker.ts (только типы).
+  const workerImportBlocks = page.match(/import [^;]*from '[^']*local-map-worker\.ts';/g) ?? [];
+  assert.ok(workerImportBlocks.length > 0, 'страница импортирует типы wire-протокола из local-map-worker.ts');
+  for (const block of workerImportBlocks) {
+    assert.ok(
+      /^import type /.test(block.trim()),
+      `страница не должна value-импортировать local-map-worker.ts: ${block.trim()}`,
+    );
+  }
 });

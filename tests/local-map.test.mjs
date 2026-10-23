@@ -11,6 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
@@ -39,7 +40,9 @@ const grid = GeodesicGrid.build(V);
 const surface = PlanetSurface.generateSurface(grid, INPUT);
 // Сэмплер опрашивает БАЗОВЫЕ поля c100-soft-v1 (E/M/T/P/V/D/W): поверхность
 // c100-soft-v2 строится поверх них, и глобус использует тот же сэмплер.
-const sampler = LocalMapContract.createPatchFieldSampler({ ...INPUT, geographyVersion: 'c100-soft-v1' });
+// Stage-8.10b (A-12b): сэмплер поднимает полное ядро через ленивый
+// динамический импорт — создание ассинхронно, await на верхнем уровне ESM.
+const sampler = await LocalMapContract.createPatchFieldSampler({ ...INPUT, geographyVersion: 'c100-soft-v1' });
 
 function isHex(cell) {
   return grid.neighborCount[cell] === 6;
@@ -285,4 +288,55 @@ test('verifyPatchInvariants: все проверки И-3 зелёные на р
       assert.equal(report.checks[key], true, `проверка ${key}`);
     }
   }
+});
+
+/* ---------------------------------------------------------------
+   Stage-8.10b (A-12b): разрыв цепочки ядра в контракте
+   -------------------------------------------------------------
+   Контракт больше не value-импортирует planet-geography на верхнем
+   уровне: константы взяты из planet-geography-constants.ts (без ядра),
+   а полное ядро поднимается лениво через динамический import() внутри
+   createPatchFieldSampler. planet-geography по-прежнему отдаёт
+   константы через объект — внешние импорты не ломаются.
+   --------------------------------------------------------------- */
+
+test('Stage-8.10b: контракт не тащит ядро на верхнем уровне, константы — из constants-модуля', async () => {
+  const contract = readFileSync(
+    new URL('../src/local-map/local-map-contract.ts', import.meta.url),
+    'utf8',
+  );
+  assert.ok(
+    !/^import PlanetGeography from '.*planet-geography\.ts';$/m.test(contract),
+    'в контракте не должно быть value-импорта PlanetGeography на верхнем уровне',
+  );
+  assert.match(
+    contract,
+    /import \{ EARTH_CANONICAL_V, GEOGRAPHY_VERSION \} from '.*planet-geography-constants\.ts';/,
+    'константы берутся из planet-geography-constants.ts',
+  );
+  assert.match(
+    contract,
+    /export async function createPatchFieldSampler/,
+    'createPatchFieldSampler ассинхронный (ленивый динамический импорт ядра)',
+  );
+  assert.match(
+    contract,
+    /import\('\.\.\/\.\.\/site\/shared\/planet-geography\.ts'\)/,
+    'ядро поднимается динамическим импортом внутри createPatchFieldSampler',
+  );
+
+  const constants = require('../site/shared/planet-geography-constants.ts');
+  assert.equal(constants.EARTH_CANONICAL_V, 128);
+  assert.equal(constants.GEOGRAPHY_VERSION, 'c100-soft-v1');
+
+  const PlanetGeography = require('../site/shared/planet-geography.ts').default;
+  assert.equal(PlanetGeography.EARTH_CANONICAL_V, 128, 'объект по-прежнему отдаёт EARTH_CANONICAL_V');
+  assert.equal(PlanetGeography.GEOGRAPHY_VERSION, 'c100-soft-v1', 'объект по-прежнему отдаёт GEOGRAPHY_VERSION');
+
+  // Сэмплер через контракт даёт тот же результат (побитово — golden-тест в stage8).
+  const sampler = await LocalMapContract.createPatchFieldSampler({ ...INPUT, geographyVersion: 'c100-soft-v1' });
+  const probe = [0.31, -0.52, 0.79];
+  const fields = sampler.sampleFields(probe[0], probe[1], probe[2]);
+  assert.equal(fields.length, 6, 'сэмплер отдаёт 6 каналов');
+  assert.ok(fields.every((value) => Number.isFinite(value)), 'сэмплер даёт конечные значения');
 });

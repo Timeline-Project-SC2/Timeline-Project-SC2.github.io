@@ -205,6 +205,12 @@ for (const fullPath of walk(publishRoot)) {
       checkPublishedScriptReference(argMatch[2], publishPath, 'importScripts()');
     }
   }
+  // Stage-8.10b (A-12b): динамические import() на статические записи —
+  // ленивые чанки (например local-map-worker-lazy) обязаны вести на
+  // существующие hashed JS-файлы публикации.
+  for (const match of text.matchAll(/\bimport\(\s*(['"])([^'"]+)\1\s*\)/g)) {
+    checkPublishedScriptReference(match[2], publishPath, 'dynamic import()');
+  }
 }
 
 for (const fullPath of walk(publishRoot)) {

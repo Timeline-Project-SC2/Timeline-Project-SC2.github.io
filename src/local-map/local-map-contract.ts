@@ -25,15 +25,15 @@
    Контракт чистый (без побочных эффектов) и исполняется одинаково в
    воркере, в браузере и в Node-тесте tests/local-map.test.mjs. */
 
-import PlanetGeography from '../../site/shared/planet-geography.ts';
-import type { FieldSampler, GeographyProfileInput } from '../../site/shared/planet-geography.ts';
+import type { FieldSampler, GeographyProfileInput, PlanetGeographyApi } from '../../site/shared/planet-geography.ts';
 import type { PlanetGrid } from '../../site/shared/geodesic-grid.ts';
 import type { SurfaceResult } from '../../site/shared/planet-surface.ts';
+import { EARTH_CANONICAL_V, GEOGRAPHY_VERSION } from '../../site/shared/planet-geography-constants.ts';
 
 export const LOCAL_MAP_PATCH_VERSION = 'local-map-patch-v1';
 
 /** Каноническая частота сетки Земли (И-1): адресация только на canonicalV. */
-export const EARTH_CANONICAL_V = PlanetGeography.EARTH_CANONICAL_V;
+export { EARTH_CANONICAL_V };
 
 /** Раскладка каналов sampleFields (совпадает с ядром sampleFieldsBatch). */
 export const FIELD_CHANNELS = [
@@ -131,16 +131,34 @@ export interface FieldSampler3D {
 
 const SURFACE_GEOGRAPHY_VERSION = 'c100-soft-v2';
 
-export function createPatchFieldSampler(input: GeographyProfileInput): FieldSampler {
+/**
+ * Stage-8.10b (A-12b): полное Wasm-ядро (planet-geography → planet-core)
+ * поднимается лениво — только при первом вызове сэмплера. Импорт
+ * planet-geography убран с верхнего уровня модуля: динамический import()
+ * внутри функции не тащит байты ядра в чанки, которые вызывают
+ * createPatchFieldSampler только через этот путь (главный поток страницы —
+ * среди них: генерация локальной карты грузится отдельным чанком).
+ */
+let planetGeographyPromise: Promise<PlanetGeographyApi> | null = null;
+
+function planetGeographyModule(): Promise<PlanetGeographyApi> {
+  planetGeographyPromise ??= import('../../site/shared/planet-geography.ts').then(
+    (module) => module.default as PlanetGeographyApi,
+  );
+  return planetGeographyPromise;
+}
+
+export async function createPatchFieldSampler(input: GeographyProfileInput): Promise<FieldSampler> {
   // Профиль поверхности глобуса c100-soft-v2 — надстройка PlanetSurface поверх
   // базовой географии c100-soft-v1 (см. PlanetSurface.normalizeSurfaceProfile),
   // поэтому на поверхностной копии приводим версию к базовой.
+  const PlanetGeography = await planetGeographyModule();
   const src: GeographyProfileInput = { ...input };
   const requested = src.geographyVersion != null && src.geographyVersion !== ''
     ? src.geographyVersion
     : src.geography_version;
   if (requested === SURFACE_GEOGRAPHY_VERSION) {
-    src.geographyVersion = PlanetGeography.GEOGRAPHY_VERSION;
+    src.geographyVersion = GEOGRAPHY_VERSION;
   }
   // PlanetGeography.createFieldSampler внутри использует Wasm-батч
   // planet-core (sampleFieldsBatch) — единый движок И-2/И-3.
