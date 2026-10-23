@@ -90,7 +90,8 @@ function createLocalMapQuickNavShim(
   return null;
 }
 
-/** Stage-8: состояние плавной анимации локальной камеры (Dive-in / перелёт к соседу). */
+/** Stage-8: анимация локальной камеры (Dive-in, смена масштаба, сглаживание
+ *  остатка после ре-бейзинга). Stage-8.7: перелётов между гексами больше нет. */
 interface LocalCameraAnim {
   startAt: number;
   durationMs: number;
@@ -332,7 +333,7 @@ let localCameraTarget: [number, number, number] = [0, 0, 20];
 let localCameraAnim: LocalCameraAnim | null = null;
 let localSkirtData: HorizonSkirtData | null = null;
 /**
- * Ожидаемый перелёт к соседу: азимут действителен только для своей ячейки.
+ * Ожидаемый переход к соседу: азимут действителен только для своей ячейки.
  * Stage-8.7: снимок камеры на момент запроса больше НЕ нужен — подмена патча
  * атомарна, а ре-бейзинг берёт текущее состояние камеры, поэтому правки
  * пользователя во время догрузки (панорама, зум) не теряются.
@@ -2024,7 +2025,7 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
   //
   // Stage-8.5.1: плавный зум допустим ТОЛЬКО когда это действительно смена
   // масштаба на уже отрисованной ячейке. Пока идёт загрузка соседнего патча
-  // (`localPatchLoading`) или запланирован перелёт (`pendingNeighborFly`),
+  // (`localPatchLoading`) или запланирован переход (`pendingNeighborFly`),
   // `activePatchReady` ещё указывает на прежнюю ячейку — такой вызов обязан
   // идти полным путём `renderLocalMapFromPatch`, иначе переход по кнопкам
   // «СОСЕДИ PATCH7» и по клику на гексы 3D-сцены молча терялся.
@@ -2053,7 +2054,7 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
   }
 
   const shouldFlyToPatch = !localMapActive;
-  // Свежий Dive-in не должен подхватывать перелёт несостоявшегося соседнего запроса.
+  // Свежий Dive-in не должен подхватывать несостоявшийся переход к соседу.
   if (shouldFlyToPatch) {
     pendingNeighborFly = null;
     discardStagedLocalPatch();
