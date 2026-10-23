@@ -87,6 +87,13 @@ const LOCAL_REST_YAW = -0.65;
 const LOCAL_DIVE_REVEAL_DELAY_MS = 320;
 /** Stage-8.2: длительность фазы 2 — плавного спуска до уровня гекса. */
 const LOCAL_DIVE_ANIM_MS = 1150;
+/**
+ * Stage-8.5: фиксированный физический радиус генерируемого центрального участка
+ * (диаметр активного гекса ~4.5 км). 10 колец горизонта охватывают R_outer ≈ 28.75 км
+ * вокруг центра с плотной сеткой и нормальным размером домиков. Селектор «Видимая
+ * ширина» больше не растягивает меш, а управляет только дистанцией/наклоном камеры.
+ */
+const LOCAL_PATCH_BASE_RADIUS_M = 2500;
 
 interface LocalMapPrograms {
   terrainProgram: WebGLProgram;
@@ -254,7 +261,8 @@ let localMapGenerationMs = 0;
 let localMapBuildableFraction = 0;
 let localMapInstanceCount = 0;
 let localMapWidthKm = 1.2;
-let localMapRadiusM = 600;
+/** Stage-8.5: физический радиус центрального участка — стабильный, не зависит от селектора «Видимая ширина». */
+let localMapRadiusM = LOCAL_PATCH_BASE_RADIUS_M;
 let localMapHudLastAt = 0;
 let localMapCanvasEventsInstalled = false;
 let localCameraYaw = -0.65;
@@ -520,11 +528,39 @@ function resizeLocalMapCanvas(): void {
   }
 }
 
+/**
+ * Stage-8.5: дистанция камеры по выбранной видимой ширине `widthKm`.
+ * Физический размер участка фиксирован (LOCAL_PATCH_BASE_RADIUS_M), а селектор
+ * «Видимая ширина» задаёт только охват кадра камеры — от близкого вида у долины
+ * (1.2 км) до высотного тактического обзора всех 10 колец гексов.
+ */
+function cameraDistanceForWidthKm(widthKm: number): number {
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  const aspect = rect.height > 0 ? rect.width / rect.height : 1;
+  const fit = Math.max(0.45, Math.min(1, aspect || 1));
+  const clampedWidthM = clampLocal(widthKm * 1000, 800, localMapRadiusM * 22);
+  return Math.max(localMinCameraDistance(), (clampedWidthM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+}
+
+/**
+ * Stage-8.5: целевой наклон камеры по видимой ширине.
+ * На близких масштабах (1.2–5 км) камера смотрит вдоль долины на горный горизонт
+ * (LOCAL_REST_PITCH ≈ 0.31 рад), а на обзорных масштабах (≥39 км) плавно
+ * поднимается до высотного тактического обзора (0.68 рад) всех 10 колец.
+ */
+function cameraPitchForWidthKm(widthKm: number): number {
+  const restPitch = LOCAL_REST_PITCH;
+  const overviewPitch = 0.68;
+  // Линейная интерполяция между 5 км (restPitch) и 39 км (overviewPitch).
+  const t = clampLocal((widthKm - 5) / (39 - 5), 0, 1);
+  return restPitch + (overviewPitch - restPitch) * t;
+}
+
 function resetLocalCamera(): void {
   localCameraYaw = LOCAL_REST_YAW;
-  // Stage-8.3: панорамный наклон ~17.8° — верхние 28–35% кадра занимают горные
-  // вершины и облачный купол неба, нижние 65–72% — долина активного гекса.
-  localCameraPitch = LOCAL_REST_PITCH;
+  // Stage-8.5: наклон зависит от выбранной видимой ширины — плавно переходит
+  // от панорамного вида вдоль долины к высотному тактическому обзору.
+  localCameraPitch = cameraPitchForWidthKm(localMapWidthKm);
   const hf = localMapData?.heightfield;
   const res = Math.round(Math.sqrt(hf?.length || 0));
   const centerZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
@@ -536,12 +572,9 @@ function resetLocalCamera(): void {
     -Math.sin(localCameraYaw) * forwardOffset,
     (Number.isFinite(centerZ) ? centerZ : 0) + Math.max(14, localMapRadiusM * 0.025),
   ];
-  const rect = els.localMapCanvas.getBoundingClientRect();
-  const aspect = rect.height > 0 ? rect.width / rect.height : 1;
-  const fit = Math.max(0.45, Math.min(1, aspect || 1));
-  // Stage-8.3: рабочая дистанция сжимается на 40%, чтобы камера оказывалась
-  // внутри пространства активного гекса, а не висела снаружи над шестиугольником.
-  localCameraDistance = Math.max(2, (localMapRadiusM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+  // Stage-8.5: дистанция вычисляется через cameraDistanceForWidthKm() по
+  // выбранной видимой ширине localMapWidthKm (физический R гекса фиксирован).
+  localCameraDistance = cameraDistanceForWidthKm(localMapWidthKm);
 }
 
 function lerpLocal(a: number, b: number, t: number): number {
@@ -804,10 +837,10 @@ function localMinCameraDistance(): number {
 }
 
 /** Stage-8.2: верхний предел зума — отдаление выше сферического горизонта.
- *  Stage-8.4: поднят с 5.8·R до 7.5·R, чтобы окинуть взглядом все 3–4 ближних
- *  круга гексов и дальний 10-кольцевой горизонт расширенной прогрузки. */
+ *  Stage-8.5: поднят до 14·R, чтобы вместить все ступени обзора 10 колец
+ *  (максимальная дистанция cameraDistanceForWidthKm(1250 км) ≈ 13.75·R). */
 function localMaxCameraDistance(): number {
-  return localMapRadiusM * 7.5;
+  return localMapRadiusM * 14;
 }
 
 function currentLocalPinchDistance(): number {
@@ -1002,11 +1035,13 @@ function updateLocalMapHud(): void {
   const skirt = localSkirtData;
   if (skirt) {
     const horizonDropM = planetCurvatureDropM(skirt.planetRadiusM, skirt.outerRadiusM);
-    // Stage-8.4: число колец горизонта берётся из фактических данных юбки
+    // Stage-8.4/8.5: число колец горизонта берётся из фактических данных юбки
     // (R_outer / d_hex), а не хардкодится — HUD честен и при 6, и при 10 кольцах.
+    // Stage-8.5: в статусе также показана реальная видимая ширина камеры
+    // (селектор «Видимая ширина») и Δz в метрах сферического проседания.
     const ringsLabel = Math.round(skirt.outerRadiusM / Math.max(1, skirt.hexSpacingM));
     els.localFogStatus.textContent =
-      `${ringsLabel} колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (Δz ${fmtNum(horizonDropM / 1000, 2)} км)`;
+      `${ringsLabel} колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (обзор ${fmtNum(localMapWidthKm, 1)} км, Δz ${fmtNum(horizonDropM, 0)} м)`;
   } else {
     els.localFogStatus.textContent = 'активен · R ' + fmtInt(localMapRadiusM) + ' м';
   }
@@ -1167,12 +1202,15 @@ function renderLocalMapFromPatch(
   let localData: LocalMapWorkerResponse;
   let currentProfile: GeographyProfileInput | undefined;
   try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
-  // Единый запрос для детального участка и планетарной юбки 6 колец.
+  // Stage-8.5: физический радиус центрального участка жёстко фиксирован
+  // (LOCAL_PATCH_BASE_RADIUS_M = 2500 м) и больше не растягивается от селектора
+  // «Видимая ширина» — домики и рельеф всегда нормального размера, а селектор
+  // управляет только высотой/наклоном камеры.
   const mapRequest = {
     patch: patchReady.patch,
     seed: parseSeedUint32(els.seed.value),
     placeId: Number(selectedPlace?.ID || 2),
-    radiusM: Math.max(600, (scale * 1000) / 2),
+    radiusM: LOCAL_PATCH_BASE_RADIUS_M,
     patchKey: patchReady.keys.patchKey,
     ...(currentProfile ? { profile: currentProfile } : {}),
   };
@@ -1311,14 +1349,44 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
     return;
   }
   const scale = selectedLocalScale(Number(widthKm));
+  // Stage-8.5: физический радиус центрального участка стабилен
+  // (LOCAL_PATCH_BASE_RADIUS_M) и не зависит от селектора «Видимая ширина».
+  localMapRadiusM = LOCAL_PATCH_BASE_RADIUS_M;
+  els.localScale.value = String(scale);
+
+  // Stage-8.5: если локальная карта уже открыта для ТОЙ ЖЕ ячейки,
+  // не перегенерируем меш с гигантскими домами, а плавно переводим камеру
+  // на новую дистанцию/наклон (550 мс easeInOutCubic), обновляя URL и HUD.
+  if (localMapActive && activePatchReady &&
+      activePatchReady.hexCenterCell === patchReady.hexCenterCell) {
+    localMapWidthKm = scale;
+    const targetDistance = cameraDistanceForWidthKm(scale);
+    const targetPitch = cameraPitchForWidthKm(scale);
+    cancelLocalCameraAnim();
+    localCameraAnim = {
+      startAt: performance.now(),
+      durationMs: 550,
+      fromYaw: localCameraYaw,
+      toYaw: localCameraYaw,
+      fromPitch: localCameraPitch,
+      toPitch: targetPitch,
+      fromDist: localCameraDistance,
+      toDist: targetDistance,
+      fromTarget: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+      toTarget: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+      easeInOut: true,
+    };
+    updateLocalMapUrl(patchReady, scale);
+    updateLocalMapHud();
+    return;
+  }
+
   const shouldFlyToPatch = !localMapActive;
   // Свежий Dive-in не должен подхватывать перелёт несостоявшегося соседнего запроса.
   if (shouldFlyToPatch) pendingNeighborFly = null;
   const requestId = ++localMapEntrySeq;
   window.clearTimeout(localMapHideTimer);
   localMapWidthKm = scale;
-  localMapRadiusM = Math.max(600, (scale * 1000) / 2);
-  els.localScale.value = String(scale);
   setLocalMapStatus('Запускаю локальную генерацию и подлёт к центру Patch7…', 'info');
 
   // Подлёт и CPU-генерация стартуют на одном первом кадре Dive-in.
@@ -2186,8 +2254,13 @@ function initEvents(): void {
     }
   });
   els.localScale.addEventListener('change', () => {
+    const scale = Number(els.localScale.value);
+    // Stage-8.5: при изменении селектора «Видимая ширина» всегда запоминаем
+    // новое значение, а если локальная карта открыта — плавно переводим камеру
+    // (не перегенерируя меш, см. enterLocalMap с проверкой той же ячейки).
+    localMapWidthKm = selectedLocalScale(scale);
     const patch = lastPatchReady || activePatchReady;
-    if (patch && localMapActive) enterLocalMap(patch, Number(els.localScale.value));
+    if (patch && localMapActive) enterLocalMap(patch, scale);
   });
   els.resetLocalCam.addEventListener('click', resetLocalCamera);
   els.localNeighborNav.addEventListener('click', (event: MouseEvent) => {
