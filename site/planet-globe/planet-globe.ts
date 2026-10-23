@@ -118,9 +118,13 @@ const els = {
   localScale: must<HTMLSelectElement>('localScaleSel'),
   resetLocalCam: must<HTMLButtonElement>('resetLocalCamBtn'),
   localNeighborNav: must<HTMLElement>('localNeighborNav'),
+  placeSelect: must<HTMLSelectElement>('catalogPlaceSel'),
+  breadcrumbSystem: must<HTMLAnchorElement>('breadcrumbSystem'),
+  breadcrumbPlanet: must<HTMLElement>('breadcrumbPlanet'),
   breadcrumbPatchWrap: must<HTMLElement>('breadcrumbPatchWrap'),
   breadcrumbPatchSep: must<HTMLElement>('breadcrumbPatchSep'),
   breadcrumbPatch: must<HTMLElement>('breadcrumbPatch'),
+  backToSector: must<HTMLAnchorElement>('backToSectorBtn'),
   localGenMs: must<HTMLElement>('localGenMs'),
   localUploadProgress: must<HTMLProgressElement>('localUploadProgress'),
   localUploadLabel: must<HTMLElement>('localUploadLabel'),
@@ -185,14 +189,19 @@ let cycleTimer = 0;
 let cycleActive = false;
 let completedPlanets = 0;
 let generationHistory: HistoryEntry[] = [];
+const initialUrlParams = new URLSearchParams(window.location.search);
+const initialCellRaw = (initialUrlParams.get('cell') || '').trim();
 let placesCatalog: CsvRow[] = [];
 let systemsCatalog: CsvRow[] = [];
 let generationByPlaceId = new Map<string, CsvRow>();
 let selectedPlace: CsvRow | null = null;
-let pendingInitialCell: string | null = new URLSearchParams(window.location.search).get('cell');
+let pendingInitialCell: string | null = initialCellRaw || null;
+let selectedCellAddress: string | null = pendingInitialCell;
+let pendingInitialLocalView: boolean = Boolean(pendingInitialCell && initialUrlParams.get('view') === 'local');
 let globe: PlanetGlobeHandle | null = null;
 let webglAvailable = true;
 let lastPatchReady: WorkerPatchReadyResponse | null = null;
+let activePatchReady: WorkerPatchReadyResponse | null = null;
 let localMapGl: WebGL2RenderingContext | null = null;
 let localMapRenderer: Stage8StructureRenderer | null = null;
 let localMapPrograms: LocalMapPrograms | null = null;
@@ -741,20 +750,124 @@ function updateLocalNeighborButtons(patchReady: WorkerPatchReadyResponse | null)
   });
 }
 
-function updateLocalBreadcrumb(visible: boolean): void {
-  els.breadcrumbPatchWrap.hidden = !visible;
-  els.breadcrumbPatchSep.hidden = !visible;
-  els.breadcrumbPatch.hidden = !visible;
-  if (visible) els.breadcrumbPatch.textContent = 'Участок';
+function updateLocalBreadcrumb(active: boolean): void {
+  els.breadcrumbPatchWrap.hidden = !active;
+  els.breadcrumbPatchSep.hidden = !active;
+  els.breadcrumbPatch.hidden = !active;
+  if (active) {
+    els.breadcrumbPatch.textContent = activePatchReady
+      ? 'Участок #' + String(activePatchReady.hexCenterCell)
+      : 'Участок';
+    els.breadcrumbPlanet.removeAttribute('aria-current');
+    els.breadcrumbPlanet.setAttribute('role', 'button');
+    els.breadcrumbPlanet.tabIndex = 0;
+    els.breadcrumbPlanet.title = 'Вернуться на глобус планеты';
+  } else {
+    els.breadcrumbPatch.textContent = 'Участок';
+    els.breadcrumbPlanet.setAttribute('aria-current', 'page');
+    els.breadcrumbPlanet.removeAttribute('role');
+    els.breadcrumbPlanet.tabIndex = -1;
+    els.breadcrumbPlanet.removeAttribute('title');
+  }
 }
 
 function updateLocalMapUrl(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
-  const params = new URLSearchParams(window.location.search);
-  params.set('place', selectedPlace ? (selectedPlace.ID || '') : String(els.planetId.value || '2'));
-  params.set('cell', patchReady.canonicalAddress);
-  params.set('view', 'local');
-  params.set('scale', String(widthKm));
-  window.history.replaceState(null, '', window.location.pathname + '?' + params.toString() + window.location.hash);
+  syncBrowserUrl({
+    cell: patchReady.canonicalAddress,
+    localView: true,
+    scale: widthKm,
+  });
+}
+
+function extractShortFaceCoord(canonicalAddress: string): string {
+  const afterV = /\/v\d+\/(.+)$/.exec(canonicalAddress);
+  if (afterV && afterV[1]) return afterV[1];
+  const segments = canonicalAddress.split('/');
+  return segments.length >= 3 ? segments.slice(-3).join('/') : canonicalAddress;
+}
+
+function renderLocalMapFromPatch(
+  patchReady: WorkerPatchReadyResponse,
+  scale: number,
+  shouldFlyToPatch: boolean,
+  requestId: number,
+): void {
+  const centerCell = patchReady.patch.cells[0];
+  if (!centerCell || requestId !== localMapEntrySeq) return;
+  if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.45, 750);
+
+  const startedAt = performance.now();
+  let localData: LocalMapWorkerResponse;
+  try {
+    let currentProfile: GeographyProfileInput | undefined;
+    try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
+    localData = generateLocalMap({
+      patch: patchReady.patch,
+      seed: parseSeedUint32(els.seed.value),
+      placeId: Number(selectedPlace?.ID || 2),
+      radiusM: Math.max(600, (scale * 1000) / 2),
+      patchKey: patchReady.keys.patchKey,
+      ...(currentProfile ? { profile: currentProfile } : {}),
+    });
+  } catch (error) {
+    setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
+    return;
+  }
+  if (requestId !== localMapEntrySeq) return;
+
+  localMapData = localData;
+  const meta = localData.meta as LocalMapWorkerResponse['meta'] & {
+    genMs?: number;
+    totalInstances?: number;
+    buildableFraction?: number;
+  };
+  const measuredMs = performance.now() - startedAt;
+  localMapGenerationMs = Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs;
+  localMapInstanceCount = localTotalInstances(localData);
+  localMapBuildableFraction = Number.isFinite(meta.buildableFraction)
+    ? clampLocal(meta.buildableFraction as number, 0, 1)
+    : clampLocal(patchReady.buildableFraction, 0, 1);
+  if (!initializeLocalMapRenderer() || !localMapRenderer) return;
+
+  const renderer = localMapRenderer;
+  try {
+    if (typeof renderer.enqueueWorkerData === 'function') {
+      renderer.enqueueWorkerData(localData, 3.0);
+      setLocalMapStatus('Данные готовы; выполняю порционную GPU-заливку без блокировки кадров.', 'info');
+    } else {
+      renderer.onWorkerData(localData);
+      setLocalMapStatus('Локальная карта готова к управлению камерой.', 'ok');
+    }
+  } catch (error) {
+    setLocalMapStatus('Ошибка передачи локальных данных в WebGL2: ' + ((error as Error).message || String(error)), 'error');
+    return;
+  }
+
+  activePatchReady = patchReady;
+  const shortFaceCoord = extractShortFaceCoord(patchReady.canonicalAddress);
+  const planetName = selectedPlace?.name || 'Планета';
+  els.localMapTitle.textContent =
+    `${planetName} · ячейка #${patchReady.hexCenterCell} (${shortFaceCoord}) · ${patchReady.keys.patchKey}`;
+  els.localMapTitle.title =
+    `${patchReady.canonicalAddress} · patch_key ${patchReady.keys.patchKey}`;
+  els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
+    Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
+  els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
+  localMapActive = true;
+  updateLocalNeighborButtons(patchReady);
+  updateLocalBreadcrumb(true);
+  updateLocalMapUrl(patchReady, scale);
+  document.body.classList.add('local-map-active');
+  els.localMapStage.hidden = false;
+  resizeLocalMapCanvas();
+  resetLocalCamera();
+  els.localMapStage.classList.remove('is-active');
+  void els.localMapStage.offsetWidth;
+  els.localMapStage.classList.add('is-active');
+  localMapHudLastAt = 0;
+  updateLocalMapHud();
+  if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
+  els.localMapCanvas.focus({ preventScroll: true });
 }
 
 function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
@@ -778,82 +891,14 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
 
   // Подлёт и CPU-генерация стартуют на одном первом кадре Dive-in.
   window.requestAnimationFrame(() => {
-    if (requestId !== localMapEntrySeq) return;
-    if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.45, 750);
-
-    const startedAt = performance.now();
-    let localData: LocalMapWorkerResponse;
-    try {
-      let currentProfile: GeographyProfileInput | undefined;
-      try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
-      localData = generateLocalMap({
-        patch: patchReady.patch,
-        seed: parseSeedUint32(els.seed.value),
-        placeId: Number(selectedPlace?.ID || 2),
-        radiusM: Math.max(600, (scale * 1000) / 2),
-        patchKey: patchReady.keys.patchKey,
-        ...(currentProfile ? { profile: currentProfile } : {}),
-      });
-    } catch (error) {
-      setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
-      return;
-    }
-    if (requestId !== localMapEntrySeq) return;
-
-    localMapData = localData;
-    const meta = localData.meta as LocalMapWorkerResponse['meta'] & {
-      genMs?: number;
-      totalInstances?: number;
-      buildableFraction?: number;
-    };
-    const measuredMs = performance.now() - startedAt;
-    localMapGenerationMs = Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs;
-    localMapInstanceCount = localTotalInstances(localData);
-    localMapBuildableFraction = Number.isFinite(meta.buildableFraction)
-      ? clampLocal(meta.buildableFraction as number, 0, 1)
-      : clampLocal(patchReady.buildableFraction, 0, 1);
-    if (!initializeLocalMapRenderer() || !localMapRenderer) return;
-
-    const renderer = localMapRenderer;
-    try {
-      if (typeof renderer.enqueueWorkerData === 'function') {
-        renderer.enqueueWorkerData(localData, 3.0);
-        setLocalMapStatus('Данные готовы; выполняю порционную GPU-заливку без блокировки кадров.', 'info');
-      } else {
-        renderer.onWorkerData(localData);
-        setLocalMapStatus('Локальная карта готова к управлению камерой.', 'ok');
-      }
-    } catch (error) {
-      setLocalMapStatus('Ошибка передачи локальных данных в WebGL2: ' + ((error as Error).message || String(error)), 'error');
-      return;
-    }
-
-    els.localMapTitle.textContent = patchReady.canonicalAddress + ' · patch_key ' + patchReady.keys.patchKey;
-    els.localMapTitle.title = 'Ячейка ' + patchReady.canonicalAddress + ' · ключ участка ' + patchReady.keys.patchKey;
-    els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
-      Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
-    els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
-    updateLocalNeighborButtons(patchReady);
-    updateLocalBreadcrumb(true);
-    updateLocalMapUrl(patchReady, scale);
-    document.body.classList.add('local-map-active');
-    els.localMapStage.hidden = false;
-    resizeLocalMapCanvas();
-    resetLocalCamera();
-    els.localMapStage.classList.remove('is-active');
-    void els.localMapStage.offsetWidth;
-    els.localMapStage.classList.add('is-active');
-    localMapActive = true;
-    localMapHudLastAt = 0;
-    updateLocalMapHud();
-    if (!localMapFrameId) localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
-    els.localMapCanvas.focus({ preventScroll: true });
+    renderLocalMapFromPatch(patchReady, scale, shouldFlyToPatch, requestId);
   });
 }
 
 function exitLocalMap(): void {
   localMapEntrySeq++;
   localMapActive = false;
+  pendingInitialLocalView = false;
   if (localMapFrameId) window.cancelAnimationFrame(localMapFrameId);
   localMapFrameId = 0;
   localPointers.clear();
@@ -863,11 +908,7 @@ function exitLocalMap(): void {
   els.localMapStage.classList.remove('is-active');
   document.body.classList.remove('local-map-active');
   updateLocalBreadcrumb(false);
-  const params = new URLSearchParams(window.location.search);
-  params.delete('view');
-  params.delete('scale');
-  const query = params.toString();
-  window.history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+  syncBrowserUrl({ localView: false });
   if (globe) globe.setDistance(3.05);
 
   if (localMapRenderer && typeof localMapRenderer.dispose === 'function') {
@@ -930,6 +971,98 @@ function numberFrom(row: CsvRow | null, key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+interface PlaceLabDefaults {
+  preset: string;
+  planet: string;
+  seed: string;
+  radius: string;
+  surface: string;
+  quality: string;
+  mode: string;
+  relief: string;
+}
+
+interface SyncBrowserUrlOptions {
+  profile?: GeographyProfileInput;
+  cell?: string | null;
+  localView?: boolean;
+  scale?: number | string;
+}
+
+function normalizePlanetId(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'stage6-planet';
+}
+
+function getPlaceLabDefaults(place: CsvRow): PlaceLabDefaults {
+  const genRow = place.ID ? generationByPlaceId.get(place.ID) : undefined;
+  const fallbackPreset = (presets[0] && presets[0].archetype_id) || 'earthlike_balanced';
+  let preset = fallbackPreset;
+  if (genRow && genRow.preset_id && presetsById.has(genRow.preset_id)) {
+    preset = genRow.preset_id;
+  } else if (place.type === 'moon' && presetsById.has('barren_moon')) {
+    preset = 'barren_moon';
+  }
+  const preferredSurface = PREFERRED_SURFACE_CLASS[preset] || 'terrestrial';
+  const surface = (genRow && genRow.surface_class && [...els.surfaceClass.options].some((o) => o.value === genRow.surface_class))
+    ? genRow.surface_class
+    : preferredSurface;
+  const rawPlanet = place.ID || place.name || 'world';
+  const seed = (genRow && genRow.master_seed_hex)
+    ? genRow.master_seed_hex.trim()
+    : ('place-' + (place.ID || '') + '-' + (place.name || 'world'));
+  const rawRadius = (genRow && genRow.radius_km)
+    ? genRow.radius_km
+    : (place.type === 'moon' ? '1737' : '6371');
+  const radius = String(Math.max(300, Number(rawRadius) || 6371));
+  return {
+    preset,
+    planet: normalizePlanetId(rawPlanet),
+    seed,
+    radius,
+    surface,
+    quality: 'auto',
+    mode: 'biome',
+    relief: '1',
+  };
+}
+
+function applyUrlLabOverrides(params: URLSearchParams, ignorePlanetParam: boolean): void {
+  const presetParam = params.get('preset');
+  if (presetParam && presetsById.has(presetParam)) {
+    els.preset.value = presetParam;
+    syncSurfaceClassWithPreset();
+  }
+  const surfaceParam = params.get('surface');
+  if (surfaceParam && [...els.surfaceClass.options].some((o) => o.value === surfaceParam)) {
+    els.surfaceClass.value = surfaceParam;
+  }
+  const seedParam = params.get('seed');
+  if (seedParam) els.seed.value = seedParam;
+  const planetParam = params.get('planet');
+  if (planetParam && !ignorePlanetParam) els.planetId.value = planetParam;
+  const radiusParam = params.get('radius');
+  if (radiusParam) els.radius.value = radiusParam;
+  const qualityParam = params.get('quality');
+  if (qualityParam && [...els.quality.options].some((o) => o.value === qualityParam)) {
+    els.quality.value = qualityParam;
+  }
+  const modeParam = params.get('mode');
+  if (modeParam && [...els.colorMode.options].some((o) => o.value === modeParam)) {
+    els.colorMode.value = modeParam;
+  }
+  const reliefParam = params.get('relief');
+  if (reliefParam && [...els.relief.options].some((o) => o.value === reliefParam)) {
+    els.relief.value = reliefParam;
+  }
+  const scaleParam = params.get('scale');
+  if (scaleParam && LOCAL_MAP_SCALE_STEPS.some((step) => String(step) === scaleParam)) {
+    els.localScale.value = scaleParam;
+    localMapWidthKm = Number(scaleParam);
+  }
+  updateEstimates();
+}
+
 function installPresets(rows: CsvRow[]): void {
   presets = rows.filter((r) =>
     r.archetype_id && r.archetype_id !== 'gas_giant_bands');
@@ -937,29 +1070,8 @@ function installPresets(rows: CsvRow[]): void {
   els.preset.innerHTML = presets.map((r) =>
     '<option value="' + escapeHtml(r.archetype_id) + '">' +
     escapeHtml(r.display_name_ru || r.archetype_id) + '</option>').join('');
-  const params = new URLSearchParams(window.location.search);
-  const presetParam = params.get('preset');
-  if (presetParam && presetsById.has(presetParam)) els.preset.value = presetParam;
-  const seedParam = params.get('seed');
-  if (seedParam) els.seed.value = seedParam;
-  const planetParam = params.get('planet');
-  if (planetParam) els.planetId.value = planetParam;
-  const radiusParam = params.get('radius');
-  if (radiusParam) els.radius.value = radiusParam;
-  const qualityParam = params.get('quality');
-  if (qualityParam) els.quality.value = qualityParam;
-  const modeParam = params.get('mode');
-  if (modeParam) els.colorMode.value = modeParam;
-  const reliefParam = params.get('relief');
-  if (reliefParam) els.relief.value = reliefParam;
-  const scaleParam = params.get('scale');
-  if (scaleParam && LOCAL_MAP_SCALE_STEPS.some((step) => String(step) === scaleParam)) {
-    els.localScale.value = scaleParam;
-  }
   syncSurfaceClassWithPreset();
-  const surfaceParam = params.get('surface');
-  if (surfaceParam) els.surfaceClass.value = surfaceParam;
-  updateEstimates();
+  applyUrlLabOverrides(initialUrlParams, false);
 }
 
 function syncSurfaceClassWithPreset(): void {
@@ -1016,8 +1128,7 @@ function profileFromControls(): GeographyProfileInput {
   const preset = presetsById.get(els.preset.value);
   if (!preset) throw new Error('Пресет ещё не загружен');
   const seedRaw = els.seed.value.trim() || 'korhal-iv';
-  const planetId = els.planetId.value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'stage6-planet';
+  const planetId = normalizePlanetId(els.planetId.value);
   els.planetId.value = planetId;
   const profile: GeographyProfileInput = {
     planetId: planetId,
@@ -1054,25 +1165,78 @@ function profileKey(profile: GeographyProfileInput): string {
   return JSON.stringify(profile) + '|relief=' + els.relief.value + '|quality=' + els.quality.value;
 }
 
-function updateUrl(profile: GeographyProfileInput): void {
-  const params = new URLSearchParams();
-  const prior = new URLSearchParams(window.location.search);
-  params.set('preset', els.preset.value);
-  params.set('planet', String(profile.planetId));
-  params.set('seed', els.seed.value.trim());
-  params.set('radius', String(profile.radiusKm));
-  params.set('surface', els.surfaceClass.value);
-  params.set('quality', els.quality.value);
-  params.set('mode', els.colorMode.value);
-  params.set('relief', els.relief.value);
-  if (selectedPlace) params.set('place', selectedPlace.ID || '');
-  if (prior.has('cell')) params.set('cell', prior.get('cell') || '');
-  if (prior.has('system')) params.set('system', prior.get('system') || '');
-  if (prior.get('view') === 'local') {
-    params.set('view', 'local');
-    params.set('scale', prior.get('scale') || els.localScale.value || '1.2');
+function syncBrowserUrl(options: SyncBrowserUrlOptions = {}): void {
+  if (options.cell !== undefined) {
+    selectedCellAddress = options.cell ? (options.cell.trim() || null) : null;
   }
-  window.history.replaceState(null, '', window.location.pathname + '?' + params.toString() + window.location.hash);
+  const currentPreset = options.profile?.presetId
+    ? String(options.profile.presetId)
+    : els.preset.value;
+  const currentPlanet = options.profile
+    ? String(options.profile.planetId)
+    : normalizePlanetId(els.planetId.value);
+  const currentSeed = els.seed.value.trim();
+  const currentRadius = options.profile
+    ? String(options.profile.radiusKm)
+    : String(Math.max(300, Number(els.radius.value) || 6371));
+  const currentSurface = options.profile?.surfaceClass
+    ? String(options.profile.surfaceClass)
+    : els.surfaceClass.value;
+  const currentQuality = els.quality.value;
+  const currentMode = els.colorMode.value;
+  const currentRelief = els.relief.value;
+
+  const params = new URLSearchParams();
+  if (selectedPlace !== null) {
+    const placeId = (selectedPlace.ID && selectedPlace.ID !== 'none') ? selectedPlace.ID.trim() : '';
+    const systemId = (selectedPlace.system_id && selectedPlace.system_id !== 'none') ? selectedPlace.system_id.trim() : '';
+    if (placeId) params.set('place', placeId);
+    if (systemId) params.set('system', systemId);
+
+    const defaults = getPlaceLabDefaults(selectedPlace);
+    if (currentPreset && currentPreset !== defaults.preset) params.set('preset', currentPreset);
+    if (currentPlanet && currentPlanet !== defaults.planet) params.set('planet', currentPlanet);
+    if (currentSeed && currentSeed !== defaults.seed) params.set('seed', currentSeed);
+    if (currentRadius && currentRadius !== defaults.radius) params.set('radius', currentRadius);
+    if (currentSurface && currentSurface !== defaults.surface) params.set('surface', currentSurface);
+    if (currentQuality && currentQuality !== defaults.quality) params.set('quality', currentQuality);
+    if (currentMode && currentMode !== defaults.mode) params.set('mode', currentMode);
+    if (currentRelief && currentRelief !== defaults.relief) params.set('relief', currentRelief);
+  } else {
+    if (currentPreset) params.set('preset', currentPreset);
+    if (currentPlanet) params.set('planet', currentPlanet);
+    if (currentSeed) params.set('seed', currentSeed);
+    if (currentRadius) params.set('radius', currentRadius);
+    if (currentSurface) params.set('surface', currentSurface);
+    if (currentQuality) params.set('quality', currentQuality);
+    if (currentMode) params.set('mode', currentMode);
+    if (currentRelief) params.set('relief', currentRelief);
+  }
+
+  if (selectedCellAddress) {
+    params.set('cell', selectedCellAddress);
+    const isLocal = options.localView !== undefined
+      ? options.localView
+      : (localMapActive || pendingInitialLocalView);
+    if (isLocal) {
+      params.set('view', 'local');
+      const scaleVal = options.scale !== undefined
+        ? String(options.scale)
+        : String(localMapWidthKm || els.localScale.value || '1.2');
+      params.set('scale', scaleVal);
+    }
+  }
+
+  const query = params.toString().replace(
+    /(^|&)cell=([^&]*)/,
+    (_match, prefix: string, val: string) => prefix + 'cell=' + val.replace(/%2F/gi, '/'),
+  );
+  const nextUrl = window.location.pathname + (query ? '?' + query : '') + window.location.hash;
+  window.history.replaceState(null, '', nextUrl);
+}
+
+function updateUrl(profile: GeographyProfileInput): void {
+  syncBrowserUrl({ profile });
 }
 
 /* --------------------------------------------------------------- worker */
@@ -1155,8 +1319,14 @@ function startGeneration(restart: boolean, reason: string): void {
     return;
   }
   if (localMapActive) exitLocalMap();
+  if (reason !== 'initial') {
+    pendingInitialCell = null;
+    selectedCellAddress = null;
+    pendingInitialLocalView = false;
+  }
   latestPatchRequest++;
   lastPatchReady = null;
+  activePatchReady = null;
   els.diveLocalMap.disabled = true;
   updateLocalNeighborButtons(null);
   updateUrl(profile);
@@ -1212,10 +1382,7 @@ function onWorkerMessage(event: MessageEvent): void {
         if (globe && Array.isArray(msg.info.centerDirection)) {
           globe.flyToDirection(msg.info.centerDirection, undefined, 650);
         }
-        const params = new URLSearchParams(window.location.search);
-        params.set('place', selectedPlace ? (selectedPlace.ID || '') : String(els.planetId.value));
-        params.set('cell', msg.info.address);
-        window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
+        syncBrowserUrl({ cell: msg.info.address });
         const inspector = document.getElementById('patchInspector');
         if (inspector) inspector.dataset.cell = String(msg.info.cell);
         lastPatchReady = null;
@@ -1224,6 +1391,9 @@ function onWorkerMessage(event: MessageEvent): void {
         const prefetch = document.getElementById('prefetchStatus');
         if (prefetch) prefetch.textContent = 'Каноническая ячейка ' + msg.info.address + ' выбрана; запрашиваю срез Patch7…';
         requestPatchExtract(msg.info.cell);
+      } else {
+        pendingInitialLocalView = false;
+        syncBrowserUrl({ cell: null, localView: false });
       }
     }
     return;
@@ -1257,7 +1427,7 @@ function onWorkerMessage(event: MessageEvent): void {
 function handleReady(msg: WorkerReadyResponse): void {
   const request = activeRequest;
   if (request && request.phase === 'upgrade' && !pendingInitialCell) {
-    pendingInitialCell = lastPatchReady?.canonicalAddress || new URLSearchParams(window.location.search).get('cell');
+    pendingInitialCell = lastPatchReady?.canonicalAddress || activePatchReady?.canonicalAddress || selectedCellAddress;
   }
   lastPatchReady = null;
   els.diveLocalMap.disabled = true;
@@ -1548,8 +1718,20 @@ function initEvents(): void {
     }
   });
   els.exitLocalMap.addEventListener('click', exitLocalMap);
+  els.breadcrumbPlanet.addEventListener('click', () => {
+    if (localMapActive) exitLocalMap();
+  });
+  els.breadcrumbPlanet.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (!localMapActive) return;
+    if (event.key === 'Enter' || event.key === ' ' || event.code === 'Space') {
+      event.preventDefault();
+      event.stopPropagation();
+      exitLocalMap();
+    }
+  });
   els.localScale.addEventListener('change', () => {
-    if (lastPatchReady && localMapActive) enterLocalMap(lastPatchReady, Number(els.localScale.value));
+    const patch = lastPatchReady || activePatchReady;
+    if (patch && localMapActive) enterLocalMap(patch, Number(els.localScale.value));
   });
   els.resetLocalCam.addEventListener('click', resetLocalCamera);
   els.localNeighborNav.addEventListener('click', (event: MouseEvent) => {
@@ -1567,7 +1749,13 @@ function initEvents(): void {
       if (status) status.textContent = 'Ссылка на ячейку скопирована.';
     }).catch(() => setStatus('Не удалось скопировать ссылку: проверьте разрешение браузера.', 'warn'));
   });
-  els.preset.addEventListener('change', () => { syncSurfaceClassWithPreset(); updateEstimates(); });
+  els.preset.addEventListener('change', () => {
+    syncSurfaceClassWithPreset();
+    if (selectedPlace === null) {
+      els.breadcrumbPlanet.textContent = els.preset.options[els.preset.selectedIndex]?.text || 'Демо-мир';
+    }
+    updateEstimates();
+  });
   els.radius.addEventListener('input', () => { updateEstimates(); });
   els.quality.addEventListener('change', () => {
     updateEstimates();
@@ -1577,6 +1765,7 @@ function initEvents(): void {
       const profile = profileFromControls();
       const key = profileKey(profile);
       const est = updateEstimates();
+      updateUrl(profile);
       if (displayedSummary.renderV !== est.target) requestRender(profile, key, proxyRenderV(est.target), est.target, 'quality');
     }
   });
@@ -1619,8 +1808,14 @@ function initEvents(): void {
     els.panelBody.hidden = expanded;
   });
   window.addEventListener('keydown', (event: KeyboardEvent) => {
-    const tag = document.activeElement ? document.activeElement.tagName : '';
-    if (event.code === 'Space' && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(tag || '')) {
+    if (localMapActive) return;
+    const activeEl = document.activeElement;
+    const tag = activeEl ? activeEl.tagName : '';
+    if (
+      event.code === 'Space' &&
+      !/INPUT|SELECT|TEXTAREA|BUTTON|A/.test(tag || '') &&
+      activeEl?.getAttribute('role') !== 'button'
+    ) {
       event.preventDefault();
       els.spin.click();
     }
@@ -1635,8 +1830,7 @@ function installPlaceCatalog(placesText: string, systemsText: string, generation
   for (const row of parseCsv(generationText)) {
     if (row.place_id) generationByPlaceId.set(row.place_id, row);
   }
-  const select = document.getElementById('catalogPlaceSel') as HTMLSelectElement | null;
-  if (!select) return;
+  const select = els.placeSelect;
   const placeOptions = placesCatalog.map((row) => '<option value="' + escapeHtml(row.ID) + '">' +
     escapeHtml(row.name + (row.type === 'moon' ? ' · луна' : '')) + '</option>').join('');
   const demo = ['korhal-iv|Корхал IV · эталон', 'char|Чар · эталон', 'shakuras|Шакурас · эталон'];
@@ -1644,32 +1838,80 @@ function installPlaceCatalog(placesText: string, systemsText: string, generation
     '</optgroup><optgroup label="Эталонные миры генератора (DEMO_PLANETS)">' + demo.map((v) => {
       const parts = v.split('|'); return '<option value="demo:' + escapeHtml(parts[0]) + '">' + escapeHtml(parts[1]) + '</option>';
     }).join('') + '</optgroup>';
-  const query = new URLSearchParams(location.search);
-  const requested = query.get('place') || query.get('planet') || '2';
-  const selected = placesCatalog.find((r) => r.ID === requested || (r.name || '').toLocaleLowerCase('ru') === requested.toLocaleLowerCase('ru'));
-  selectedPlace = selected || placesCatalog.find((r) => r.ID === '2') || null;
-  if (selectedPlace) { select.value = selectedPlace.ID || ''; applyPlace(selectedPlace); }
-  else if (requested) { const demoValue = 'demo:' + requested; if ([...select.options].some((o) => o.value === demoValue)) select.value = demoValue; }
+
+  const hasPlaceParam = initialUrlParams.has('place');
+  const hasPlanetParam = initialUrlParams.has('planet');
+  const findPlace = (token: string): CsvRow | null => placesCatalog.find(
+    (r) => r.ID === token || (r.name || '').toLocaleLowerCase('ru') === token.toLocaleLowerCase('ru'),
+  ) || null;
+
+  let requestedDemo = '';
+  if (hasPlaceParam) {
+    const placeReq = (initialUrlParams.get('place') || '').trim();
+    selectedPlace = findPlace(placeReq) || placesCatalog.find((r) => r.ID === '2') || placesCatalog[0] || null;
+  } else if (hasPlanetParam) {
+    const planetReq = (initialUrlParams.get('planet') || '').trim();
+    const matched = findPlace(planetReq);
+    if (matched) {
+      selectedPlace = matched;
+    } else {
+      selectedPlace = null;
+      requestedDemo = planetReq;
+    }
+  } else {
+    selectedPlace = placesCatalog.find((r) => r.ID === '2') || placesCatalog[0] || null;
+  }
+
+  if (selectedPlace) {
+    select.value = selectedPlace.ID || '';
+    applyPlace(selectedPlace);
+    applyUrlLabOverrides(initialUrlParams, !hasPlaceParam);
+  } else {
+    if (requestedDemo) {
+      const demoValue = 'demo:' + requestedDemo;
+      if ([...select.options].some((o) => o.value === demoValue)) select.value = demoValue;
+    }
+    applyUrlLabOverrides(initialUrlParams, false);
+    applyPlace(null);
+  }
+
   select.addEventListener('change', () => {
-    if (select.value.startsWith('demo:')) { selectedPlace = null; els.planetId.value = select.value.slice(5); els.seed.value = select.value.slice(5); }
-    else { selectedPlace = placesCatalog.find((r) => r.ID === select.value) || null; if (selectedPlace) applyPlace(selectedPlace); }
+    if (select.value.startsWith('demo:')) {
+      selectedPlace = null;
+      const demoSlug = select.value.slice(5);
+      els.planetId.value = demoSlug;
+      els.seed.value = demoSlug;
+      applyPlace(null);
+    } else {
+      selectedPlace = placesCatalog.find((r) => r.ID === select.value) || null;
+      applyPlace(selectedPlace);
+    }
     startGeneration(true, 'catalog');
   });
 }
 
-function applyPlace(place: CsvRow): void {
+function applyPlace(place: CsvRow | null): void {
+  if (!place) {
+    els.breadcrumbSystem.textContent = 'Система';
+    els.breadcrumbSystem.href = '../sector/';
+    els.breadcrumbPlanet.textContent = els.preset.options[els.preset.selectedIndex]?.text || 'Демо-мир';
+    els.backToSector.href = '../sector/';
+    return;
+  }
   const genRow = place.ID ? generationByPlaceId.get(place.ID) : undefined;
+  const defaults = getPlaceLabDefaults(place);
   els.planetId.value = place.ID || place.name || 'world';
-  els.seed.value = (genRow && genRow.master_seed_hex) ? genRow.master_seed_hex : ('place-' + (place.ID || '') + '-' + (place.name || 'world'));
-  els.radius.value = (genRow && genRow.radius_km) ? genRow.radius_km : (place.type === 'moon' ? '1737' : '6371');
-  if (genRow && genRow.preset_id && presetsById.has(genRow.preset_id)) {
-    els.preset.value = genRow.preset_id;
-    syncSurfaceClassWithPreset();
-  } else if (place.type === 'moon' && presetsById.has('barren_moon')) {
-    els.preset.value = 'barren_moon';
+  els.seed.value = defaults.seed;
+  els.radius.value = defaults.radius;
+  if (presetsById.has(defaults.preset)) {
+    els.preset.value = defaults.preset;
     syncSurfaceClassWithPreset();
   }
-  const system = systemsCatalog.find((row) => row.system_id === place.system_id);
+  els.surfaceClass.value = defaults.surface;
+  updateEstimates();
+  const systemId = (place.system_id && place.system_id !== 'none') ? place.system_id.trim() : '';
+  const placeId = (place.ID && place.ID !== 'none') ? place.ID.trim() : '';
+  const system = systemId ? systemsCatalog.find((row) => row.system_id === systemId) : undefined;
   const name = document.getElementById('dossierName'); if (name) name.textContent = place.name || 'Мир';
   const meta = document.getElementById('dossierMeta'); if (meta) meta.textContent = (system ? system.name : 'Система не указана') + ' · ' + (place.faction || 'фракция неизвестна') + ' · ' + (place.type === 'moon' ? 'луна' : 'планета');
   const desc = document.getElementById('dossierDesc'); if (desc) desc.textContent = place.description && place.description !== 'none' ? place.description : 'Описание мира пока не внесено в каталог.';
@@ -1686,11 +1928,10 @@ function applyPlace(place: CsvRow): void {
     if (badge) { badge.textContent = 'L0 Draft · черновик'; badge.className = 'profile-badge draft'; }
     if (key) key.textContent = (genRow && genRow.generation_key) ? genRow.generation_key : 'Вычисляется по манифесту…';
   }
-  const crumb = document.getElementById('breadcrumbPlanet'); if (crumb) crumb.textContent = place.name || 'Планета';
-  const sysCrumb = document.getElementById('breadcrumbSystem') as HTMLAnchorElement | null;
-  if (sysCrumb) { sysCrumb.textContent = system ? (system.name || 'Система') : 'Система'; sysCrumb.href = '../sector/#system=' + encodeURIComponent(place.system_id || ''); }
-  const back = document.getElementById('backToSectorBtn') as HTMLAnchorElement | null;
-  if (back) back.href = '../sector/#planet=' + encodeURIComponent(place.ID || '');
+  els.breadcrumbPlanet.textContent = place.name || 'Планета';
+  els.breadcrumbSystem.textContent = system ? (system.name || 'Система') : 'Система';
+  els.breadcrumbSystem.href = systemId ? ('../sector/#/s/' + encodeURIComponent(systemId)) : '../sector/';
+  els.backToSector.href = placeId ? ('../sector/#/p/' + encodeURIComponent(placeId)) : '../sector/';
 }
 
 function syncDossierSummary(summary: GlobeSummary): void {
@@ -1749,6 +1990,7 @@ function renderPrefetchReady(msg: WorkerPrefetchReadyResponse): void {
 
 function renderPatchReady(msg: WorkerPatchReadyResponse): void {
   lastPatchReady = msg;
+  activePatchReady = msg;
   els.diveLocalMap.disabled = !msg.invariants.ok;
   updateLocalNeighborButtons(msg);
 
@@ -1782,11 +2024,15 @@ function renderPatchReady(msg: WorkerPatchReadyResponse): void {
       '</div>';
   }
   if (!msg.invariants.ok) {
+    pendingInitialLocalView = false;
+    if (localMapActive) exitLocalMap();
+    else syncBrowserUrl({ localView: false });
     setLocalMapStatus('Patch7 не прошёл проверки И-3; Dive-in заблокирован.', 'error');
     return;
   }
   const params = new URLSearchParams(window.location.search);
-  if (localMapActive || params.get('view') === 'local') {
+  if (localMapActive || pendingInitialLocalView || params.get('view') === 'local') {
+    pendingInitialLocalView = false;
     const scale = selectedLocalScale(Number(params.get('scale') || els.localScale.value));
     enterLocalMap(msg, scale);
   }
@@ -1822,8 +2068,15 @@ function init(): void {
         sendPick(direction, 'hover');
       },
       onPickMiss: function () {
+        latestPatchRequest++;
+        lastPatchReady = null;
+        activePatchReady = null;
+        pendingInitialLocalView = false;
+        els.diveLocalMap.disabled = true;
+        updateLocalNeighborButtons(null);
         if (globe) globe.clearSelection();
         renderSelection(null);
+        syncBrowserUrl({ cell: null, localView: false });
       },
       onCameraIntent: function (intent) {
         if (!worker || !displayedSummary || !displayedToken || intent.zoomRatio < 0.35) return;
