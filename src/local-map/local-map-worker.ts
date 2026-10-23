@@ -837,12 +837,20 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 // получает честный радиус кривизны планеты.
 // ---------------------------------------------------------------------------
 
-/** Угловых сегментов контура гекса: 6 секторов × 16 шагов (97 узлов с замыканием). */
+/** Угловых сегментов контура горизонта: 6 секторов × 16 шагов (97 узлов с замыканием). */
 export const SKIRT_ANGULAR_SEGMENTS = 96;
-/** Радиальных колец воротника центрального гекса: 8 колец точной сшивки + 4 кольца фаски. */
-export const SKIRT_RADIAL_RINGS = 12;
+/** Радиальных шагов единой полярной сетки горизонта: 14 плотных + 42 до сферы (57 рядов). */
+export const SKIRT_RADIAL_RINGS = 56;
 /** Радиальных шагов плотного воротника: от R_inner до 1.10 · R_patch (остальные 42 — к горизонту). */
 export const SKIRT_COLLAR_RINGS = 14;
+/** Число соседних гексов кластера Patch7 (шестиугольное кольцо slot 0..5). */
+export const SKIRT_RING_COUNT = 6;
+/** √3/2 — отношение апофемы правильного шестиугольника к радиусу описанной окружности. */
+export const HEX_APOTHEM_RATIO = 0.8660254037844386;
+/** Доля R_patch: радиус описанной окружности выделенного центрального гекса. */
+export const CENTER_HEX_RADIUS_RATIO = 0.93;
+/** Доля R_patch: внутренний радиус непрерывной юбки (воротник перекрывает центральный гекс). */
+export const SKIRT_INNER_RADIUS_RATIO = 0.72;
 /** Доля R_patch: внешний радиус плотного воротника вокруг выделенного гекса. */
 export const SKIRT_COLLAR_END_RADIUS_RATIO = 1.1;
 /** Доля R_patch: шаг центров соседних гексов канонической сетки кластера Patch7. */
@@ -857,28 +865,6 @@ export const SKIRT_COLLAR_BLEND_START_RATIO = 1.005;
 export const SKIRT_COLLAR_BLEND_END_RATIO = 1.2;
 /** Доля R_patch: страховочная граница точной выборки heightfield (сетка res × res). */
 export const SKIRT_HEIGHTFIELD_GUARD_RATIO = 0.98;
-/** Радиальных колец в плите соседнего гекса (веера 16 шагов от центра к вершинам). */
-export const SKIRT_PLATE_RINGS = 16;
-/** Число соседних плит кластера Patch7 (шестиугольное кольцо slot 0..5). */
-export const SKIRT_RING_COUNT = 6;
-/** √3/2 — отношение апофемы правильного шестиугольника к радиусу описанной окружности. */
-export const HEX_APOTHEM_RATIO = 0.8660254037844386;
-/** Доля R_patch: радиус описанной окружности центрального гекса кластера. */
-export const CENTER_HEX_RADIUS_RATIO = 0.93;
-/** Доля R_patch: внутренний контур шестиугольного воротника. */
-export const SKIRT_INNER_RADIUS_RATIO = 0.72;
-/** Внешний радиус кластера из 7 гексов в апофемах центрального гекса (3·A ≈ 2.416·R_patch). */
-export const SKIRT_OUTER_APOTHEM_RATIO = 3.0;
-/** Доля апофемы: начало фаски центрального гекса и фаски плиты соседа. */
-export const SKIRT_BEVEL_START_RATIO = 0.94;
-export const NEIGHBOR_BEVEL_START_RATIO = 0.92;
-/** Доля апофемы: внешний край фаски центрального гекса (перекрытие поверх плиты соседа). */
-export const SKIRT_BEVEL_END_RATIO = 1.04;
-/** Глубина 3D-фаски грани гекса: не меньше 14 м и 2.8 % R_patch. */
-export const SKIRT_BEVEL_MIN_DROP_M = 14;
-export const SKIRT_BEVEL_DROP_RATIO = 0.028;
-/** Нижняя граница честного радиуса планеты (радиус Луны), м — без «маленьких астероидов». */
-export const SKIRT_MIN_PLANET_RADIUS_M = 1_737_000;
 /** Число ячеек канонической сетки Голдберга v = 128: 10v² + 2. */
 const GOLDBERG_V128_CELLS = 10 * 128 * 128 + 2;
 /** Узлов макро-решётки 3D-сэмплера на сторону (25×25 = 625 опросов). */
@@ -1121,22 +1107,27 @@ function skirtPlanetaryHeight(
 }
 
 /**
- * Генерация тактического кластера Patch7 (вместо круглой полярной юбки):
+ * Генерация непрерывной сферической юбки горизонта вокруг выделенного
+ * центрального гекса активной ячейки (Stage-8.2, вместо кластера из 7 плит):
  *
- * - Часть A — шестиугольный воротник центрального гекса: 96 угловых шагов
- *   (6 секторов × 16) × 12 радиальных колец от h = 0.72 · R_patch до
- *   h = 1.04 · апофемы. Каждое кольцо — идеальный правильный шестиугольник в
- *   единой гекс-метрике `hexMetric2D`. На внутренних кольцах (h ≤ 0.94 · A)
- *   высота — точная билинейная выборка `innerHeightfield` (бесшовный стык с
- *   центральным гексом), на внешних (h ∈ [0.94, 1.04] · A) формируется явно
- *   выделенная 3D-плоскость грани (bevel facet) с перепадом `bevelDropM`.
- * - Часть B — 6 шестиугольных плит соседних ячеек (k = 0..5): веера от центра
- *   соседа к его 6 вершинам по 16 радиальных шагов, якорь высоты — каноническая
- *   ячейка соседа + тот же fBm и канал `detail` единого 3D-сэмплера; краевая
- *   полоса h ∈ [0.92, 1.0] · A — скошенная 3D-грань (фаска соседа).
- *
- * Кривизна — реальный радиус планеты (проседание касательной плоскости
- * применяет вершинный шейдер), нормали считаются честно по треугольникам меша.
+ * - Единая полярная сетка `(SKIRT_ANGULAR_SEGMENTS + 1) × (SKIRT_RADIAL_RINGS + 1)`
+ *   = 97 × 57 = 5 529 вершин и 96 × 56 × 6 = 32 256 индексов: горизонт
+ *   непрерывен по всем направлениям, без 6 отдельных плит-лепестков и без
+ *   физических провалов фасок `bevelDropM`.
+ * - Первые `SKIRT_COLLAR_RINGS = 14` радиальных шагов — плотный воротник от
+ *   `R_inner = 0.72 · R_patch` до `1.10 · R_patch`; остальные 42 шага — от
+ *   `1.10 · R_patch` до `R_outer = 6.5 · d_hex = 7.475 · R_patch` по степени
+ *   `Math.pow(t, 1.35)` (сгущение линий у выделенного гекса).
+ * - Гексагональная сшивка высот воротника: шейдер обрезает центральный меш
+ *   257 × 257 строго по контуру `clusterHexMetric(x, y) <= A`, где
+ *   `A = centerApothemM = CENTER_HEX_RADIUS_RATIO · HEX_APOTHEM_RATIO · R_patch`.
+ *   При `hexDist <= 1.005 · A` высота равна ТОЧНОЙ билинейной выборке
+ *   `innerHeightfield` (`blend = 0`) — на всём шестиугольном срезе нет ни
+ *   ступеньки, ни щели. На полосе `1.005 · A < hexDist <= 1.20 · A` высота
+ *   плавно смешивается через `smooth01` с `skirtPlanetaryHeight`.
+ * - Кривизна — `R_planet = 3.6 · R_outer` (проседание касательной плоскости
+ *   применяет вершинный шейдер); нормали — гладкие конечные разности полярной
+ *   сетки с угловым замыканием `i % SKIRT_ANGULAR_SEGMENTS` и ориентацией `nz > 0`.
  */
 export function generateHorizonSkirt(
   request: LocalMapWorkerRequest,
@@ -1144,13 +1135,13 @@ export function generateHorizonSkirt(
 ): HorizonSkirtData {
   const patch = request.patch;
   const radiusPatchM = request.radiusM;
-  const centerHexRadiusM = CENTER_HEX_RADIUS_RATIO * radiusPatchM;
-  const centerApothemM = centerHexRadiusM * HEX_APOTHEM_RATIO;
-  const hexSpacingM = 2 * centerApothemM;
+  // Апофема выделенного центрального гекса: ровно тот контур, по которому шейдер
+  // обрезает центральный меш 257 × 257 (hexApothem = 0.8054 · R_patch).
+  const centerApothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusPatchM;
   const innerRadiusM = SKIRT_INNER_RADIUS_RATIO * radiusPatchM;
-  const outerRadiusM = SKIRT_OUTER_APOTHEM_RATIO * centerApothemM;
-  const planetRadiusM = Math.max(SKIRT_MIN_PLANET_RADIUS_M, (patch.radiusKm || 6371) * 1000);
-  const bevelDropM = Math.max(SKIRT_BEVEL_MIN_DROP_M, SKIRT_BEVEL_DROP_RATIO * radiusPatchM);
+  const hexSpacingM = SKIRT_HEX_SPACING_RATIO * radiusPatchM;
+  const outerRadiusM = SKIRT_OUTER_SPACING_RATIO * hexSpacingM;
+  const planetRadiusM = SKIRT_PLANET_RADIUS_SPACING_RATIO * outerRadiusM;
 
   const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
   const elevLattice = sampler
@@ -1158,53 +1149,63 @@ export function generateHorizonSkirt(
     : null;
   const cellSeed = (request.seed ^ Math.imul((patch.centerCell + 1) >>> 0, 0x9E3779B1)) >>> 0;
   const noiseScale = (3.5 + Math.log2(Math.max(1, radiusPatchM / 600)) * 0.65) / Math.max(radiusPatchM, 1);
-  const neighborCells = mapNeighborCellsToSlots(patch);
 
   const innerRes = HEIGHTFIELD_RES;
   const hasCollar = !!innerHeightfield && innerHeightfield.length >= innerRes * innerRes;
+  const collarHeights = hasCollar ? (innerHeightfield as Float32Array) : null;
 
-  const angularCount = SKIRT_ANGULAR_SEGMENTS + 1;
-  const collarRings = SKIRT_RADIAL_RINGS + 1;
-  const bevelStartH = SKIRT_BEVEL_START_RATIO * centerApothemM;
-  const collarEndH = SKIRT_BEVEL_END_RATIO * centerApothemM;
-  const plateVerts = 1 + SKIRT_PLATE_RINGS * angularCount;
-  const collarVerts = angularCount * collarRings;
-  const vertexCount = collarVerts + SKIRT_RING_COUNT * plateVerts;
+  const angularCount = SKIRT_ANGULAR_SEGMENTS + 1;   // 97 узлов с угловым замыканием
+  const radialCount = SKIRT_RADIAL_RINGS + 1;        // 57 радиальных рядов
+  const vertexCount = angularCount * radialCount;    // 5 529 вершин
   const positions = new Float32Array(vertexCount * 3);
 
-  // Радиусы (в гекс-метрике) рядов воротника: 8 колец точной сшивки до начала
-  // фаски + 4 кольца 3D-фаски до 1.04 · апофемы.
-  const flatRings = SKIRT_RADIAL_RINGS - 4;
-  const ringH = new Float64Array(collarRings);
-  for (let j = 0; j <= flatRings; j++) {
-    ringH[j] = innerRadiusM + (bevelStartH - innerRadiusM) * (j / flatRings);
+  // Радиусы рядов: 14 плотных шагов воротника от R_inner до 1.10 · R_patch,
+  // затем 42 шага к горизонту по степени t^1.35.
+  const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
+  const outerSteps = SKIRT_RADIAL_RINGS - SKIRT_COLLAR_RINGS;
+  const ringRadius = new Float64Array(radialCount);
+  for (let j = 0; j <= SKIRT_COLLAR_RINGS; j++) {
+    ringRadius[j] = innerRadiusM + (collarEndM - innerRadiusM) * (j / SKIRT_COLLAR_RINGS);
   }
-  for (let j = flatRings + 1; j < collarRings; j++) {
-    ringH[j] = bevelStartH
-      + (collarEndH - bevelStartH) * ((j - flatRings) / (collarRings - 1 - flatRings));
+  for (let j = SKIRT_COLLAR_RINGS + 1; j < radialCount; j++) {
+    const t = (j - SKIRT_COLLAR_RINGS) / outerSteps;
+    ringRadius[j] = collarEndM + (outerRadiusM - collarEndM) * Math.pow(t, 1.35);
   }
 
-  // ---- Часть A: шестиугольный воротник и 3D-фаска центрального гекса ----
-  for (let j = 0; j < collarRings; j++) {
-    const h = ringH[j] as number;
+  const blendStartM = SKIRT_COLLAR_BLEND_START_RATIO * centerApothemM;
+  const blendEndM = SKIRT_COLLAR_BLEND_END_RATIO * centerApothemM;
+  const blendSpanM = blendEndM - blendStartM;
+  const guardM = SKIRT_HEIGHTFIELD_GUARD_RATIO * radiusPatchM;
+
+  for (let j = 0; j < radialCount; j++) {
+    const r = ringRadius[j] as number;
     for (let i = 0; i < angularCount; i++) {
       const phi = (i / SKIRT_ANGULAR_SEGMENTS) * Math.PI * 2;
-      const dirX = Math.cos(phi);
-      const dirY = Math.sin(phi);
-      // Точка на луче φ при гекс-метрике h: кольцо — идеальный правильный
-      // шестиугольник. Кластерный гекс повёрнут гранями к θ_k = k·π/3, поэтому
-      // метрика берётся с переставленными осями (см. clusterHexMetric).
-      const scale = h / clusterHexMetric(dirX, dirY);
-      const x = dirX * scale;
-      const y = dirY * scale;
+      const x = r * Math.cos(phi);
+      const y = r * Math.sin(phi);
+      // Гексагональная метрика кластера: внутри выделенного гекса hexDist <= A.
+      const hexDist = clusterHexMetric(x, y);
+      const insideGuard = Math.abs(x) <= guardM && Math.abs(y) <= guardM;
 
-      let z = hasCollar
-        ? sampleInnerHeightfield(innerHeightfield as Float32Array, innerRes, radiusPatchM, x, y)
-        : skirtPlanetaryHeight(patch, radiusPatchM, x, y, h, cellSeed, noiseScale, elevLattice, outerRadiusM);
-      // Внешние кольца воротника: явная 3D-плоскость грани гекса (bevel facet) —
-      // высота плавно опускается на bevelDropM к базовому уровню фаски.
-      if (h > bevelStartH) {
-        z -= bevelDropM * smooth01((h - bevelStartH) / (collarEndH - bevelStartH));
+      let z: number;
+      if (collarHeights && insideGuard && hexDist <= blendEndM) {
+        // Точная билинейная выборка детального heightfield участка: тот же
+        // рельеф, что у обрезанного по гексу центрального меша 257 × 257.
+        const innerZ = sampleInnerHeightfield(collarHeights, innerRes, radiusPatchM, x, y);
+        if (hexDist <= blendStartM) {
+          // Шестиугольный срез: высота совпадает 1-в-1 (blend = 0, без ступеньки).
+          z = innerZ;
+        } else {
+          const blend = smooth01((hexDist - blendStartM) / blendSpanM);
+          const planetaryZ = skirtPlanetaryHeight(
+            patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, outerRadiusM,
+          );
+          z = innerZ + (planetaryZ - innerZ) * blend;
+        }
+      } else {
+        z = skirtPlanetaryHeight(
+          patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, outerRadiusM,
+        );
       }
 
       const idx = (j * angularCount + i) * 3;
@@ -1214,150 +1215,61 @@ export function generateHorizonSkirt(
     }
   }
 
-  // ---- Часть B: 6 шестиугольных плит соседних гексов (k = 0..5) ----
-  const plateBase = collarVerts;
-  const neighborBevelStartH = NEIGHBOR_BEVEL_START_RATIO * centerApothemM;
-  for (let k = 0; k < SKIRT_RING_COUNT; k++) {
-    const theta = (k * Math.PI) / 3;
-    const cx = hexSpacingM * Math.cos(theta);
-    const cy = hexSpacingM * Math.sin(theta);
-    const neighborCell = neighborCells[k] as PatchCell;
-    const water = isWaterCell(neighborCell, patch.seaLevel);
-    // Якорь плиты — каноническая высота соседней ячейки Patch7 (И-3.2);
-    // вода держит зеркало waterLevelOf, суша — базовый якорь ячейки.
-    const anchorM = water
-      ? Math.min(0, (waterLevelOf(neighborCell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT)
-      : (baseElevationOf(neighborCell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
-    // Тот же fBm и канал detail единого 3D-сэмплера, что во всём поле (И-3.1).
-    const plateSurfaceZ = (x: number, y: number): number => {
-      if (water) return anchorM;
-      const fbmM = fBm(x * noiseScale, y * noiseScale, cellSeed, 5) * LAND_FBM_AMPLITUDE_M;
-      const detailM = (elevLattice
-        ? sampleSkirtLatticeAt(elevLattice.detail, outerRadiusM, x, y) * 0.5 + 0.5
-        : 0.5) * PROFILE_DETAIL_AMPLITUDE_M;
-      return anchorM + fbmM + detailM;
-    };
-
-    const centerIdx = (plateBase + k * plateVerts) * 3;
-    positions[centerIdx] = cx;
-    positions[centerIdx + 1] = cy;
-    positions[centerIdx + 2] = plateSurfaceZ(cx, cy);
-
-    for (let j = 1; j <= SKIRT_PLATE_RINGS; j++) {
-      const hLocal = (j / SKIRT_PLATE_RINGS) * centerApothemM;
-      for (let i = 0; i < angularCount; i++) {
-        // Веер гекса: вершины 6 секторов лежат на лучах π/6 + k·π/3, поэтому
-        // на i = 16·m луч проходит точно через вершины шестиугольника.
-        const phi = Math.PI / 6 + (i / SKIRT_ANGULAR_SEGMENTS) * Math.PI * 2;
-        const dirX = Math.cos(phi);
-        const dirY = Math.sin(phi);
-        const scale = hLocal / clusterHexMetric(dirX, dirY);
-        const x = cx + dirX * scale;
-        const y = cy + dirY * scale;
-
-        let z = plateSurfaceZ(x, y);
-        // Краевая полоса плиты: плавный переход в скошенную 3D-грань (фаску),
-        // чтобы все 6 соседей читались как чёткие 3D-шестиугольники.
-        if (hLocal > neighborBevelStartH) {
-          z -= bevelDropM
-            * smooth01((hLocal - neighborBevelStartH) / (centerApothemM - neighborBevelStartH));
-        }
-
-        const idx = (plateBase + k * plateVerts + 1 + (j - 1) * angularCount + i) * 3;
-        positions[idx] = x;
-        positions[idx + 1] = y;
-        positions[idx + 2] = z;
-      }
-    }
-  }
-
-  // Индексы: воротник (96 × 12 quadr'ов) + 6 плит (веер 96 треугольников
-  // из центра и 15 рядов quadr'ов). Порядок обхода — CCW из +z (грань вверх).
-  const collarIndexCount = SKIRT_ANGULAR_SEGMENTS * SKIRT_RADIAL_RINGS * 6;
-  const plateIndexCount = SKIRT_ANGULAR_SEGMENTS * 3
-    + (SKIRT_PLATE_RINGS - 1) * SKIRT_ANGULAR_SEGMENTS * 6;
-  const indices = new Uint32Array(collarIndexCount + SKIRT_RING_COUNT * plateIndexCount);
+  // Индексы непрерывной полярной сетки: (96 × 56) quad'ов = 32 256 индексов.
+  // Порядок обхода — CCW из +z (грань вверх), как у плоского меша рельефа.
+  const indices = new Uint32Array(SKIRT_ANGULAR_SEGMENTS * SKIRT_RADIAL_RINGS * 6);
   let ptr = 0;
   for (let j = 0; j < SKIRT_RADIAL_RINGS; j++) {
     for (let i = 0; i < SKIRT_ANGULAR_SEGMENTS; i++) {
       const a = j * angularCount + i;
-      const b = j * angularCount + i + 1;
+      const b = a + 1;
       const c = (j + 1) * angularCount + i;
-      const d = (j + 1) * angularCount + i + 1;
+      const d = c + 1;
       indices[ptr++] = a; indices[ptr++] = c; indices[ptr++] = b;
       indices[ptr++] = b; indices[ptr++] = c; indices[ptr++] = d;
     }
   }
-  const plateVertexAt = (k: number, j: number, i: number): number =>
-    plateBase + k * plateVerts + (j === 0 ? 0 : 1 + (j - 1) * angularCount + i);
-  for (let k = 0; k < SKIRT_RING_COUNT; k++) {
-    const center = plateVertexAt(k, 0, 0);
-    for (let i = 0; i < SKIRT_ANGULAR_SEGMENTS; i++) {
-      // Треугольный веер: центр плиты → первый радиальный ряд.
-      indices[ptr++] = center;
-      indices[ptr++] = plateVertexAt(k, 1, i);
-      indices[ptr++] = plateVertexAt(k, 1, i + 1);
-    }
-    for (let j = 1; j < SKIRT_PLATE_RINGS; j++) {
-      for (let i = 0; i < SKIRT_ANGULAR_SEGMENTS; i++) {
-        const a = plateVertexAt(k, j, i);
-        const b = plateVertexAt(k, j, i + 1);
-        const c = plateVertexAt(k, j + 1, i);
-        const d = plateVertexAt(k, j + 1, i + 1);
-        indices[ptr++] = a; indices[ptr++] = c; indices[ptr++] = b;
-        indices[ptr++] = b; indices[ptr++] = c; indices[ptr++] = d;
-      }
-    }
-  }
 
-  // Честные нормали вершин по треугольникам меша: накопление площадей граней,
-  // нормализация и ориентация в верхнюю полусферу (nz > 0), чтобы наклонные
-  // плоскости фасок гексов ярко подсвечивались боковым светом.
+  // Гладкие нормали по конечным разностям полярной сетки: тангенс вдоль кольца
+  // (с угловым замыканием i % SKIRT_ANGULAR_SEGMENTS) и тангенс вдоль радиуса;
+  // n = t_angular × t_radial, ориентация — в верхнюю полусферу (nz > 0).
   const normals = new Float32Array(vertexCount * 3);
-  for (let t = 0; t < indices.length; t += 3) {
-    const ia = (indices[t] as number) * 3;
-    const ib = (indices[t + 1] as number) * 3;
-    const ic = (indices[t + 2] as number) * 3;
-    const avx = positions[ia] as number;
-    const avy = positions[ia + 1] as number;
-    const avz = positions[ia + 2] as number;
-    const e1x = (positions[ib] as number) - avx;
-    const e1y = (positions[ib + 1] as number) - avy;
-    const e1z = (positions[ib + 2] as number) - avz;
-    const e2x = (positions[ic] as number) - avx;
-    const e2y = (positions[ic + 1] as number) - avy;
-    const e2z = (positions[ic + 2] as number) - avz;
-    const nx = e1y * e2z - e1z * e2y;
-    const ny = e1z * e2x - e1x * e2z;
-    const nz = e1x * e2y - e1y * e2x;
-    if (nx === 0 && ny === 0 && nz === 0) continue; // вырожденный треугольник
-    normals[ia] = (normals[ia] as number) + nx;
-    normals[ia + 1] = (normals[ia + 1] as number) + ny;
-    normals[ia + 2] = (normals[ia + 2] as number) + nz;
-    normals[ib] = (normals[ib] as number) + nx;
-    normals[ib + 1] = (normals[ib + 1] as number) + ny;
-    normals[ib + 2] = (normals[ib + 2] as number) + nz;
-    normals[ic] = (normals[ic] as number) + nx;
-    normals[ic + 1] = (normals[ic + 1] as number) + ny;
-    normals[ic + 2] = (normals[ic + 2] as number) + nz;
-  }
-  for (let v = 0; v < vertexCount; v++) {
-    const o = v * 3;
-    let nx = normals[o] as number;
-    let ny = normals[o + 1] as number;
-    let nz = normals[o + 2] as number;
-    const len = Math.hypot(nx, ny, nz);
-    if (len > 0) {
-      nx /= len;
-      ny /= len;
-      nz /= len;
-    } else {
-      nx = 0; ny = 0; nz = 1;
+  const vertexAt = (i: number, j: number): number => (j * angularCount + i) * 3;
+  for (let j = 0; j < radialCount; j++) {
+    const jPrev = j > 0 ? j - 1 : j;
+    const jNext = j < radialCount - 1 ? j + 1 : j;
+    for (let i = 0; i < angularCount; i++) {
+      const iPrev = (i - 1 + SKIRT_ANGULAR_SEGMENTS) % SKIRT_ANGULAR_SEGMENTS;
+      const iNext = (i + 1) % SKIRT_ANGULAR_SEGMENTS;
+      const aPrev = vertexAt(iPrev, j);
+      const aNext = vertexAt(iNext, j);
+      const rPrev = vertexAt(i, jPrev);
+      const rNext = vertexAt(i, jNext);
+      const tax = (positions[aNext] as number) - (positions[aPrev] as number);
+      const tay = (positions[aNext + 1] as number) - (positions[aPrev + 1] as number);
+      const taz = (positions[aNext + 2] as number) - (positions[aPrev + 2] as number);
+      const trx = (positions[rNext] as number) - (positions[rPrev] as number);
+      const tryy = (positions[rNext + 1] as number) - (positions[rPrev + 1] as number);
+      const trz = (positions[rNext + 2] as number) - (positions[rPrev + 2] as number);
+
+      let nx = tay * trz - taz * tryy;
+      let ny = taz * trx - tax * trz;
+      let nz = tax * tryy - tay * trx;
+      const len = Math.hypot(nx, ny, nz);
+      if (len > 1e-9) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+      } else {
+        nx = 0; ny = 0; nz = 1;
+      }
+      if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+
+      const idx = vertexAt(i, j);
+      normals[idx] = nx;
+      normals[idx + 1] = ny;
+      normals[idx + 2] = nz;
     }
-    if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
-    normals[o] = nx;
-    normals[o + 1] = ny;
-    normals[o + 2] = nz;
   }
 
   return {
