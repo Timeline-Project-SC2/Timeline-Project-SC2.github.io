@@ -739,9 +739,15 @@ function nearestLocalNeighbor(azimuth: number): LocalPatchCell | null {
   return nearest;
 }
 
-/** Запускает единый latest-wins переход на соседний канонический гекс. */
+/**
+ * Запускает единый latest-wins переход на соседний канонический гекс.
+ * Stage-8.5.1: блокировки `localPatchLoading` больше нет — повторный клик по
+ * другой кнопке «СОСЕДИ PATCH7» или по другому гексу 3D-сцены не зависает:
+ * каждый новый запрос увеличивает `latestPatchRequest`, ответы устаревших
+ * переходов отбрасываются в обработчике (`msg.requestId !== latestPatchRequest`).
+ */
 function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
-  if (!localMapActive || localPatchLoading || !activePatchReady || !worker || !displayedToken) return;
+  if (!localMapActive || !activePatchReady || !worker || !displayedToken) return;
   // Stage-8.4: точка прицела НЕ сбрасывается мгновенно — прежний обнуляющий
   // рывок localCameraTarget[0..1] ломал кадр ещё до прихода нового патча.
   // Текущее состояние камеры сохраняется в pendingNeighborFly и разыгрывается
@@ -1357,7 +1363,14 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
   // Stage-8.5: если локальная карта уже открыта для ТОЙ ЖЕ ячейки,
   // не перегенерируем меш с гигантскими домами, а плавно переводим камеру
   // на новую дистанцию/наклон (550 мс easeInOutCubic), обновляя URL и HUD.
-  if (localMapActive && activePatchReady &&
+  //
+  // Stage-8.5.1: плавный зум допустим ТОЛЬКО когда это действительно смена
+  // масштаба на уже отрисованной ячейке. Пока идёт загрузка соседнего патча
+  // (`localPatchLoading`) или запланирован перелёт (`pendingNeighborFly`),
+  // `activePatchReady` ещё указывает на прежнюю ячейку — такой вызов обязан
+  // идти полным путём `renderLocalMapFromPatch`, иначе переход по кнопкам
+  // «СОСЕДИ PATCH7» и по клику на гексы 3D-сцены молча терялся.
+  if (localMapActive && !localPatchLoading && !pendingNeighborFly && activePatchReady &&
       activePatchReady.hexCenterCell === patchReady.hexCenterCell) {
     localMapWidthKm = scale;
     const targetDistance = cameraDistanceForWidthKm(scale);
@@ -2280,7 +2293,18 @@ function initEvents(): void {
       const dir = neighbor.center;
       const u = dir[0] * east[0] + dir[1] * east[1] + dir[2] * east[2];
       const v = dir[0] * north[0] + dir[1] * north[1] + dir[2] * north[2];
-      pendingNeighborFly = { cell, azimuth: Math.atan2(u, v) };
+      // Stage-8.5.1: кнопка «СОСЕДИ PATCH7» и клик по гексу 3D-сцены идут
+      // ОДНИМ путём — сохраняем полное состояние камеры (как в
+      // requestLocalNeighbor), чтобы перелёт стартовал без рывка и не терял
+      // пользовательский yaw/pitch/zoom.
+      pendingNeighborFly = {
+        cell,
+        azimuth: Math.atan2(u, v),
+        prevTargetOffset: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+        prevYaw: localCameraYaw,
+        prevPitch: localCameraPitch,
+        prevDist: localCameraDistance,
+      };
     }
     cancelLocalCameraAnim();
     setLocalMapStatus('Запрашиваю соседнюю ячейку #' + cell + ' и новый Patch7…', 'info');
@@ -2535,7 +2559,13 @@ function renderPrefetchReady(msg: WorkerPrefetchReadyResponse): void {
 
 function renderPatchReady(msg: WorkerPatchReadyResponse): void {
   lastPatchReady = msg;
-  activePatchReady = msg;
+  // Stage-8.5.1: НЕ перезаписываем `activePatchReady` при открытой локальной
+  // карте. Иначе `enterLocalMap(msg, scale)` ниже сравнивал только что
+  // записанный `msg` сам с собой, принимал переход на соседнюю ячейку за смену
+  // масштаба на той же ячейке и делал `return` без `renderLocalMapFromPatch`.
+  // При открытой карте `activePatchReady = patchReady` обновляет сам
+  // `renderLocalMapFromPatch` — уже после генерации нового меша.
+  if (!localMapActive) activePatchReady = msg;
   els.diveLocalMap.disabled = !msg.invariants.ok;
   updateLocalNeighborButtons(msg);
 

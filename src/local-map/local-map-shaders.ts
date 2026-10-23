@@ -419,17 +419,43 @@ void main() {
   }
   vec3 baseColor = mix(naturalColor, zoneColor, terraformBlend * zoneWeight * 0.36);
 
+  // Stage-8.5.1: мягкая кромка прибоя. На полярной сетке юбки 145 × 85
+  // переходный треугольник «океан ↔ суша» имеет две вершины z == 0 и одну
+  // z > 0, поэтому интерполяция даёт v_worldPos.z > 0 по ВСЕЙ площади
+  // треугольника и вода обрывалась строго по прямым рёбрам треугольников.
+  // Двухоктавный шум береговой кромки искривляет урез на малых высотах
+  // (0…5.5 м), поэтому линия прибоя проходит сквозь внутренность
+  // треугольников плавной природной дугой без единого зубца.
+  vec2 shoreUv = v_worldPos.xy / max(u_focusRadiusM, 600.0);
+  float shoreWave = (terrainValueNoise(shoreUv * 3.4 + vec2(4.1, -2.7)) - 0.5) * 1.8
+                  + (terrainValueNoise(shoreUv * 9.8 + vec2(-7.3, 5.4)) - 0.5) * 0.7;
+  float effectiveShoreZ = v_worldPos.z + shoreWave * smoothstep(0.0, 5.0, v_worldPos.z);
+  bool coastalBand = (u_isSkirt >= 0.5 || rawTerraform < 0.002);
+  bool isCoastalShore = coastalBand && (effectiveShoreZ < 4.8);
+
   // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
   // океана канонической ячейки лежит ровно на уровне seaLevel (z == 0), врез
   // речного русла уходит ниже — условие z <= 0. Континентальные озёра выше
   // seaLevel держат зенит ровной горизонтальной площадки (isFlatWaterMirror)
   // и тонируются тем же водным градиентом SHALLOW_WATER_COLOR /
   // DEEP_WATER_COLOR, что и океан.
-  if (zone == 0u && (v_worldPos.z <= 0.0 || isFlatWaterMirror)) {
+  if (zone == 0u && (v_worldPos.z <= 0.0 || isFlatWaterMirror || isCoastalShore)) {
     float depthBelowZero = max(0.0, -v_worldPos.z);
     float waterBlend = isFlatWaterMirror ? 1.0 : smoothstep(0.0, 3.0, depthBelowZero);
+    // Плавный переход в воду на водном урезе: effectiveShoreZ <= 1.8 м — ещё
+    // вода (мелководье), выше — береговая кромка и прибрежная трава.
+    float shoreWater = isFlatWaterMirror
+      ? 1.0
+      : max(waterBlend, 1.0 - smoothstep(0.0, 1.8, effectiveShoreZ));
     vec3 waterColor = mix(SHALLOW_WATER_COLOR, DEEP_WATER_COLOR, smoothstep(0.0, 24.0, depthBelowZero));
-    baseColor = mix(baseColor, waterColor, waterBlend * 0.92);
+    baseColor = mix(baseColor, waterColor, shoreWater * 0.92);
+    // На полосе 1.4 < effectiveShoreZ < 4.8 м — мягкая песчано-галечная
+    // кромка, плавно переходящая от мелководья к прибрежной траве baseColor.
+    if (!isFlatWaterMirror && coastalBand) {
+      float beachBand = smoothstep(1.4, 2.8, effectiveShoreZ)
+        * (1.0 - smoothstep(3.4, 4.8, effectiveShoreZ));
+      baseColor = mix(baseColor, vec3(0.66, 0.63, 0.49), beachBand * 0.85);
+    }
   }
 
   // Деликатная кромка ТОЛЬКО активного гекса: узкая приглушённая линия

@@ -1306,6 +1306,13 @@ export const SKIRT_COLLAR_BLEND_START_RATIO = 1.005;
 export const SKIRT_COLLAR_BLEND_END_RATIO = 1.35;
 /** Доля R_patch: страховочная граница точной выборки heightfield (сетка res × res). */
 export const SKIRT_HEIGHTFIELD_GUARD_RATIO = 0.98;
+/**
+ * Stage-8.5.1: «разумный кап» размаха положительных высот макро-решётки, м.
+ * На морском патче Patch7 целиком вода (перепад 0), поэтому берег, выходящий
+ * из океана во 2–4 кольце юбки, получает амплитуду прибрежных гряд именно из
+ * калиброванного канала `elevation`, но не выше этого капа.
+ */
+export const SKIRT_LATTICE_RELIEF_CAP_M = 240;
 /** Число ячеек канонической сетки Голдберга v = 128: 10v² + 2. */
 const GOLDBERG_V128_CELLS = 10 * 128 * 128 + 2;
 /** Узлов макро-решётки 3D-сэмплера на сторону (33×33 = 1 089 опросов). */
@@ -1554,12 +1561,24 @@ function smoothPatchBaseElevation(
  * плюс размах канала `detail` макро-решётки. Равнинный патч даёт малую
  * амплитуду (открытая равнина вокруг гекса), контрастный горный — большую;
  * искусственной зависимости от `radiusPatchM` больше нет.
+ *
+ * Stage-8.5.1: на морском патче перепад Patch7 равен нулю (все 7 ячеек —
+ * океан), и юбка за воротником оставалась плоским зеркалом, хотя во 2–4
+ * кольце из океана уже выходит настоящий берег. Поэтому амплитуда учитывает
+ * ещё и размах положительных высот калиброванного канала `elevation`
+ * макро-решётки над `patch.seaLevel` (в метрах, с капом
+ * `SKIRT_LATTICE_RELIEF_CAP_M`): у вышедшей из моря суши появляются
+ * естественные прибрежные холмы и гряды.
+ *
+ * Экспортируется для тестов Stage-8.5.1 (проверка вклада макро-решётки в
+ * амплитуду гребней на морском патче).
  */
-function skirtLocalReliefAmplitudeM(
+export function skirtLocalReliefAmplitudeM(
   patch: LocalMapPatch,
   neighborSlots: readonly PatchCell[],
   centerCanonElev: number,
   elevLattice: SkirtElevationLattice | null,
+  elevCalibration = 0,
 ): number {
   const canon = (cell: PatchCell): number => isWaterCell(cell, patch.seaLevel)
     ? waterLevelOf(cell, patch.seaLevel) : baseElevationOf(cell);
@@ -1582,7 +1601,16 @@ function skirtLocalReliefAmplitudeM(
   const detailReliefM = Number.isFinite(minDetail) && Number.isFinite(maxDetail)
     ? (maxDetail - minDetail) * PROFILE_DETAIL_AMPLITUDE_M
     : 0;
-  return patchReliefM + detailReliefM;
+  // Размах положительных высот макро-решётки над seaLevel, м (калибровка та же,
+  // что у сэмпла высоты в skirtPlanetaryHeight и центре патча).
+  let maxLatticeAboveSeaM = 0;
+  for (let i = 0; i < elevLattice.elevation.length; i++) {
+    const aboveSeaM = ((elevLattice.elevation[i] as number) + elevCalibration - patch.seaLevel)
+      * METERS_PER_ELEVATION_UNIT;
+    if (aboveSeaM > maxLatticeAboveSeaM) maxLatticeAboveSeaM = aboveSeaM;
+  }
+  const latticeReliefM = Math.min(SKIRT_LATTICE_RELIEF_CAP_M, maxLatticeAboveSeaM);
+  return Math.max(patchReliefM, latticeReliefM) + detailReliefM;
 }
 
 /**
@@ -1632,6 +1660,22 @@ function skirtPlanetaryHeight(
   // к z = 0.
   const waterMirrorM = (base.waterLevel - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
 
+  // Stage-8.5.1: калиброванная высота макро-решётки нужна ДО блока mountainM —
+  // именно по ней видно, где за пределами водного Patch7 из океана реально
+  // выходит суша (2–4 кольца юбки, где канонический якорь ещё говорит «вода»).
+  const latticeX = (x * coordScale) / planetCoordScale;
+  const latticeY = (y * coordScale) / planetCoordScale;
+  const calibratedM = elevLattice
+    ? (sampleSkirtLatticeAt(elevLattice.elevation, outerRadiusM, latticeX, latticeY)
+      + elevCalibration - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
+    : (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+  // Локальная доля суши: якорь Patch7 (1 - water) ИЛИ калиброванная высота
+  // решётки над зеркалом. Водное зеркало (calibratedM <= waterMirrorM) обязано
+  // остаться идеально плоским, поэтому эффективная доля суши там равна 1 - water.
+  const effectiveLand = elevLattice
+    ? Math.max(1 - water, smooth01((calibratedM - waterMirrorM - 2) / 35))
+    : (1 - water);
+
   // Stage-8.3: гребневые горные хребты только на суше и только за пределами
   // активного гекса (r > collarEndM). Огибающая плавно выводит рельеф из
   // природной долины в предгорья на 2.8 · R_patch и слегка (на 30%) гасит
@@ -1647,17 +1691,15 @@ function skirtPlanetaryHeight(
   // гекса простирается равнина, а отдельные гряды стоят лишь на тех азимутах,
   // где рельеф планеты действительно поднят.
   // На воде горный рельеф строго ноль — зеркало Stage-8.2.1 не трогаем.
+  // Stage-8.5.1: критерий «суша» — не только якорь Patch7 (`water < 1`), но и
+  // effectiveLand: берег, поднимающийся из океана за пределами водного Patch7,
+  // получает живой прибрежный рельеф холмов и гряд.
   let mountainM = 0;
-  if (water < 1 && r > collarEndM) {
+  if (effectiveLand > 0.01 && r > collarEndM) {
     const mountainEnvelope = smooth01((r - collarEndM) / (2.8 * radiusPatchM))
       * (1 - 0.30 * smooth01((r - 6.0 * radiusPatchM) / (outerRadiusM - 6.0 * radiusPatchM)));
     // Реальная возвышенность направления, м над seaLevel.
-    const macroElevM = elevLattice
-      ? (sampleSkirtLatticeAt(
-        elevLattice.elevation, outerRadiusM,
-        (x * coordScale) / planetCoordScale, (y * coordScale) / planetCoordScale,
-      ) + elevCalibration - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
-      : (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+    const macroElevM = calibratedM;
     const centerElevM = (centerCanonElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
     // Низина и шельф гор не дают вовсе, пологая равнина — отдельные гряды,
     // поднятое направление — полноценные хребты.
@@ -1675,28 +1717,32 @@ function skirtPlanetaryHeight(
       x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, cellSeed ^ 0x3391B7,
     );
     const basinMask = smooth01((macroBasin - 0.52) / 0.32);
-    // Stage-8.5: амплитуда — реальный перепад высот Patch7 и размах `detail`.
+    // Stage-8.5: амплитуда — реальный перепад высот Patch7 (Stage-8.5.1: и
+    // размах положительных высот макро-решётки морского патча) и `detail`.
     const peakAmpM = Math.min(320, Math.max(60, localReliefAmpM));
     mountainM = peakAmpM * mountainEnvelope * reliefMask * basinMask * Math.pow(ridgeVal, 1.35);
   }
 
+  // Stage-8.5.1: гребни подмешиваются к суше с весом effectiveLand — на
+  // идеально ровном водном зеркале их строго ноль.
   const landHeight = (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
-    + fbmM + detailM + mountainM;
+    + fbmM + detailM + mountainM * effectiveLand;
   const nearHeight = waterMirrorM * water + landHeight * (1 - water);
   if (r <= radiusPatchM || !elevLattice) return nearHeight;
 
   // Калибровка сэмпла макро-решётки относительно центра патча: непрерывное
   // поле elevation продолжает канонический якорь центральной ячейки
   // (waterLevelOf для воды, baseElevationOf для суши), а не абсолютную
-  // некалиброванную высоту сэмплера.
-  const elev = sampleSkirtLatticeAt(
-    elevLattice.elevation, outerRadiusM, x * coordScale / planetCoordScale, y * coordScale / planetCoordScale,
-  );
-  const calibratedElev = elev + elevCalibration;
-  const calibratedM = (calibratedElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+  // некалиброванную высоту сэмплера (см. calibratedM выше).
   const shoreBlend = smooth01(Math.max(0, calibratedM - waterMirrorM) / 45);
   const waterHeight = Math.max(waterMirrorM, calibratedM) + (fbmM + detailM) * shoreBlend;
-  const latticeHeight = waterHeight * water + (calibratedM + fbmM + detailM + mountainM) * (1 - water);
+  // Stage-8.5.1: доля суши в точке — ещё и калиброванная высота макро-решётки
+  // (effectiveLand). Берег, выходящий из океана за пределами водного Patch7,
+  // получает живой прибрежный рельеф холмов и гряд, а само водное зеркало
+  // (calibratedM <= waterMirrorM) остаётся идеально плоским: там
+  // effectiveLand == 1 - water и высота в точности равна waterMirrorM.
+  const latticeLandHeight = calibratedM + fbmM + detailM + mountainM * effectiveLand;
+  const latticeHeight = waterHeight * (1 - effectiveLand) + latticeLandHeight * effectiveLand;
   const latticeBlend = smooth01((r - collarEndM) / (3.4 * radiusPatchM));
   return nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
 }
@@ -1781,7 +1827,7 @@ export function generateHorizonSkirt(
   // Stage-8.5: амплитуда горных гребней — от реального перепада высот патча и
   // размаха канала `detail`, а не от визуального радиуса участка.
   const localReliefAmpM = skirtLocalReliefAmplitudeM(
-    patch, neighborSlots, centerCanonElev, elevLattice,
+    patch, neighborSlots, centerCanonElev, elevLattice, elevCalibration,
   );
 
   const innerRes = HEIGHTFIELD_RES;
