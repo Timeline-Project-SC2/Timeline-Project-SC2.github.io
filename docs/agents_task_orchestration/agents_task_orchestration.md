@@ -235,3 +235,51 @@ docs/agents_task_orchestration/worker_instruction_on_splitwork.md
 
 
 
+
+---
+
+## 15. Матрица волны Stage-8.7 (Бесшовный межъячеечный переход, голографические квик-стрелки и рендер колец 1–5)
+
+Цель волны **Stage-8.7** — сделать переход между каноническими гексами локальной карты визуально непрерывным (камера не дёргается, ни одного кадра сброса), дать игроку квик-навигацию «время от времени возникающими» голографическими стрелками, перпендикулярными граням активного гекса, и разрешить рендер кольцевых областей вокруг активного участка — **до 5 колец включительно**.
+
+### 15.1. Модель колец: гексагональная геометрия + экспоненциальный LOD
+
+Кольцо `k` вокруг активного гекса содержит ровно `6k` ячеек; число колец — до `k = 5`. Экспонента заложена не в форму кольца, а в **разрешение высотного поля**: каждая следующая кольцевая область вдвое грубее предыдущей, поэтому площадь покрытия растёт квадратично, а стоимость ячейки падает экспоненциально.
+
+| Кольцо | Ячеек (`6k`) | `hfRes` | Накопительно (`3k(k+1)+1`) |
+|---|---:|---:|---:|
+| 0 (центр, `Patch7`) | 1 | 256 | 1 |
+| 1 | 6 | 64 | 7 |
+| 2 | 12 | 32 | 19 |
+| 3 | 18 | 16 | 37 |
+| 4 | 24 | 8 | 61 |
+| 5 | 30 | 4 | **91** |
+
+Бюджет буферов при `neighborRings = 5`: высотные поля `43 488` значений `f32` (**≈ 170 КиБ**) и `waterMask` `43 488` байт (**≈ 42,5 КиБ**), итого **≈ 212 КиБ** на патч — вдвое ниже лимита гейта **G6.3** (`≤ 512 КБ`).
+
+### 15.2. Матрица распределения файлов (`Zero File Overlap`)
+
+| Воркер | Поток работ | Эксклюзивные файлы (`OWNED_FILES`) | Запрещено трогать (`FORBIDDEN_FILES`) |
+|---|---|---|---|
+| **Воркер 1**<br>*(Кольцевые области 1–5 в воркере, LOD-таблица и тесты)* | Обход колец `1..5` от канонического центра `Patch7` по `GeodesicGrid.neighbors`, разрешения `RING_HF_RES = [256, 64, 32, 16, 8, 4]`, `LocalMapRingCell` и необязательные поля `ringCells` / `ringCellCount` / `ringGenMs` / `neighborRings`; детерминизм, учёт колец в LRU-кэше участков и полная эквивалентность прежнему поведению при `neighborRings = 0`. | - `src/local-map/local-map-worker.ts`<br>- `tests/local-map-stage8.test.mjs` | Все остальные файлы, включая `src/local-map/local-map-shaders.ts`, `src/local-map/local-map-renderer.ts`, `site/*`, `package.json`, `docs/HANDOFF.md`, `CHANGELOG.md` |
+| **Воркер 2**<br>*(Рендер колец 1–5 и бесшовный стык с юбкой горизонта)* | Меш кольцевой ячейки из `heightfield` её разрешения в предвыделенных буферах без пересоздания VAO; юниформы `u_ringLevel` / `u_ringFade`; упрощение гипсометрии и воды по уровню кольца; передача цвета, тумана и нормалей в `u_fogColor` / `u_horizonColor` на границе «кольцо 5 → сферическая юбка»; порядок отрисовки `5 → 1 → центральный патч → юбка` без z-fighting; публичный `getRingStats()`. | - `src/local-map/local-map-shaders.ts`<br>- `src/local-map/local-map-renderer.ts` | Все остальные файлы, включая `src/local-map/local-map-worker.ts`, `tests/*`, `site/*`, `package.json`, `docs/HANDOFF.md`, `CHANGELOG.md` |
+| **Воркер 3**<br>*(Бесшовный переход между гексами и интеграция квик-навигации)* | Чистая функция `rebaseLocalCameraState(...)` (сохранение мировой точки прицела при сдвиге на шаг центров `d_hex = 1.15 · R_patch`), атомарная подмена патча в одном кадре без пустого кадра и сброса `LOCAL_REST_YAW`, сглаживание остаточного рассогласования `≤ 220 мс` (`easeOutCubic`), сохранение `latest-wins`; интеграция `createLocalMapQuickNav(host, onPick)` в `#localMapStage` с делегированием в `requestLocalNeighbor`; диагностика G6.1 (`max |Δeye|`, `max |Δyaw|`) за флагом `?debug=local`. | - `site/planet-globe/planet-globe.ts`<br>- `site/planet-globe/planet-globe.css`<br>- `site/planet-globe/index.html` | Все остальные файлы, включая `site/planet-globe/local-map-quick-nav.ts`, `site/shared/*`, `src/*`, `tests/*`, `package.json`, `docs/HANDOFF.md`, `CHANGELOG.md` |
+| **Воркер 4**<br>*(Модуль голографических квик-стрелок)* | Новый `site/planet-globe/local-map-quick-nav.ts` по контракту `QuickNavHintInput` / `LocalMapQuickNav` / `createLocalMapQuickNav` и чистая `layoutQuickNavArrows(...)`; цикл `7 200 мс`, окно `2 600 мс`, ступенчатая задержка `90 мс` по слотам `0..5`, `fade-in 180 мс` / `fade-out 260 мс`; голографический шеврон `#00ff66` с `mix-blend-mode: screen`, hit-area `≥ 44 × 44` CSS px, поддержка `prefers-reduced-motion`, запрет `eval`/`new Function` (CSP); тест `tests/local-map-quick-nav.test.mjs` и подключение его в `npm test`. | - `site/planet-globe/local-map-quick-nav.ts`<br>- `tests/local-map-quick-nav.test.mjs`<br>- `package.json` | Все остальные файлы, включая `site/planet-globe/planet-globe.ts`, `planet-globe.css`, `index.html`, `src/*`, `docs/HANDOFF.md`, `CHANGELOG.md` |
+| **Воркер 5**<br>*(Документация волны; запускается последним, после слияния PR 1–4)* | Сводные записи волны: `CHANGELOG.md`, `docs/HANDOFF.md` (§1 «Статус», §2, §5, §8), новый раздел 7 в `docs/stages/STAGE_8_PLANETARY_HORIZON.md`, проставление номеров слитых PR в §15 настоящего документа и строка статуса «Местность до ~1 км» в `docs/PREPARATION_PLAN.md`. Числа — только из отчётов воркеров и кода, без домыслов. | - `docs/HANDOFF.md`<br>- `CHANGELOG.md`<br>- `docs/stages/STAGE_8_PLANETARY_HORIZON.md`<br>- `docs/agents_task_orchestration/agents_task_orchestration.md`<br>- `docs/PREPARATION_PLAN.md` | Все остальные файлы, включая `site/*`, `src/*`, `tests/*`, `tools/*`, `package.json`, `.github/*`, `data/*` |
+
+**Стык `package.json`.** Единственный общий файл волны (подключение нового теста в `npm test`) отдан ровно **Воркеру 4** (правило О-1); остальным воркерам его правка запрещена.
+
+**Стык `planet-globe.ts` ↔ `local-map-quick-nav.ts` (О-3, Interface-First).** Имя файла и сигнатуры `QuickNavHintInput`, `LocalMapQuickNav`, `createLocalMapQuickNav(host, onPick)` зафиксированы дословно до старта волны. Воркер 3 интегрирует модуль по контракту через временный локальный шим (5 строк, с комментарием «удалить после слияния PR Воркера 4») и не создаёт сам модуль; Воркер 4 не правит страницу.
+
+### 15.3. Гейты волны (продолжение G5 → G6)
+
+| Гейт | Критерий |
+|---|---|
+| **G6.1** | Переход между гексами непрерывен: `0` кадров со скачком `|Δyaw| > 0.002` рад или смещением точки прицела `> 1` CSS px; нет пустых кадров и сброса ракурса |
+| **G6.2** | Квик-навигация: 6 стрелок, цикл `7 200 мс`, hit-area `≥ 44 × 44` CSS px, `prefers-reduced-motion` — без пульса и скан-линии, клики работают |
+| **G6.3** | Кольца: `ringGenMs ≤ 20 мс`, новые буферы `≤ 512 КБ` на патч при `neighborRings = 5`, `0` видимых швов «кольцо 5 → юбка», steady-кадр `p95 ≤ 20 мс` |
+| **G6.4** | Матрица проверок зелёная: `tsc`, `eslint`, `npm run build`, `node --test`, `verify:publish`, `check.yml` 4/4 |
+
+### 15.4. Порядок запуска
+
+Воркеры 1–4 стартуют одновременно в отдельных ветках от `main`; Воркер 5 запускается после слияния PR 1–4 и проставляет фактические номера PR в таблицу §15.2. Каждый воркер останавливается перед merge — слияние выполняет Гайдлайнер после приёмки по гейтам G6.1–G6.4.
