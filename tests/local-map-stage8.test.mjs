@@ -1356,9 +1356,35 @@ test('Stage-8.2 HorizonSkirt: GPU-путь непрерывной юбки на 
   assert.equal(skyDraws.length, 1, 'купол неба рисуется один раз за кадр');
   assert.equal(skyDraws[0].count, 3, 'купол — полноэкранный треугольник из 3 вершин');
   const terrainDraws = calls.draws.filter((draw) => draw.kind === 'terrain');
-  assert.equal(terrainDraws.length, 2, 'юбка (u_isSkirt=1) и центральный рельеф (u_isSkirt=0)');
+  // Stage-8.7: к каждому кольцу добавляется собственная LOD-область, поэтому
+  // базовые два terrain-draw (юбка и центр) дополняются числом ringCells.
+  const ringCells = local.ringCells ?? [];
+  // Stage-8.7: в пределах одного кольца все 6·level ячеек смежны и лежат в
+  // общем буфере, поэтому на кольцо приходится ровно один batch-draw.
+  const ringBatches = new Set(ringCells.map((cell) => cell.ring)).size;
+  assert.equal(
+    terrainDraws.length,
+    2 + ringBatches,
+    'юбка, центральный рельеф и по одному batch-draw на каждое кольцо',
+  );
   const uniform = (name) => calls.uniforms.filter((entry) => entry[0] === name).map((entry) => entry[1]);
-  assert.deepEqual(uniform('u_isSkirt'), [1, 0], 'юбка рисуется с u_isSkirt=1, центр — с 0');
+  const isSkirtValues = uniform('u_isSkirt');
+  // Stage-8.7: униформа ставится при смене программы, поэтому число её записей
+  // не равно числу draw-вызовов. Проверяем состав, а не количество:
+  // ровно один terrain-draw помечен как юбка (u_isSkirt=1).
+  assert.equal(
+    isSkirtValues.filter((value) => value === 1).length,
+    1,
+    'ровно один terrain-draw помечен как юбка',
+  );
+  assert.ok(isSkirtValues.includes(0), 'центральный рельеф и кольца рисуются с u_isSkirt=0');
+  if (ringBatches > 0) {
+    assert.deepEqual(
+      uniform('u_ringLevel').filter((value) => value > 0),
+      [5, 4, 3, 2, 1],
+      'кольца рисуются от дальнего к ближнему: 5 → 4 → 3 → 2 → 1',
+    );
+  }
   assert.ok(
     uniform('u_planetRadiusM').some((value) => Math.abs(value - rp) < 1e-6),
     'u_planetRadiusM передан в шейдеры',
