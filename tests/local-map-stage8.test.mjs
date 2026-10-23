@@ -19,7 +19,11 @@
       центрального гекса.
    3. StructureRenderer на mock WebGL2: VAO рельефа и модулей создаются ровно
       один раз, повторные участки обновляются через gl.bufferSubData,
-      compilePrograms/renderFrame/dispose работают и освобождают ресурсы. */
+      compilePrograms/renderFrame/dispose работают и освобождают ресурсы.
+   4. Stage-8.2.1: континентальное озеро выше seaLevel (морфология ячейки
+      #53275 «Корхал IV») непрерывно проходит шестигранный воротник юбки
+      горизонта без обрыва к z = 0 и не застраивается при малом radiusM,
+      когда края patchSpanMeters попадают на сухих соседей. */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -675,6 +679,27 @@ test('шейдеры Этапа 8: тонирование водных низи�
   assert.ok(terrain.includes('zone == 0u'), 'тонирование только вне зон застройки');
   assert.ok(terrain.includes('v_worldPos.z'), 'глубина считается по мировой высоте');
   assert.ok(terrain.includes('v_worldPos.z <= 0.0'), 'зеркало воды на z == 0 тоже тонируется');
+  // Stage-8.2.1: ровное водное зеркало (в том числе континентальное озеро
+  // выше seaLevel) распознаётся по горизонтальной нормали и не получает
+  // сухопутной текстуры с периодическими «зебровыми» кольцами.
+  assert.ok(terrain.includes('isFlatWaterMirror'), 'признак ровного водного зеркала объявлен');
+  assert.ok(terrain.includes('normalHoriz < 0.0015'), 'зеркало воды распознаётся по горизонтальной нормали');
+  assert.ok(
+    terrain.includes('v_worldPos.z > 0.0 && !isFlatWaterMirror'),
+    '3 каскада сухопутной текстуры отключены на водном зеркале',
+  );
+  assert.ok(
+    !terrain.includes('fract(v_worldPos.z / 30.0'),
+    'периодические «зебровые» кольца каждые 30 м по высоте удалены',
+  );
+  assert.ok(
+    terrain.includes('slopeSteep') && terrain.includes('slopeRock'),
+    'крутые склоны затеняются по крутизне без периодичности',
+  );
+  assert.ok(
+    terrain.includes('isFlatWaterMirror ? 1.0 : smoothstep'),
+    'континентальные озёра выше seaLevel тонируются водой',
+  );
   for (const name of ['u_zoning_map', 'u_terraform_map', 'u_lightDir', 'u_ambientColor', 'u_fogColor']) {
     assert.ok(terrain.includes(name), `юниформ ${name} сохранён`);
   }
@@ -838,6 +863,64 @@ function buildSkirt(patchKey) {
   const request = requestFor(dryPatch, { patchKey, profile: PROFILE });
   const local = Worker.generateLocalMap(request);
   return { request, local, skirt: Worker.generateHorizonSkirt(request, local.heightfield) };
+}
+
+/**
+ * Фикстура Stage-8.2.1: континентальное озеро ВЫШЕ уровня моря (морфология
+ * ячейки #53275 «Корхал IV»: seaLevel = 0.1129, elevation = 0.3910,
+ * filledElevation = 0.3943, lakeWeight = 0.4456) в кольце сухих застраиваемых
+ * соседей. Геометрия кольца берётся из канонического патча v=16 (dryPatch),
+ * а поля ячеек переопределяются детерминированно.
+ */
+const LAKE_SEA_LEVEL = 0.1129;
+const LAKE_CENTER_ELEVATION = 0.3910;
+const LAKE_CENTER_FILLED = 0.3943;
+const LAKE_WEIGHT = 0.4456;
+
+function buildContinentalLakePatch(basePatch) {
+  assert.ok(basePatch, 'нужен шестиугольный патч-основа');
+  const center = basePatch.cells[0];
+  const cells = [
+    {
+      ...center,
+      elevation: LAKE_CENTER_ELEVATION,
+      filledElevation: LAKE_CENTER_FILLED,
+      depressionDepth: LAKE_CENTER_FILLED - LAKE_CENTER_ELEVATION,
+      muLand: 0,
+      slope: 0,
+      lakeId: 11,
+      lakeWeight: LAKE_WEIGHT,
+      streamWeight: 0,
+      riverAccumulation: 0,
+      flowReceiver: -1,
+    },
+    ...basePatch.cells.slice(1).map((cell) => ({
+      ...cell,
+      elevation: 0.52,
+      filledElevation: 0.52,
+      depressionDepth: 0,
+      muLand: 0.92,
+      slope: 0.4,
+      lakeId: -1,
+      lakeWeight: 0,
+      streamWeight: 0,
+      riverAccumulation: 0,
+      flowReceiver: -1,
+    })),
+  ];
+  return {
+    ...basePatch,
+    seaLevel: LAKE_SEA_LEVEL,
+    cells,
+    river: {
+      centerCell: basePatch.centerCell,
+      flowsThroughCenter: false,
+      centerStreamWeight: 0,
+      centerRiverAccumulation: 0,
+      inlets: [],
+      outlet: null,
+    },
+  };
 }
 
 test('Stage-8.2 HorizonSkirt: единая полярная сетка 97 × 57 и геометрия горизонта', () => {
@@ -1112,6 +1195,93 @@ test('Stage-8.2 HorizonSkirt: бесшовная гексагональная с
   const noCollar = Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-collar' }), undefined);
   assert.equal(noCollar.positions.length, SKIRT_VERTEX_COUNT * 3, 'без heightfield — та же сетка');
   assert.equal(noCollar.indices.length, 32256, 'без heightfield — те же индексы');
+});
+
+test('Stage-8.2.1: континентальное озеро выше seaLevel проходит воротник юбки без обрыва к z = 0', () => {
+  const patch = buildContinentalLakePatch(dryPatch);
+  const invariants = Contract.verifyPatchInvariants(patch);
+  assert.equal(invariants.ok, true, `фикстура озера валидна по И-3: ${JSON.stringify(invariants.checks)}`);
+
+  const lakeRadiusM = 600;
+  const lakeMirrorM =
+    (Contract.waterLevelOf(patch.cells[0], patch.seaLevel) - patch.seaLevel) * M_PER_UNIT;
+  assert.ok(
+    Math.abs(lakeMirrorM - 253.3) < 1,
+    `зеркало континентального озера ≈ +253 м над seaLevel (${lakeMirrorM} м)`,
+  );
+
+  Worker.clearLocalMapCache();
+  const request = {
+    patch,
+    seed: 12345,
+    placeId: 7,
+    radiusM: lakeRadiusM,
+    profile: PROFILE,
+    patchKey: 'continental-lake',
+  };
+  const local = Worker.generateLocalMap(request);
+
+  // 1. Локальный участок целиком под водой озера и держит зеркало waterLevelOf.
+  assert.equal(local.meta.waterFraction, 1, 'вся локальная карта — вода озера');
+  assert.ok(
+    Math.abs(local.heightfield[CENTER] - lakeMirrorM) < 1e-3,
+    `центр heightfield на уровне озера (${local.heightfield[CENTER]} м)`,
+  );
+
+  // 2. Маска спавна на полном patchSpanMeters разрешает застройку у сухих
+  //    соседей — раньше это и порождало здания прямо на водном гексе.
+  const spanMask = Contract.buildBuildingSpawnMask(patch, HF_RES);
+  assert.ok(spanMask.includes(1), 'фикстура воспроизводит расхождение маски: сухие соседи застраиваемы');
+
+  // 3. На водном гексе при radiusM = 600 не спавнится ни одного здания.
+  const buildings = [];
+  for (const pack of Object.values(local.instanceBuffers)) {
+    for (let i = 0; i < pack.count; i++) buildings.push(Array.from(pack.buffer.subarray(i * 8, i * 8 + 8)));
+  }
+  assert.equal(buildings.length, 0, `на континентальном озере нет зданий (${buildings.length})`);
+  assert.equal(local.meta.totalInstances, 0, 'meta.totalInstances = 0');
+  assert.deepEqual(Object.keys(local.instanceBuffers), [], 'буферы инстансов пусты');
+
+  // 4. Шестигранный воротник (кольца 0..10 юбки горизонта) не обваливается к
+  //    z = 0: высота непрерывно продолжает зеркало озера (~ +253 м), без
+  //    250-метрового обрыва на границе выделенного гекса.
+  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+  const lastCollarRing = 10;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let maxRingJump = 0;
+  let maxRaySpread = 0;
+  for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
+    let rayMin = Infinity;
+    let rayMax = -Infinity;
+    for (let j = 0; j <= lastCollarRing; j++) {
+      const z = skirtVertex(skirt, i, j)[2];
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+      rayMin = Math.min(rayMin, z);
+      rayMax = Math.max(rayMax, z);
+      if (j > 0) maxRingJump = Math.max(maxRingJump, Math.abs(z - skirtVertex(skirt, i, j - 1)[2]));
+    }
+    maxRaySpread = Math.max(maxRaySpread, rayMax - rayMin);
+  }
+  assert.ok(
+    minZ > lakeMirrorM - 5,
+    `воротник не проваливается ниже зеркала озера: min z = ${minZ} м при зеркале ${lakeMirrorM} м`,
+  );
+  assert.ok(
+    maxZ < lakeMirrorM + 40,
+    `воротник не взлетает над зеркалом озера: max z = ${maxZ} м`,
+  );
+  assert.ok(
+    maxRingJump < 25,
+    `между соседними кольцами воротника нет 250-метрового обрыва (макс. скачок ${maxRingJump} м)`,
+  );
+  assert.ok(
+    maxRaySpread < 40,
+    `высота воротника непрерывна по радиусу на каждом луче (размах ${maxRaySpread} м)`,
+  );
+
+  Worker.clearLocalMapCache();
 });
 
 test('Stage-8.2 HorizonSkirt: GPU-путь непрерывной юбки на mock WebGL2', () => {
