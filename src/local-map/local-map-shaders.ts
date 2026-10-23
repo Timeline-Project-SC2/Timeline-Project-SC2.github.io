@@ -243,6 +243,29 @@ float terrainValueNoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+/** Билинейный сэмплер RG8UI-карты зон с мягкой долей покрытия. */
+void sampleZoningBilinear(vec3 naturalColor, out vec3 zoneColor, out float zoneWeight) {
+  vec2 zGrid = v_uv * 64.0 - 0.5;
+  ivec2 ij = ivec2(floor(zGrid));
+  vec2 f = smoothstep(0.0, 1.0, fract(zGrid));
+
+  uint z00 = texelFetch(u_zoning_map, clamp(ij + ivec2(0, 0), ivec2(0), ivec2(63)), 0).r;
+  uint z10 = texelFetch(u_zoning_map, clamp(ij + ivec2(1, 0), ivec2(0), ivec2(63)), 0).r;
+  uint z01 = texelFetch(u_zoning_map, clamp(ij + ivec2(0, 1), ivec2(0), ivec2(63)), 0).r;
+  uint z11 = texelFetch(u_zoning_map, clamp(ij + ivec2(1, 1), ivec2(0), ivec2(63)), 0).r;
+  vec3 c00 = (z00 > 0u && z00 < 5u) ? ZONE_COLORS[z00] : naturalColor;
+  vec3 c10 = (z10 > 0u && z10 < 5u) ? ZONE_COLORS[z10] : naturalColor;
+  vec3 c01 = (z01 > 0u && z01 < 5u) ? ZONE_COLORS[z01] : naturalColor;
+  vec3 c11 = (z11 > 0u && z11 < 5u) ? ZONE_COLORS[z11] : naturalColor;
+  float w00 = (z00 > 0u && z00 < 5u) ? 1.0 : 0.0;
+  float w10 = (z10 > 0u && z10 < 5u) ? 1.0 : 0.0;
+  float w01 = (z01 > 0u && z01 < 5u) ? 1.0 : 0.0;
+  float w11 = (z11 > 0u && z11 < 5u) ? 1.0 : 0.0;
+
+  zoneColor = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+  zoneWeight = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
+}
+
 void main() {
   float dist = length(v_worldPos.xy);
   // Апофема активного центрального гекса и гексагональная метрика (ориентация clusterHexMetric: yx).
@@ -262,10 +285,12 @@ void main() {
   // Юбка не наследует краевые тексели карт центрального участка.
   uint zone = 0u;
   float terraformBlend = 0.0;
+  float rawTerraform = (u_isSkirt < 0.5) ? texture(u_terraform_map, v_uv).r : 1.0;
   if (u_isSkirt < 0.5) {
-    uvec4 zoneData = texture(u_zoning_map, v_uv);
-    zone = zoneData.r;
-    terraformBlend = texture(u_terraform_map, v_uv).r;
+    vec2 zGrid = v_uv * 64.0 - 0.5;
+    ivec2 nearestZone = clamp(ivec2(floor(zGrid + 0.5)), ivec2(0), ivec2(63));
+    zone = texelFetch(u_zoning_map, nearestZone, 0).r;
+    terraformBlend = rawTerraform;
     // Цвет зон полностью гасим до границы активного гекса: на срезе центральный
     // меш и юбка используют один и тот же природный цвет без скачка.
     float innerEdgeFade = 1.0 - smoothstep(hexApothem * 0.58, hexApothem * 0.90, centerHexDist);
@@ -279,13 +304,15 @@ void main() {
     ? smoothstep(clearHexRadius, u_fogEnd * 0.92, centerHexDist)
     : ((u_focusRadiusM > 1.0 && centerHexDist > clearHexRadius) ? 1.0 : 0.0);
 
-  // Признак горизонтального водного зеркала: у воды/озера (зона 0) нормаль
-  // строго вертикальна, поэтому xy-составляющая нормали равна нулю. Такой
-  // фрагмент не получает ни сухопутной текстуры, ни изолиний — иначе на
-  // континентальном озере выше seaLevel (z > 0) рисовались бы полосатые
-  // кольца и «каменные» склоны.
+  // Признак водного зеркала дополнительно проверяет сырую маску терраформинга
+  // в центре и неизменность мировой высоты на юбке: пологая суша не может
+  // ошибочно попасть в цвет океана ни при каком масштабе.
   float normalHoriz = length(v_normal.xy);
-  bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015);
+  float zStep = abs(dFdx(v_worldPos.z)) + abs(dFdy(v_worldPos.z));
+  bool waterMirrorSurface = (u_isSkirt < 0.5)
+    ? (rawTerraform < 0.002 && zStep < 0.02)
+    : (normalHoriz < 0.00002 && zStep < 0.005);
+  bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015) && waterMirrorSurface;
 
   // Гипсометрия живой долины: сочные луга внизу, светлая каменистая
   // осыпь и субальпийский пояс на верхних склонах и у подножий пиков.
@@ -370,18 +397,27 @@ void main() {
 
   // Застройка остаётся маленькими усадьбами в зелени: вместо бетонной
   // сетки 64×64 — мягкие проплешины и тропинки тёплого грунта.
-  vec3 zoneColor = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
-  if (zone > 0u && zone < 5u) {
+  vec3 zoneColor = naturalColor;
+  float zoneWeight = 0.0;
+  if (u_isSkirt < 0.5) {
+    sampleZoningBilinear(naturalColor, zoneColor, zoneWeight);
     vec2 padCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
     float padPatch = terrainValueNoise(padCoord * 9.5 + vec2(3.8, 12.4));
     float pathNoise = terrainValueNoise(padCoord * 4.2 + vec2(-15.1, 2.7));
     float footpath = 1.0 - smoothstep(0.035, 0.13, abs(pathNoise - 0.50));
     float padFade = 1.0 - blur * 0.80;
-    vec3 bareSoil = mix(zoneColor, vec3(0.64, 0.56, 0.40), 0.48);
-    zoneColor = mix(zoneColor, bareSoil, smoothstep(0.34, 0.72, padPatch) * 0.55 * padFade);
-    zoneColor = mix(zoneColor, vec3(0.62, 0.55, 0.41), footpath * 0.28 * padFade);
+    // Шум органически размывает билинейную границу поселения, не оставляя
+    // квадратных углов, а внутренние дворы превращает в мягкие пятна грунта.
+    if (zoneWeight > 0.0 && zoneWeight < 1.0) {
+      zoneWeight = smoothstep(0.0, 1.0, clamp(zoneWeight + (padPatch - 0.5) * 0.28, 0.0, 1.0));
+    }
+    if (zoneWeight > 0.0) {
+      vec3 bareSoil = mix(zoneColor, vec3(0.64, 0.56, 0.40), 0.48);
+      zoneColor = mix(zoneColor, bareSoil, smoothstep(0.34, 0.72, padPatch) * 0.55 * padFade);
+      zoneColor = mix(zoneColor, vec3(0.62, 0.55, 0.41), footpath * 0.28 * padFade);
+    }
   }
-  vec3 baseColor = mix(naturalColor, zoneColor, terraformBlend * 0.36);
+  vec3 baseColor = mix(naturalColor, zoneColor, terraformBlend * zoneWeight * 0.36);
 
   // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
   // океана канонической ячейки лежит ровно на уровне seaLevel (z == 0), врез
@@ -401,10 +437,10 @@ void main() {
   float hexGlow = 0.0;
   float hexCoreLine = 0.0;
   if (u_focusRadiusM > 1.0) {
-    hexGlow = smoothstep(hexApothem * 0.988, hexApothem * 0.998, centerHexDist)
-      * (1.0 - smoothstep(hexApothem * 0.998, hexApothem * 1.008, centerHexDist));
-    hexCoreLine = smoothstep(hexApothem * 0.994, hexApothem * 0.999, centerHexDist)
-      * (1.0 - smoothstep(hexApothem * 0.999, hexApothem * 1.004, centerHexDist));
+    hexGlow = smoothstep(hexApothem * 0.975, hexApothem * 0.998, centerHexDist)
+      * (1.0 - smoothstep(hexApothem * 0.998, hexApothem * 1.022, centerHexDist));
+    hexCoreLine = smoothstep(hexApothem * 0.991, hexApothem * 0.999, centerHexDist)
+      * (1.0 - smoothstep(hexApothem * 0.999, hexApothem * 1.007, centerHexDist));
   }
 
   // Нормаль освещения едина для центра и юбки: без разворота к rimNormal,
@@ -414,8 +450,8 @@ void main() {
   vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8));
 
   if (u_focusRadiusM > 1.0) {
-    vec3 hexRimColor = mix(vec3(0.56, 0.67, 0.45), vec3(0.78, 0.82, 0.62), hexCoreLine);
-    float hexRimWeight = clamp(hexGlow * 0.05 + hexCoreLine * 0.12, 0.0, 0.16);
+    vec3 hexRimColor = mix(vec3(0.22, 0.78, 0.88), vec3(0.92, 0.97, 1.0), hexCoreLine);
+    float hexRimWeight = clamp(hexGlow * 0.18 + hexCoreLine * 0.58, 0.0, 0.68);
     lit = mix(lit, hexRimColor, hexRimWeight);
   }
 
