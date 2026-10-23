@@ -38,6 +38,7 @@ import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
 // без ядра. generateLocalMap / generateHorizonSkirt грузятся лениво через
 // динамический import() (см. loadLocalMapWorkerModule ниже).
 import { mapNeighborCellsToSlots, planetCurvatureDropM } from '../../src/local-map/local-map-geometry.ts';
+import { createTransitionLog as tlCreate } from './local-transition-log.ts';
 import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
 import type {
   HorizonSkirtData,
@@ -971,6 +972,8 @@ function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
   pendingNeighborFly = { cell: neighbor.cell, azimuth };
   localPatchLoading = true;
   startLocalCameraDiagWindow();
+  // A-16: t1 — клик по гексу (унифицированный вход перехода).
+  tl?.mark('t1', neighbor.cell);
   setLocalMapStatus('Перехожу на соседний гекс #' + String(neighbor.cell) + '…', 'info');
   requestCellPick(neighbor.cell);
 }
@@ -1417,6 +1420,14 @@ function updateLocalCameraDiag(now: number): void {
     renderLocalCameraDiag();
   }
   if (now > diag.until) closeLocalCameraDiagWindow();
+}
+
+/* --------------------------------------------- A-16: лог-замер перехода (Stage-8.10c) */
+// Замер существует ТОЛЬКО в режиме ?debug=local (wiring в initEvents). Вне этого
+// режима tl === null и все tl?.mark() — no-op; горячий путь кадра не растёт.
+let tl: ReturnType<typeof tlCreate> | null = null;
+function tlClick(): void {
+  tl?.stop() || tl?.start(parseSeedUint32(els.seed.value));
 }
 
 /* --------------------------------------------- Квик-навигация по граням (Stage-8.7) */
@@ -1916,6 +1927,8 @@ async function renderLocalMapFromPatch(
 ): Promise<void> {
   const centerCell = patchReady.patch.cells[0];
   if (!centerCell || requestId !== localMapEntrySeq) return;
+  // A-16: t2 — Patch7 готов (WorkerPatchReadyResponse прибыл).
+  tl?.mark('t2');
   // Stage-8.2, фаза 1: стремительное сближение поверхности планеты с выбранным
   // гексом за 420 мс (параллельно идёт CPU-генерация локального участка).
   if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.16, 420);
@@ -1935,6 +1948,8 @@ async function renderLocalMapFromPatch(
     return;
   }
   if (requestId !== localMapEntrySeq) return;
+  // A-16: t3 — import() ленивого чанка генерации завершён.
+  tl?.mark('t3');
 
   const startedAt = performance.now();
   let localData: LocalMapWorkerResponse;
@@ -1959,6 +1974,8 @@ async function renderLocalMapFromPatch(
     return;
   }
   if (requestId !== localMapEntrySeq) return;
+  // A-16: t4 — generateLocalMap завершён.
+  tl?.mark('t4');
 
   // Stage-8: планетарная юбка 6 колец с бесшовным воротником по heightfield.
   let skirtData: HorizonSkirtData | null = null;
@@ -1969,6 +1986,9 @@ async function renderLocalMapFromPatch(
     skirtData = null;
   }
   if (requestId !== localMapEntrySeq) return;
+  // A-16: t5 — horizon skirt завершён. t6 (GPU-работа) определяет rAF-пробник
+  // по условию завершения заливки, t7/t8 — свои кадры пробника.
+  tl?.mark('t5');
   const measuredMs = performance.now() - startedAt;
 
   // Stage-8.7: локальная сцена уже нарисована для другого гекса — новый участок
@@ -3050,6 +3070,13 @@ function initEvents(): void {
     }
   });
   els.exitLocalMap.addEventListener('click', exitLocalMap);
+  // A-16 / Stage-8.10c: кнопка лог-замера видна и работает только при ?debug=local.
+  if (LOCAL_DEBUG_QUERY) {
+    tl = tlCreate({ gpuDone: () => !(stagedLocalPatch?.renderer ?? localMapRenderer)?.isUploading?.() });
+    // Кнопка «Старт логирования» — последний элемент панели #localMapDiag.
+    els.localMapDiag.lastElementChild?.addEventListener('click', tlClick);
+    els.localMapDiag.hidden = false;
+  }
   els.breadcrumbPlanet.addEventListener('click', () => {
     if (localMapActive) exitLocalMap();
   });

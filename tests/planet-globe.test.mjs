@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
@@ -183,4 +184,223 @@ test('planet-globe-v1: fallback-развёртка заполнена и сох�
     if (!(preview.data[i] === 3 && preview.data[i + 1] === 18 && preview.data[i + 2] === 48)) nonBackground++;
   }
   assert.ok(nonBackground > 180 * 90 * 0.75);
+});
+
+/* ---------------------------------------------------------------
+   A-16 / Stage-8.10c: ручной лог-замер перехода между гексами
+   ------------------------------------------------------------
+   Инструмент живёт в site/planet-globe/local-transition-log.ts;
+   страница подхватывает его только при ?debug=local. Ядро модуля
+   берёт rAF/часы из глобуса и скачивание через options — так фазы
+   t0..t8 и буфер проверяются в Node на синтетических кадрах.
+   --------------------------------------------------------------- */
+
+const { createTransitionLog } = require('../site/planet-globe/local-transition-log.ts');
+
+/** Симуляция кадрового цикла: искусственные кадры, часы, скачивание. */
+function createLogHarness() {
+  let clock = 0;
+  const queue = [];
+  const downloads = [];
+  const realPerformance = globalThis.performance;
+  const realRaf = globalThis.requestAnimationFrame;
+  const realCancel = globalThis.cancelAnimationFrame;
+  globalThis.performance = { now: () => clock };
+  globalThis.requestAnimationFrame = (cb) => { queue.push(cb); return queue.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  const harness = {
+    gpuDone: false,
+    now: () => clock,
+    advance(ms) { clock += ms; },
+    tick(ms) {
+      clock += ms;
+      const callbacks = queue.splice(0, queue.length);
+      for (const cb of callbacks) cb();
+    },
+    downloads,
+    restore() {
+      globalThis.performance = realPerformance;
+      globalThis.requestAnimationFrame = realRaf;
+      globalThis.cancelAnimationFrame = realCancel;
+    },
+  };
+  const log = createTransitionLog({
+    gpuDone: () => harness.gpuDone,
+    download: (filename, text) => { downloads.push({ filename, text }); },
+  });
+  return { log, harness, downloads };
+}
+
+/** Запускает «реальный» переход до естественного финала (t0..t8). */
+function runRealTransition(log, harness) {
+  log.start(12345);
+  harness.advance(10);
+  log.mark('t1', 7);
+  harness.advance(10);
+  log.mark('t2');
+  harness.advance(10);
+  log.mark('t3');
+  harness.advance(10);
+  log.mark('t4');
+  harness.advance(10);
+  log.mark('t5');
+  harness.tick(16); // кадр 1: GPU-заливка ещё идёт — t6 не достигнут
+  harness.gpuDone = true;
+  harness.tick(16); // кадр 2: t6 — upload-условие выполнено
+  harness.tick(16); // кадр 3: t7 — первый кадр после t6
+  for (let i = 0; i < 5; i++) harness.tick(16); // 5 спокойных кадров → t8
+  return lastRecord(harness.downloads);
+}
+
+/** Последняя запись из скачанного буфера (модуль скачивает весь буфер). */
+function lastRecord(downloads) {
+  const parsed = JSON.parse(downloads[downloads.length - 1].text);
+  return parsed[parsed.length - 1];
+}
+
+test('A-16: ручной стоп и естественный финал дают одинаковую структуру записи', (t) => {
+  const { log, harness } = createLogHarness();
+  t.after(() => harness.restore());
+  // Ручной стоп сразу после старта — переход не стартовал.
+  log.start(12345);
+  const manual = log.stop();
+  assert.ok(manual, 'ручной стоп пишет запись');
+  for (const key of ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 'maxFrameGapMs']) {
+    assert.equal(manual[key], null, `${key}: пустое поле — null, не undefined/NaN`);
+    assert.notEqual(manual[key], undefined);
+  }
+  assert.equal(manual.cell, null, 'ячейка неизвестна — null');
+  assert.equal(manual.alarming, false);
+  assert.equal(manual.seed, 12345, 'seed берётся при старте');
+
+  // Естественный финал на реальном переходе.
+  const natural = runRealTransition(log, harness);
+  assert.deepEqual(Object.keys(natural).sort(), Object.keys(manual).sort(),
+    'оба пути пишут одну и ту же структуру записи');
+  assert.equal(log.stop(), null, 'финал закрывает окно замера');
+});
+
+test('A-16: все фазы t0..t8 заполняются на реальном переходе', (t) => {
+  const { log, harness } = createLogHarness();
+  t.after(() => harness.restore());
+  const rec = runRealTransition(log, harness);
+  assert.equal(rec.seed, 12345);
+  assert.equal(rec.cell, 7, 'cell — кликнутая ячейка (t1)');
+  for (const key of ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']) {
+    assert.ok(typeof rec[key] === 'number' && Number.isFinite(rec[key]),
+      `${key} заполнена числом (не null/NaN/undefined)`);
+  }
+  const phases = ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'];
+  for (let i = 1; i < phases.length; i++) {
+    assert.ok(rec[phases[i]] >= rec[phases[i - 1]],
+      `фазы монотонны: ${phases[i - 1]} <= ${phases[i]}`);
+  }
+  assert.ok(rec.t6 > rec.t5, 't6 (GPU) после t5 (skirt)');
+  assert.ok(rec.t7 > rec.t6, 't7 (кадр) после t6 (GPU)');
+});
+
+test('A-16: max frame gap — отдельный пол, порог тревоги 100 мс', (t) => {
+  const { log, harness } = createLogHarness();
+  t.after(() => harness.restore());
+  // Все разрывы маленькие — не тревожно.
+  const calm = runRealTransition(log, harness);
+  assert.equal(calm.maxFrameGapMs, 66, 'max frame gap — отдельный пол (счёт с t0)');
+  assert.equal(calm.alarming, false);
+  assert.notEqual(calm.maxFrameGapMs, calm.t8 - calm.t7,
+    'maxFrameGapMs не смешивается с фазами');
+
+  // Большой разрыв между кадрами — тревожный переход.
+  const { log: log2, harness: h2 } = createLogHarness();
+  t.after(() => h2.restore());
+  log2.start(1);
+  log2.mark('t1', 1);
+  log2.mark('t2');
+  log2.mark('t3');
+  log2.mark('t4');
+  log2.mark('t5');
+  h2.tick(16);
+  h2.gpuDone = true;
+  h2.tick(16); // t6
+  h2.tick(16); // t7
+  h2.tick(150); // большой разрыв — выше порога
+  h2.tick(16); // после скачка счётчик спокойных кадров заново
+  h2.tick(16);
+  h2.tick(16);
+  h2.tick(16);
+  h2.tick(16); // 5 спокойных кадров → t8 и финал
+  const alarm = lastRecord(h2.downloads);
+  assert.equal(alarm.maxFrameGapMs, 150);
+  assert.equal(alarm.alarming, true, 'разрыв > 100 мс помечается как тревожный');
+  assert.equal(typeof alarm.alarming, 'boolean', 'тревога — отдельный флаг');
+});
+
+test('A-16: буфер держит ровно последние 20 переходов', (t) => {
+  const { log, harness, downloads } = createLogHarness();
+  t.after(() => harness.restore());
+  for (let i = 0; i < 25; i++) {
+    log.start(i);
+    log.mark('t1', i);
+    log.stop();
+  }
+  const buffer = JSON.parse(downloads[downloads.length - 1].text);
+  assert.equal(buffer.length, 20, 'буфер ровно на 20 переходов');
+  assert.equal(buffer[0].seed, 5, 'старшие вытесняются');
+  assert.equal(buffer[19].seed, 24, 'новее всех — последний');
+});
+
+test('A-16: файл скачивается, имя содержит seed, ячейку и дату-время', (t) => {
+  const { log, harness, downloads } = createLogHarness();
+  t.after(() => harness.restore());
+  log.start(987654);
+  log.mark('t1', 42);
+  log.stop();
+  assert.equal(downloads.length, 1, 'финал скачивает файл');
+  const name = downloads[0].filename;
+  assert.match(name, /^tl-987654-42-\d{13}$/,
+    'имя: seed, ячейка, дата-время (Unix ms)');
+  const parsed = JSON.parse(downloads[0].text);
+  assert.ok(Array.isArray(parsed), 'файл — весь буфер (массив записей)');
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].seed, 987654);
+  assert.equal(parsed[0].cell, 42);
+
+  // Ячейка неизвестна (стоп до клика) — null, не NaN.
+  log.start(777);
+  log.stop();
+  assert.equal(downloads.length, 2);
+  assert.match(downloads[1].filename, /^tl-777-null-\d{13}$/);
+});
+
+test('A-16: кнопка и обработчик живут только при ?debug=local', () => {
+  const html = readFileSync(new URL('../site/planet-globe/index.html', import.meta.url), 'utf8');
+  const diagAt = html.indexOf('id="localMapDiag"');
+  assert.ok(diagAt >= 0, 'панель #localMapDiag есть');
+  const diagBlock = html.slice(diagAt, html.indexOf('</div>', diagAt));
+  assert.match(diagBlock, /localTransitionLogBtn/, 'кнопка внутри панели #localMapDiag');
+  assert.match(html, /id="localMapDiag" hidden/, 'панель скрыта по умолчанию');
+
+  const page = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
+  // Обработчик кнопки и создание модуля — только в debug-режиме.
+  assert.match(page, /if \(LOCAL_DEBUG_QUERY\) \{\s*tl = tlCreate\(\{ gpuDone:/);
+  assert.match(page, /els\.localMapDiag\.lastElementChild\?\.addEventListener\('click', tlClick\);/);
+  assert.match(page, /els\.localMapDiag\.hidden = false;/);
+  // Фазовые метки ставит страница в потоке перехода.
+  assert.match(page, /tl\?\.mark\('t1', neighbor\.cell\)/);
+  assert.match(page, /tl\?\.mark\('t2'\)/);
+  assert.match(page, /tl\?\.mark\('t3'\)/);
+  assert.match(page, /tl\?\.mark\('t4'\)/);
+  assert.match(page, /tl\?\.mark\('t5'\)/);
+  // Горячий путь кадра не касается лог-замера (ни пробника, ни меток).
+  const frameAt = page.indexOf('function renderLocalMapFrame');
+  const frameEnd = page.indexOf('\nfunction ', frameAt + 10);
+  const frameBody = page.slice(frameAt, frameEnd < 0 ? page.length : frameEnd);
+  assert.ok(!frameBody.includes('tl'), 'renderLocalMapFrame не касается лог-замера');
+  assert.ok(!frameBody.includes('tlMark'), 'горячий путь кадра чист');
+
+  // Модуль ядра чист: без value-импортов (летит в главный чанк как есть).
+  const moduleSrc = readFileSync(
+    new URL('../site/planet-globe/local-transition-log.ts', import.meta.url),
+    'utf8',
+  );
+  assert.ok(!/^import /m.test(moduleSrc), 'модуль не тащит зависимостей');
 });
