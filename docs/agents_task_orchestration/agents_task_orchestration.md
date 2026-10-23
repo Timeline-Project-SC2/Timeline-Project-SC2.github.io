@@ -255,7 +255,18 @@ docs/agents_task_orchestration/worker_instruction_on_splitwork.md
 | 4 | 24 | 8 | 61 |
 | 5 | 30 | 4 | **91** |
 
-Бюджет буферов при `neighborRings = 5`: высотные поля `43 488` значений `f32` (**≈ 170 КиБ**) и `waterMask` `43 488` байт (**≈ 42,5 КиБ**), итого **≈ 212 КиБ** на патч — вдвое ниже лимита гейта **G6.3** (`≤ 512 КБ`).
+Бюджет CPU-буферов при `neighborRings = 5`: высотные поля `43 488` значений `f32` (**≈ 170 КиБ**) и `waterMask` `43 488` байт (**≈ 42,5 КиБ**), итого **≈ 216 КиБ** на патч — вдвое ниже лимита гейта **G6.3** (`≤ 512 КБ`).
+
+**Факт волны (после слияния PR #200–#202 и интеграционного фикса 8.7.1).**
+`RING_HF_RES` в воркере и в рендерере обязан совпадать: рассинхрон `[256, 32, 16, 8, 4, 2]` против `[256, 64, 32, 16, 8, 4]` приводил к отбраковке ячеек
+слотами и распаду batch-отрисовки — **92 terrain-draw вместо 7**. После
+выравнивания контракта: `ringGenMs ≈ 7 мс`, CPU-буферы колец ≈ 216 КиБ,
+GPU-буферы колец **2,4 МБ** (позиции, нормали, локальные XY, вода, индексы),
+draw-вызовы: **2 + число колец** (batch на кольцо), порядок `5 → 4 → 3 → 2 → 1 → центр → юбка`.
+Ячейка `ringCells[i].cell` — **синтетический индекс отрисовки**, а не
+канонический адрес сетки: кольца 2–5 строятся как плоская гексагональная
+решётка в касательной плоскости вокруг `Patch7`. Переход между гексами
+разрешён только по `activePatchReady.patch.cells[1..6]` (канон, И-1/И-3).
 
 ### 15.2. Матрица распределения файлов (`Zero File Overlap`)
 
@@ -267,6 +278,8 @@ docs/agents_task_orchestration/worker_instruction_on_splitwork.md
 | **Воркер 4**<br>*(Модуль голографических квик-стрелок)* | Новый `site/planet-globe/local-map-quick-nav.ts` по контракту `QuickNavHintInput` / `LocalMapQuickNav` / `createLocalMapQuickNav` и чистая `layoutQuickNavArrows(...)`; цикл `7 200 мс`, окно `2 600 мс`, ступенчатая задержка `90 мс` по слотам `0..5`, `fade-in 180 мс` / `fade-out 260 мс`; голографический шеврон `#00ff66` с `mix-blend-mode: screen`, hit-area `≥ 44 × 44` CSS px, поддержка `prefers-reduced-motion`, запрет `eval`/`new Function` (CSP); тест `tests/local-map-quick-nav.test.mjs` и подключение его в `npm test`. | - `site/planet-globe/local-map-quick-nav.ts`<br>- `tests/local-map-quick-nav.test.mjs`<br>- `package.json` | Все остальные файлы, включая `site/planet-globe/planet-globe.ts`, `planet-globe.css`, `index.html`, `src/*`, `docs/HANDOFF.md`, `CHANGELOG.md` |
 | **Воркер 5**<br>*(Документация волны; запускается последним, после слияния PR 1–4)* | Сводные записи волны: `CHANGELOG.md`, `docs/HANDOFF.md` (§1 «Статус», §2, §5, §8), новый раздел 7 в `docs/stages/STAGE_8_PLANETARY_HORIZON.md`, проставление номеров слитых PR в §15 настоящего документа и строка статуса «Местность до ~1 км» в `docs/PREPARATION_PLAN.md`. Числа — только из отчётов воркеров и кода, без домыслов. | - `docs/HANDOFF.md`<br>- `CHANGELOG.md`<br>- `docs/stages/STAGE_8_PLANETARY_HORIZON.md`<br>- `docs/agents_task_orchestration/agents_task_orchestration.md`<br>- `docs/PREPARATION_PLAN.md` | Все остальные файлы, включая `site/*`, `src/*`, `tests/*`, `tools/*`, `package.json`, `.github/*`, `data/*` |
 
+**Ссылка на внешний аудит.** Замечания стороннего агента по ядру генерации (двойная canonical-генерация proxy→final, ленивый Wasm-синглтон, кэш поверхности, предел радиуса) разобраны и занесены в backlog A-1…A-7 в [`../../docs/stages/planet-core-audit-2026-10-23.md`](../../docs/stages/planet-core-audit-2026-10-23.md); к файлам этой волны они не относятся.
+
 **Стык `package.json`.** Единственный общий файл волны (подключение нового теста в `npm test`) отдан ровно **Воркеру 4** (правило О-1); остальным воркерам его правка запрещена.
 
 **Стык `planet-globe.ts` ↔ `local-map-quick-nav.ts` (О-3, Interface-First).** Имя файла и сигнатуры `QuickNavHintInput`, `LocalMapQuickNav`, `createLocalMapQuickNav(host, onPick)` зафиксированы дословно до старта волны. Воркер 3 интегрирует модуль по контракту через временный локальный шим (5 строк, с комментарием «удалить после слияния PR Воркера 4») и не создаёт сам модуль; Воркер 4 не правит страницу.
@@ -277,7 +290,7 @@ docs/agents_task_orchestration/worker_instruction_on_splitwork.md
 |---|---|
 | **G6.1** | Переход между гексами непрерывен: `0` кадров со скачком `|Δyaw| > 0.002` рад или смещением точки прицела `> 1` CSS px; нет пустых кадров и сброса ракурса |
 | **G6.2** | Квик-навигация: 6 стрелок, цикл `7 200 мс`, hit-area `≥ 44 × 44` CSS px, `prefers-reduced-motion` — без пульса и скан-линии, клики работают |
-| **G6.3** | Кольца: `ringGenMs ≤ 20 мс`, новые буферы `≤ 512 КБ` на патч при `neighborRings = 5`, `0` видимых швов «кольцо 5 → юбка», steady-кадр `p95 ≤ 20 мс` |
+| **G6.3** | Кольца, две независимые части: **(а) CPU** — `ringGenMs ≤ 20 мс` и новые типизированные буферы `≤ 512 КБ` на патч при `neighborRings = 5`; **(б) GPU** — суммарные кольцевые буферы `≤ 4 МБ`, `0` видимых швов «кольцо 5 → юбка», steady-кадр `p95 ≤ 20 мс`. Формулировка 8.7 ошибочно смешивала CPU- и GPU-бюджет в одном лимите `512 КБ`; разделение введено по факту замера (`216 КиБ` CPU против `2,4 МБ` GPU) |
 | **G6.4** | Матрица проверок зелёная: `tsc`, `eslint`, `npm run build`, `node --test`, `verify:publish`, `check.yml` 4/4 |
 
 ### 15.4. Порядок запуска
