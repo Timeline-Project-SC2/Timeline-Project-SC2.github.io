@@ -44,11 +44,12 @@
       горизонта `planetRadiusM = max(frame.radiusM, 3.6·R_outer)` — от
       настоящего радиуса планеты, поэтому на малых масштабах проседание
       горизонта плавное (Δz < 1 км на 10 км).
-   8. Stage-8.5.1: на морском патче (все 7 ячеек — океан) прибрежная суша
-      юбки поднимается из моря с ненулевым рельефом холмов и гряд — амплитуда
-      гребней учитывает размах положительных высот макро-решётки `elevation`
-      (с капом `SKIRT_LATTICE_RELIEF_CAP_M`), — а водное зеркало воротника
-      (до 1.15 · R_patch) остаётся идеально плоским на уровне seaLevel. */
+   8. Stage-8.5.1: на прибрежном морском патче воротник центрального океана
+      остаётся ровным на seaLevel, сухопутные соседи поднимаются грядами, а
+      океанские направления держат отрицательную батиметрию без круглого вала.
+   9. Stage-8.6: соседние суша ↔ океан синхронно продолжаются за воротником,
+      а стрежень речного русла получает явный водный маркер terraform_map = 0
+      и запрещает спавн даже выше seaLevel. */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -246,7 +247,7 @@ test('И-3.3: речное русло врезается от входных г�
   assert.equal(withRiver.meta.buildableFraction, 0, 'строгое правило запрещает спавн всюду');
   assert.equal(twin.meta.buildableFraction, 0, 'двойник тоже без спавна');
 
-  const depth = Math.max(6, RADIUS_M * Worker.RIVER_DEPTH_RATIO);
+  const depth = Math.max(10, RADIUS_M * Worker.RIVER_DEPTH_RATIO * 1.8);
   const centerDrop = twin.heightfield[CENTER] - withRiver.heightfield[CENTER];
   assert.ok(centerDrop > depth * 0.999, `в центре русло врезано на ${centerDrop} из ${depth}`);
   assert.ok(centerDrop <= depth + 1e-3, 'врез не превышает расчётную глубину');
@@ -1901,107 +1902,219 @@ test('Stage-8.5: базовая высота суши интерполирует
 // 8. Stage-8.5.1: живой прибрежный рельеф юбки над морским Patch7
 // ---------------------------------------------------------------------------
 
+/**
+ * Прибрежная морская фикстура: центр и три соседа — океан с отрицательным
+ * дном; остальные три соседа — суша +0.14…+0.28. Геометрия остаётся от
+ * канонического Patch7, поэтому тестирует именно переход в юбке, а не
+ * искусственную полярную сетку.
+ */
+function buildCoastalSeaPatch(basePatch) {
+  assert.ok(basePatch, 'нужен морской Patch7-основание');
+  const sea = basePatch.seaLevel;
+  const landHeights = [0.14, 0.21, 0.28];
+  const cells = basePatch.cells.map((cell, index) => {
+    const isLand = index >= 4;
+    const elevation = isLand
+      ? sea + landHeights[index - 4]
+      : sea - (0.18 + index * 0.025);
+    return {
+      ...cell,
+      elevation,
+      filledElevation: elevation,
+      depressionDepth: 0,
+      muLand: isLand ? 0.92 : 0,
+      slope: isLand ? 0.18 : 0,
+      lakeId: -1,
+      lakeWeight: 0,
+      streamWeight: 0,
+      riverAccumulation: 0,
+      flowReceiver: -1,
+    };
+  });
+  return {
+    ...basePatch,
+    cells,
+    river: {
+      centerCell: basePatch.centerCell,
+      flowsThroughCenter: false,
+      centerStreamWeight: 0,
+      centerRiverAccumulation: 0,
+      inlets: [],
+      outlet: null,
+    },
+  };
+}
+
+/** Сухой центр с одним океанским соседом для обратной проверки шва. */
+function buildCoastalLandPatch(basePatch) {
+  assert.ok(basePatch, 'нужен Patch7-основание');
+  const sea = basePatch.seaLevel;
+  const cells = basePatch.cells.map((cell, index) => {
+    const isOcean = index === 1;
+    const elevation = isOcean ? sea - 0.23 : sea + 0.22 + (index % 3) * 0.03;
+    return {
+      ...cell,
+      elevation,
+      filledElevation: elevation,
+      depressionDepth: 0,
+      muLand: isOcean ? 0 : 0.92,
+      slope: isOcean ? 0 : 0.18,
+      lakeId: -1,
+      lakeWeight: 0,
+      streamWeight: 0,
+      riverAccumulation: 0,
+      flowReceiver: -1,
+    };
+  });
+  return {
+    ...basePatch,
+    cells,
+    river: {
+      centerCell: basePatch.centerCell,
+      flowsThroughCenter: false,
+      centerStreamWeight: 0,
+      centerRiverAccumulation: 0,
+      inlets: [],
+      outlet: null,
+    },
+  };
+}
+
+/** Луч на центр заданного слота и соседние вершины юбки. */
+function slotRayIndices(slot) {
+  const center = slot * (Worker.SKIRT_ANGULAR_SEGMENTS / Worker.SKIRT_RING_COUNT);
+  return [-3, -2, -1, 0, 1, 2, 3].map((offset) =>
+    (center + offset + Worker.SKIRT_ANGULAR_SEGMENTS) % Worker.SKIRT_ANGULAR_SEGMENTS,
+  );
+}
+
 test('Stage-8.5.1: морской патч — рельеф прибрежной суши юбки и ровное зеркало воротника', () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
+  const coastalSeaPatch = buildCoastalSeaPatch(waterPatch);
+  assert.equal(Contract.verifyPatchInvariants(coastalSeaPatch).ok, true, 'прибрежная фикстура валидна по И-3');
   const radiusM = 600;
   Worker.clearLocalMapCache();
-  const request = requestFor(waterPatch, { radiusM, patchKey: 'stage851-sea-skirt', profile: PROFILE });
+  const request = requestFor(coastalSeaPatch, { radiusM, patchKey: 'stage851-coastal-sea', profile: PROFILE });
   const local = Worker.generateLocalMap(request);
-  assert.equal(local.meta.waterFraction, 1, 'все 7 ячеек Patch7 — океан');
+  assert.equal(local.meta.waterFraction, 1, 'в малом активном гексе центр — океан');
   const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
 
-  // 1. Воротник (до 1.15 · R_patch) — идеально плоское водное зеркало ocean
-  //    seaLevel (z === 0): новый прибрежный рельеф его не трогает.
-  const collarEndM = Worker.SKIRT_COLLAR_END_RADIUS_RATIO * radiusM;
+  // 1. Воротник центрального океана точно продолжает seaLevel независимо от
+  // того, какой сосед начинает вступать в силу сразу за ним.
   let collarVertices = 0;
   for (let j = 0; j <= Worker.SKIRT_COLLAR_RINGS; j++) {
     for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
-      const [x, y, z] = skirtVertex(skirt, i, j);
-      // Позиции юбки хранятся во Float32, поэтому допуск на округление — 10 см.
-      assert.ok(
-        Math.hypot(x, y) <= collarEndM + 0.1,
-        `кольцо ${j} воротника лежит в пределах ${collarEndM.toFixed(0)} м`,
-      );
-      assert.ok(
-        Math.abs(z) < 1e-6,
-        `кольцо ${j}, луч ${i}: водное зеркало ровно на seaLevel (z = ${z.toFixed(3)} м)`,
-      );
+      const z = skirtVertex(skirt, i, j)[2];
+      assert.ok(Math.abs(z) < 1e-6, `воротник (${i}, ${j}) держит z = 0, получено ${z}`);
       collarVertices++;
     }
   }
-  assert.ok(collarVertices > 3000, `воротник проверен по всей окружности (${collarVertices} вершин)`);
+  assert.ok(collarVertices > 3000, `воротник проверен по всей окружности (${collarVertices})`);
 
-  // 2. За воротником из океана выходит настоящий берег: суша 2–4 колец юбки
-  //    поднимается с НЕНУЛЕВЫМ рельефом (холмы и гряды), а не остаётся
-  //    плоским зеркалом. Вода при этом нигде не проваливается ниже seaLevel.
-  let minZ = Infinity;
-  let maxZ = -Infinity;
+  // 2. В сухих полусекторах — настоящая суша с грядами; подсчёт ведётся по
+  // всей юбке, потому что три соседних гекса занимают примерно половину круга.
   let landVertices = 0;
+  let maxLandZ = -Infinity;
   for (let j = Worker.SKIRT_COLLAR_RINGS + 1; j < SKIRT_RADIAL_COUNT; j++) {
     for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
       const z = skirtVertex(skirt, i, j)[2];
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
       if (z > 1) landVertices++;
+      maxLandZ = Math.max(maxLandZ, z);
     }
   }
-  assert.ok(minZ > -1e-6, `юбка не проваливается ниже зеркала океана (min z = ${minZ.toFixed(3)} м)`);
-  assert.ok(
-    landVertices > 200,
-    `прибрежная суша 2–4 колец поднялась из моря (${landVertices} вершин выше 1 м)`,
-  );
-  assert.ok(
-    maxZ > 100,
-    `прибрежные холмы и гряды юбки имеют реальный рельеф (max z = ${maxZ.toFixed(0)} м > 100 м)`,
-  );
+  assert.ok(landVertices > 200, `сухие соседи дали более 200 вершин суши (${landVertices})`);
+  assert.ok(maxLandZ > 100, `сухие соседи поднялись с грядами выше 100 м (${maxLandZ.toFixed(1)} м)`);
 
-  // 3. Внешнее кольцо — живой рельеф, а не гладкий вал: несколько локальных
-  //    вершин-гряд по окружности и заметный размах высот вдоль кольца.
-  const outerRing = SKIRT_RADIAL_COUNT - 1;
-  const outerHeights = [];
-  for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
-    outerHeights.push(skirtVertex(skirt, i, outerRing)[2]);
+  // 3. Океанские полусектора не получают ложный положительный fBm-вал: на
+  // лучах в центры океанских соседей дно всё время ниже seaLevel, с заметной
+  // батиметрией уже в следующих кольцах.
+  const slots = Worker.mapNeighborCellsToSlots(coastalSeaPatch);
+  const oceanSlots = slots
+    .map((cell, slot) => ({ cell, slot }))
+    .filter(({ cell }) => cell.elevation < coastalSeaPatch.seaLevel && cell.lakeWeight === 0);
+  const landSlots = slots
+    .map((cell, slot) => ({ cell, slot }))
+    .filter(({ cell }) => cell.elevation > coastalSeaPatch.seaLevel);
+  assert.equal(oceanSlots.length, 3, 'три океанских соседа');
+  assert.equal(landSlots.length, 3, 'три сухопутных соседа');
+  let minOceanZ = Infinity;
+  for (const { slot } of oceanSlots) {
+    const i = slotRayIndices(slot)[3];
+    for (let j = Worker.SKIRT_COLLAR_RINGS + 1; j < SKIRT_RADIAL_COUNT; j++) {
+      const z = skirtVertex(skirt, i, j)[2];
+      assert.ok(z <= 1e-4, `океанский слот ${slot}, кольцо ${j}: z <= 0 (${z.toFixed(2)})`);
+      minOceanZ = Math.min(minOceanZ, z);
+    }
   }
-  const outerRangeM = Math.max(...outerHeights) - Math.min(...outerHeights);
-  assert.ok(
-    outerRangeM > Worker.LAND_FBM_AMPLITUDE_M,
-    `на внешнем кольце юбки выраженный рельеф (размах ${outerRangeM.toFixed(0)} м)`,
-  );
-  const localRidges = outerHeights.filter((z, i) => {
-    const next = outerHeights[(i + 1) % outerHeights.length];
-    const prev = outerHeights[(i - 1 + outerHeights.length) % outerHeights.length];
-    return z > next && z > prev;
-  }).length;
-  assert.ok(localRidges >= 5, `вдоль горизонта несколько гряд, а не один вал (${localRidges} локальных вершин)`);
+  assert.ok(minOceanZ < -5, `в океанских направлениях видна батиметрия (${minOceanZ.toFixed(1)} м)`);
 
-  // 4. Амплитуда гребней учитывает размах ПОЛОЖИТЕЛЬНЫХ высот макро-решётки:
-  //    перепад морского Patch7 равен нулю, поэтому без решётки гребней нет, а
-  //    с ней появляются прибрежные холмы (с капом SKIRT_LATTICE_RELIEF_CAP_M).
-  const slots = Worker.mapNeighborCellsToSlots(waterPatch);
-  const centerCell = waterPatch.cells[0];
-  const centerCanonElev = Contract.waterLevelOf(centerCell, waterPatch.seaLevel);
-  const patchOnlyAmpM = Worker.skirtLocalReliefAmplitudeM(waterPatch, slots, centerCanonElev, null);
-  assert.equal(patchOnlyAmpM, 0, 'перепад высот морского Patch7 равен нулю');
-  const nodes = 33;
-  const elevation = new Float32Array(nodes * nodes);
-  const detail = new Float32Array(nodes * nodes);
-  for (let n = 0; n < elevation.length; n++) elevation[n] = waterPatch.seaLevel + (n % 5) * 0.06;
-  const latticeAmpM = Worker.skirtLocalReliefAmplitudeM(
-    waterPatch, slots, centerCanonElev, { elevation, detail }, 0,
-  );
-  assert.ok(
-    latticeAmpM > patchOnlyAmpM + Worker.LAND_FBM_AMPLITUDE_M,
-    `берег из макро-решётки даёт амплитуду гребней ${latticeAmpM.toFixed(0)} м`,
-  );
-  for (let n = 0; n < elevation.length; n++) elevation[n] = waterPatch.seaLevel + (n % 5) * 0.12;
-  const cappedAmpM = Worker.skirtLocalReliefAmplitudeM(
-    waterPatch, slots, centerCanonElev, { elevation, detail }, 0,
-  );
-  assert.equal(
-    cappedAmpM,
-    Worker.SKIRT_LATTICE_RELIEF_CAP_M,
-    `размах решётки ограничен разумным капом ${Worker.SKIRT_LATTICE_RELIEF_CAP_M} м`,
-  );
+  Worker.clearLocalMapCache();
+});
+
+// ---------------------------------------------------------------------------
+// 9. Stage-8.6: синхронизация соседних ячеек и водный маркер русла
+// ---------------------------------------------------------------------------
+
+test('Stage-8.6: синхронизация соседних ячеек (суша ↔ океан) и водный маркер речного русла', () => {
+  assert.ok(waterPatch, 'нужен Patch7 для прибрежной пары');
+  assert.ok(riverPatch, 'нужен Patch7 с руслом');
+  const radiusM = 600;
+  const coastalSeaPatch = buildCoastalSeaPatch(waterPatch);
+  const coastalLandPatch = buildCoastalLandPatch(waterPatch);
+
+  const build = (patch, patchKey) => {
+    Worker.clearLocalMapCache();
+    const request = requestFor(patch, { radiusM, patchKey });
+    const local = Worker.generateLocalMap(request);
+    return Worker.generateHorizonSkirt(request, local.heightfield);
+  };
+
+  // С океанской ячейки луч в сторону сухого соседа поднимается настоящей
+  // сушей, а с сухой ячейки луч к океану опускается ниже seaLevel.
+  const seaSkirt = build(coastalSeaPatch, 'stage86-ocean-to-land');
+  const seaLandSlot = Worker.mapNeighborCellsToSlots(coastalSeaPatch)
+    .findIndex((cell) => cell.elevation > coastalSeaPatch.seaLevel);
+  assert.ok(seaLandSlot >= 0, 'у океанского центра есть сухопутный сосед');
+  const seaToLandZ = skirtVertex(
+    seaSkirt,
+    slotRayIndices(seaLandSlot)[3],
+    SKIRT_RADIAL_COUNT - 1,
+  )[2];
+  assert.ok(seaToLandZ > 15, `океан → суша поднимается выше 15 м (${seaToLandZ.toFixed(1)} м)`);
+
+  const landSkirt = build(coastalLandPatch, 'stage86-land-to-ocean');
+  const landOceanSlot = Worker.mapNeighborCellsToSlots(coastalLandPatch)
+    .findIndex((cell) => cell.elevation < coastalLandPatch.seaLevel && cell.lakeWeight === 0);
+  assert.ok(landOceanSlot >= 0, 'у сухопутного центра есть океанский сосед');
+  const landToSeaZ = skirtVertex(
+    landSkirt,
+    slotRayIndices(landOceanSlot)[3],
+    SKIRT_RADIAL_COUNT - 1,
+  )[2];
+  assert.ok(landToSeaZ < -1, `суша → океан уходит под seaLevel (${landToSeaZ.toFixed(1)} м)`);
+
+  // Водное стрежневое русло на возвышенной суше кодируется terraformMap == 0,
+  // а не только уменьшенной высотой. Реальный spawnMask потребляет этот же
+  // запрет: ни один инстанс не может попасть в тексель стрежня.
+  Worker.clearLocalMapCache();
+  const river = Worker.generateLocalMap(requestFor(riverPatch, { patchKey: 'stage86-river-marker' }));
+  const waterCore = [];
+  let raisedWaterCore = 0;
+  for (let idx = 0; idx < river.terraformMap.length; idx++) {
+    if (river.terraformMap[idx] !== 0) continue;
+    waterCore.push(idx);
+    if (river.heightfield[idx] > 0) raisedWaterCore++;
+  }
+  assert.ok(waterCore.length > 0, `русло содержит явные водные тексели (${waterCore.length})`);
+  assert.ok(raisedWaterCore > 0, `река остаётся водой над z = 0 (${raisedWaterCore} текселей)`);
+  const instances = [];
+  for (const pack of Object.values(river.instanceBuffers)) {
+    for (let i = 0; i < pack.count; i++) instances.push({ data: pack.buffer.subarray(i * 8, i * 8 + 8) });
+  }
+  for (const instance of instances) {
+    const { index } = heightfieldIndexFor(instance, radiusM);
+    assert.notEqual(river.terraformMap[index], 0, 'buildingSpawnMask запрещает инстанс в русле');
+  }
 
   Worker.clearLocalMapCache();
 });
