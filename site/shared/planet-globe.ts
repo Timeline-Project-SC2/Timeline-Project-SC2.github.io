@@ -17,12 +17,10 @@
    География и pick остаются авторитетно на CPU: рендер только
    сообщает направление луча, ячейку находит `GeodesicGrid.pick`.
 
-   Stage-8.8.1 (A-3): импорт этого модуля НЕ создаёт Wasm-арену. Полное
-   ядро (>= 24 МиБ) поднимается лениво и только в воркере — при первом
-   вызове упаковщика геометрии; главный поток работает на данных, уже
-   переданных worker'ом (см. «ГРАНИЦА МОДУЛЯ» ниже). */
+   Stage-8.10a (A-12a): упаковка вершин и цветов перенесена в отдельный
+   модуль вне главного потока; рендерер не импортирует Wasm-ядро и работает
+   на данных, уже переданных воркером (см. «ГРАНИЦА МОДУЛЯ» ниже). */
 
-import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
 import type { SurfaceResult } from './planet-surface.ts';
 
@@ -213,25 +211,12 @@ const COLOR_MODES: { key: string; label: string }[] = [
 ];
 
 /* ------------------------------------------------------- ГРАНИЦА МОДУЛЯ
-   Stage-8.8.1 (A-3). Модуль сознательно разделён на два слоя, и только
-   второй касается полного Wasm-ядра:
-
-   1) СЛОЙ ДАННЫХ И РЕНДЕРА (главный поток):
-      buildCellColors, buildEquirectPreview, reliefDelta, cellPolygon,
-      listGeometryTransferables, createPlanetGlobe. Всё считается по сетке
-      и `SurfaceResult`, которые уже пришли из воркера; pick идёт через
-      `GeodesicGrid.pick`. Ни одна функция этого слоя не вызывает getCore(),
-      поэтому арена >= 24 МиБ на главном потоке не создаётся ни при импорте,
-      ни при отрисовке.
-
-   2) СЛОЙ УПАКОВКИ ГЕОМЕТРИИ (только воркер):
-      buildVertexColors (expandVertexColors) и buildGlobeGeometry (globePack).
-      Это единственные потребители полного ядра в модуле; вызываются из
-      `site/planet-globe/planet-globe-worker.ts` и из Node-стендов.
-      Ядро поднимается лениво — в момент первого вызова, а не при импорте. */
-function getCore(): PlanetCore {
-  return getSharedPlanetCore();
-}
+   Stage-8.10a (A-12a). В этом модуле остаётся только слой данных и рендера
+   главного потока: buildCellColors, buildEquirectPreview, reliefDelta,
+   cellPolygon, listGeometryTransferables, createPlanetGlobe. Всё считается
+   по сетке и `SurfaceResult`, которые уже пришли из воркера; pick идёт через
+   `GeodesicGrid.pick`. Упаковка позиций/нормалей/цветов вершин на полном
+   Wasm-ядре вынесена из этого файла без реэкспорта. */
 
 function clamp(x: number, lo: number, hi: number): number { return x < lo ? lo : (x > hi ? hi : x); }
 function clamp01(x: number): number { return x < 0 ? 0 : (x > 1 ? 1 : x); }
@@ -371,14 +356,6 @@ function buildCellColors(surface: SurfaceResult, mode?: string): Float32Array {
   return out;
 }
 
-/** @workerOnly Полное Wasm-ядро (expandVertexColors). На главный поток не
- *  вызывать: цвет вершины приезжает из воркера готовым в `geometry.colors`. */
-function buildVertexColors(surface: SurfaceResult, vertexCellId: Uint32Array, mode?: string, cellCount?: number): Uint8Array {
-  const cellColors = buildCellColors(surface, mode || 'biome');
-  const centerCount = cellCount == null ? surface.cellCount : cellCount;
-  return getCore().expandVertexColors(vertexCellId, cellColors, centerCount);
-}
-
 function assertGeometryInputs(grid: PlanetGrid, surface: SurfaceResult): void {
   if (!grid || !grid.centers || !grid.corners || !grid.cellCorners || !grid.cellCornerStart ||
       !Number.isInteger(grid.cellCount)) {
@@ -387,99 +364,6 @@ function assertGeometryInputs(grid: PlanetGrid, surface: SurfaceResult): void {
   if (!surface || surface.cellCount !== grid.cellCount || !surface.elevation || !surface.biomeColor) {
     throw new Error('PlanetGlobe: нужна поверхность PlanetSurface той же формы, что сетка');
   }
-}
-
-/** @workerOnly Полное Wasm-ядро (globePack: позиции f32×3 + наклонные
- *  нормали i16×4, вершина 24 Б). Единственный потребитель —
- *  `site/planet-globe/planet-globe-worker.ts`; рендерер получает результаты
- *  transferable-массивами через `setGeometry`/`transitionGeometry`. */
-function buildGlobeGeometry(grid: PlanetGrid, surface: SurfaceResult, options?: GlobeGeometryOptions | null): GlobeGeometry {
-  const opts = options || {};
-  assertGeometryInputs(grid, surface);
-  const reliefScale = opts.reliefScale == null ? 1 : Number(opts.reliefScale);
-  const F = grid.cellCount;
-  const totalSides = grid.cellCorners.length;
-  const vertexCount = F + totalSides;
-  const vertexCellId = new Uint32Array(vertexCount);
-  const indices = new Uint32Array(totalSides * 3);
-  const cellIndexStart = new Uint32Array(F + 1);
-
-  const cellRadius = new Float32Array(F);
-  let c: number, k: number;
-  for (c = 0; c < F; c++) cellRadius[c] = 1 + reliefDelta(surface, surface.elevation[c] as number, reliefScale);
-  const cornerRadius = new Float32Array(grid.triangleCount || (grid.corners.length / 3));
-  for (let t = 0; t < cornerRadius.length; t++) {
-    if (grid.triangles) {
-      const a = grid.triangles[t * 3] as number, b = grid.triangles[t * 3 + 1] as number, d = grid.triangles[t * 3 + 2] as number;
-      cornerRadius[t] = ((cellRadius[a] as number) + (cellRadius[b] as number) + (cellRadius[d] as number)) / 3;
-    } else cornerRadius[t] = 1;
-  }
-
-  // Позиции и нормали упаковывает Wasm-ядро globePack; сетка отдаёт
-  // углы как Uint32Array — zero-copy Int32Array-вьюха на тот же буфер.
-  const cellCornersI32 = new Int32Array(grid.cellCorners.buffer, grid.cellCorners.byteOffset, grid.cellCorners.length);
-  const cellCornerStartI32 = new Int32Array(grid.cellCornerStart.buffer, grid.cellCornerStart.byteOffset, grid.cellCornerStart.length);
-  const packed = getCore().globePack(grid.centers, grid.corners, cellCornersI32, cellCornerStartI32,
-    cellRadius, cornerRadius, F);
-  const positions = packed.positions;
-  const normals = packed.normals;
-
-  for (c = 0; c < F; c++) vertexCellId[c] = c;
-  let slot = F;
-  let w = 0;
-  for (c = 0; c < F; c++) {
-    cellIndexStart[c] = w;
-    const start = grid.cellCornerStart[c] as number;
-    const sides = (grid.cellCornerStart[c + 1] as number) - start;
-    for (k = 0; k < sides; k++) {
-      vertexCellId[slot] = c;
-      slot++;
-    }
-    const firstCornerSlot = slot - sides;
-    for (k = 0; k < sides; k++) {
-      indices[w++] = c;
-      indices[w++] = firstCornerSlot + k;
-      indices[w++] = firstCornerSlot + ((k + 1) % sides);
-    }
-  }
-  cellIndexStart[F] = w;
-
-  const chunkRanges: GlobeChunkRange[] = [];
-  if (grid.chunkCellStart && grid.chunkCenters && grid.chunkCosAngularRadius) {
-    for (let ci = 0; ci < (grid.chunkCount as number); ci++) {
-      const startCell = grid.chunkCellStart[ci] as number;
-      const endCell = grid.chunkCellStart[ci + 1] as number;
-      chunkRanges.push({
-        id: ci,
-        startCell: startCell,
-        cellCount: endCell - startCell,
-        indexStart: cellIndexStart[startCell] as number,
-        indexCount: (cellIndexStart[endCell] as number) - (cellIndexStart[startCell] as number),
-        center: [grid.chunkCenters[ci * 3] as number, grid.chunkCenters[ci * 3 + 1] as number, grid.chunkCenters[ci * 3 + 2] as number],
-        cosAngularRadius: grid.chunkCosAngularRadius[ci] as number,
-        sinAngularRadius: grid.chunkSinAngularRadius ? (grid.chunkSinAngularRadius[ci] as number) : 0,
-      });
-    }
-  }
-
-  const colors = buildVertexColors(surface, vertexCellId, opts.colorMode || 'biome', F);
-  return {
-    version: GLOBE_VERSION,
-    v: grid.v,
-    cellCount: F,
-    vertexCount: vertexCount,
-    triangleCount: totalSides,
-    indexCount: indices.length,
-    positions: positions,
-    normals: normals,
-    colors: colors,
-    indices: indices,
-    vertexCellId: vertexCellId,
-    cellIndexStart: cellIndexStart,
-    chunkRanges: chunkRanges,
-    reliefScale: reliefScale,
-    typedBytes: positions.byteLength + normals.byteLength + colors.byteLength + indices.byteLength,
-  };
 }
 
 function listGeometryTransferables(geometry: GlobeGeometry | null, includeVertexCellId?: boolean): ArrayBuffer[] {
@@ -1695,8 +1579,6 @@ const PlanetGlobe = {
   GLOBE_VERSION: GLOBE_VERSION,
   COLOR_MODES: COLOR_MODES.map(function (x) { return { key: x.key, label: x.label }; }),
   buildCellColors: buildCellColors,
-  buildVertexColors: buildVertexColors,
-  buildGlobeGeometry: buildGlobeGeometry,
   listGeometryTransferables: listGeometryTransferables,
   cellPolygon: cellPolygon,
   buildEquirectPreview: buildEquirectPreview,

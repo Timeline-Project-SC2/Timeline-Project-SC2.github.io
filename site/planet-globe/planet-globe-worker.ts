@@ -54,6 +54,7 @@ import PlanetSurface from '../shared/planet-surface.ts';
 import type { SurfaceProfile, SurfaceResult } from '../shared/planet-surface.ts';
 import PlanetGlobe from '../shared/planet-globe.ts';
 import type { GlobeGeometry } from '../shared/planet-globe.ts';
+import { buildGlobeGeometry, buildVertexColors } from '../shared/planet-globe-pack.ts';
 import { LOCAL_MAP_PATCH_VERSION, buildPatch7, verifyPatchInvariants, patchSpanMeters, buildBuildingSpawnMask } from '../../src/local-map/local-map-contract.ts';
 import type { LocalMapPatch, PatchInvariantReport } from '../../src/local-map/local-map-contract.ts';
 
@@ -822,7 +823,7 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
       const proxyGridResult = await getGrid(proxyV, token, requestId, 0.845);
       const proxyRenderGrid = proxyGridResult.grid;
       const proxyRenderSurface = projectSurfaceToRender(grid, surface, proxyRenderGrid);
-      proxyGeometry = PlanetGlobe.buildGlobeGeometry(proxyRenderGrid, proxyRenderSurface, {
+      proxyGeometry = buildGlobeGeometry(proxyRenderGrid, proxyRenderSurface, {
         colorMode: colorMode,
         reliefScale: reliefScale,
       });
@@ -843,7 +844,7 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
       renderGrid = render.grid;
       renderSurface = projectSurfaceToRender(grid, surface, renderGrid);
     }
-    const geometry = PlanetGlobe.buildGlobeGeometry(renderGrid, renderSurface, {
+    const geometry = buildGlobeGeometry(renderGrid, renderSurface, {
       colorMode: colorMode,
       reliefScale: reliefScale,
     });
@@ -1221,7 +1222,7 @@ async function routeMessage(message: WorkerMessage): Promise<void> {
       if (!current) throw new Error('Планета ещё не сгенерирована');
       const mode = message.mode || 'biome';
       const layer = colorLayerFor(current, message.renderV);
-      const colors = PlanetGlobe.buildVertexColors(layer.renderSurface, layer.vertexCellId, mode, layer.cellCount);
+      const colors = buildVertexColors(layer.renderSurface, layer.vertexCellId, mode, layer.cellCount);
       current.colorMode = mode;
       post('colors', {
         token: message.token, requestId: message.requestId, mode: mode, colors: colors,
