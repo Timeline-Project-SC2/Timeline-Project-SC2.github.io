@@ -49,7 +49,12 @@
       океанские направления держат отрицательную батиметрию без круглого вала.
    9. Stage-8.6: соседние суша ↔ океан синхронно продолжаются за воротником,
       а стрежень речного русла получает явный водный маркер terraform_map = 0
-      и запрещает спавн даже выше seaLevel. */
+      и запрещает спавн даже выше seaLevel.
+   10. Stage-8.7: кольца соседних областей вокруг активного гекса (ringCells,
+      neighborRings 1..5): состав 6/12/18/24/30, ring-1 точны по 6 соседям Patch7,
+      детерминированность, бюджет ringGenMs <= 20 мс и ring-буферы <= 512 КБ,
+      waterMask по seaLevel, И-3.3 (neighborRings=0 — основной ответ побайтово
+      совпадает), кэш с fingerprint(neighborRings) и глубокое клонирование. */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -2117,4 +2122,193 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
   }
 
   Worker.clearLocalMapCache();
+});
+
+// ---------------------------------------------------------------------------
+// Stage-8.7: кольца соседних областей вокруг активного гекса (worker 1 из 5)
+// ---------------------------------------------------------------------------
+
+test('Stage-8.7: contract ringCells — состав, нет дубликатов, hfRes монотонно убывает', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  assert.equal(Worker.RING_LEVELS, 5);
+  assert.equal(Worker.MAX_RING_CELLS, 91);
+  // RING_HF_RES: [центр, 1..5], строго убывающее
+  const res = Worker.RING_HF_RES;
+  assert.equal(res.length, 6);
+  for (let i = 1; i < res.length; i++) {
+    assert.ok(res[i] < res[i - 1], `RING_HF_RES[${i}] < RING_HF_RES[${i - 1}]`);
+  }
+  Worker.clearLocalMapCache();
+  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-contract', profile: PROFILE, neighborRings: 5,
+  }));
+  assert.ok(response.ringCells, 'ringCells при neighborRings=5');
+  assert.equal(response.ringCells.length, 90);
+  assert.equal(response.meta.ringCellCount, 90);
+  assert.ok(response.meta.ringGenMs >= 0 && response.meta.ringGenMs <= 20,
+    `гейт ringGenMs: ${response.meta.ringGenMs.toFixed(2)} мс <= 20 мс`);
+  // состав по кольцам: 6/12/18/24/30
+  const counts = {};
+  for (const cell of response.ringCells) counts[cell.ring] = (counts[cell.ring] || 0) + 1;
+  assert.deepEqual(counts, { 1: 6, 2: 12, 3: 18, 4: 24, 5: 30 });
+  // нет дубликатов cell, кольца в порядке возрастания, инварианты ячейки
+  const seen = new Set();
+  let lastRing = 0;
+  for (const cell of response.ringCells) {
+    assert.ok(!seen.has(cell.cell), `дубликат cell ${cell.cell}`);
+    seen.add(cell.cell);
+    assert.ok(cell.ring >= lastRing, 'кольца в порядке возрастания');
+    lastRing = cell.ring;
+    assert.ok(cell.ring >= 1 && cell.ring <= 5, `ring ${cell.ring} в [1, 5]`);
+    assert.equal(cell.hfRes, res[cell.ring], `hfRes ring ${cell.ring}`);
+    assert.equal(cell.heightfield.length, cell.hfRes * cell.hfRes);
+    assert.equal(cell.waterMask.length, cell.hfRes * cell.hfRes);
+    assert.ok(cell.minHeightM <= cell.maxHeightM, `границы высот ring ${cell.ring}`);
+    const len = Math.hypot(cell.center[0], cell.center[1], cell.center[2]);
+    assert.ok(Math.abs(len - 1) < 1e-6, `center единичная: ${len}`);
+    assert.ok(Number.isFinite(cell.offsetM[0]) && Number.isFinite(cell.offsetM[1]), 'offsetM фините');
+  }
+  assert.equal(seen.size, 90);
+});
+
+test('Stage-8.7: ring-1 точность — центры и смещения совпадают с 6 соседями Patch7', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-ring1', profile: PROFILE, neighborRings: 1,
+  }));
+  assert.equal(response.ringCells.length, 6);
+  for (const cell of response.ringCells) {
+    // center совпадает с одним из patch.cells.slice(1).center
+    let matched = false;
+    for (let k = 1; k <= 6; k++) {
+      const p = dryPatch.cells[k];
+      const dot = cell.center[0] * p.center[0] + cell.center[1] * p.center[1] + cell.center[2] * p.center[2];
+      if (dot > 1 - 1e-9) { matched = true; break; }
+    }
+    assert.ok(matched, 'ring-1 center совпадает с соседом Patch7');
+    // offsetM → localPointToDirection ≈ center
+    const dir = Contract.localPointToDirection(dryPatch, cell.offsetM[0], cell.offsetM[1]);
+    const diff = Math.hypot(dir[0] - cell.center[0], dir[1] - cell.center[1], dir[2] - cell.center[2]);
+    assert.ok(diff < 1e-6, `offsetM → center: diff ${diff}`);
+  }
+});
+
+test('Stage-8.7: детерминированность — два вызова дают побайтово одинаковые ringCells', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const a = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-det-a', profile: PROFILE, neighborRings: 5,
+  }));
+  Worker.clearLocalMapCache();
+  const b = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-det-b', profile: PROFILE, neighborRings: 5,
+  }));
+  assert.equal(a.ringCells.length, b.ringCells.length);
+  for (let i = 0; i < a.ringCells.length; i++) {
+    const ca = a.ringCells[i];
+    const cb = b.ringCells[i];
+    assert.equal(ca.cell, cb.cell);
+    assert.equal(ca.ring, cb.ring);
+    assert.equal(ca.hfRes, cb.hfRes);
+    for (let j = 0; j < ca.heightfield.length; j++) assert.equal(ca.heightfield[j], cb.heightfield[j]);
+    for (let j = 0; j < ca.waterMask.length; j++) assert.equal(ca.waterMask[j], cb.waterMask[j]);
+  }
+});
+
+test('Stage-8.7: бюджет — ringGenMs <= 20 мс, ring-буферы <= 512 КБ', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-budget', profile: PROFILE, neighborRings: 5,
+  }));
+  assert.ok(response.meta.ringGenMs >= 0 && response.meta.ringGenMs <= 20,
+    `гейт ringGenMs: ${response.meta.ringGenMs.toFixed(2)} мс <= 20 мс`);
+  let bytes = 0;
+  for (const cell of response.ringCells) {
+    bytes += cell.heightfield.byteLength + cell.waterMask.byteLength;
+  }
+  assert.ok(bytes <= 512 * 1024, `ring-буферы: ${(bytes / 1024).toFixed(1)} КБ <= 512 КБ`);
+});
+
+test('Stage-8.7: waterMask — 1 там, где heightfield ниже seaLevel', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-water', profile: PROFILE, neighborRings: 5,
+  }));
+  for (const cell of response.ringCells) {
+    for (let i = 0; i < cell.heightfield.length; i++) {
+      const expected = cell.heightfield[i] < 0 ? 1 : 0;
+      assert.equal(cell.waterMask[i], expected, `waterMask[${i}] ring ${cell.ring}`);
+    }
+  }
+});
+
+test('Stage-8.7: neighborRings=0 — основной ответ побайтово совпадает с ringCells=5 (И-3.3)', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const a = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-eq-a', profile: PROFILE, neighborRings: 0,
+  }));
+  Worker.clearLocalMapCache();
+  const b = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-eq-b', profile: PROFILE, neighborRings: 5,
+  }));
+  assert.equal(a.ringCells, undefined, 'rings=0 не имеет ringCells');
+  assert.equal(a.meta.ringCellCount, undefined);
+  assert.equal(a.meta.ringGenMs, undefined);
+  assert.equal(b.ringCells.length, 90);
+  // основные буферы побайтово одинаковы
+  for (let i = 0; i < a.heightfield.length; i++) assert.equal(a.heightfield[i], b.heightfield[i]);
+  for (let i = 0; i < a.zoneMap.length; i++) assert.equal(a.zoneMap[i], b.zoneMap[i]);
+  for (let i = 0; i < a.terraformMap.length; i++) assert.equal(a.terraformMap[i], b.terraformMap[i]);
+  const aPacks = Object.values(a.instanceBuffers);
+  const bPacks = Object.values(b.instanceBuffers);
+  assert.equal(aPacks.length, bPacks.length);
+  for (let p = 0; p < aPacks.length; p++) {
+    assert.equal(aPacks[p].count, bPacks[p].count);
+    for (let i = 0; i < aPacks[p].buffer.length; i++) assert.equal(aPacks[p].buffer[i], bPacks[p].buffer[i]);
+  }
+});
+
+test('Stage-8.7: кэш и clone — fingerprint включает neighborRings, ringCells клонируются', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  // fingerprint включает neighborRings: rings=5 и rings=0 с тем же patchKey
+  // не должны делить записи кэша.
+  Worker.clearLocalMapCache();
+  const withRings = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-cache', profile: PROFILE, neighborRings: 5,
+  }));
+  assert.ok(withRings.ringCells, 'rings=5 имеет ringCells');
+  const withoutRings = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-cache', profile: PROFILE, neighborRings: 0,
+  }));
+  assert.equal(withoutRings.ringCells, undefined, 'rings=0 не читает ringCells из кэша rings=5');
+  // cloneLocalMapResponse глубоко клонирует ringCells
+  const clone = Worker.cloneLocalMapResponse(withRings);
+  assert.equal(clone.ringCells.length, withRings.ringCells.length);
+  const orig = withRings.ringCells[0];
+  const cl = clone.ringCells[0];
+  assert.notEqual(orig.heightfield.buffer, cl.heightfield.buffer, 'clone не делит буфер heightfield');
+  orig.heightfield[0] = -9999;
+  assert.notEqual(cl.heightfield[0], -9999, 'clone не зависит от оригинала');
+  orig.waterMask[0] = 5;
+  assert.notEqual(cl.waterMask[0], 5, 'clone waterMask не зависит от оригинала');
+  // transferables содержат ring-буферы
+  const transferables = Worker.localMapTransferables(withRings);
+  const baseCount = 3 + Object.values(withRings.instanceBuffers).filter(Boolean).length;
+  assert.equal(transferables.length, baseCount + 2 * withRings.ringCells.length,
+    'transferables включают 2 буфера на каждую ячейку кольца');
+});
+
+test('Stage-8.7: без профиля ringCells отсутствуют (нет 3D-сэмпера)', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const response = Worker.generateLocalMap(requestFor(dryPatch, {
+    patchKey: 'stage87-noprofile', neighborRings: 5,
+  }));
+  assert.equal(response.ringCells, undefined);
+  assert.equal(response.meta.ringCellCount, undefined);
+  assert.equal(response.meta.ringGenMs, undefined);
 });
