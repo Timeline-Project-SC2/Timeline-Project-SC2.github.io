@@ -102,8 +102,8 @@ export interface LocalMapRenderOptions {
   /** Камера для купола неба; без неё скайдом не рисуется. */
   readonly camera?: LocalMapCameraState;
   /**
-   * Альфа купола неба/лимба (по умолчанию 1.0 — непрозрачный купол со звёздами
-   * и атмосферным лимбом; явное значение 0..1 сохраняет обратную совместимость).
+   * Альфа купола неба/лимба (по умолчанию 1.0 — непрозрачный дневной купол
+   * с облаками; явное значение 0..1 сохраняет обратную совместимость).
    */
   readonly skyAlpha?: number;
   /** Явный флаг непрозрачного купола неба (совместимость с прежними вызовами). */
@@ -111,9 +111,9 @@ export interface LocalMapRenderOptions {
 }
 
 const DEFAULT_LIGHT_DIR: readonly [number, number, number] = [0.42, 0.28, 0.86];
-const DEFAULT_AMBIENT: readonly [number, number, number] = [0.32, 0.34, 0.38];
-const DEFAULT_FOG_COLOR: readonly [number, number, number] = [0.58, 0.66, 0.74];
-const DEFAULT_HORIZON_COLOR: readonly [number, number, number] = [0.22, 0.52, 0.68];
+const DEFAULT_AMBIENT: readonly [number, number, number] = [0.42, 0.45, 0.48];
+const DEFAULT_FOG_COLOR: readonly [number, number, number] = [0.68, 0.75, 0.82];
+const DEFAULT_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
 const FOG_START_RATIO = 0.72;
 const FOG_END_RATIO = 0.98;
 
@@ -791,8 +791,8 @@ export class StructureRenderer {
     const planetRadiusM = options.planetRadiusM ?? this.skirt?.planetRadiusM ?? 0;
     const focusRadiusM = options.focusRadiusM ?? radiusM;
     const hexSizeM = options.hexSizeM ?? this.skirt?.hexSpacingM ?? 0;
-    // По умолчанию купол неба, звёзды и атмосферный лимб рендерятся непрозрачно
-    // (skyAlpha = 1.0); явный options.skyAlpha сохраняет обратную совместимость.
+    // По умолчанию дневной купол, облака и атмосферный лимб рендерятся
+    // непрозрачно (skyAlpha = 1.0); явный options.skyAlpha сохраняет совместимость.
     const rawSkyAlpha = typeof options?.skyAlpha === 'number' ? options.skyAlpha : 1.0;
     const skyAlpha = Number.isFinite(rawSkyAlpha)
       ? Math.min(1, Math.max(0, rawSkyAlpha))
