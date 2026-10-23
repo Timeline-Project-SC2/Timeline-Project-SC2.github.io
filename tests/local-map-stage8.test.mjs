@@ -28,7 +28,11 @@
       планетарный шаг гексов и все 6 соседних ячеек Patch7, гребневой
       мультифрактал ridgedFbm даёт горно-долинный перепад > 120 м на внешнем
       кольце суши, сшивка воротника остаётся точной, а не менее 55% карты
-      зонирования остаётся природным ландшафтом (zone === 0). */
+      зонирования остаётся природным ландшафтом (zone === 0).
+   6. Stage-8.5: `terraform_map` несёт явный водный маркер — `0` на воде,
+      озере #53275 и континентальном зеркале, `>= 2` на любой суше во всех
+      масштабах участка (10 км … 1250 км), значение `1` зарезервировано, а
+      минимальная подложка суши не влияет на heightfield (нулевая альфа). */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1535,4 +1539,147 @@ test('Stage-8.4: первые четыре кольца без радиальн�
   assert.ok(checkedRings >= 40, 'проверены воротник и переход до 4.5 R');
   assert.ok(maxRadialJump < 60, `нет радиальных ступенек: ${maxRadialJump} м`);
   assert.ok(maxAngularJump < 60, `нет угловых ступенек: ${maxAngularJump} м`);
+});
+
+// ---------------------------------------------------------------------------
+// 6. Stage-8.5: явный водный маркер terraform_map — ложная вода исключена
+// ---------------------------------------------------------------------------
+
+test('Stage-8.5: terraform_map кодирует воду нулём, а сушу байтом >= 2 (нет ложной воды)', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  assert.ok(waterPatch, 'нужен полностью водный патч');
+  assert.equal(Worker.TERRAFORM_LAND_MIN, 2, 'минимальная подложка суши — 2');
+  assert.equal(Worker.TERRAFORM_ALPHA_SPAN, 253, 'знаменатель альфы терраформинга — 255 − 2');
+
+  // 1. Базовый гауссов профиль: минимум 2 (нуль и единица зарезервированы под
+  //    воду), максимум по-прежнему ограничен альфой 0.42 (Stage-8.3).
+  const base = Worker.generateTerraformMap();
+  let baseMin = Infinity;
+  let baseMax = -Infinity;
+  for (const value of base) {
+    baseMin = Math.min(baseMin, value);
+    baseMax = Math.max(baseMax, value);
+  }
+  assert.ok(baseMin >= Worker.TERRAFORM_LAND_MIN, `подложка суши generateTerraformMap >= 2 (${baseMin})`);
+  assert.ok(baseMax <= Math.floor(0.42 * 255), `максимум terraform_map ограничен (${baseMax})`);
+
+  // 2. Сухой патч: во всех масштабах участка (10 км … 1250 км) каждый тексель
+  //    строго >= 2 — пологая суша больше не «тонет» в ложной воде.
+  for (const scaleKm of [10, 60, 600, 1250]) {
+    const radiusM = Math.max(600, (scaleKm * 1000) / 2);
+    Worker.clearLocalMapCache();
+    const dry = Worker.generateLocalMap(
+      requestFor(dryPatch, { radiusM, patchKey: `stage85-dry-${scaleKm}` }),
+    );
+    assert.equal(dry.terraformMap.length, Worker.TERRAFORM_RES * Worker.TERRAFORM_RES);
+    let dryMin = Infinity;
+    let reserved = 0;
+    for (let i = 0; i < dry.terraformMap.length; i++) {
+      const value = dry.terraformMap[i];
+      dryMin = Math.min(dryMin, value);
+      if (value === 1) reserved++;
+    }
+    assert.ok(
+      dryMin >= Worker.TERRAFORM_LAND_MIN,
+      `сухой патч ${scaleKm} км: нет нулей воды (min = ${dryMin})`,
+    );
+    assert.equal(reserved, 0, `сухой патч ${scaleKm} км: значение 1 зарезервировано и не встречается`);
+    assert.equal(dry.meta.waterFraction, 0, `сухой патч ${scaleKm} км: вода не найдена`);
+  }
+
+  // 3. Полностью водный патч: каждый тексель — явный маркер воды 0.
+  Worker.clearLocalMapCache();
+  const water = Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'stage85-water' }));
+  assert.equal(water.meta.waterFraction, 1, 'водный патч целиком под водой');
+  for (let i = 0; i < water.terraformMap.length; i++) {
+    assert.equal(water.terraformMap[i], 0, `водный тексель ${i} terraform_map равен 0`);
+  }
+
+  // 4. Континентальное озеро выше seaLevel (морфология ячейки #53275
+  //    «Корхал IV»): водное зеркало несёт маркер 0, а не «нулевую альфу суши».
+  const lakePatch = buildContinentalLakePatch(dryPatch);
+  Worker.clearLocalMapCache();
+  const lake = Worker.generateLocalMap({
+    patch: lakePatch,
+    seed: 12345,
+    placeId: 7,
+    radiusM: 600,
+    profile: PROFILE,
+    patchKey: 'stage85-lake-53275',
+  });
+  assert.equal(lake.meta.waterFraction, 1, 'локальный участок #53275 целиком под озером');
+  for (let i = 0; i < lake.terraformMap.length; i++) {
+    assert.equal(lake.terraformMap[i], 0, `тексель озера #53275 — маркер воды 0 (${lake.terraformMap[i]})`);
+  }
+
+  // 5. Смешанный участок того же озера на региональном масштабе: вода — 0,
+  //    суша сухих соседей — >= 2, промежуточных значений нет.
+  Worker.clearLocalMapCache();
+  const lakeWideRadiusM = 625000;
+  const lakeWide = Worker.generateLocalMap({
+    patch: lakePatch,
+    seed: 12345,
+    placeId: 7,
+    radiusM: lakeWideRadiusM,
+    patchKey: 'stage85-lake-wide',
+  });
+  const cellSize = (2 * lakeWideRadiusM) / HF_RES;
+  let wetTexels = 0;
+  let dryTexels = 0;
+  let reservedWide = 0;
+  for (let y = 0; y < HF_RES; y++) {
+    for (let x = 0; x < HF_RES; x++) {
+      const idx = y * HF_RES + x;
+      const value = lakeWide.terraformMap[idx];
+      if (value === 1) reservedWide++;
+      const cell = Contract.nearestPatchCell(
+        lakePatch,
+        Contract.localPointToDirection(
+          lakePatch,
+          (x - HF_RES / 2) * cellSize,
+          (y - HF_RES / 2) * cellSize,
+        ),
+      );
+      if (Contract.isWaterCell(cell, lakePatch.seaLevel)) {
+        wetTexels++;
+        assert.equal(value, 0, `водный тексель озера #53275 равен 0 (${value})`);
+      } else {
+        dryTexels++;
+        assert.ok(value >= Worker.TERRAFORM_LAND_MIN, `сухой тексель соседа >= 2 (${value})`);
+      }
+    }
+  }
+  assert.equal(reservedWide, 0, 'значение 1 не встречается и на смешанном участке');
+  assert.ok(wetTexels > 0 && dryTexels > 0, `смешанный участок: вода ${wetTexels} / суша ${dryTexels}`);
+  assert.ok(
+    Math.abs(lakeWide.meta.waterFraction - wetTexels / (HF_RES * HF_RES)) < 1e-9,
+    'meta.waterFraction совпадает с долей водных маркеров terraform_map',
+  );
+
+  // 6. Подложка 2 не влияет на рельеф: альфа терраформинга считается от
+  //    TERRAFORM_LAND_MIN, поэтому в точках без терраформинга heightfield
+  //    совпадает с природным даже при полностью разрешающей маске спавна.
+  Worker.clearLocalMapCache();
+  const strict = Worker.generateLocalMap(
+    requestFor(dryPatch, { spawnRule: STRICT_RULE, patchKey: 'stage85-alpha-strict' }),
+  );
+  Worker.clearLocalMapCache();
+  const mixed = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'stage85-alpha-mixed' }));
+  const cornerIdx = 3 * HF_RES + 3;   // гауссов профиль здесь уже на подложке 2
+  assert.equal(mixed.terraformMap[cornerIdx], Worker.TERRAFORM_LAND_MIN, 'угловой тексель — подложка 2');
+  assert.ok(
+    Math.abs(strict.heightfield[cornerIdx] - mixed.heightfield[cornerIdx]) < 1e-9,
+    'подложка 2 даёт нулевую альфу: рельеф без терраформинга не меняется',
+  );
+  const tfIdx = Math.floor(HF_RES / 2) * HF_RES + Math.floor(HF_RES / 2);
+  assert.ok(
+    mixed.terraformMap[tfIdx] > Worker.TERRAFORM_LAND_MIN,
+    'в центре долины альфа терраформинга ненулевая',
+  );
+  assert.ok(
+    Math.abs(strict.heightfield[tfIdx] - mixed.heightfield[tfIdx]) > 1e-6,
+    'площадка терраформинга по-прежнему сглаживает рельеф в центре',
+  );
+
+  Worker.clearLocalMapCache();
 });

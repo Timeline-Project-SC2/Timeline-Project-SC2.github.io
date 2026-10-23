@@ -49,6 +49,17 @@ export const RIVER_HALF_WIDTH_RATIO = 0.03;
 export const RIVER_DEPTH_RATIO = 0.0025;
 /** Ёмкость LRU-кэша локальных участков (И-3, Патч 8). */
 export const LOCAL_MAP_CACHE_LIMIT = 8;
+/**
+ * Stage-8.5: явный водный маркер `terraform_map`. Байт `0` означает
+ * «вода/озеро канонической ячейки Patch7», а любая точка суши несёт минимум
+ * `TERRAFORM_LAND_MIN = 2` — даже там, где терраформинга нет вовсе. Значение
+ * `1` зарезервировано и на суше не встречается, поэтому потребитель карты
+ * (шейдер рельефа) отличает пологую сухую равнину от воды одним сравнением,
+ * а не по совпадению «нулевой альфы» с нулевой высотой.
+ */
+export const TERRAFORM_LAND_MIN = 2;
+/** Stage-8.5: знаменатель альфы терраформинга — `255 − TERRAFORM_LAND_MIN`. */
+export const TERRAFORM_ALPHA_SPAN = 253;
 
 /** Данные инстанса: 8 float × 4 Б = 32 байта (контракт layout-а шейдера). */
 export type InstanceData = readonly [
@@ -286,6 +297,10 @@ export function generateTerraformMap(): Uint8Array {
   // (sigma = 0.18 · рез.), а максимальная альфа ограничена 0.42 вместо 1.0 —
   // долина внутри гекса сохраняет живой природный микрорельеф холмов и ложбин,
   // а не превращается в плоский бетонный стол под застройкой.
+  // Stage-8.5: гауссов профиль сохраняется, но минимальная подложка суши
+  // поднята до TERRAFORM_LAND_MIN — байт суши никогда не равен 0 или 1, иначе
+  // на пологой равнине в масштабах 10…1250 км шейдер принимал сухую землю за
+  // водное зеркало (нулевая альфа терраформинга выглядела как маркер воды).
   const map = new Uint8Array(TERRAFORM_RES * TERRAFORM_RES);
   const cx = TERRAFORM_RES / 2, cy = TERRAFORM_RES / 2;
   const sigma = TERRAFORM_RES * 0.18;
@@ -295,7 +310,7 @@ export function generateTerraformMap(): Uint8Array {
       const dx = x - cx, dy = y - cy;
       const r2 = dx * dx + dy * dy;
       const alpha = Math.min(0.42, Math.exp(-r2 / (2 * sigma * sigma)));
-      map[y * TERRAFORM_RES + x] = Math.floor(alpha * 255);
+      map[y * TERRAFORM_RES + x] = Math.max(TERRAFORM_LAND_MIN, Math.floor(alpha * 255));
     }
   }
   return map;
@@ -796,6 +811,11 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   const segments = riverSegments(patch, radiusM, riverHalfWidthM);
   const noiseScale = (3.5 + Math.log2(Math.max(1, radiusM / 600)) * 0.65) / Math.max(radiusM, 1);
   const heightfield = new Float32Array(hfRes * hfRes);
+  // Stage-8.5: `terraform_map` заполняется в том же проходе, что и рельеф.
+  // Байт 0 ставится ТОЛЬКО на воду/озеро канонической ячейки Patch7, а любая
+  // точка суши несёт минимум TERRAFORM_LAND_MIN — ложная вода на пологой суше
+  // исключена на всех масштабах участка (10 км … 1250 км).
+  const terraformMap = generateTerraformMap();
   let waterPoints = 0;
   let buildablePoints = 0;
 
@@ -820,6 +840,8 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
         // И-3.2: вода/переполняющееся озеро держит зеркало waterLevelOf.
         waterPoints++;
         height = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+        // Stage-8.5: явный водный маркер — байт 0 в `terraform_map`.
+        terraformMap[idx] = 0;
       } else {
         // И-3.2: суша надёжно выше канонической высоты ячейки (берег не «ныряет»).
         const anchor = (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
@@ -831,6 +853,8 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
         // И-3.3: плавный врез русла от входных граней к центру и к выходной грани.
         const carve = riverCarveFactor(wx, wy, segments, riverHalfWidthM);
         if (carve > 0) height -= riverDepthM * carve;
+        // Stage-8.5: суша всегда отличается от воды (минимум TERRAFORM_LAND_MIN).
+        terraformMap[idx] = Math.max(TERRAFORM_LAND_MIN, terraformMap[idx] as number);
       }
 
       heightfield[idx] = height;
@@ -841,23 +865,26 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   const blurKernel = Math.max(3, Math.min(10, Math.round(radiusM / cellSize * 0.08)));
   const smoothed = boxBlurSeparable(heightfield, hfRes, hfRes, blurKernel);
 
-  // 3. Terraform mask
-  const terraformMap = generateTerraformMap();
-
-  // 4. Mix: h_final = mix(h_natural, h_smoothed, terraform_alpha) только там, где
+  // 3. Mix: h_final = mix(h_natural, h_smoothed, terraform_alpha) только там, где
   //    спавн разрешён, — терраформинг базы не засыпает реки и озёра (И-3.2/И-3.3).
+  //    Stage-8.5: альфа считается от подложки суши TERRAFORM_LAND_MIN, поэтому
+  //    минимальный маркер «это суша» не поднимает рельеф там, где терраформинга
+  //    нет (rawTf <= 2 → alpha = 0), а водные тексели (rawTf === 0) остаются
+  //    зеркалом waterLevelOf без размывания берега.
   for (let i = 0; i < hfRes * hfRes; i++) {
     if (spawnMask[i] !== 1) continue;
-    const alpha = (terraformMap[i] as number) / 255;
+    const rawTf = terraformMap[i] as number;
+    const alpha = rawTf <= TERRAFORM_LAND_MIN ? 0 : (rawTf - TERRAFORM_LAND_MIN) / TERRAFORM_ALPHA_SPAN;
+    if (alpha <= 0) continue;
     heightfield[i] = (heightfield[i] as number) * (1 - alpha) + (smoothed[i] as number) * alpha;
   }
 
-  // 5. Zone map: вода/озёра/русла остаются без зонирования (И-3.2/И-3.4).
+  // 4. Zone map: вода/озёра/русла остаются без зонирования (И-3.2/И-3.4).
   //    radiusM передаётся, чтобы зонирование учитывало и локальный размах
   //    детального участка, а не только полный patchSpanMeters.
   const zoneMap = applyWaterZoning(generateZoneMap(cellSeed, placeId), patch, radiusM);
 
-  // 6. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
+  // 5. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
   const instances = scatterInstances(zoneMap, heightfield, radiusM, cellSeed, placeId, spawnMask);
   const instanceBuffers = packInstancesByModule(instances);
 
