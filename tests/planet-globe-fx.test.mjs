@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
-const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
+const { buildGlobeGeometry } = require('../site/shared/planet-globe-pack.ts');
 const PlanetFx = require('../src/planet/planet-globe-fx.ts');
 
 const SMALL_V = 8;
@@ -39,7 +39,7 @@ const SURFACE_INPUT = {
   biomeSoftWidthCells: 0.25,
 };
 const SURFACE = PlanetSurface.generateSurface(GRID, SURFACE_INPUT);
-const GEOMETRY = PlanetGlobe.buildGlobeGeometry(GRID, SURFACE, { colorMode: 'biome' });
+const GEOMETRY = buildGlobeGeometry(GRID, SURFACE, { colorMode: 'biome' });
 
 /** Параметры осколков как у стенда: 10 осколков, разлёт 0.3, дефолты толщины. */
 function shardParams(overrides = {}) {

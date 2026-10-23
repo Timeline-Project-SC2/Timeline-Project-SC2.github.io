@@ -26,6 +26,7 @@ const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetGeography = require('../site/shared/planet-geography.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
+const { buildGlobeGeometry, buildVertexColors } = require('../site/shared/planet-globe-pack.ts');
 
 const PREFERRED_SURFACE_CLASS = {
   earthlike_balanced: 'terrestrial',
@@ -164,7 +165,7 @@ function buildPlanet(grid, profile) {
   const surface = PlanetSurface.generateSurface(grid, profile);
   const surfaceMs = performance.now() - started;
   started = performance.now();
-  const geometry = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'biome' });
+  const geometry = buildGlobeGeometry(grid, surface, { colorMode: 'biome' });
   const geometryMs = performance.now() - started;
   return { surface, geometry, surfaceMs, geometryMs };
 }
@@ -205,7 +206,7 @@ if (options.mode === 'gate') {
 
     for (const mode of PlanetGlobe.COLOR_MODES) {
       started = performance.now();
-      const colors = PlanetGlobe.buildVertexColors(
+      const colors = buildVertexColors(
         built.surface, geometry.vertexCellId, mode.key, geometry.cellCount);
       colorTimings.get(mode.key).push(performance.now() - started);
       if (colors.length !== geometry.vertexCount * 4) allGeometryValid = false;

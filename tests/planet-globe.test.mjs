@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
+const { buildGlobeGeometry } = require('../site/shared/planet-globe-pack.ts');
 
 const V = 16;
 const grid = GeodesicGrid.build(V);
@@ -25,7 +26,7 @@ const surface = PlanetSurface.generateSurface(grid, {
 });
 
 test('planet-globe-v1: геометрия ячеек индексированная, полная и без дырок по индексам', () => {
-  const geometry = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'biome' });
+  const geometry = buildGlobeGeometry(grid, surface, { colorMode: 'biome' });
   const expectedCells = 10 * V * V + 2;
   const expectedSides = grid.cellCorners.length;
 
@@ -88,8 +89,8 @@ test('planet-globe-v1: геометрия ячеек индексированн�
 });
 
 test('planet-globe-v1: геометрия и цвета детерминированы для одинаковой поверхности', () => {
-  const first = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'rivers' });
-  const second = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'rivers' });
+  const first = buildGlobeGeometry(grid, surface, { colorMode: 'rivers' });
+  const second = buildGlobeGeometry(grid, surface, { colorMode: 'rivers' });
   assert.deepEqual(first.positions, second.positions);
   assert.deepEqual(first.colors, second.colors);
   assert.deepEqual(first.indices, second.indices);
@@ -127,7 +128,7 @@ test('planet-globe-v1: все цветовые слои конечны, а ре�
 });
 
 test('planet-globe-v1: рельеф поднимает сушу и опускает глубокий океан без разрыва полигона pick', () => {
-  const geometry = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'biome', reliefScale: 1 });
+  const geometry = buildGlobeGeometry(grid, surface, { colorMode: 'biome', reliefScale: 1 });
   const radiusOfCenter = (cell) => Math.hypot(
     geometry.positions[cell * 3],
     geometry.positions[cell * 3 + 1],
