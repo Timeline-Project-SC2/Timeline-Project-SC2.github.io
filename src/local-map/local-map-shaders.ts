@@ -5,6 +5,9 @@
    деликатной кромкой, бесшовный сферический горизонт с 3-каскадной живой
    альпийской долиной, скальными хребтами и дневным куполом со слоисто-кучевыми
    облаками, плавно растворяющимися в атмосферной дымке.
+   Stage-8.6: объёмная вода с батиметрией, Fresnel-отражением неба, солнечным
+   бликом и пеной прибоя, рендеринг рек на любой высоте с галечной поймой и
+   пять отчётливых гипсометрических поясов суши от пляжа до снежных вершин.
    --------------------------------------------------------------------------
    Поля шейдеров обязаны совпадать с контрактом VAO рендерера
    (local-map-renderer.ts):
@@ -285,8 +288,38 @@ void main() {
   // Юбка не наследует краевые тексели карт центрального участка.
   uint zone = 0u;
   float terraformBlend = 0.0;
-  float rawTerraform = (u_isSkirt < 0.5) ? texture(u_terraform_map, v_uv).r : 1.0;
+  float rawTerraform = 1.0;
+  float minNeighborTf1 = 1.0;
+  float minNeighborTf2 = 1.0;
+  float maxNeighborTf3 = 0.0;
   if (u_isSkirt < 0.5) {
+    rawTerraform = texture(u_terraform_map, v_uv).r;
+    float tfE1 = textureOffset(u_terraform_map, v_uv, ivec2( 1,  0)).r;
+    float tfW1 = textureOffset(u_terraform_map, v_uv, ivec2(-1,  0)).r;
+    float tfN1 = textureOffset(u_terraform_map, v_uv, ivec2( 0,  1)).r;
+    float tfS1 = textureOffset(u_terraform_map, v_uv, ivec2( 0, -1)).r;
+    float tfNE = textureOffset(u_terraform_map, v_uv, ivec2( 1,  1)).r;
+    float tfNW = textureOffset(u_terraform_map, v_uv, ivec2(-1,  1)).r;
+    float tfSE = textureOffset(u_terraform_map, v_uv, ivec2( 1, -1)).r;
+    float tfSW = textureOffset(u_terraform_map, v_uv, ivec2(-1, -1)).r;
+    minNeighborTf1 = min(
+      min(min(tfE1, tfW1), min(tfN1, tfS1)),
+      min(min(tfNE, tfNW), min(tfSE, tfSW))
+    );
+    float tfE2 = textureOffset(u_terraform_map, v_uv, ivec2( 2,  0)).r;
+    float tfW2 = textureOffset(u_terraform_map, v_uv, ivec2(-2,  0)).r;
+    float tfN2 = textureOffset(u_terraform_map, v_uv, ivec2( 0,  2)).r;
+    float tfS2 = textureOffset(u_terraform_map, v_uv, ivec2( 0, -2)).r;
+    minNeighborTf2 = min(minNeighborTf1, min(min(tfE2, tfW2), min(tfN2, tfS2)));
+    float tfE4 = textureOffset(u_terraform_map, v_uv, ivec2( 4,  0)).r;
+    float tfW4 = textureOffset(u_terraform_map, v_uv, ivec2(-4,  0)).r;
+    float tfN4 = textureOffset(u_terraform_map, v_uv, ivec2( 0,  4)).r;
+    float tfS4 = textureOffset(u_terraform_map, v_uv, ivec2( 0, -4)).r;
+    maxNeighborTf3 = max(
+      max(max(max(tfE1, tfW1), max(tfN1, tfS1)), max(max(tfE2, tfW2), max(tfN2, tfS2))),
+      max(max(tfE4, tfW4), max(tfN4, tfS4))
+    );
+
     vec2 zGrid = v_uv * 64.0 - 0.5;
     ivec2 nearestZone = clamp(ivec2(floor(zGrid + 0.5)), ivec2(0), ivec2(63));
     zone = texelFetch(u_zoning_map, nearestZone, 0).r;
@@ -314,13 +347,56 @@ void main() {
     : (normalHoriz < 0.00002 && zStep < 0.005);
   bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015) && waterMirrorSurface;
 
-  // Гипсометрия живой долины: сочные луга внизу, светлая каменистая
-  // осыпь и субальпийский пояс на верхних склонах и у подножий пиков.
-  float hNorm = clamp((v_worldPos.z - 15.0) / 140.0, 0.0, 1.0);
-  vec3 lowlandColor  = vec3(0.30, 0.45, 0.16);
-  vec3 highlandColor = vec3(0.66, 0.60, 0.50);
-  vec3 naturalColor  = mix(lowlandColor, ZONE_COLORS[0], smoothstep(0.0, 0.45, hNorm));
-  naturalColor       = mix(naturalColor, highlandColor, smoothstep(0.45, 1.0, hNorm));
+  // Stage-8.6: распознавание рек на любой высоте по явному маркеру воды
+  // в terraform_map (байт 0 → rawTerraform < 0.002) и влажная галечно-песчаная
+  // пойма вдоль водных текселей (0.002 <= rawTerraform < 0.012).
+  bool isExplicitWaterTexel = (u_isSkirt < 0.5) && (rawTerraform < 0.002);
+  bool isRiverStream = isExplicitWaterTexel && (v_worldPos.z > 0.05) && !isFlatWaterMirror;
+  float riverBankMask = 0.0;
+  if (u_isSkirt < 0.5 && zone == 0u && !isFlatWaterMirror && !isExplicitWaterTexel && v_worldPos.z > 0.05) {
+    bool isBankBand = (rawTerraform >= 0.002) && (rawTerraform < 0.012);
+    float nearWaterEdge = max(
+      1.0 - smoothstep(0.0016, 0.0052, minNeighborTf1),
+      (1.0 - smoothstep(0.0016, 0.0042, minNeighborTf2)) * 0.62
+    );
+    float bankBandWeight = isBankBand
+      ? (1.0 - smoothstep(0.0094, 0.0120, rawTerraform))
+      : (1.0 - smoothstep(0.0020, 0.0420, rawTerraform)) * 0.85;
+    float bankNoise = terrainValueNoise(v_worldPos.xy / max(u_focusRadiusM, 600.0) * 34.0 + vec2(9.2, -4.7));
+    riverBankMask = clamp(nearWaterEdge * bankBandWeight * mix(0.80, 1.14, bankNoise), 0.0, 1.0)
+      * (1.0 - smoothstep(hexApothem * 0.82, hexApothem * 0.98, centerHexDist));
+  }
+
+  // Stage-8.6: пять отчётливых гипсометрических поясов суши
+  // (пляж → низинный луг → предгорья → высокогорные скалы → снежные пики).
+  float altM = max(0.0, v_worldPos.z);
+  float beltJitter = (terrainValueNoise(v_worldPos.xy / max(u_focusRadiusM, 600.0) * 2.6) - 0.5) * 18.0;
+  float effAltM = max(0.0, altM + beltJitter);
+  float beachAltM = max(0.0, altM + beltJitter * smoothstep(2.2, 16.0, altM) * 0.32);
+  float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
+  float slopeRock = smoothstep(0.03, 0.28, slopeSteep);
+
+  // Пояс 1 (0 … 7 м): тёплый песок и ракушечник с влажной кромкой у воды (0 … 2.2 м).
+  vec3 belt1Beach = mix(vec3(0.55, 0.50, 0.38), vec3(0.74, 0.68, 0.52), smoothstep(0.4, 2.2, altM));
+  // Пояс 2 (7 … 85 м): речная пойма и сочные низинные луга.
+  vec3 belt2Meadow = mix(vec3(0.26, 0.46, 0.18), ZONE_COLORS[0], smoothstep(10.0, 78.0, effAltM));
+  // Пояс 3 (85 … 175 м): предгорья, оливково-охристый суглинок и сухие террасы.
+  vec3 belt3Foothill = mix(vec3(0.49, 0.50, 0.26), vec3(0.58, 0.52, 0.34), smoothstep(90.0, 168.0, effAltM));
+  // Пояс 4 (175 … 290 м): субальпийское высокогорье, буро-сланцевый и базальтовый камень.
+  vec3 belt4Rock = mix(vec3(0.48, 0.45, 0.41), vec3(0.36, 0.35, 0.34), slopeRock * 0.46);
+  // Пояс 5 (> 290 м): светлый гранит и снежно-ледниковые шапки на гребнях;
+  // отвесные сбросы остаются тёмно-каменными.
+  float snowSlopeRetention = clamp(1.0 - slopeSteep * 0.55, 0.0, 1.0)
+    * (1.0 - smoothstep(0.18, 0.38, slopeSteep) * 0.66);
+  float snowCover = clamp(smoothstep(278.0, 316.0, effAltM) * snowSlopeRetention, 0.0, 1.0);
+  vec3 alpineGranite = mix(vec3(0.54, 0.53, 0.52), vec3(0.36, 0.35, 0.35), slopeRock * 0.68);
+  vec3 belt5Alpine = mix(alpineGranite, vec3(0.86, 0.90, 0.94), snowCover);
+
+  vec3 naturalColor = belt1Beach;
+  naturalColor = mix(naturalColor, belt2Meadow,   smoothstep(5.4, 9.0, beachAltM));
+  naturalColor = mix(naturalColor, belt3Foothill, smoothstep(75.0, 95.0, effAltM));
+  naturalColor = mix(naturalColor, belt4Rock,     smoothstep(164.0, 187.0, effAltM));
+  naturalColor = mix(naturalColor, belt5Alpine,   smoothstep(278.0, 304.0, effAltM));
 
   // Тонкие изолинии каждые 16 м остаются только внутри активного гекса:
   // плавно затухают до границы hexApothem и полностью погашены на юбке.
@@ -328,7 +404,7 @@ void main() {
   float contourFade  = (u_focusRadiusM > 1.0)
     ? (1.0 - smoothstep(hexApothem * 0.72, hexApothem * 0.96, centerHexDist))
     : 1.0;
-  float contourLine  = isFlatWaterMirror
+  float contourLine  = (isFlatWaterMirror || isRiverStream)
     ? 0.0
     : (1.0 - smoothstep(0.0, 0.045, contourPhase)) * contourFade * (1.0 - u_isSkirt);
   naturalColor      *= (1.0 - 0.05 * contourLine);
@@ -340,37 +416,43 @@ void main() {
   if (v_worldPos.z > 0.0 && !isFlatWaterMirror) {
     vec2 surfCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
     const mat2 OCTAVE_ROT = mat2(0.80, 0.60, -0.60, 0.80);
+    float vegBeltMask = smoothstep(6.0, 11.5, beachAltM) * (1.0 - smoothstep(158.0, 190.0, effAltM));
+    float highRockMask = smoothstep(160.0, 195.0, effAltM) * (1.0 - snowCover * 0.85);
 
-    // 1. Ближний каскад: микрозерно травы и дернины, вкрапления мелких
-    //    камней и редкие светлые эрозионные ложбинки/тропы без сетки.
+    // 1. Ближний каскад: микрозерно травы и дернины в растительных поясах,
+    //    нейтральное минерально-фирновое зерно на песке, скалах и снежниках.
     float microFade = 1.0 - smoothstep(0.0, 0.52, blur);
     float microGrain = terrainValueNoise(surfCoord * 44.0) * 0.62
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 96.0 + vec2(13.7, 7.9)) * 0.38;
-    vec3 meadowGrain = mix(vec3(0.84, 0.91, 0.76), vec3(1.12, 1.08, 0.96), microGrain);
-    naturalColor *= mix(vec3(1.0), meadowGrain, microFade * 0.72);
+    vec3 meadowGrain = mix(vec3(0.86, 0.92, 0.78), vec3(1.10, 1.07, 0.97), microGrain);
+    vec3 mineralGrain = mix(vec3(0.93, 0.94, 0.95), vec3(1.06, 1.06, 1.07), microGrain);
+    vec3 surfaceGrain = mix(mineralGrain, meadowGrain, vegBeltMask);
+    float grainStrength = microFade * mix(0.66, 0.28, snowCover);
+    naturalColor *= mix(vec3(1.0), surfaceGrain, grainStrength);
     float erosionNoise = terrainValueNoise((OCTAVE_ROT * surfCoord) * 10.5 + vec2(7.3, -4.8));
     float erosionThread = 1.0 - smoothstep(0.025, 0.095, abs(erosionNoise - 0.50));
     float trailBreakup = smoothstep(0.36, 0.72, terrainValueNoise(surfCoord * 5.2 + vec2(-8.1, 3.6)));
-    float trailMask = erosionThread * trailBreakup * microFade
-      * (1.0 - smoothstep(0.55, 0.95, hNorm));
-    naturalColor = mix(naturalColor, vec3(0.61, 0.55, 0.39), trailMask * 0.22);
+    float trailMask = erosionThread * trailBreakup * microFade * vegBeltMask;
+    naturalColor = mix(naturalColor, vec3(0.61, 0.55, 0.39), trailMask * 0.20);
 
-    // 2. Средний каскад: два геологических пояса по крутизне. Светлые
-    //    песчано-охристые конусы осыпей занимают переходные склоны и подножия,
-    //    а крутые обрывы получают серо-каменный тон и продольные кулуары.
+    // 2. Средний каскад: пятнистость дернины в долине/предгорьях, умеренные
+    //    конусы осыпей на склонах и усиленный выход скал и кулуаров в поясе 4.
     float mesoFade = 1.0 - smoothstep(0.20, 0.86, blur);
     float mesoPatch = terrainValueNoise(surfCoord * 7.5 + vec2(4.2, -9.1)) * 0.60
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 17.5 + vec2(-6.4, 15.3)) * 0.40;
-    float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
-    float slopeRock = smoothstep(0.02, 0.28, slopeSteep);
-    vec3 biomeMottle = mix(vec3(0.25, 0.39, 0.14), vec3(0.47, 0.52, 0.25), mesoPatch);
-    vec3 slopeRockTone = mix(vec3(0.34, 0.32, 0.29), vec3(0.54, 0.50, 0.45), mesoPatch);
-    float talusMask = smoothstep(0.025, 0.085, slopeSteep)
-      * (1.0 - smoothstep(0.16, 0.32, slopeSteep));
-    vec3 talusTone = vec3(0.74, 0.68, 0.58) * mix(0.94, 1.04, mesoPatch);
-    naturalColor = mix(naturalColor, biomeMottle, mesoFade * 0.22);
-    naturalColor = mix(naturalColor, slopeRockTone, slopeRock * 0.66 * mesoFade);
-    naturalColor = mix(naturalColor, talusTone, talusMask * 0.78 * mesoFade);
+    vec3 biomeMottle = mix(vec3(0.24, 0.40, 0.15), vec3(0.48, 0.51, 0.25), mesoPatch);
+    vec3 slopeRockTone = mix(vec3(0.33, 0.31, 0.29), vec3(0.51, 0.48, 0.44), mesoPatch);
+    float talusBelt = smoothstep(55.0, 105.0, effAltM) * (1.0 - smoothstep(235.0, 285.0, effAltM));
+    float talusMask = smoothstep(0.03, 0.09, slopeSteep)
+      * (1.0 - smoothstep(0.16, 0.30, slopeSteep)) * talusBelt;
+    vec3 talusTone = vec3(0.64, 0.59, 0.49) * mix(0.94, 1.04, mesoPatch);
+    float boostedSlopeRock = clamp(
+      slopeRock * mix(1.0, 1.42, highRockMask) + highRockMask * 0.24,
+      0.0, 1.0
+    ) * (1.0 - snowCover * 0.82);
+    naturalColor = mix(naturalColor, biomeMottle, mesoFade * 0.18 * vegBeltMask);
+    naturalColor = mix(naturalColor, slopeRockTone, boostedSlopeRock * 0.64 * mesoFade);
+    naturalColor = mix(naturalColor, talusTone, talusMask * 0.28 * mesoFade);
 
     vec2 gullyCoord = vec2(
       dot(surfCoord, vec2(0.92, 0.39)) * 23.0,
@@ -379,20 +461,28 @@ void main() {
     float gullyNoise = terrainValueNoise(gullyCoord + vec2(11.7, -6.2));
     float couloir = (1.0 - smoothstep(0.035, 0.13, abs(gullyNoise - 0.50)))
       * smoothstep(0.32, 0.70, mesoPatch);
-    naturalColor *= 1.0 - 0.22 * couloir * slopeRock * mesoFade;
+    float couloirDepth = mix(0.22, 0.38, highRockMask) * (1.0 - snowCover * 0.55);
+    naturalColor *= 1.0 - couloirDepth * couloir * boostedSlopeRock * mesoFade;
 
-    // 3. Дальний каскад: контраст зелёных долин и скалисто-охристых
-    //    хребтов, постепенно растворяющийся в голубовато-серой горной дымке.
+    // 3. Дальний каскад: крупномасштабная светотень котловин без затирания
+    //    5 высотных поясов и воздушная перспектива горных хребтов.
     float macroBasin = terrainValueNoise(surfCoord * 1.35 + vec2(-11.2, 5.8)) * 0.65
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 3.10 + vec2(8.6, -14.4)) * 0.35;
-    float ridgeFactor = clamp(hNorm * 0.50 + macroBasin * 0.26 + slopeRock * 0.24, 0.0, 1.0);
-    vec3 valleyMacroTone = vec3(0.28, 0.41, 0.19);
-    vec3 ridgeMacroTone  = vec3(0.64, 0.59, 0.50);
-    vec3 macroColor = mix(valleyMacroTone, ridgeMacroTone, smoothstep(0.12, 0.88, ridgeFactor));
-    naturalColor = mix(naturalColor, macroColor, mix(0.18, 0.42, blur));
+    float macroShade = mix(0.91, 1.09, macroBasin);
+    naturalColor *= mix(1.0, macroShade, mix(0.14, 0.30, blur) * (1.0 - snowCover * 0.45));
     vec3 mountainHaze = mix(u_fogColor, u_horizonColor, 0.42);
     float aerialPerspective = smoothstep(0.12, 0.92, v_fog) * mix(0.06, 0.26, blur);
     naturalColor = mix(naturalColor, mountainHaze, aerialPerspective);
+
+    // Влажная галечно-песчаная пойма вдоль берегов речного русла на любой высоте.
+    if (riverBankMask > 0.0) {
+      float pebbleNoise = terrainValueNoise(surfCoord * 68.0 + vec2(-5.4, 8.1));
+      vec3 wetShingle = vec3(0.41, 0.39, 0.33);
+      vec3 dryPebble  = vec3(0.65, 0.60, 0.48);
+      float wetEdge   = 1.0 - smoothstep(0.0015, 0.0068, rawTerraform);
+      vec3 bankColor  = mix(dryPebble, wetShingle, wetEdge * 0.72) * mix(0.92, 1.08, pebbleNoise);
+      naturalColor    = mix(naturalColor, bankColor, riverBankMask * 0.88);
+    }
   }
 
   // Застройка остаётся маленькими усадьбами в зелени: вместо бетонной
