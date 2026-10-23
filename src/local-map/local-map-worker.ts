@@ -25,7 +25,7 @@ import {
   verifyPatchInvariants,
   waterLevelOf,
 } from './local-map-contract.ts';
-import type { BuildingSpawnRule, LocalMapPatch, PatchCell } from './local-map-contract.ts';
+import type { BuildingSpawnRule, LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
 import type { MeshModuleId } from './local-map-mesh.ts';
 import type { FieldSampler, GeographyProfileInput } from '../../site/shared/planet-geography.ts';
 
@@ -83,6 +83,44 @@ export const TERRAFORM_LAND_MIN = 2;
 /** Stage-8.5: знаменатель альфы терраформинга — `255 − TERRAFORM_LAND_MIN`. */
 export const TERRAFORM_ALPHA_SPAN = 253;
 
+// ---- Stage-8.7: кольца соседних областей вокруг активного гекса ----
+/** Уровень кольца вокруг канонического центра Patch7 (1 — ближайшие 6 соседей). */
+export type RingLevel = 1 | 2 | 3 | 4 | 5;
+
+/**
+ * Stage-8.7: ячейка кольца вокруг активного гекса. Воркер 2 читает
+ * `heightfield`/`waterMask` как готовые буферы и не пересчитывает высоты.
+ * `offsetM` — смещение центра ячейки в метрах в касательной плоскости участка
+ * (x, y), совместимое с координатами основного heightfield.
+ */
+export interface LocalMapRingCell {
+  /** Детерминированный синтетический индекс ячейки кольца (порядок обхода). */
+  readonly cell: number;
+  readonly ring: RingLevel;
+  /** 3D-центр ячейки на единичной сфере. */
+  readonly center: readonly [number, number, number];
+  /** Смещение центра ячейки в касательной плоскости участка, м. */
+  readonly offsetM: readonly [number, number];
+  /** Разрешение heightfield ячейки (RING_HF_RES[ring]). */
+  readonly hfRes: number;
+  /** Heightfield ячейки кольца, м относительно seaLevel. */
+  readonly heightfield: Float32Array;
+  /** 1 — точка ниже уровня воды ячейки (море), 0 — суша. */
+  readonly waterMask: Uint8Array;
+  readonly minHeightM: number;
+  readonly maxHeightM: number;
+}
+
+/** Максимальный уровень кольца (1..5). */
+export const RING_LEVELS = 5;
+/**
+ * Разрешение heightfield по кольцам: [центр, 1..5]. Кольцо 1 — 32×32,
+ * кольцо 5 — 2×2; разрешение падает с ростом кольца.
+ */
+export const RING_HF_RES: readonly number[] = Object.freeze([256, 32, 16, 8, 4, 2]);
+/** Максимум ячеек колец 1..5: центр + 6 + 12 + 18 + 24 + 30 = 91. */
+export const MAX_RING_CELLS = 91;
+
 /** Данные инстанса: 8 float × 4 Б = 32 байта (контракт layout-а шейдера). */
 export type InstanceData = readonly [
   x: number, y: number, z: number, yaw: number,
@@ -118,6 +156,10 @@ export interface LocalMapMeta {
   readonly genMs?: number;
   /** Ключ участка (§8.8); по умолчанию строка канонического центра. */
   readonly patchKey?: string;
+  /** Число сгенерированных ячеек колец 1..neighborRings (Stage-8.7). */
+  readonly ringCellCount?: number;
+  /** Время генерации колец, мс (Stage-8.7, гейт <= 20 мс). */
+  readonly ringGenMs?: number;
 }
 
 export interface LocalMapWorkerRequest {
@@ -134,6 +176,12 @@ export interface LocalMapWorkerRequest {
   readonly profile?: GeographyProfileInput;
   /** Ключ участка §8.8 — ключ LRU-кэша и метки `meta.patchKey`. */
   readonly patchKey?: string;
+  /**
+   * Stage-8.7: число колец соседних областей вокруг активного гекса, 0..5
+   * (по умолчанию 5). 0 — кольца не генерируются, ответ побайтово совпадает с
+   * текущим поведением main. Кольца требуют профиля (единый 3D-сэмплер).
+   */
+  readonly neighborRings?: number;
 }
 
 export interface LocalMapWorkerResponse {
@@ -142,6 +190,11 @@ export interface LocalMapWorkerResponse {
   readonly terraformMap: Uint8Array;
   readonly instanceBuffers: InstanceBuffers;
   readonly meta: LocalMapMeta;
+  /**
+   * Stage-8.7: ячейки колец 1..neighborRings вокруг активного гекса.
+   * Отсутствует при neighborRings = 0 или без профиля (нет 3D-сэмпера).
+   */
+  readonly ringCells?: readonly LocalMapRingCell[];
 }
 
 // ---- Детерминированный хэш (pcg-подобный) ----
@@ -609,6 +662,171 @@ function cellTangentMeters(patch: LocalMapPatch, cell: PatchCell): Tangent2D {
   return { u: dot(cell.center, east) * scale, v: dot(cell.center, north) * scale };
 }
 
+// ---- Stage-8.7: обход колец вокруг активного гекса (гекс-решётка) ----
+/**
+ *hex-расстояние по осям (q, r): half-grid metric (|q| + |r| + |q + r|) / 2.
+ * Кольцо L — ячейки ровно на расстоянии L от центра (6L ячеек).
+ */
+function hexDistance(q: number, r: number): number {
+  return (Math.abs(q) + Math.abs(r) + Math.abs(q + r)) / 2;
+}
+
+/**
+ * Stage-8.7: канонические осевые координаты (q, r) кольца L — все ячейки на
+ * hex-расстоянии L от центра. Кольцо 1 — 6 соседей, кольцо 2 — 12, кольцо 5 —
+ * 30 (в сумме 90 ячеек + центр = MAX_RING_CELLS). Порядок детерминированный.
+ */
+function hexRingAxial(ring: number): Array<[number, number]> {
+  const result: Array<[number, number]> = [];
+  const bound = 2 * ring;
+  for (let q = -bound; q <= bound; q++) {
+    for (let r = -bound; r <= bound; r++) {
+      if (hexDistance(q, r) === ring) result.push([q, r]);
+    }
+  }
+  return result;
+}
+
+/**
+ * Stage-8.7: билинейная интерполяция решётки L×L в сетку res×res.
+ */
+function bilinearLattice(lat: Float32Array, latSteps: number, fx: number, fy: number): number {
+  const x = Math.min(latSteps - 1.0001, Math.max(0, fx));
+  const y = Math.min(latSteps - 1.0001, Math.max(0, fy));
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const ax = x - ix;
+  const ay = y - iy;
+  const i00 = iy * latSteps + ix;
+  const i10 = i00 + 1;
+  const i01 = i00 + latSteps;
+  const i11 = i01 + 1;
+  const top = (lat[i00] as number) * (1 - ax) + (lat[i10] as number) * ax;
+  const bottom = (lat[i01] as number) * (1 - ax) + (lat[i11] as number) * ax;
+  return top * (1 - ay) + bottom * ay;
+}
+
+/**
+ * Stage-8.7: heightfield одной ячейки кольца через единый 3D-сэмплер Patch7.
+ * Решётка L×L (L = max(2, res/4)) опрашивает сэмплер, а сетка res×res
+ * получается билинейной интерполяцией — тот же паттерн, что у детального
+ * решёточного канала центра (sampleDetailLattice), без новых формул рельефа.
+ * waterMask = 1 там, где высота ниже уровня воды ячейки (море, seaLevel);
+ * русла рек в кольцах за пределами Patch7 не детектируются — патч несёт
+ * топологию рек только для кольца 0..1, а детальный центр уже вырезает русла.
+ */
+function buildRingCellHeightfield(
+  patch: LocalMapPatch,
+  sampler: FieldSampler,
+  offsetX: number,
+  offsetY: number,
+  res: number,
+  span: number,
+  seaLevel: number,
+  scratch: Float32Array,
+): { heightfield: Float32Array; waterMask: Uint8Array } {
+  const latSteps = Math.max(2, Math.min(res, Math.round(res / 5)));
+  const lat = new Float32Array(latSteps * latSteps);
+  for (let j = 0; j < latSteps; j++) {
+    const wy = offsetY + (j / (latSteps - 1) - 0.5) * span;
+    for (let i = 0; i < latSteps; i++) {
+      const wx = offsetX + (i / (latSteps - 1) - 0.5) * span;
+      const dir = localPointToDirection(patch, wx, wy);
+      const fields = sampler.sampleFields(dir[0], dir[1], dir[2], scratch);
+      lat[j * latSteps + i] = (fields[0] as number - seaLevel) * METERS_PER_ELEVATION_UNIT;
+    }
+  }
+  const heightfield = new Float32Array(res * res);
+  const waterMask = new Uint8Array(res * res);
+  const cellSize = span / res;
+  for (let y = 0; y < res; y++) {
+    const wy = offsetY + (y - res / 2) * cellSize;
+    const fy = ((wy - (offsetY - span / 2)) / span) * (latSteps - 1);
+    for (let x = 0; x < res; x++) {
+      const wx = offsetX + (x - res / 2) * cellSize;
+      const fx = ((wx - (offsetX - span / 2)) / span) * (latSteps - 1);
+      const idx = y * res + x;
+      const h = bilinearLattice(lat, latSteps, fx, fy);
+      heightfield[idx] = h;
+      waterMask[idx] = h < 0 ? 1 : 0;
+    }
+  }
+  return { heightfield, waterMask };
+}
+
+/**
+ * Stage-8.7: обход колец 1..neighborRings от канонического центра Patch7.
+ * Кольцо 1 — реальные 6 соседей Patch7 (точные центры и смещения). Кольца 2..5 —
+ * плоская гексагональная решётка в касательной плоскости: 6 соседей сортируются
+ * по азимуту, два смежных (N0, N1) служат базисом, ячейка кольца L в осевых
+ * координатах (q, r) лежит в q·N0 + r·N1. Порядок внутри кольца — по азимуту.
+ */
+function buildNeighborRingCells(
+  patch: LocalMapPatch,
+  sampler: FieldSampler,
+  neighborRings: number,
+  seaLevel: number,
+): LocalMapRingCell[] {
+  const normAngle = (a: number): number => (a + 2 * Math.PI) % (2 * Math.PI);
+  const sorted: Array<{ cell: PatchCell; off: Tangent2D; angle: number }> = [];
+  for (let k = 0; k < SKIRT_RING_COUNT; k++) {
+    const cell = patch.cells[k + 1] as PatchCell;
+    const off = cellTangentMeters(patch, cell);
+    sorted.push({ cell, off, angle: Math.atan2(off.v, off.u) });
+  }
+  sorted.sort((a, b) => normAngle(a.angle) - normAngle(b.angle));
+  const n0 = sorted[0] as { off: Tangent2D };
+  const n1 = sorted[1] as { off: Tangent2D };
+  const dHex = Math.hypot(n0.off.u, n0.off.v);   // расстояние до соседа кольца 1
+  const scratch = new Float32Array(8);
+  const ringCells: LocalMapRingCell[] = [];
+  let cellIndex = 0;
+  for (let ring = 1; ring <= neighborRings; ring++) {
+    const hfRes = RING_HF_RES[ring] as number;
+    const entries: Array<{ x: number; y: number; center?: Vec3 }> = [];
+    if (ring === 1) {
+      for (const item of sorted) {
+        entries.push({ x: item.off.u, y: item.off.v, center: item.cell.center });
+      }
+    } else {
+      for (const [q, r] of hexRingAxial(ring)) {
+        entries.push({ x: q * n0.off.u + r * n1.off.u, y: q * n0.off.v + r * n1.off.v });
+      }
+      entries.sort((a, b) => {
+        const angA = normAngle(Math.atan2(a.y, a.x));
+        const angB = normAngle(Math.atan2(b.y, b.x));
+        if (angA !== angB) return angA - angB;
+        return Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y);
+      });
+    }
+    for (const entry of entries) {
+      const center = entry.center ?? localPointToDirection(patch, entry.x, entry.y);
+      const built = buildRingCellHeightfield(
+        patch, sampler, entry.x, entry.y, hfRes, dHex, seaLevel, scratch,
+      );
+      let minH = Infinity;
+      let maxH = -Infinity;
+      for (let i = 0; i < built.heightfield.length; i++) {
+        const h = built.heightfield[i] as number;
+        if (h < minH) minH = h;
+        if (h > maxH) maxH = h;
+      }
+      ringCells.push({
+        cell: cellIndex++,
+        ring: ring as RingLevel,
+        center,
+        offsetM: [entry.x, entry.y],
+        hfRes,
+        heightfield: built.heightfield,
+        waterMask: built.waterMask,
+        minHeightM: minH === Infinity ? 0 : minH,
+        maxHeightM: maxH === -Infinity ? 0 : maxH,
+      });
+    }
+  }
+  return ringCells;
+}
+
 interface RiverSegment {
   readonly u0: number; readonly v0: number;
   readonly u1: number; readonly v1: number;
@@ -1030,7 +1248,10 @@ function localMapFingerprint(request: LocalMapWorkerRequest): string {
   const rule = request.spawnRule
     ? `${request.spawnRule.minLand}/${request.spawnRule.maxSlope}`
     : 'default';
-  return `${seedHex}|${rule}`;
+  // Stage-8.7: neighborRings входит в отпечаток — ringCells=0 и ringCells=5
+  // не должны berkongsiовать запись кэша.
+  const rings = String(clampScalar(Math.floor(request.neighborRings ?? RING_LEVELS), 0, RING_LEVELS));
+  return `${seedHex}|${rule}|${rings}`;
 }
 
 function cloneInstanceBuffers(instanceBuffers: InstanceBuffers): InstanceBuffers {
@@ -1050,6 +1271,15 @@ export function cloneLocalMapResponse(response: LocalMapWorkerResponse): LocalMa
     terraformMap: new Uint8Array(response.terraformMap),
     instanceBuffers: cloneInstanceBuffers(response.instanceBuffers),
     meta: { ...response.meta },
+    ...(response.ringCells ? {
+      ringCells: response.ringCells.map((cell) => ({
+        ...cell,
+        center: [cell.center[0], cell.center[1], cell.center[2]] as readonly [number, number, number],
+        offsetM: [cell.offsetM[0], cell.offsetM[1]] as readonly [number, number],
+        heightfield: new Float32Array(cell.heightfield),
+        waterMask: new Uint8Array(cell.waterMask),
+      })),
+    } : {}),
   };
 }
 
@@ -1245,6 +1475,19 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
     if (h > finalMax) finalMax = h;
   }
 
+  // Stage-8.7: кольца соседних областей вокруг активного гекса. Кольца
+  // требуют единый 3D-сэмплер (профиль) — без профиля ringCells отсутствуют.
+  const neighborRings = clampScalar(Math.floor(request.neighborRings ?? RING_LEVELS), 0, RING_LEVELS);
+  let ringCells: LocalMapRingCell[] | undefined;
+  let ringCellCount = 0;
+  let ringGenMs = 0;
+  if (neighborRings > 0 && sampler) {
+    const ringStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    ringCells = buildNeighborRingCells(patch, sampler, neighborRings, patch.seaLevel);
+    ringCellCount = ringCells.length;
+    ringGenMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - ringStartedAt;
+  }
+
   const totalPoints = hfRes * hfRes;
   const genMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
   const response: LocalMapWorkerResponse = {
@@ -1264,7 +1507,9 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
       maxHeightM: finalMax === -Infinity ? 0 : finalMax,
       genMs,
       patchKey: request.patchKey || String(patch.centerCell),
+      ...(ringCellCount > 0 ? { ringCellCount, ringGenMs } : {}),
     },
+    ...(ringCells ? { ringCells } : {}),
   };
 
   writeCache(cacheKey, request, response);
@@ -2039,6 +2284,11 @@ export function localMapTransferables(response: LocalMapWorkerResponse): Transfe
   ];
   for (const pack of Object.values(response.instanceBuffers)) {
     if (pack) transferables.push(pack.buffer.buffer as ArrayBuffer);
+  }
+  // Stage-8.7: буферы колец передаются zero-copy alongside с основными буферами.
+  for (const cell of response.ringCells ?? []) {
+    transferables.push(cell.heightfield.buffer as ArrayBuffer);
+    transferables.push(cell.waterMask.buffer as ArrayBuffer);
   }
   return transferables;
 }
