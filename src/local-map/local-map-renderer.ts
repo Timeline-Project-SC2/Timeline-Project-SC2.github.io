@@ -101,6 +101,14 @@ export interface LocalMapRenderOptions {
   readonly horizonColor?: readonly [number, number, number];
   /** Камера для купола неба; без неё скайдом не рисуется. */
   readonly camera?: LocalMapCameraState;
+  /**
+   * Альфа купола неба/лимба (0 — прозрачно). По умолчанию купол полностью
+   * прозрачен: непрозрачная панорама перекрывала бы живой 3D-глобус планеты,
+   * который должен просвечивать сквозь растворяющийся край 7-гексового стола.
+   */
+  readonly skyAlpha?: number;
+  /** Явный флаг непрозрачного купола неба (legacy-режим без глобуса). */
+  readonly opaqueSkyDome?: boolean;
 }
 
 const DEFAULT_LIGHT_DIR: readonly [number, number, number] = [0.42, 0.28, 0.86];
@@ -602,6 +610,7 @@ export class StructureRenderer {
     horizonColor: readonly [number, number, number],
     lightDir: readonly [number, number, number],
     camera: LocalMapCameraState,
+    skyAlpha: number,
   ): void {
     const gl = this.gl;
     const planetRadiusM = this.skirt ? this.skirt.planetRadiusM : 0;
@@ -612,6 +621,8 @@ export class StructureRenderer {
     gl.uniform1f(this.uniform(program, 'u_aspect'), camera.aspect);
     gl.uniform1f(this.uniform(program, 'u_camHeightM'), camera.heightM);
     gl.uniform1f(this.uniform(program, 'u_planetRadiusM'), planetRadiusM);
+    // Альфа купола: 0 — виньетка атмосферы полностью прозрачна.
+    gl.uniform1f(this.uniform(program, 'u_skyAlpha'), skyAlpha);
     gl.uniform3fv(this.uniform(program, 'u_lightDir'), lightDir);
     gl.uniform3fv(this.uniform(program, 'u_fogColor'), fogColor);
     gl.uniform3fv(this.uniform(program, 'u_horizonColor'), horizonColor);
@@ -781,10 +792,32 @@ export class StructureRenderer {
     const planetRadiusM = options.planetRadiusM ?? this.skirt?.planetRadiusM ?? 0;
     const focusRadiusM = options.focusRadiusM ?? radiusM;
     const hexSizeM = options.hexSizeM ?? this.skirt?.hexSpacingM ?? 0;
+    // Купол неба по умолчанию полностью прозрачен: непрозрачная панорама
+    // перекрывала бы живой 3D-глобус планеты (#globe) за прозрачными полями
+    // 7-гексового кластера. Непрозрачный режим включается флагом явно.
+    const skyAlpha = options.opaqueSkyDome === true
+      ? 1.0
+      : (Number.isFinite(options.skyAlpha)
+        ? Math.min(1, Math.max(0, options.skyAlpha as number))
+        : 0.0);
+
+    // Прозрачный рендер кластера: юбка и рельеф рисуются с альфа-смешиванием,
+    // чтобы внешний край 7-гексового стола мягко растворялся над живым
+    // 3D-глобусом. Проверки typeof нужны для mock-контекста в Node-тестах.
+    const blendingEnabled = this.skirt !== null
+      && typeof gl.enable === 'function'
+      && typeof gl.blendFunc === 'function'
+      && typeof gl.BLEND === 'number'
+      && typeof gl.SRC_ALPHA === 'number'
+      && typeof gl.ONE_MINUS_SRC_ALPHA === 'number';
+    if (blendingEnabled) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
 
     // 1. Купол атмосферы и горизонта (depthMask выключен внутри drawSky).
     if (this.skirt && this.skyProgram && this.skyVAO && options.camera) {
-      this.drawSky(this.skyProgram, fogColor, horizonColor, lightDir, options.camera);
+      this.drawSky(this.skyProgram, fogColor, horizonColor, lightDir, options.camera, skyAlpha);
     }
 
     // 2. Рельеф: общие юниформы для юбки и центрального участка.
@@ -829,6 +862,12 @@ export class StructureRenderer {
     gl.uniform1f(this.uniform(structureProgram, 'u_fogEnd'), fogEnd);
     gl.uniform1f(this.uniform(structureProgram, 'u_planetRadiusM'), planetRadiusM);
     this.drawStructures(structureProgram);
+
+    // 4. Состояние GL возвращается в исходное: альфа-смешивание нужно только
+    //    на время кадра локальной карты (прозрачный край кластера).
+    if (blendingEnabled && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
+    }
   }
 
   // ---- Освобождение GPU-ресурсов ----
