@@ -912,11 +912,11 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 // ---------------------------------------------------------------------------
 
 /** Угловых сегментов контура горизонта: 6 секторов × 16 шагов (97 узлов с замыканием). */
-export const SKIRT_ANGULAR_SEGMENTS = 96;
+export const SKIRT_ANGULAR_SEGMENTS = 144;
 /** Радиальных шагов единой полярной сетки горизонта: 14 плотных + 42 до сферы (57 рядов). */
-export const SKIRT_RADIAL_RINGS = 56;
+export const SKIRT_RADIAL_RINGS = 84;
 /** Радиальных шагов плотного воротника: от R_inner до 1.10 · R_patch (остальные 42 — к горизонту). */
-export const SKIRT_COLLAR_RINGS = 14;
+export const SKIRT_COLLAR_RINGS = 24;
 /** Число соседних гексов кластера Patch7 (шестиугольное кольцо slot 0..5). */
 export const SKIRT_RING_COUNT = 6;
 /** √3/2 — отношение апофемы правильного шестиугольника к радиусу описанной окружности. */
@@ -926,23 +926,23 @@ export const CENTER_HEX_RADIUS_RATIO = 0.93;
 /** Доля R_patch: внутренний радиус непрерывной юбки (воротник перекрывает центральный гекс). */
 export const SKIRT_INNER_RADIUS_RATIO = 0.72;
 /** Доля R_patch: внешний радиус плотного воротника вокруг выделенного гекса. */
-export const SKIRT_COLLAR_END_RADIUS_RATIO = 1.1;
+export const SKIRT_COLLAR_END_RADIUS_RATIO = 1.15;
 /** Доля R_patch: шаг центров соседних гексов канонической сетки кластера Patch7. */
 export const SKIRT_HEX_SPACING_RATIO = 1.15;
 /** Число шагов d_hex от центра юбки до сферического горизонта (R_outer = 6.5 · d_hex). */
-export const SKIRT_OUTER_SPACING_RATIO = 6.5;
+export const SKIRT_OUTER_SPACING_RATIO = 10.0;
 /** Отношение радиуса планеты к внешнему радиусу юбки (плавная кривизна горизонта). */
 export const SKIRT_PLANET_RADIUS_SPACING_RATIO = 3.6;
 /** Доля апофемы центрального гекса: начало полосы смешивания высот воротника. */
 export const SKIRT_COLLAR_BLEND_START_RATIO = 1.005;
 /** Доля апофемы центрального гекса: конец полосы смешивания (срез + 0.195 · A). */
-export const SKIRT_COLLAR_BLEND_END_RATIO = 1.2;
+export const SKIRT_COLLAR_BLEND_END_RATIO = 1.35;
 /** Доля R_patch: страховочная граница точной выборки heightfield (сетка res × res). */
 export const SKIRT_HEIGHTFIELD_GUARD_RATIO = 0.98;
 /** Число ячеек канонической сетки Голдберга v = 128: 10v² + 2. */
 const GOLDBERG_V128_CELLS = 10 * 128 * 128 + 2;
 /** Узлов макро-решётки 3D-сэмплера на сторону (25×25 = 625 опросов). */
-const SKIRT_LATTICE_STEPS = 24;
+const SKIRT_LATTICE_STEPS = 32;
 
 /**
  * Единая гексагональная метрика кластера: точное расстояние от центра
@@ -1251,7 +1251,7 @@ function skirtPlanetaryHeight(
  *   = 97 × 57 = 5 529 вершин и 96 × 56 × 6 = 32 256 индексов: горизонт
  *   непрерывен по всем направлениям, без 6 отдельных плит-лепестков и без
  *   физических провалов фасок `bevelDropM`.
- * - Первые `SKIRT_COLLAR_RINGS = 14` радиальных шагов — плотный воротник от
+ * - Первые `SKIRT_COLLAR_RINGS = 24` радиальных шагов — плотный воротник от
  *   `R_inner = 0.72 · R_patch` до `1.10 · R_patch`; остальные 42 шага — от
  *   `1.10 · R_patch` до `R_outer = 6.5 · d_hex = 7.475 · R_patch` по степени
  *   `Math.pow(t, 1.35)` (сгущение линий у выделенного гекса).
