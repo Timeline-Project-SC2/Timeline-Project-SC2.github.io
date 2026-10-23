@@ -178,3 +178,100 @@ git diff --check
 от гекса к гексу (нет рывка кадра до прихода патча, пользовательский yaw не
 сбрасывается), прозрачность и детализация первых 3–4 кругов гексов при
 10-кольцевой прогрузке и честное число колец в статусе `localFogStatus`.
+
+---
+
+## 6. Stage-8.5 · Фиксированный физический масштаб гекса и камера «видимой ширины»
+
+Срез волны **Stage-8.5** исправляет семантику селектора «Видимая ширина»
+(`els.localScale`): прежняя реализация растягивала ОДИН гекс и 383 домика на
+`(scale · 1000)/2` метров (при `1250 км` домики становились ≈15 км шириной,
+а юбка горизонта улетала на R ≈ 7187 км с Δz ≈ 1018 км). Начиная с 8.5
+физический размер тактического участка жёстко зафиксирован, а селектор управляет
+только дистанцией/наклоном камеры над этой местностью.
+
+### 6.1. `LOCAL_PATCH_BASE_RADIUS_M = 2500 м` — стабильный физический радиус
+
+- Константа `LOCAL_PATCH_BASE_RADIUS_M = 2500` фиксирует физический радиус
+  генерируемого центрального участка (диаметр активного гекса ≈4.5 км).
+- В `enterLocalMap()` и `renderLocalMapFromPatch()` в `mapRequest.radiusM` и
+  `localMapRadiusM` передаётся стабильный `LOCAL_PATCH_BASE_RADIUS_M` — меш
+  больше не растягивается при переключении селектора `localScale`, домики и
+  рельеф всегда генерируются в физически корректном метрическом масштабе.
+- 10 колец горизонта охватывают `R_outer ≈ 28.75 км` вокруг центра с плотной
+  сеткой — это реальный планетарный радиус кривизны `planetRadiusM`, проседание
+  Δz которого честно считается в `planetCurvatureDropM()` (километры, а не
+  тысячи километров).
+
+### 6.2. `cameraDistanceForWidthKm(widthKm)` — дистанция камеры по видимой ширине
+
+Селектор «Видимая ширина» (`scale` в км) теперь задаёт только **видимую ширину
+захвата камеры** (`localCameraDistance`) над фиксированной местностью — от
+близкого вида `1.2 км` у самой долины и построек до высотного тактического
+обзора всех 10 колец гексов:
+
+```ts
+function cameraDistanceForWidthKm(widthKm: number): number {
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  const aspect = rect.height > 0 ? rect.width / rect.height : 1;
+  const fit = Math.max(0.45, Math.min(1, aspect || 1));
+  const clampedWidthM = clampLocal(widthKm * 1000, 800, localMapRadiusM * 22);
+  return Math.max(localMinCameraDistance(), (clampedWidthM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+}
+```
+
+- `resetLocalCamera()` выставляет `localCameraDistance = cameraDistanceForWidthKm(localMapWidthKm)`;
+- наклон `localCameraPitch` плавно зависит от `localMapWidthKm`: функция
+  `cameraPitchForWidthKm()` даёт `LOCAL_REST_PITCH = 0.31` (≈17.8°) на
+  масштабах 1.2–5 км (взгляд вдоль долины на горный горизонт) и плавно
+  поднимает камеру до `0.68` рад (≈39°) на обзорных масштабах ≥39 км
+  (высотный тактический обзор всех 10 колец гексов);
+- верхний предел отдаления `localMaxCameraDistance()` поднят с `7.5·R` до
+  `14·R`, чтобы вместить все ступени обзора 10 колец (максимальная дистанция
+  `cameraDistanceForWidthKm(1250 км) ≈ 13.75·R`).
+
+### 6.3. Плавная анимация камеры при переключении селектора (без перегенерации меша)
+
+- Обработчик `els.localScale` (`change`) и вход через `enterLocalMap()` теперь
+  проверяют: если локальная карта уже открыта для **той же** ячейки
+  (`activePatchReady.hexCenterCell === patchReady.hexCenterCell`), то меш
+  **не** перегенерируется — вместо этого запускается плавная анимация
+  `localCameraAnim` длительностью **550 мс** по кривой `easeInOutCubic`:
+  - `fromDist → toDist = cameraDistanceForWidthKm(scale)` (высота камеры);
+  - `fromPitch → toPitch = cameraPitchForWidthKm(scale)` (наклон);
+  - yaw и точка прицела `localCameraTarget` сохраняются (камера не дёргается).
+- После старта анимации синхронно обновляются URL (`updateLocalMapUrl`) и HUD
+  (`updateLocalMapHud`), так что пользователь видит актуальную «видимую ширину»
+  уже в процессе полёта, не дожидаясь CPU/GPU-перегенерации.
+
+### 6.4. Честный HUD статуса горизонта (`updateLocalMapHud`)
+
+- Строка `els.localFogStatus.textContent` теперь показывает реальные километры
+  10-кольцевого горизонта **и** текущую видимую ширину камеры:
+  ```ts
+  const ringsLabel = Math.round(skirt.outerRadiusM / Math.max(1, skirt.hexSpacingM));
+  els.localFogStatus.textContent =
+    `${ringsLabel} колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (обзор ${fmtNum(localMapWidthKm, 1)} км, Δz ${fmtNum(horizonDropM, 0)} м)`;
+  ```
+- Сферическое проседание `Δz` теперь выводится в **метрах** (а не километрах,
+  как раньше), что при фиксированном физическом R ≈ 28.75 км даёт честные
+  значения порядка десятков метров — горизонт действительно виден как
+  планетарное скругление, а не как многосоткилометровая пропасть.
+
+### 6.5. Проверки волны Stage-8.5
+
+```bash
+npm run typecheck        # tsc --noEmit
+npm run lint             # eslint site src
+npm test                 # node --test (87 тестов, включая local-map-stage8.test.mjs)
+npm run build            # tsc --noEmit + Vite -> .publish/
+npm run verify:publish   # 7 маршрутов, build-manifest.json, паритет экспортов
+npm run verify:contract  # кросс-проверка Python ↔ TS контракта
+git diff --check
+```
+
+На визуальную приёмку владельца остаются: плавность подъёма/наклона камеры при
+переключении «Видимой ширины» от 1.2 км к 1250 км (домики не растягиваются,
+сетка гексов остаётся стабильной, горизонт юбки остаётся на своём месте при
+смене масштаба), корректность значений Δz в HUD и отсутствие перегенерации меша
+при смене селектора внутри уже открытой локальной карты.
