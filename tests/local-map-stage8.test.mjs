@@ -671,6 +671,13 @@ test('шейдеры Этапа 8: тонирование водных низи�
   for (const name of ['u_zoning_map', 'u_terraform_map', 'u_lightDir', 'u_ambientColor', 'u_fogColor']) {
     assert.ok(terrain.includes(name), `юниформ ${name} сохранён`);
   }
+  assert.ok(terrain.includes('dist > u_focusRadiusM * 0.93'), 'квадратные углы центрального меша отбрасываются');
+  assert.ok(terrain.includes('smoothstep(0.465, 0.495, edgeCoord)'), 'гекс-сетка имеет тонкую деликатную линию');
+  assert.ok(terrain.includes('* (1.0 - u_isSkirt)'), 'изолинии полностью погашены на юбке');
+  assert.ok(terrain.includes('smoothstep(0.35, 0.98, v_fog)'), 'рельеф полностью растворяется в цвете горизонта');
+  const sky = Shaders.SKY_DOME_FRAGMENT_SHADER;
+  assert.ok(sky.includes('smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta)'), 'широкий мягкий переход через лимб');
+  assert.ok(sky.includes('smoothstep(horizonAngle, horizonAngle + 0.85, beta)'), 'плавный градиент неба к зениту');
   for (const shader of [Shaders.TERRAIN_VERTEX_SHADER, Shaders.STRUCTURE_VERTEX_SHADER]) {
     assert.ok(shader.includes('#version 300 es'), 'GLSL ES 3.00');
     assert.ok(shader.includes('u_fogStart') && shader.includes('u_fogEnd'), 'круговой туман сохранён');
@@ -714,15 +721,18 @@ test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое п
     'все индексы юбки ссылаются на существующие вершины',
   );
 
-  // Радиусы: R_inner = 0.88·R_patch; внешний край покрывает минимум 6 колец.
-  assert.ok(Math.abs(skirt.innerRadiusM - 0.88 * RADIUS_M) < 1e-6, 'R_inner = 0.88·R_patch');
+  // Все размеры привязаны к R_patch: ровно 6 колец на любом масштабе участка.
+  assert.ok(Math.abs(skirt.innerRadiusM - 0.78 * RADIUS_M) < 1e-6, 'R_inner = 0.78·R_patch');
+  assert.ok(Math.abs(skirt.hexSpacingM - 1.15 * RADIUS_M) < 1e-6, 'd_hex = 1.15·R_patch');
   assert.ok(skirt.outerRadiusM >= 6 * skirt.hexSpacingM, 'R_skirt ≥ 6·d_hex (6 колец гексов)');
-  assert.ok(skirt.outerRadiusM >= 4.5 * RADIUS_M, 'R_skirt ≥ 4.5·R_patch');
-  assert.ok(skirt.planetRadiusM >= 300000, 'радиус планеты не ниже 300 км');
-  const expectedSpacing = Math.sqrt(
-    (8 * Math.PI * skirt.planetRadiusM * skirt.planetRadiusM) / (Math.sqrt(3) * 163842),
+  assert.ok(Math.abs(skirt.outerRadiusM - 6.5 * skirt.hexSpacingM) < 1e-6, 'R_skirt = 6.5·d_hex');
+  assert.ok(Math.abs(skirt.planetRadiusM - 3.6 * skirt.outerRadiusM) < 1e-6, 'R_p = 3.6·R_skirt');
+  const collarEnd = skirt.positions[14 * angularNodes * 3];
+  const collarEndY = skirt.positions[14 * angularNodes * 3 + 1];
+  assert.ok(
+    Math.abs(Math.hypot(collarEnd, collarEndY) - 1.10 * RADIUS_M) < 5e-3,
+    'первые 14 интервалов заканчиваются на 1.10·R_patch',
   );
-  assert.ok(Math.abs(skirt.hexSpacingM - expectedSpacing) < 1e-6, 'd_hex по формуле сетки v=128');
 
   // Сферическое проседание на внешнем крае положительно и равно формуле
   // Δz = R_p − sqrt(R_p² − R_skirt²); при R_p ≤ 1 проседание выключено.
@@ -735,36 +745,42 @@ test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое п
   );
   assert.equal(Worker.planetCurvatureDropM(0, skirt.outerRadiusM), 0, 'R_p ≤ 1 — проседания нет');
 
-  // Бесшовный воротник: на внутреннем кольце r = R_inner высоты юбки равны
-  // билинейной выборке детального heightfield (без ступеньки/щели на стыке).
+  // Бесшовный воротник: на R_inner и вплоть до 0.82·R_patch высоты юбки
+  // равны билинейной выборке детального heightfield (без ступеньки/щели).
   const res = HF_RES;
   const cellSize = (2 * RADIUS_M) / res;
   let collarChecked = 0;
-  for (let i = 0; i < angularNodes; i += 4) {
-    const px = skirt.positions[i * 3];
-    const py = skirt.positions[i * 3 + 1];
-    const pz = skirt.positions[i * 3 + 2];
-    assert.ok(
-      Math.abs(Math.hypot(px, py) - skirt.innerRadiusM) < 5e-3,
-      'узел внутреннего кольца лежит на r = R_inner (допуск точности float32)',
-    );
-    const gx = Math.min(res - 1.0001, Math.max(0, px / cellSize + res / 2));
-    const gy = Math.min(res - 1.0001, Math.max(0, py / cellSize + res / 2));
-    const ix = Math.floor(gx);
-    const iy = Math.floor(gy);
-    const ax = gx - ix;
-    const ay = gy - iy;
-    const i00 = iy * res + ix;
-    const ref =
-      (local.heightfield[i00] * (1 - ax) + local.heightfield[i00 + 1] * ax) * (1 - ay)
-      + (local.heightfield[i00 + res] * (1 - ax) + local.heightfield[i00 + res + 1] * ax) * ay;
-    assert.ok(
-      Math.abs(pz - ref) < 1e-3,
-      `высота воротника совпадает с heightfield (расхождение ${Math.abs(pz - ref)})`,
-    );
-    collarChecked++;
+  for (const ring of [0, 1]) {
+    for (let i = 0; i < angularNodes; i += 4) {
+      const vertex = ring * angularNodes + i;
+      const px = skirt.positions[vertex * 3];
+      const py = skirt.positions[vertex * 3 + 1];
+      const pz = skirt.positions[vertex * 3 + 2];
+      assert.ok(Math.hypot(px, py) <= 0.82 * RADIUS_M + 5e-3, 'проверяемое кольцо внутри зоны точной сшивки');
+      if (ring === 0) {
+        assert.ok(
+          Math.abs(Math.hypot(px, py) - skirt.innerRadiusM) < 5e-3,
+          'узел внутреннего кольца лежит на r = R_inner (допуск точности float32)',
+        );
+      }
+      const gx = Math.min(res - 1.0001, Math.max(0, px / cellSize + res / 2));
+      const gy = Math.min(res - 1.0001, Math.max(0, py / cellSize + res / 2));
+      const ix = Math.floor(gx);
+      const iy = Math.floor(gy);
+      const ax = gx - ix;
+      const ay = gy - iy;
+      const i00 = iy * res + ix;
+      const ref =
+        (local.heightfield[i00] * (1 - ax) + local.heightfield[i00 + 1] * ax) * (1 - ay)
+        + (local.heightfield[i00 + res] * (1 - ax) + local.heightfield[i00 + res + 1] * ax) * ay;
+      assert.ok(
+        Math.abs(pz - ref) < 1e-3,
+        `высота воротника совпадает с heightfield (расхождение ${Math.abs(pz - ref)})`,
+      );
+      collarChecked++;
+    }
   }
-  assert.ok(collarChecked > 0, 'воротник проверен в нескольких угловых узлах');
+  assert.ok(collarChecked > angularNodes / 4, 'воротник проверен на двух внутренних кольцах');
 
   // Нормали юбки единичной длины и направлены вверх.
   for (let k = 0; k < skirt.normals.length; k += angularNodes * 3) {
@@ -807,13 +823,13 @@ test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое п
     renderer.renderFrame(viewProj, {
       lightDir: [0.46, -0.36, 0.81],
       ambientColor: [0.28, 0.34, 0.39],
-      fogColor: [0.07, 0.2, 0.3],
-      fogStart: skirt.outerRadiusM * 0.22,
-      fogEnd: skirt.outerRadiusM * 0.96,
+      fogColor: [0.16, 0.31, 0.42],
+      fogStart: RADIUS_M * 1.05,
+      fogEnd: skirt.outerRadiusM * 0.94,
       planetRadiusM: skirt.planetRadiusM,
       focusRadiusM: RADIUS_M,
       hexSizeM: skirt.hexSpacingM,
-      horizonColor: [0.22, 0.52, 0.68],
+      horizonColor: [0.34, 0.58, 0.74],
       camera: { pitch: 0.44, yaw: -0.65, fovY: 0.87, aspect: 1.5, heightM: 3000 },
     });
   }, 'setHorizonSkirt + renderFrame отрабатывают на mock WebGL2');
