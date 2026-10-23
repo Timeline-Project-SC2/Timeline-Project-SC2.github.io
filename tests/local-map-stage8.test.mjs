@@ -40,7 +40,10 @@
       равнинного гекса простирается равнина (размах внешнего кольца меньше
       амплитуды fBm), на реально поднятых направлениях гребни вырастают, их
       амплитуда зависит от перепада высот Patch7, а не от radiusPatchM, и на
-      кольцах юбки остаются широкие непрерывные равнинные сектора. */
+      кольцах юбки остаются широкие непрерывные равнинные сектора. Кривизна
+      горизонта `planetRadiusM = max(frame.radiusM, 3.6·R_outer)` — от
+      настоящего радиуса планеты, поэтому на малых масштабах проседание
+      горизонта плавное (Δz < 1 км на 10 км). */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -974,8 +977,11 @@ test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85
   assert.ok(Math.abs(skirt.outerRadiusM - 10.0 * skirt.hexSpacingM) < 1e-4, 'R_outer = 10.0·d_hex');
   assert.ok(Math.abs(skirt.outerRadiusM - 11.5 * R) < 1e-4, 'R_outer = 11.5·R_patch');
   assert.ok(
-    Math.abs(skirt.planetRadiusM - 3.6 * skirt.outerRadiusM) < 1e-4,
-    'R_planet = 3.6·R_outer — плавная кривизна горизонта',
+    Math.abs(
+      skirt.planetRadiusM
+      - Math.max(dryPatch.frame.radiusM || 0, 3.6 * skirt.outerRadiusM),
+    ) < 1e-4,
+    'R_planet = max(frame.radiusM, 3.6·R_outer) — кривизна от настоящего радиуса планеты',
   );
   assert.equal(skirt.ringCount, 6, '6 соседних гексов Patch7');
   assert.ok(
@@ -1800,6 +1806,32 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   assert.ok(
     midPlainDeg >= 60,
     `на среднем кольце равнинный сектор ещё шире: ${midPlainDeg.toFixed(0)}° >= 60°`,
+  );
+
+  // 5. Кривизна горизонта — от настоящего радиуса планеты: на малых и средних
+  //    масштабах побеждает `patch.frame.radiusM`, на крупнейших остаётся
+  //    нижняя граница 3.6·R_outer (иначе R_outer > R_planet и сферическое
+  //    проседание в касательной плоскости вырождается).
+  const skirtAt = (label, radiusM) => {
+    Worker.clearLocalMapCache();
+    const request = requestFor(dryPatch, { radiusM, patchKey: label });
+    const local = Worker.generateLocalMap(request);
+    return Worker.generateHorizonSkirt(request, local.heightfield);
+  };
+  const microSkirt = skirtAt('stage85-radius-micro', 5000);
+  assert.ok(
+    Math.abs(microSkirt.planetRadiusM - dryPatch.frame.radiusM) < 1e-6,
+    `на масштабе 10 км R_planet = frame.radiusM (${microSkirt.planetRadiusM} м)`,
+  );
+  const microDropM = Worker.planetCurvatureDropM(microSkirt.planetRadiusM, microSkirt.outerRadiusM);
+  assert.ok(
+    microDropM < 1000,
+    `кривизна настоящей планеты плавная: Δz на масштабе 10 км = ${(microDropM / 1000).toFixed(2)} км < 1 км`,
+  );
+  const wideSkirt = skirtAt('stage85-radius-wide', 625000);
+  assert.ok(
+    Math.abs(wideSkirt.planetRadiusM - 3.6 * wideSkirt.outerRadiusM) < 1e-3,
+    `на масштабе 1250 км действует нижняя граница 3.6·R_outer (${wideSkirt.planetRadiusM} м)`,
   );
 
   Worker.clearLocalMapCache();

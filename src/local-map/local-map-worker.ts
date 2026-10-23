@@ -1737,7 +1737,18 @@ export function generateHorizonSkirt(
   const innerRadiusM = SKIRT_INNER_RADIUS_RATIO * radiusPatchM;
   const hexSpacingM = SKIRT_HEX_SPACING_RATIO * radiusPatchM;
   const outerRadiusM = SKIRT_OUTER_SPACING_RATIO * hexSpacingM;
-  const planetRadiusM = SKIRT_PLANET_RADIUS_SPACING_RATIO * outerRadiusM;
+  // Stage-8.5: кривизна горизонта берётся от НАСТОЯЩЕГО физического радиуса
+  // планеты (`patch.frame.radiusM = surface.radiusKm · 1000`, для Земли
+  // 6 371 000 м), а не только от визуального радиуса участка. Формула
+  // 3.6 · R_outer сохранена как нижняя граница: начиная с шага масштаба
+  // ~308 км R_outer превышает радиус планеты и сферическое проседание в
+  // касательной плоскости вырождается (r > R_planet). Ниже этого порога
+  // горизонт гнётся по реальной планете — на 10 км Δz = 0.26 км вместо 8 км,
+  // на 100 км — 26 км вместо 82 км, — то есть кривизна плавная и физичная.
+  const planetRadiusM = Math.max(
+    patch.frame.radiusM || 0,
+    SKIRT_PLANET_RADIUS_SPACING_RATIO * outerRadiusM,
+  );
 
   // Stage-8.3: физический шаг центров соседних гексов на глобусе (~60 км для
   // Земли v=128) против визуального шага юбки (690 м при radiusPatchM = 600 м).
