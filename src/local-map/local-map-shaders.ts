@@ -258,8 +258,8 @@ void main() {
   float clusterOuter = 2.0 * hexApothem + hexApothem * 1.1547;
   // 0 внутри 7-гексового кластера, 1 за его внешним краем.
   float outsideCluster = smoothstep(clusterOuter * 0.92, clusterOuter * 1.06, dist);
-  // Гексагональная координата центрального участка (апофема = 1).
-  float centerHexDist = hexMetric2D(v_worldPos.xy);
+  // Гексагональная координата центрального участка (ориентация clusterHexMetric: yx).
+  float centerHexDist = hexMetric2D(v_worldPos.yx);
 
   // Центральный участок обрезается строгим правильным шестиугольником:
   // 6 прямых сторон вместо прежнего кругового среза. Страховочное круговое
@@ -340,7 +340,7 @@ void main() {
   float cellIsNeighbor = 0.0;
   float bestSq = dot(v_worldPos.xy, v_worldPos.xy);
   for (int k = 0; k < 6; k++) {
-    float ang = (float(k) * 60.0 + 30.0) * 0.0174532925;
+    float ang = (float(k) * 60.0) * 0.0174532925;
     vec2 candidate = vec2(cos(ang), sin(ang)) * stepD;
     vec2 rel = v_worldPos.xy - candidate;
     float dSq = dot(rel, rel);
@@ -350,8 +350,8 @@ void main() {
       cellIsNeighbor = 1.0;
     }
   }
-  // Локальная гексагональная координата внутри найденного гекса.
-  float localHexDist = hexMetric2D(v_worldPos.xy - cellCenter);
+  // Локальная гексагональная координата внутри найденного гекса (clusterHexMetric: yx).
+  float localHexDist = hexMetric2D((v_worldPos.xy - cellCenter).yx);
   // Фаска существует только внутри своего гекса (до плоскости грани).
   float inCell = 1.0 - smoothstep(hexApothem * 0.995, hexApothem * 1.035, localHexDist);
 
