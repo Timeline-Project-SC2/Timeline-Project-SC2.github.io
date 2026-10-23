@@ -85,3 +85,115 @@ test('quick-nav: пустой массив и повторные вызовы н
   assert.deepEqual(layoutQuickNavArrows([], QUICK_NAV_CYCLE_MS, 8000), []);
   assert.deepEqual(layoutQuickNavArrows([], QUICK_NAV_CYCLE_MS, 0), []);
 });
+
+/* ---------------------------------------------------------------------------
+   Stage-8.7.3: контракт DOM-гигиены оверлея.
+   Регресс из #204: модуль вызывал host.replaceChildren(...) и стирал разметку
+   хоста. На /planet-globe/ хостом была вся сцена #localMapStage, поэтому
+   вместе с оверлеем исчезали канвас, шапка, кнопка «← На глобус планеты»,
+   селектор ширины, «Соседи Patch7» и HUD — возврат на планетарный уровень
+   становился невозможен. Тест поднимает минимальный fake DOM и проверяет,
+   что чужие узлы хоста переживают создание и освобождение оверлея.
+--------------------------------------------------------------------------- */
+
+function createFakeDocument() {
+  class FakeStyle {
+    constructor() { this.props = new Map(); }
+    setProperty(name, value, priority = '') { this.props.set(name, { value, priority }); }
+    getPropertyValue(name) { return this.props.get(name)?.value ?? ''; }
+    getPropertyPriority(name) { return this.props.get(name)?.priority ?? ''; }
+    removeProperty(name) { this.props.delete(name); }
+  }
+
+  class FakeElement {
+    constructor(tag) {
+      this.tagName = String(tag).toUpperCase();
+      this.ownerDocument = doc;
+      this.children = [];
+      this.parentElement = null;
+      this.style = new FakeStyle();
+      this.dataset = {};
+      this.className = '';
+      this.textContent = '';
+      this.attributes = new Map();
+      this.listeners = new Map();
+      const self = this;
+      this.classList = {
+        add(name) { self.className = `${self.className} ${name}`.trim(); },
+        remove(name) { self.className = self.className.split(/\s+/).filter((token) => token && token !== name).join(' '); },
+        contains(name) { return self.className.split(/\s+/).includes(name); },
+      };
+    }
+    getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    removeAttribute(name) { this.attributes.delete(name); }
+    append(...nodes) {
+      for (const node of nodes) {
+        if (node.parentElement) node.remove();
+        node.parentElement = this;
+        this.children.push(node);
+      }
+    }
+    appendChild(node) { this.append(node); return node; }
+    replaceChildren(...nodes) { for (const child of [...this.children]) child.remove(); this.append(...nodes); }
+    remove() {
+      if (!this.parentElement) return;
+      const index = this.parentElement.children.indexOf(this);
+      if (index >= 0) this.parentElement.children.splice(index, 1);
+      this.parentElement = null;
+    }
+    addEventListener(type, listener) { this.listeners.set(type, listener); }
+    removeEventListener(type) { this.listeners.delete(type); }
+    closest() { return null; }
+  }
+
+  class FakeButtonElement extends FakeElement {}
+
+  const doc = {
+    createElement(tag) { return tag.toLowerCase() === 'button' ? new FakeButtonElement(tag) : new FakeElement(tag); },
+    createElementNS(_namespace, tag) { return new FakeElement(tag); },
+  };
+  doc.defaultView = {
+    Element: FakeElement,
+    HTMLButtonElement: FakeButtonElement,
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    performance: { now: () => 1000 },
+  };
+  return doc;
+}
+
+test('quick-nav: оверлей не стирает содержимое хоста (регресс #204)', () => {
+  const doc = createFakeDocument();
+  const host = doc.createElement('div');
+  const canvas = doc.createElement('canvas');
+  const exitButton = doc.createElement('button');
+  host.append(canvas, exitButton);
+
+  const nav = QuickNav.createLocalMapQuickNav(host, () => {});
+  assert.ok(host.children.includes(canvas), 'канвас локал-карты исчез при создании оверлея');
+  assert.ok(host.children.includes(exitButton), 'кнопка «На глобус планеты» исчезла при создании оверлея');
+  assert.ok(host.children.some((child) => child.classList.contains('lmqn-layer')), 'слой стрелок не добавлен');
+
+  nav.update([{ slot: 0, cell: 100, x: 10, y: 20, angleRad: 0 }], true);
+  assert.ok(host.children.includes(canvas), 'канвас исчез после первого update');
+  assert.ok(host.children.includes(exitButton), 'кнопка выхода исчезла после первого update');
+
+  nav.dispose();
+  assert.deepEqual(host.children, [canvas, exitButton], 'после dispose в хосте остались лишние узлы или пропала разметка');
+  assert.equal(host.style.getPropertyValue('position'), '', 'dispose не восстановил инлайновые стили хоста');
+  assert.equal(host.getAttribute('data-local-map-quick-nav-host'), null);
+});
+
+test('quick-nav: модуль не заменяет содержимое хоста целиком', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../site/planet-globe/local-map-quick-nav.ts', import.meta.url), 'utf8');
+  assert.ok(!source.includes('host.replaceChildren'), 'модуль снова стирает разметку хоста через host.replaceChildren');
+});
+
+test('quick-nav: страница передаёт модулю отдельный слой, а не сцену локал-карты', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
+  assert.ok(!source.includes('createLocalMapQuickNav(els.localMapStage'), 'хостом оверлея снова стала вся сцена #localMapStage');
+  assert.match(source, /localMapQuickNavHost/, 'страница не хранит собственный слой оверлея');
+});
