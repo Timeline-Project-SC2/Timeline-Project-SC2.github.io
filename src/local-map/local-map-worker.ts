@@ -828,6 +828,299 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   return response;
 }
 
+// ---------------------------------------------------------------------------
+// Stage-8: планетарная юбка 6 колец гексов (сферический горизонт локальной карты)
+// ---------------------------------------------------------------------------
+
+/** Угловых сегментов полярной кольцевой сетки юбки (97 узлов по окружности). */
+export const SKIRT_ANGULAR_SEGMENTS = 96;
+/** Радиальных колец сетки юбки (57 колец вершин вместе с внутренним). */
+export const SKIRT_RADIAL_RINGS = 56;
+/** Число видимых колец соседних гексов вокруг целевой ячейки. */
+export const SKIRT_RING_COUNT = 6;
+/** Число ячеек канонической сетки Голдберга v = 128: 10v² + 2. */
+const GOLDBERG_V128_CELLS = 10 * 128 * 128 + 2;
+/** Узлов макро-решётки 3D-сэмплера на сторону (25×25 = 625 опросов). */
+const SKIRT_LATTICE_STEPS = 24;
+/** Амплитуда макро-fBm планетарной юбки, м. */
+const SKIRT_MACRO_FBM_AMPLITUDE_M = 60;
+
+/** Геометрия планетарной юбки 6 колец (z — высота над seaLevel, без сферического проседания). */
+export interface HorizonSkirtData {
+  /** (x, y, z) в метрах; сферическое проседание добавляет вершинный шейдер. */
+  readonly positions: Float32Array;
+  /** Нормали (nx, ny, nz) по гипсометрической высоте. */
+  readonly normals: Float32Array;
+  readonly indices: Uint32Array;
+  /** R_inner = 0.88 · R_patch — начало бесшовного воротника. */
+  readonly innerRadiusM: number;
+  /** R_skirt = max(6.5 · d_hex, 4.5 · R_patch) — внешний край 6 колец. */
+  readonly outerRadiusM: number;
+  /** Радиус планеты R_p в метрах (минимум 300 км). */
+  readonly planetRadiusM: number;
+  /** Шаг центров соседних гексов d_hex(R_p) в метрах. */
+  readonly hexSpacingM: number;
+  readonly ringCount: number;
+}
+
+/** Шаг центров соседних гексов сетки Голдберга v=128: d_hex ≈ 0.009418 · R_p. */
+export function hexSpacingMeters(planetRadiusM: number): number {
+  return Math.sqrt(
+    (8 * Math.PI * planetRadiusM * planetRadiusM) / (Math.sqrt(3) * GOLDBERG_V128_CELLS),
+  );
+}
+
+/**
+ * Сферическое проседание касательной плоскости на расстоянии r от центра:
+ * Δz_drop = R_p − sqrt(max(0, R_p² − r²)). При R_p ≤ 1 проседание выключено
+ * (обратная совместимость с плоской локальной картой).
+ */
+export function planetCurvatureDropM(planetRadiusM: number, rM: number): number {
+  if (!(planetRadiusM > 1)) return 0;
+  return planetRadiusM - Math.sqrt(Math.max(0, planetRadiusM * planetRadiusM - rM * rM));
+}
+
+function smooth01(t: number): number {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
+
+function clampScalar(value: number, min: number, max: number): number {
+  return value < min ? min : value > max ? max : value;
+}
+
+/** Билинейная выборка детального heightfield участка (сетка res×res на радиус radiusM). */
+function sampleInnerHeightfield(
+  heightfield: Float32Array,
+  res: number,
+  radiusM: number,
+  x: number,
+  y: number,
+): number {
+  const cellSize = (2 * radiusM) / res;
+  const gx = clampScalar(x / cellSize + res / 2, 0, res - 1.0001);
+  const gy = clampScalar(y / cellSize + res / 2, 0, res - 1.0001);
+  const ix = Math.floor(gx);
+  const iy = Math.floor(gy);
+  const ax = gx - ix;
+  const ay = gy - iy;
+  const i00 = iy * res + ix;
+  const i10 = i00 + 1;
+  const i01 = i00 + res;
+  const i11 = i01 + 1;
+  const top = (heightfield[i00] as number) * (1 - ax) + (heightfield[i10] as number) * ax;
+  const bottom = (heightfield[i01] as number) * (1 - ax) + (heightfield[i11] as number) * ax;
+  return top * (1 - ay) + bottom * ay;
+}
+
+/** Макро-решётка базовой высоты (канал elevation единого 3D-сэмплера). */
+function sampleSkirtElevationLattice(
+  patch: LocalMapPatch,
+  sampler: FieldSampler,
+  extentM: number,
+): Float32Array {
+  const nodes = SKIRT_LATTICE_STEPS + 1;
+  const lattice = new Float32Array(nodes * nodes);
+  const scratch = new Float32Array(8);
+  for (let j = 0; j < nodes; j++) {
+    const y = (j / SKIRT_LATTICE_STEPS - 0.5) * 2 * extentM;
+    for (let i = 0; i < nodes; i++) {
+      const x = (i / SKIRT_LATTICE_STEPS - 0.5) * 2 * extentM;
+      const dir = localPointToDirection(patch, x, y);
+      const fields = sampler.sampleFields(dir[0], dir[1], dir[2], scratch);
+      lattice[j * nodes + i] = fields[0] as number;
+    }
+  }
+  return lattice;
+}
+
+function sampleElevationLatticeAt(lattice: Float32Array, extentM: number, x: number, y: number): number {
+  const nodes = SKIRT_LATTICE_STEPS + 1;
+  const gx = clampScalar((x / (2 * extentM) + 0.5) * SKIRT_LATTICE_STEPS, 0, SKIRT_LATTICE_STEPS - 1e-9);
+  const gy = clampScalar((y / (2 * extentM) + 0.5) * SKIRT_LATTICE_STEPS, 0, SKIRT_LATTICE_STEPS - 1e-9);
+  const ix = Math.floor(gx);
+  const iy = Math.floor(gy);
+  const ax = gx - ix;
+  const ay = gy - iy;
+  const i00 = iy * nodes + ix;
+  const top = (lattice[i00] as number) * (1 - ax) + (lattice[i00 + 1] as number) * ax;
+  const bottom = (lattice[i00 + nodes] as number) * (1 - ax) + (lattice[i00 + nodes + 1] as number) * ax;
+  return top * (1 - ay) + bottom * ay;
+}
+
+/**
+ * Планетарная высота точки юбки относительно seaLevel, м. В ближней зоне
+ * (r ≤ R_patch) — привязка к каноническим ячейкам Patch7 тем же контрактом,
+ * что и heightfield; вдали — макро-решётка единого 3D-сэмплера плюс лёгкий
+ * fBm; вода/океан держат зеркало z ≤ 0.
+ */
+function skirtPlanetaryHeight(
+  patch: LocalMapPatch,
+  radiusPatchM: number,
+  x: number,
+  y: number,
+  r: number,
+  seed: number,
+  elevLattice: Float32Array | null,
+  extentM: number,
+): number {
+  const dir = localPointToDirection(patch, x, y);
+  const cell = nearestPatchCell(patch, dir);
+  const macroScale = 2.2 / Math.max(radiusPatchM, 1);
+  const macro = (fBm(x * macroScale, y * macroScale, seed, 4) - 0.5) * 2 * SKIRT_MACRO_FBM_AMPLITUDE_M;
+
+  if (r <= radiusPatchM) {
+    if (isWaterCell(cell, patch.seaLevel)) {
+      return Math.min(
+        0,
+        (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT,
+      );
+    }
+    const anchor = (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+    return anchor + macro;
+  }
+
+  if (elevLattice) {
+    const elev = sampleElevationLatticeAt(elevLattice, extentM, x, y);
+    let height = (elev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + macro;
+    // Океан/озёра за пределами детального участка держат плоское зеркало z ≤ 0.
+    if (elev < patch.seaLevel) height = Math.min(0, height);
+    return height;
+  }
+
+  // Фолбэк без профиля планеты: макро-fBm вокруг якорей семи ячеек Patch7.
+  if (isWaterCell(cell, patch.seaLevel)) return 0;
+  return (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + macro;
+}
+
+/**
+ * Генерация планетарной юбки 6 колец гексов: полярная кольцевая сетка
+ * 97 × 57 = 5 529 вершин (32 256 индексов) с нелинейным сгущением колец к
+ * детальному участку и бесшовным воротником (collar blend) на внутреннем
+ * радиусе R_inner = 0.88 · R_patch. Сферическое проседание в геометрию не
+ * закладывается — его применяет вершинный шейдер по u_planetRadiusM.
+ */
+export function generateHorizonSkirt(
+  request: LocalMapWorkerRequest,
+  innerHeightfield?: Float32Array,
+): HorizonSkirtData {
+  const patch = request.patch;
+  const radiusPatchM = request.radiusM;
+  const planetRadiusM = Math.max(300000, (patch.radiusKm || 6371) * 1000);
+  const hexSpacingM = hexSpacingMeters(planetRadiusM);
+  const innerRadiusM = 0.88 * radiusPatchM;
+  const outerRadiusM = Math.max(6.5 * hexSpacingM, 4.5 * radiusPatchM);
+
+  const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
+  const elevLattice = sampler
+    ? sampleSkirtElevationLattice(patch, sampler, outerRadiusM)
+    : null;
+  const seed = (request.seed ^ 0x5bd1e995) >>> 0;
+
+  const angularCount = SKIRT_ANGULAR_SEGMENTS + 1;
+  const radialCount = SKIRT_RADIAL_RINGS + 1;
+  const vertexCount = angularCount * radialCount;
+  const positions = new Float32Array(vertexCount * 3);
+  const heights = new Float32Array(vertexCount);
+  const ringRadii = new Float32Array(radialCount);
+
+  const innerRes = HEIGHTFIELD_RES;
+  const hasCollar = !!innerHeightfield && innerHeightfield.length >= innerRes * innerRes;
+
+  for (let j = 0; j < radialCount; j++) {
+    const t = j / SKIRT_RADIAL_RINGS;
+    ringRadii[j] = innerRadiusM + (outerRadiusM - innerRadiusM) * Math.pow(t, 1.65);
+  }
+
+  for (let j = 0; j < radialCount; j++) {
+    const r = ringRadii[j] as number;
+    for (let i = 0; i < angularCount; i++) {
+      const theta = (i / SKIRT_ANGULAR_SEGMENTS) * Math.PI * 2;
+      const x = r * Math.cos(theta);
+      const y = r * Math.sin(theta);
+      const idx = j * angularCount + i;
+
+      let z = skirtPlanetaryHeight(
+        patch, radiusPatchM, x, y, r, seed, elevLattice, outerRadiusM,
+      );
+
+      // Бесшовный воротник: на r ∈ [R_inner, R_patch] подмешиваем билинейную
+      // высоту детального участка (на R_inner вес детали = 1 — щель исключена).
+      if (hasCollar && r <= radiusPatchM) {
+        const detail = sampleInnerHeightfield(
+          innerHeightfield as Float32Array, innerRes, radiusPatchM, x, y,
+        );
+        const blend = smooth01((r - innerRadiusM) / (radiusPatchM - innerRadiusM));
+        z = detail * (1 - blend) + z * blend;
+      }
+
+      heights[idx] = z;
+      positions[idx * 3] = x;
+      positions[idx * 3 + 1] = y;
+      positions[idx * 3 + 2] = z;
+    }
+  }
+
+  // Нормали конечными разностями по сетке (угловое замыкание, кламп колец).
+  const normals = new Float32Array(vertexCount * 3);
+  const vertexAt = (j: number, i: number): number => {
+    const jj = j < 0 ? 0 : j >= radialCount ? radialCount - 1 : j;
+    let ii = i % SKIRT_ANGULAR_SEGMENTS;
+    if (ii < 0) ii += SKIRT_ANGULAR_SEGMENTS;
+    return jj * angularCount + ii;
+  };
+  for (let j = 0; j < radialCount; j++) {
+    for (let i = 0; i < angularCount; i++) {
+      const idx = j * angularCount + i;
+      const pA = vertexAt(j, i + 1);
+      const pB = vertexAt(j, i - 1);
+      const pC = vertexAt(j + 1, i);
+      const pD = vertexAt(j - 1, i);
+      const ax = (positions[pA * 3] as number) - (positions[pB * 3] as number);
+      const ay = (positions[pA * 3 + 1] as number) - (positions[pB * 3 + 1] as number);
+      const az = (heights[pA] as number) - (heights[pB] as number);
+      const bx = (positions[pC * 3] as number) - (positions[pD * 3] as number);
+      const by = (positions[pC * 3 + 1] as number) - (positions[pD * 3 + 1] as number);
+      const bz = (heights[pC] as number) - (heights[pD] as number);
+      // cross(A, B); разворачиваем нормаль в сторону +z (вверх).
+      let nx = ay * bz - az * by;
+      let ny = az * bx - ax * bz;
+      let nz = ax * by - ay * bx;
+      if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      const len = Math.hypot(nx, ny, nz) || 1;
+      normals[idx * 3] = nx / len;
+      normals[idx * 3 + 1] = ny / len;
+      normals[idx * 3 + 2] = nz / len;
+    }
+  }
+
+  const indexCount = SKIRT_ANGULAR_SEGMENTS * SKIRT_RADIAL_RINGS * 6;
+  const indices = new Uint32Array(indexCount);
+  let ptr = 0;
+  for (let j = 0; j < SKIRT_RADIAL_RINGS; j++) {
+    for (let i = 0; i < SKIRT_ANGULAR_SEGMENTS; i++) {
+      const ip = (i + 1) % SKIRT_ANGULAR_SEGMENTS;
+      const a = j * angularCount + i;
+      const b = j * angularCount + ip;
+      const c = (j + 1) * angularCount + i;
+      const d = (j + 1) * angularCount + ip;
+      indices[ptr++] = a; indices[ptr++] = c; indices[ptr++] = b;
+      indices[ptr++] = b; indices[ptr++] = c; indices[ptr++] = d;
+    }
+  }
+
+  return {
+    positions,
+    normals,
+    indices,
+    innerRadiusM,
+    outerRadiusM,
+    planetRadiusM,
+    hexSpacingM,
+    ringCount: SKIRT_RING_COUNT,
+  };
+}
+
 export function localMapTransferables(response: LocalMapWorkerResponse): Transferable[] {
   const transferables: Transferable[] = [
     response.heightfield.buffer as ArrayBuffer,
