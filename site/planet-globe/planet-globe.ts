@@ -17,6 +17,8 @@ import type { CellPolygon, GlobeGeometry, GlobeStats, PlanetGlobeHandle } from '
 import { verifyGenerationKey } from '../shared/planet-generation-contract.ts';
 import type { PlanetGenerationProfileInput } from '../shared/planet-generation-contract.ts';
 import type { GeographyProfileInput } from '../shared/planet-geography.ts';
+import { createLocalMapQuickNav } from './local-map-quick-nav.ts';
+import type { LocalMapQuickNav, QuickNavHintInput } from './local-map-quick-nav.ts';
 import type {
   ColorModeMessage,
   ExtractPatchMessage,
@@ -61,34 +63,13 @@ type Stage8StructureRenderer = StructureRenderer & {
 };
 
 /* ------------------------------------------------- СТЫК С ВОРКЕРОМ 4 (Stage-8.7)
-   Модуль site/planet-globe/local-map-quick-nav.ts создаёт Воркер 4 и в этой
-   ветке его ещё нет. Контракт на стыке (символ в символ) зафиксирован ниже,
-   интеграция уже написана; после слияния его PR достаточно заменить шим на
-   импорт: import { createLocalMapQuickNav } from './local-map-quick-nav'; */
+   Модуль голографических квик-стрелок живёт в
+   site/planet-globe/local-map-quick-nav.ts (PR #198). Временный шим,
+   возвращавший null, удалён в интеграционном фиксе 8.7.1: без него стрелки
+   не отрисовывались вообще, и гейт G6.2 не был достигнут. Типы контракта
+   реэкспортируются ниже, чтобы паритет экспортов (И-6) сохранился. */
 
-/** Подсказка для одной из 6 граней активного гекса. */
-export interface QuickNavHintInput {
-  readonly slot: number;
-  readonly cell: number;
-  /** Экранные координаты середины грани, CSS px канваса #localMapCanvas. */
-  readonly x: number;
-  readonly y: number;
-  /** Экранный угол нормали грани «наружу»: 0 = вправо (+X), радианы. */
-  readonly angleRad: number;
-}
-
-export interface LocalMapQuickNav {
-  update(hints: readonly QuickNavHintInput[], visible: boolean): void;
-  dispose(): void;
-}
-
-/** ВРЕМЕННЫЙ ШИМ (удалить после слияния PR Воркера 4): модуля ещё нет. */
-function createLocalMapQuickNavShim(
-  _host: HTMLElement,
-  _onPick: (slot: number, cell: number) => void,
-): LocalMapQuickNav | null {
-  return null;
-}
+export type { LocalMapQuickNav, QuickNavHintInput };
 
 /** Stage-8: анимация локальной камеры (Dive-in, смена масштаба, сглаживание
  *  остатка после ре-бейзинга). Stage-8.7: перелётов между гексами больше нет. */
@@ -1434,7 +1415,7 @@ function ensureLocalMapQuickNav(): LocalMapQuickNav | null {
   if (localMapQuickNav) return localMapQuickNav;
   if (localQuickNavInitialized) return null;
   localQuickNavInitialized = true;
-  localMapQuickNav = createLocalMapQuickNavShim(els.localMapStage, (slot: number, cell: number) => {
+  localMapQuickNav = createLocalMapQuickNav(els.localMapStage, (slot: number, cell: number) => {
     if (requestLocalNeighborByCellId(cell)) return;
     setLocalMapStatus(
       'Квик-навигация: ячейка #' + String(cell) + ' (слот ' + String(slot) + ') отсутствует в активном Patch7.',
