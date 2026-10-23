@@ -76,11 +76,11 @@ interface LocalCameraAnim {
   easeInOut?: boolean;
 }
 
-/** Палитра атмосферы планетарного горизонта (Stage-8). */
-const LOCAL_HORIZON_COLOR: readonly [number, number, number] = [0.34, 0.58, 0.74];
-const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.16, 0.31, 0.42];
-/** Рабочий панорамный наклон и азимут камеры локальной карты. */
-const LOCAL_REST_PITCH = 0.44;
+/** Палитра атмосферы планетарного горизонта (Stage-8.3): светлая дневная горная дымка. */
+const LOCAL_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
+const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.66, 0.74, 0.82];
+/** Рабочий панорамный наклон и азимут камеры локальной карты (Stage-8.3: ~17.8°). */
+const LOCAL_REST_PITCH = 0.31;
 const LOCAL_REST_YAW = -0.65;
 /** Stage-8.2: фаза 1 (подлёт глобуса к гексу) удерживается 320 мс, после чего
  *  сцена проявляется и камера начинает спуск до уровня участка. */
@@ -509,17 +509,26 @@ function resizeLocalMapCanvas(): void {
 
 function resetLocalCamera(): void {
   localCameraYaw = LOCAL_REST_YAW;
-  // Панорамный наклон ~25°: в кадре и база участка, и 5–6 колец гексов,
-  // уходящих за сферический горизонт с атмосферным лимбом.
+  // Stage-8.3: панорамный наклон ~17.8° — верхние 28–35% кадра занимают горные
+  // вершины и облачный купол неба, нижние 65–72% — долина активного гекса.
   localCameraPitch = LOCAL_REST_PITCH;
   const hf = localMapData?.heightfield;
   const res = Math.round(Math.sqrt(hf?.length || 0));
   const centerZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
-  localCameraTarget = [0, 0, Number.isFinite(centerZ) ? centerZ + 12 : 20];
+  // Точка прицела ставится чуть впереди по направлению взгляда и чуть выше уровня
+  // центра: взгляд идёт вдоль долины к горному массиву на горизонте.
+  const forwardOffset = localMapRadiusM * 0.14;
+  localCameraTarget = [
+    -Math.cos(localCameraYaw) * forwardOffset,
+    -Math.sin(localCameraYaw) * forwardOffset,
+    (Number.isFinite(centerZ) ? centerZ : 0) + Math.max(14, localMapRadiusM * 0.025),
+  ];
   const rect = els.localMapCanvas.getBoundingClientRect();
   const aspect = rect.height > 0 ? rect.width / rect.height : 1;
   const fit = Math.max(0.45, Math.min(1, aspect || 1));
-  localCameraDistance = Math.max(2, (localMapRadiusM * 0.72) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+  // Stage-8.3: рабочая дистанция сжимается на 40%, чтобы камера оказывалась
+  // внутри пространства активного гекса, а не висела снаружи над шестиугольником.
+  localCameraDistance = Math.max(2, (localMapRadiusM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
 }
 
 function lerpLocal(a: number, b: number, t: number): number {
@@ -541,10 +550,10 @@ function cancelLocalCameraAnim(): void {
 }
 
 /**
- * Stage-8.2, фаза 2 двухфазного спуска: камера стартует высоко над участком
- * (fromDist = 4.8x, крутой взгляд сверху вниз ~75°) и за 1150 мс по кривой
- * easeInOutCubic мягко опускается и выравнивается над уровнем выделенного гекса
- * (LOCAL_REST_PITCH ≈ 25°).
+ * Stage-8.3, фаза 2 двухфазного спуска: камера стартует с высокой орбитальной
+ * точки (fromDist = 5.2x, крутой взгляд сверху вниз ~75°) и за 1150 мс по кривой
+ * easeInOutCubic мягко опускается и выравнивается до панорамного уровня долины
+ * (LOCAL_REST_PITCH ≈ 17.8°), оставляя в верхней трети кадра горы и облачный купол.
  */
 function startLocalDiveInAnim(): void {
   const targetDist = localCameraDistance > 0 ? localCameraDistance : localMapRadiusM;
@@ -556,11 +565,11 @@ function startLocalDiveInAnim(): void {
     durationMs: LOCAL_DIVE_ANIM_MS,
     fromYaw: LOCAL_REST_YAW - 0.24,
     toYaw: LOCAL_REST_YAW,
-    fromPitch: 1.30,
+    fromPitch: 1.32,
     toPitch: LOCAL_REST_PITCH,
-    fromDist: targetDist * 4.8,
+    fromDist: targetDist * 5.2,
     toDist: targetDist,
-    fromTarget: [0, 0, target[2] + localMapRadiusM * 0.18],
+    fromTarget: [0, 0, target[2] + localMapRadiusM * 0.25],
     toTarget: target,
     easeInOut: true,
   };
@@ -808,7 +817,9 @@ function installLocalMapCanvasEvents(): void {
     localPointerLast = { x: event.clientX, y: event.clientY };
     if (localPointerMode === 'orbit') {
       localCameraYaw -= dx * 0.006;
-      localCameraPitch = clampLocal(localCameraPitch + dy * 0.005, 0.12, 1.48);
+      // Stage-8.3: нижний предел наклона 0.06 рад (~3.4°) позволяет поднять взгляд
+      // ещё выше — на горные пики и облака над долиной.
+      localCameraPitch = clampLocal(localCameraPitch + dy * 0.005, 0.06, 1.48);
     } else {
       applyLocalPan(dx, dy);
     }
@@ -879,12 +890,13 @@ function drawLocalMapFallback(viewProj: Float32Array): void {
   const renderer = localMapRenderer;
   const programs = localMapPrograms;
   if (!gl || !renderer || !programs || !renderer.ready) return;
-  const light = normalizeLocalVec3([0.46, -0.36, 0.81]);
-  const ambient: LocalVec3 = [0.28, 0.34, 0.39];
+  // Stage-8.3: дневная светотень гор и долины (тот же свет, что и в renderFrame).
+  const light = normalizeLocalVec3([0.52, -0.38, 0.76]);
+  const ambient: LocalVec3 = [0.42, 0.45, 0.48];
   const skirt = localSkirtData;
-  const fog: LocalVec3 = skirt ? [...LOCAL_SKIRT_FOG_COLOR] : [0.025, 0.09, 0.13];
-  const horizon: LocalVec3 = skirt ? [...LOCAL_HORIZON_COLOR] : [0.025, 0.09, 0.13];
-  const fogStart = skirt ? skirt.outerRadiusM * 0.72 : localMapRadiusM * 0.85;
+  const fog: LocalVec3 = [...LOCAL_SKIRT_FOG_COLOR];
+  const horizon: LocalVec3 = [...LOCAL_HORIZON_COLOR];
+  const fogStart = skirt ? skirt.outerRadiusM * 0.58 : localMapRadiusM * 0.85;
   const fogEnd = skirt ? skirt.outerRadiusM * 0.98 : localMapRadiusM;
 
   gl.useProgram(programs.terrainProgram);
@@ -955,23 +967,36 @@ function renderLocalMapFrame(): void {
   if (!gl || !renderer || gl.isContextLost()) return;
   resizeLocalMapCanvas();
   if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
-  // Stage-8.2: непрозрачный цвет космоса/горизонта вместо прозрачной очистки —
+  // Stage-8.3: светлый дневной сизый тон атмосферы вместо космической черноты —
   // за локальной сценой не должен просвечивать уменьшенный глобус.
-  gl.clearColor(0.015, 0.045, 0.075, 1);
+  gl.clearColor(0.52, 0.62, 0.74, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   applyLocalCameraAnim(performance.now());
   const viewProj = localViewProjection();
   if (typeof renderer.renderFrame === 'function') {
     const skirt = localSkirtData;
+    const aspect = Math.max(0.1, els.localMapCanvas.width / Math.max(1, els.localMapCanvas.height));
+    const eye = localCameraEye();
     const renderOptions: Record<string, unknown> = {
-      lightDir: new Float32Array([0.46, -0.36, 0.81]),
-      ambientColor: new Float32Array([0.28, 0.34, 0.39]),
-      fogColor: skirt
-        ? new Float32Array(LOCAL_SKIRT_FOG_COLOR)
-        : new Float32Array([0.025, 0.09, 0.13]),
-      fogStart: skirt ? skirt.outerRadiusM * 0.72 : localMapRadiusM * 0.85,
+      lightDir: new Float32Array([0.52, -0.38, 0.76]),
+      ambientColor: new Float32Array([0.42, 0.45, 0.48]),
+      fogColor: new Float32Array(LOCAL_SKIRT_FOG_COLOR),
+      // Stage-8.3: туман отодвинут, чтобы горные хребты юбки читались объёмно
+      // и растворялись только у самого дальнего края горизонта.
+      fogStart: skirt ? skirt.outerRadiusM * 0.58 : localMapRadiusM * 0.85,
       fogEnd: skirt ? skirt.outerRadiusM * 0.98 : localMapRadiusM,
       radiusM: localMapRadiusM,
+      // Stage-8.3: без объекта camera LocalMapRenderer.renderFrame не рисует
+      // купол неба — облака и атмосферный лимб появляются только с ним.
+      camera: {
+        pitch: localCameraPitch,
+        yaw: localCameraYaw,
+        fovY: LOCAL_MAP_FOV,
+        aspect,
+        heightM: Math.max(2, eye[2] - localCameraTarget[2]),
+      },
+      skyAlpha: 1.0,
+      opaqueSkyDome: true,
     };
     if (skirt) {
       renderOptions.planetRadiusM = skirt.planetRadiusM;
