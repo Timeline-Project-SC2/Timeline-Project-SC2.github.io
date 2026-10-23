@@ -1,10 +1,10 @@
 /* LocalMapShaders — GLSL ES 3.00 шейдеры локальной карты (Этапы 8/9, CR-01 PR 5;
    Stage-8 Planetary Horizon: кривизна планеты, оптический блюр горизонта,
-   гекс-сетка 6 колец, атмосферная дымка и купол неба.
-   Stage-8 Hybrid A+B: гексагональное отсечение центрального участка,
-   тактические 3D-грани (Tactical Hex Facet Plane) гексов кластера и
-   прозрачный альфа-выход по внешнему краю кластера для композитинга над
-   живым 3D-глобусом планеты.
+   атмосферная дымка и купол неба.
+   Stage-8.2: выделение только активного центрального гекса тонкой тактической
+   кромкой, бесшовный простирающийся сферический горизонт с 3-каскадными
+   процедурными текстурами рельефа, плавным ухудшением видимости от границы
+   гекса к лимбу и непрозрачным куполом неба со звёздами.
    --------------------------------------------------------------------------
    Поля шейдеров обязаны совпадать с контрактом VAO рендерера
    (local-map-renderer.ts):
@@ -214,15 +214,6 @@ const vec3 ZONE_COLORS[5] = vec3[5](
 const vec3 SHALLOW_WATER_COLOR = vec3(0.145, 0.375, 0.415);
 const vec3 DEEP_WATER_COLOR    = vec3(0.055, 0.235, 0.290);
 
-// Число видимых колец соседних гексов планетарной юбки.
-const int SKIRT_RING_COUNT = 6;
-
-// --- Tactical Hex Facet Plane (Stage-8 Hybrid A+B) ---
-// Материал скошенной 3D-грани гекса: тёмный базальт с циановой кромкой излома.
-const vec3 FACET_BASE_COLOR   = vec3(0.16, 0.30, 0.38);  // плоскость грани
-const vec3 FACET_EDGE_CENTER  = vec3(0.38, 0.84, 0.96);  // кромка излома центра
-const vec3 FACET_EDGE_NEIGHBOR = vec3(0.28, 0.62, 0.74);  // кромка излома соседей
-
 /**
  * Гексагональная метрика правильного шестиугольника: hexMetric2D(p) = 1 —
  * граница гекса с апофемой 1 (плоские стороны смотрят на 30°, 90°, 150°…),
@@ -233,43 +224,38 @@ float hexMetric2D(vec2 p) {
   return max(a.x * 0.8660254 + a.y * 0.5, a.y);
 }
 
-/** Округление аксиальных кубических координат гекса к центру ближайшей ячейки. */
-vec3 roundHexCube(vec3 cube) {
-  vec3 r = round(cube);
-  float dx = abs(r.x - cube.x);
-  float dy = abs(r.y - cube.y);
-  float dz = abs(r.z - cube.z);
-  if (dx > dy && dx > dz) {
-    r.x = -r.y - r.z;
-  } else if (dy > dz) {
-    r.y = -r.x - r.z;
-  } else {
-    r.z = -r.x - r.y;
-  }
-  return r;
+/** Компактный детерминированный 2D-хеш без sin()-артефактов точности. */
+float terrainHash2D(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+/** Плавный 2D value-шум с эрмитовой интерполяцией в диапазоне [0, 1]. */
+float terrainValueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = terrainHash2D(i);
+  float b = terrainHash2D(i + vec2(1.0, 0.0));
+  float c = terrainHash2D(i + vec2(0.0, 1.0));
+  float d = terrainHash2D(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
 void main() {
   float dist = length(v_worldPos.xy);
-  // Апофема гекса кластера (7 гексов: центральный + 6 соседних).
+  // Апофема активного центрального гекса и гексагональная метрика (ориентация clusterHexMetric: yx).
   float hexApothem = u_focusRadiusM * 0.8054;
-  // Внешний радиус кластера: 6 соседей на расстоянии 2·апофема плюс их
-  // описанный радиус (1.1547·апофема).
-  float clusterOuter = 2.0 * hexApothem + hexApothem * 1.1547;
-  // 0 внутри 7-гексового кластера, 1 за его внешним краем.
-  float outsideCluster = smoothstep(clusterOuter * 0.92, clusterOuter * 1.06, dist);
-  // Гексагональная координата центрального участка (ориентация clusterHexMetric: yx).
   float centerHexDist = hexMetric2D(v_worldPos.yx);
 
   // Центральный участок обрезается строгим правильным шестиугольником:
-  // 6 прямых сторон вместо прежнего кругового среза. Страховочное круговое
-  // отсечение по радиусу 0.93·R_patch сохранено: описанный радиус гекса
-  // 0.8054 / 0.866 ≈ 0.9299·R_patch меньше 0.93·R_patch, поэтому контур
-  // остаётся строго шестиугольным.
-  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.93) {
+  // 6 прямых сторон активного гекса (с микрозапасом 1.003 для бесшовного
+  // перекрытия с воротником юбки) и страховочное круговое отсечение 0.935·R_patch.
+  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.935) {
     discard;
   }
-  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && centerHexDist > hexApothem) {
+  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && centerHexDist > hexApothem * 1.003) {
     discard;
   }
 
@@ -282,12 +268,11 @@ void main() {
     terraformBlend = texture(u_terraform_map, v_uv).r;
   }
 
-  // Оптический блюр включается только за внешним краем 7-гексового кластера:
-  // внутри кластера (и тем более при dist < u_fogStart) он строго нулевой —
-  // рельеф, реки и база видны в полной резкости.
-  float blur = (u_focusRadiusM > 1.0)
-    ? smoothstep(0.0, 0.72, v_fog) * outsideCluster
-    : 0.0;
+  // Внутри активного гекса (centerHexDist <= hexApothem) оптическое размытие
+  // строго нулевое (blur = 0.0), а за его пределами плавно нарастает к горизонту.
+  float blur = (u_focusRadiusM > 1.0 && u_fogEnd * 0.88 > hexApothem)
+    ? smoothstep(hexApothem, u_fogEnd * 0.88, centerHexDist)
+    : ((u_focusRadiusM > 1.0 && centerHexDist > hexApothem) ? 1.0 : 0.0);
 
   // Гипсометрия и изолинии рельефа: низины зеленее, склоны и гребни каменистее.
   float hNorm = clamp((v_worldPos.z - 15.0) / 140.0, 0.0, 1.0);
@@ -296,18 +281,55 @@ void main() {
   vec3 naturalColor  = mix(lowlandColor, ZONE_COLORS[0], smoothstep(0.0, 0.45, hNorm));
   naturalColor       = mix(naturalColor, highlandColor, smoothstep(0.45, 1.0, hNorm));
 
-  // Тонкие изолинии каждые 16 м остаются только на детальном участке:
-  // на крупных треугольниках юбки они не ломаются угловатыми зигзагами.
+  // Тонкие изолинии каждые 16 м остаются только внутри активного гекса:
+  // плавно затухают до границы hexApothem и полностью погашены на юбке.
   float contourPhase = abs(fract(v_worldPos.z / 16.0) - 0.5);
+  float contourFade  = (u_focusRadiusM > 1.0)
+    ? (1.0 - smoothstep(hexApothem * 0.72, hexApothem * 0.96, centerHexDist))
+    : 1.0;
   float contourLine  = (1.0 - smoothstep(0.0, 0.045, contourPhase))
-    * (1.0 - smoothstep(u_focusRadiusM * 0.70, u_focusRadiusM * 1.15, dist))
+    * contourFade
     * (1.0 - u_isSkirt);
   naturalColor      *= (1.0 - 0.12 * contourLine);
+
+  // 3 каскада процедурной текстуры поверхности суши (v_worldPos.z > 0.0)
+  // в нормированных мировых координатах (единое поле для центра и юбки).
+  if (v_worldPos.z > 0.0) {
+    vec2 surfCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
+    const mat2 OCTAVE_ROT = mat2(0.80, 0.60, -0.60, 0.80);
+
+    // 1. Ближняя микротекстура породы/грунта (внутри гекса и у его кромки).
+    float microFade = 1.0 - smoothstep(0.0, 0.35, blur);
+    float microGrain = terrainValueNoise(surfCoord * 44.0) * 0.62
+      + terrainValueNoise((OCTAVE_ROT * surfCoord) * 96.0 + vec2(13.7, 7.9)) * 0.38;
+    vec3 gritTint = mix(vec3(0.90, 0.89, 0.87), vec3(1.11, 1.09, 1.06), microGrain);
+    naturalColor *= mix(vec3(1.0), gritTint, microFade * 0.85);
+
+    // 2. Среднемасштабная стратификация склонов и пятнистость биома за гексом.
+    float mesoFade = 1.0 - smoothstep(0.15, 0.78, blur);
+    float mesoPatch = terrainValueNoise(surfCoord * 7.5 + vec2(4.2, -9.1)) * 0.60
+      + terrainValueNoise((OCTAVE_ROT * surfCoord) * 17.5 + vec2(-6.4, 15.3)) * 0.40;
+    float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
+    float strataPhase = abs(fract(v_worldPos.z / 30.0 + (mesoPatch - 0.5) * 0.42) - 0.5) * 2.0;
+    float strataTerrace = smoothstep(0.18, 0.82, strataPhase);
+    float strataStrength = 0.35 + 0.65 * smoothstep(0.02, 0.28, slopeSteep);
+    vec3 biomeMottle = mix(vec3(0.28, 0.37, 0.28), vec3(0.55, 0.50, 0.43), mesoPatch);
+    naturalColor = mix(naturalColor, biomeMottle, mesoFade * 0.26);
+    naturalColor *= 1.0 + (strataTerrace - 0.5) * 0.16 * strataStrength * mesoFade;
+
+    // 3. Дальние макро-тона вершин и ложбин, читаемые вплоть до дымки горизонта.
+    float macroBasin = terrainValueNoise(surfCoord * 1.35 + vec2(-11.2, 5.8)) * 0.65
+      + terrainValueNoise((OCTAVE_ROT * surfCoord) * 3.10 + vec2(8.6, -14.4)) * 0.35;
+    float ridgeFactor = clamp(hNorm * 0.58 + macroBasin * 0.42, 0.0, 1.0);
+    vec3 valleyMacroTone = vec3(0.26, 0.35, 0.30);
+    vec3 ridgeMacroTone  = vec3(0.60, 0.55, 0.47);
+    vec3 macroColor = mix(valleyMacroTone, ridgeMacroTone, smoothstep(0.12, 0.88, ridgeFactor));
+    naturalColor = mix(naturalColor, macroColor, mix(0.22, 0.48, blur));
+  }
 
   vec3 zoneColor    = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
   if (zone > 0u && zone < 5u) {
     vec2 gridCell = abs(fract(v_uv * 64.0) - 0.5);
-    // Техногенная сетка базы тоже оптически размывается вдали.
     float padGrid = (1.0 - smoothstep(0.44, 0.49, max(gridCell.x, gridCell.y)))
       * (1.0 - blur * 0.9);
     zoneColor *= (0.92 + 0.08 * padGrid);
@@ -316,9 +338,7 @@ void main() {
 
   // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
   // воды/озёр канонической ячейки лежит ровно на уровне seaLevel (z == 0),
-  // врез речного русла уходит ниже, поэтому условие — z <= 0. Воркер не
-  // зонирует воду (applyWaterZoning), так что zone == 0u здесь означает
-  // «вода, озеро, русло или пустошь вне техногенных площадок».
+  // врез речного русла уходит ниже, поэтому условие — z <= 0.
   if (zone == 0u && v_worldPos.z <= 0.0) {
     float depthBelowZero = max(0.0, -v_worldPos.z);
     float waterBlend = smoothstep(0.0, 3.0, depthBelowZero);
@@ -326,103 +346,47 @@ void main() {
     baseColor = mix(baseColor, waterColor, waterBlend * 0.92);
   }
 
-  // Дальняя оптика усредняет мелкие цветовые пятна в спокойный тон биома.
-  vec3 distantBiomeColor = mix(lowlandColor, highlandColor, 0.38);
-  baseColor = mix(baseColor, distantBiomeColor, blur * 0.55);
-
-  // --- Тактические 3D-грани кластера гексов (Tactical Hex Facet Plane) ---
-  // Ближайший центр из 7 гексов кластера: центральный (0, 0) и 6 соседей
-  // на радиусе stepD = 2·апофема под углами k * 60°; фаза 30° совпадает с
-  // нормалями плоских граней hexMetric2D, поэтому семь гексов складываются
-  // в правильную мозаику без наложений.
-  float stepD = 2.0 * hexApothem;
-  vec2 cellCenter = vec2(0.0);
-  float cellIsNeighbor = 0.0;
-  float bestSq = dot(v_worldPos.xy, v_worldPos.xy);
-  for (int k = 0; k < 6; k++) {
-    float ang = (float(k) * 60.0) * 0.0174532925;
-    vec2 candidate = vec2(cos(ang), sin(ang)) * stepD;
-    vec2 rel = v_worldPos.xy - candidate;
-    float dSq = dot(rel, rel);
-    if (dSq < bestSq) {
-      bestSq = dSq;
-      cellCenter = candidate;
-      cellIsNeighbor = 1.0;
-    }
+  // Тонкая тактическая кромка ТОЛЬКО вдоль границы активного центрального гекса:
+  // без широких фасок соседей, без FACET_BASE_COLOR и без 6-кольцевой сетки.
+  float hexGlow = 0.0;
+  float hexCoreLine = 0.0;
+  if (u_focusRadiusM > 1.0) {
+    hexGlow = smoothstep(hexApothem * 0.955, hexApothem * 0.996, centerHexDist)
+      * (1.0 - smoothstep(hexApothem * 0.996, hexApothem * 1.045, centerHexDist));
+    hexCoreLine = smoothstep(hexApothem * 0.986, hexApothem * 0.998, centerHexDist)
+      * (1.0 - smoothstep(hexApothem * 0.998, hexApothem * 1.012, centerHexDist));
   }
-  // Локальная гексагональная координата внутри найденного гекса (clusterHexMetric: yx).
-  float localHexDist = hexMetric2D((v_worldPos.xy - cellCenter).yx);
-  // Фаска существует только внутри своего гекса (до плоскости грани).
-  float inCell = 1.0 - smoothstep(hexApothem * 0.995, hexApothem * 1.035, localHexDist);
 
-  // Полосы фаски: краевая полоса центрального гекса и грани 6 соседей.
-  float centerBevel = smoothstep(hexApothem * 0.935, hexApothem * 0.995, centerHexDist);
-  float facetBand  = smoothstep(hexApothem * 0.92, hexApothem * 0.99, localHexDist);
-  float bevel = mix(facetBand, centerBevel, 1.0 - cellIsNeighbor) * inCell;
-  // Яркая тонкая внутренняя кромка излома у плоскости грани.
-  float centerEdge   = smoothstep(hexApothem * 0.972, hexApothem * 0.995, centerHexDist);
-  float neighborEdge = smoothstep(hexApothem * 0.965, hexApothem * 0.99, localHexDist);
-  float edgeLine = mix(neighborEdge, centerEdge, 1.0 - cellIsNeighbor) * inCell;
-
-  // Освещение: нормаль сглаживается к вертикали по мере оптического блюра.
-  vec3 N   = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur));
-  // Грань читается как настоящая скошенная 3D-плоскость плиты: нормаль
-  // уводится наружу перпендикулярно плоской стороне шестиугольника.
-  vec3 facetNormal = normalize(vec3(normalize(v_worldPos.xy - cellCenter + 1e-4) * 0.74, 0.67));
-  N = normalize(mix(N, facetNormal, bevel));
+  // Нормаль плавно сглаживается к вертикали по мере роста blur; лёгкий разворот
+  // нормали (hexGlow * 0.28) действует только на тонкой кромке центрального гекса.
+  vec3 N = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur * 0.82));
+  if (u_focusRadiusM > 1.0) {
+    vec3 rimNormal = normalize(vec3((v_worldPos.xy / max(dist, 1e-4)) * 0.74, 0.67));
+    N = normalize(mix(N, rimNormal, hexGlow * 0.28));
+  }
   float NdL = max(dot(N, u_lightDir), 0.0);
   vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8));
 
-  // Плоскость грани тонируется в конструктивный базальтово-циановый материал.
-  vec3 edgeColor = mix(FACET_EDGE_NEIGHBOR, FACET_EDGE_CENTER, 1.0 - cellIsNeighbor);
-  vec3 facetColor = mix(FACET_BASE_COLOR, edgeColor, edgeLine);
-  float facetNdL = max(dot(facetNormal, u_lightDir), 0.0);
-  vec3 facetLit = facetColor * (u_ambientColor + vec3(facetNdL * 0.8));
-  lit = mix(lit, facetLit, clamp(bevel, 0.0, 1.0) * 0.92);
-
-  // Мягкая топографическая гексагональная сетка 6 колец на юбке и дальней
-  // зоне: тонкие цианово-золотистые грани соседних гексов, гаснущие в блюре.
-  // Внутри 7-гексового кластера сетка не рисуется — там работают 3D-грани.
-  if ((u_isSkirt > 0.5 || dist > u_focusRadiusM * 0.9)
-      && u_hexSizeM > 1.0 && u_focusRadiusM > 1.0) {
-    vec3 cube = vec3(
-      (0.57735026919 * v_worldPos.x - v_worldPos.y / 3.0) / u_hexSizeM,
-      (2.0 * v_worldPos.y / 3.0) / u_hexSizeM,
-      0.0
-    );
-    cube.z = -cube.x - cube.y;
-    vec3 rounded = roundHexCube(cube);
-    float edgeCoord = max(
-      max(abs(cube.x - rounded.x), abs(cube.y - rounded.y)),
-      abs(cube.z - rounded.z)
-    );
-    float hexLine = smoothstep(0.465, 0.495, edgeCoord);
-    float ringK = (abs(rounded.x) + abs(rounded.y) + abs(rounded.z)) * 0.5;
-    float ringFade = 1.0 - smoothstep(
-      float(SKIRT_RING_COUNT), float(SKIRT_RING_COUNT + 1), ringK);
-    float outsideFocus = smoothstep(u_focusRadiusM * 0.85, u_focusRadiusM * 1.25, dist);
-    float hexFade = hexLine * outsideFocus * ringFade * (1.0 - blur * 0.82) * outsideCluster;
-    vec3 hexCyan = vec3(0.30, 0.72, 0.78);
-    vec3 hexGold = vec3(0.83, 0.68, 0.32);
-    vec3 hexColor = mix(hexCyan, hexGold, clamp(ringK / float(SKIRT_RING_COUNT), 0.0, 1.0));
-    lit = mix(lit, hexColor, clamp(hexFade * 0.28, 0.0, 0.28));
+  if (u_focusRadiusM > 1.0) {
+    vec3 hexRimColor = mix(vec3(0.32, 0.78, 0.86), vec3(0.58, 0.94, 0.98), hexCoreLine);
+    float hexRimWeight = clamp(hexGlow * 0.26 + hexCoreLine * 0.48, 0.0, 0.62);
+    lit = mix(lit, hexRimColor, hexRimWeight);
   }
 
-  // Сначала воздушная дымка лимба, затем полное растворение в цвете диска:
-  // на внешнем крае v_fog → 1 цвет рельефа в точности равен u_fogColor.
+  // Воздушная дымка и туман начинаются только за пределами активного гекса;
+  // рельеф рендерится непрозрачно (alpha = 1.0) встык с куполом неба.
+  float outsideHex = (u_focusRadiusM > 1.0)
+    ? smoothstep(hexApothem * 0.98, hexApothem * 1.15, centerHexDist)
+    : 1.0;
   vec3 finalColor;
   if (u_focusRadiusM > 1.0) {
-    float haze = smoothstep(0.0, 0.72, v_fog) * 0.68 * outsideCluster;
+    float haze = smoothstep(0.0, 0.72, v_fog) * 0.68 * outsideHex;
     vec3 hazed = mix(lit, u_horizonColor, haze);
-    finalColor = mix(hazed, u_fogColor, smoothstep(0.35, 0.98, v_fog));
+    finalColor = mix(hazed, u_fogColor, smoothstep(0.35, 0.98, v_fog) * outsideHex);
   } else {
     finalColor = mix(lit, u_fogColor, v_fog);
   }
-  // Прозрачный край 7-гексового стола: альфа гаснет только там, где уже
-  // начался дальний туман (v_fog > 0), поэтому внешний край кластера мягко
-  // растворяется над живым 3D-глобусом планеты — без чёрного «бублика».
-  float outAlpha = (u_focusRadiusM > 1.0) ? (1.0 - smoothstep(0.55, 0.98, v_fog)) : 1.0;
-  fragColor = vec4(finalColor, outAlpha);
+  fragColor = vec4(finalColor, 1.0);
 }
 `;
 
@@ -462,9 +426,42 @@ uniform float u_planetRadiusM;   // R_p, м
 uniform vec3  u_lightDir;        // направление на солнце, нормализовано
 uniform vec3  u_fogColor;        // плотная дымка планетарного диска
 uniform vec3  u_horizonColor;    // светящийся атмосферный лимб
-uniform float u_skyAlpha;        // 0 — купол прозрачен (виден живой 3D-глобус)
+uniform float u_skyAlpha;        // 1 — непрозрачный купол (по умолчанию)
 
 out vec4 fragColor;
+
+float skyHash2D(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+/** Тонкое звёздное поле в мировых координатах луча (проекция на грани куба). */
+float skyStars(vec3 dir) {
+  vec3 a = abs(dir);
+  vec2 uv;
+  float face;
+  if (a.z >= a.x && a.z >= a.y) {
+    uv = dir.xy / max(a.z, 1e-4);
+    face = dir.z >= 0.0 ? 1.0 : 2.0;
+  } else if (a.x >= a.y) {
+    uv = dir.yz / max(a.x, 1e-4);
+    face = dir.x >= 0.0 ? 3.0 : 4.0;
+  } else {
+    uv = dir.xz / max(a.y, 1e-4);
+    face = dir.y >= 0.0 ? 5.0 : 6.0;
+  }
+  vec2 grid = uv * 46.0 + face * 37.0;
+  vec2 cell = floor(grid);
+  vec2 f = fract(grid);
+  float h1 = skyHash2D(cell);
+  if (h1 < 0.915) return 0.0;
+  float h2 = skyHash2D(cell + vec2(19.7, 41.3));
+  vec2 starCenter = vec2(0.24, 0.24) + 0.52 * vec2(fract(h1 * 31.7), h2);
+  float d = length(f - starCenter);
+  float brightness = smoothstep(0.915, 0.998, h1);
+  return (1.0 - smoothstep(0.02, 0.14, d)) * (0.35 + 0.65 * brightness);
+}
 
 void main() {
   float tanHalfY = tan(u_fovY * 0.5);
@@ -500,21 +497,20 @@ void main() {
   float skyT = smoothstep(horizonAngle, horizonAngle + 0.85, beta);
   vec3 sky = mix(u_horizonColor, deepSpace, skyT);
 
-  // Мягкий солнечный ореол по u_lightDir.
+  // Мягкий солнечный ореол по u_lightDir и звёзды в высоком зените.
   float sunDot = max(dot(ray, normalize(u_lightDir)), 0.0);
   float halo = pow(sunDot, 18.0) * 0.5 + pow(sunDot, 90.0) * 0.9;
+  float starMask = skyT * skyT * (1.0 - smoothstep(0.35, 0.85, sunDot));
+  sky += vec3(0.84, 0.91, 1.0) * (skyStars(ray) * starMask * 0.85);
   sky += vec3(1.0, 0.86, 0.62) * halo;
 
-  // Диск планеты ниже линии горизонта: плотная дымка, в неё без шва
-  // уходит внешнее (6-е) кольцо гексов.
+  // Диск планеты ниже линии горизонта: плотная дымка, в которую без шва
+  // уходит сферическая юбка горизонта рельефа.
   float diskT = smoothstep(horizonAngle - 0.12, horizonAngle, beta);
   vec3 disk = mix(u_fogColor, u_horizonColor, diskT);
   float above = smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta);
 
   vec3 color = mix(disk, sky, above);
-  // Атмосферная виньетка купола по умолчанию полностью прозрачна (альфа 0):
-  // непрозрачная панорама перекрывала бы живой 3D-глобус планеты (#globe),
-  // который должен просвечивать сквозь растворяющийся край гексового стола.
   fragColor = vec4(color, clamp(u_skyAlpha, 0.0, 1.0));
 }
 `;

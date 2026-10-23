@@ -102,12 +102,11 @@ export interface LocalMapRenderOptions {
   /** Камера для купола неба; без неё скайдом не рисуется. */
   readonly camera?: LocalMapCameraState;
   /**
-   * Альфа купола неба/лимба (0 — прозрачно). По умолчанию купол полностью
-   * прозрачен: непрозрачная панорама перекрывала бы живой 3D-глобус планеты,
-   * который должен просвечивать сквозь растворяющийся край 7-гексового стола.
+   * Альфа купола неба/лимба (по умолчанию 1.0 — непрозрачный купол со звёздами
+   * и атмосферным лимбом; явное значение 0..1 сохраняет обратную совместимость).
    */
   readonly skyAlpha?: number;
-  /** Явный флаг непрозрачного купола неба (legacy-режим без глобуса). */
+  /** Явный флаг непрозрачного купола неба (совместимость с прежними вызовами). */
   readonly opaqueSkyDome?: boolean;
 }
 
@@ -621,7 +620,7 @@ export class StructureRenderer {
     gl.uniform1f(this.uniform(program, 'u_aspect'), camera.aspect);
     gl.uniform1f(this.uniform(program, 'u_camHeightM'), camera.heightM);
     gl.uniform1f(this.uniform(program, 'u_planetRadiusM'), planetRadiusM);
-    // Альфа купола: 0 — виньетка атмосферы полностью прозрачна.
+    // Альфа купола неба (по умолчанию 1.0 — полноценный непрозрачный скайдом).
     gl.uniform1f(this.uniform(program, 'u_skyAlpha'), skyAlpha);
     gl.uniform3fv(this.uniform(program, 'u_lightDir'), lightDir);
     gl.uniform3fv(this.uniform(program, 'u_fogColor'), fogColor);
@@ -792,19 +791,18 @@ export class StructureRenderer {
     const planetRadiusM = options.planetRadiusM ?? this.skirt?.planetRadiusM ?? 0;
     const focusRadiusM = options.focusRadiusM ?? radiusM;
     const hexSizeM = options.hexSizeM ?? this.skirt?.hexSpacingM ?? 0;
-    // Купол неба по умолчанию полностью прозрачен: непрозрачная панорама
-    // перекрывала бы живой 3D-глобус планеты (#globe) за прозрачными полями
-    // 7-гексового кластера. Непрозрачный режим включается флагом явно.
-    const skyAlpha = options.opaqueSkyDome === true
-      ? 1.0
-      : (Number.isFinite(options.skyAlpha)
-        ? Math.min(1, Math.max(0, options.skyAlpha as number))
-        : 0.0);
+    // По умолчанию купол неба, звёзды и атмосферный лимб рендерятся непрозрачно
+    // (skyAlpha = 1.0); явный options.skyAlpha сохраняет обратную совместимость.
+    const rawSkyAlpha = typeof options?.skyAlpha === 'number' ? options.skyAlpha : 1.0;
+    const skyAlpha = Number.isFinite(rawSkyAlpha)
+      ? Math.min(1, Math.max(0, rawSkyAlpha))
+      : 1.0;
 
-    // Прозрачный рендер кластера: юбка и рельеф рисуются с альфа-смешиванием,
-    // чтобы внешний край 7-гексового стола мягко растворялся над живым
-    // 3D-глобусом. Проверки typeof нужны для mock-контекста в Node-тестах.
+    // Альфа-смешивание нужно только при полупрозрачном куполе (skyAlpha < 1.0);
+    // в штатном непрозрачном режиме рельеф и скайдом сшиваются с alpha = 1.0.
+    // Проверки typeof нужны для mock-контекста в Node-тестах.
     const blendingEnabled = this.skirt !== null
+      && skyAlpha < 1.0
       && typeof gl.enable === 'function'
       && typeof gl.blendFunc === 'function'
       && typeof gl.BLEND === 'number'
