@@ -214,7 +214,6 @@ export function createLocalMapQuickNav(
   layer.setAttribute('aria-hidden', 'true');
 
   const buttons = new Map<number, HTMLButtonElement>();
-  const clickListeners = new Map<HTMLButtonElement, (event: MouseEvent) => void>();
   let currentHints: QuickNavHintInput[] = [];
   let isVisible = false;
   let disposed = false;
@@ -250,16 +249,24 @@ export function createLocalMapQuickNav(
     layer.append(button);
     buttons.set(slot, button);
 
-    const clickListener = (event: MouseEvent): void => {
-      const hint = currentHints.find((candidate) => candidate.slot === slot);
-      if (disposed || !isVisible || button.disabled || hint === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      onPick(slot, hint.cell);
-    };
-    button.addEventListener('click', clickListener);
-    clickListeners.set(button, clickListener);
   }
+
+  const clickListener = (event: MouseEvent): void => {
+    const target = event.target;
+    if (!(target instanceof view.Element)) return;
+    const button = target.closest('button.lmqn-button');
+    if (!(button instanceof view.HTMLButtonElement) || button.parentElement !== layer) return;
+
+    const slot = Number(button.dataset.slot);
+    if (!Number.isInteger(slot) || disposed || !isVisible || button.disabled) return;
+    const hint = currentHints.find((candidate) => candidate.slot === slot);
+    if (hint === undefined) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    onPick(slot, hint.cell);
+  };
+  layer.addEventListener('click', clickListener);
 
   host.replaceChildren(styleElement, layer);
 
@@ -341,8 +348,7 @@ export function createLocalMapQuickNav(
     currentHints = [];
     cancelFrame();
     hideButtons();
-    for (const [button, listener] of clickListeners) button.removeEventListener('click', listener);
-    clickListeners.clear();
+    layer.removeEventListener('click', clickListener);
     buttons.clear();
     host.replaceChildren();
 
