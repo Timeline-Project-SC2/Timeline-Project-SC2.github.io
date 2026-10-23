@@ -23,7 +23,12 @@
    4. Stage-8.2.1: континентальное озеро выше seaLevel (морфология ячейки
       #53275 «Корхал IV») непрерывно проходит шестигранный воротник юбки
       горизонта без обрыва к z = 0 и не застраивается при малом radiusM,
-      когда края patchSpanMeters попадают на сухих соседей. */
+      когда края patchSpanMeters попадают на сухих соседей.
+   5. Stage-8.3: при малом radiusM = 600 юбка за пределами воротника видит
+      планетарный шаг гексов и все 6 соседних ячеек Patch7, гребневой
+      мультифрактал ridgedFbm даёт горно-долинный перепад > 120 м на внешнем
+      кольце суши, сшивка воротника остаётся точной, а не менее 55% карты
+      зонирования остаётся природным ландшафтом (zone === 0). */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1361,4 +1366,137 @@ test('Stage-8.2 HorizonSkirt: GPU-путь непрерывной юбки на 
   const secondSky = mock2.calls.draws.filter((draw) => draw.kind === 'sky');
   assert.equal(secondSky.length, 0, 'после снятия юбки купол не рисуется');
   second.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// 4. Stage-8.3: планетарный масштаб юбки, гребневые хребты и природная долина
+// ---------------------------------------------------------------------------
+
+test('Stage-8.3: малый радиус 600 м — планетарный масштаб, горно-долинный рельеф и природная долина', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  const smallRadiusM = 600;
+  Worker.clearLocalMapCache();
+  const request = {
+    patch: dryPatch,
+    seed: 12345,
+    placeId: 7,
+    radiusM: smallRadiusM,
+    profile: PROFILE,
+    patchKey: 'stage83-small-radius',
+  };
+  const local = Worker.generateLocalMap(request);
+  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+
+  // 1. Шестигранный воротник сшит с heightfield безошибочно: планетарное
+  //    растяжение координат включается только за пределами воротника.
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * smallRadiusM;
+  const blendStartM = Worker.SKIRT_COLLAR_BLEND_START_RATIO * apothemM;   // 1.005 · A
+  let exactVerts = 0;
+  let exactMaxErr = 0;
+  for (let j = 0; j < SKIRT_RADIAL_COUNT; j++) {
+    for (let i = 0; i < SKIRT_ANGULAR_COUNT; i++) {
+      const [x, y, z] = skirtVertex(skirt, i, j);
+      if (Worker.clusterHexMetric(x, y) > blendStartM) continue;
+      exactVerts++;
+      const exactZ = bilinearHeight(local.heightfield, HF_RES, smallRadiusM, x, y);
+      exactMaxErr = Math.max(exactMaxErr, Math.abs(z - exactZ));
+    }
+  }
+  assert.ok(exactVerts > 400, `точная зона воротника заполнена (вершин: ${exactVerts})`);
+  assert.ok(
+    exactMaxErr < 1e-2,
+    `сшивка воротника при radiusM = 600 точна (макс. расхождение ${exactMaxErr} м)`,
+  );
+
+  // 2. За пределами воротника (r > 1.1 · radiusM) координаты растянуты к
+  //    физическому шагу гексов планеты: внешнее кольцо юбки целиком лежит на
+  //    6 соседних канонических ячейках Patch7 и несёт выраженный
+  //    горно-долинный перепад высот гребневого мультифрактала.
+  const planetHexSpacingM = Worker.hexSpacingMeters(dryPatch.frame.radiusM);
+  const planetCoordScale = Math.max(
+    1,
+    planetHexSpacingM / Math.max(Worker.SKIRT_HEX_SPACING_RATIO * smallRadiusM, 1),
+  );
+  assert.ok(planetCoordScale > 80, `планетарный масштаб при 600 м велик (${planetCoordScale})`);
+  const smooth01 = (t) => {
+    const x = t < 0 ? 0 : t > 1 ? 1 : t;
+    return x * x * (3 - 2 * x);
+  };
+  const collarEndM = Worker.SKIRT_COLLAR_END_RADIUS_RATIO * smallRadiusM;
+  const outerRing = SKIRT_RADIAL_COUNT - 1;
+  const landHeights = [];
+  const neighborCells = new Set();
+  for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
+    const [x, y, z] = skirtVertex(skirt, i, outerRing);
+    const r = Math.hypot(x, y);
+    assert.ok(r > collarEndM, 'внешнее кольцо лежит за пределами воротника');
+    const coordScale = 1 + (planetCoordScale - 1) * smooth01((r - collarEndM) / (0.85 * smallRadiusM));
+    const cell = Contract.nearestPatchCell(
+      dryPatch,
+      Contract.localPointToDirection(dryPatch, x * coordScale, y * coordScale),
+    );
+    if (Contract.isWaterCell(cell, dryPatch.seaLevel)) continue;
+    landHeights.push(z);
+    neighborCells.add(cell.cell);
+  }
+  assert.ok(landHeights.length > 50, `внешнее кольцо в основном суша (${landHeights.length} вершин)`);
+  const reliefRangeM = Math.max(...landHeights) - Math.min(...landHeights);
+  assert.ok(
+    reliefRangeM > 120,
+    `перепад высот внешнего кольца суши выражен (${reliefRangeM} м > 120 м)`,
+  );
+  assert.deepEqual(
+    [...neighborCells].sort((a, b) => a - b),
+    dryPatch.cells.slice(1).map((cell) => cell.cell).sort((a, b) => a - b),
+    'все 6 соседних ячеек Patch7 реально формируют рельеф за пределами гекса',
+  );
+
+  // 3. Гребневой мультифрактал детерминирован, нормирован в [0, 1] и даёт
+  //    настоящий контраст «острый гребень — гладкая долина».
+  assert.equal(
+    Worker.ridgedFbm(1.25, -3.5, 0x5A17C3, 5),
+    Worker.ridgedFbm(1.25, -3.5, 0x5A17C3, 5),
+    'ridgedFbm детерминирован',
+  );
+  let ridgeMin = Infinity;
+  let ridgeMax = -Infinity;
+  for (let gy = 0; gy < 32; gy++) {
+    for (let gx = 0; gx < 32; gx++) {
+      const value = Worker.ridgedFbm(gx * 0.31, gy * 0.31, 0x5A17C3, 5);
+      assert.ok(value >= 0 && value <= 1, `ridgedFbm в [0, 1] (${value})`);
+      ridgeMin = Math.min(ridgeMin, value);
+      ridgeMax = Math.max(ridgeMax, value);
+    }
+  }
+  assert.ok(ridgeMax - ridgeMin > 0.4, `контраст гребней и долин ridgedFbm (${ridgeMax - ridgeMin})`);
+
+  // 4. Природная долина: не менее 55% карты зонирования — природный ландшафт
+  //    (zone === 0), а органические гроздья застройки всё же дают здания.
+  const zoneMap = Worker.generateZoneMap(12345, 7);
+  let naturalTexels = 0;
+  for (let i = 0; i < zoneMap.length; i += 2) {
+    if (zoneMap[i] === 0) naturalTexels++;
+  }
+  const naturalFraction = naturalTexels / (Worker.ZONE_RES * Worker.ZONE_RES);
+  assert.ok(
+    naturalFraction >= 0.55,
+    `доля природного ландшафта generateZoneMap не менее 55% (${naturalFraction})`,
+  );
+  let localNaturalTexels = 0;
+  for (let i = 0; i < local.zoneMap.length; i += 2) {
+    if (local.zoneMap[i] === 0) localNaturalTexels++;
+  }
+  assert.ok(
+    localNaturalTexels / (Worker.ZONE_RES * Worker.ZONE_RES) >= 0.55,
+    'в сгенерированном участке не менее 55% природных текселей',
+  );
+  assert.ok(local.meta.totalInstances > 0, 'кластеры застройки дают здания в scatterInstances');
+
+  // 5. Терраформинг долины мягкий: альфа нигде не выше 0.42 (107 из 255).
+  const terraformMap = Worker.generateTerraformMap();
+  let terraformMax = 0;
+  for (const value of terraformMap) terraformMax = Math.max(terraformMax, value);
+  assert.ok(terraformMax <= Math.floor(0.42 * 255), `максимум terraform_map ограничен (${terraformMax})`);
+
+  Worker.clearLocalMapCache();
 });
