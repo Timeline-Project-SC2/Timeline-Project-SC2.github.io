@@ -166,6 +166,29 @@ function fBm(x: number, y: number, seed: number, octaves = 6, lacunarity = 2.0, 
   return sum / maxAmp;   // нормализовано в [0, 1]
 }
 
+/**
+ * Stage-8.3: гребневой мультифрактал (ridged fBm) горных хребтов юбки
+ * горизонта. Каждая октава складывается «гармошкой» вокруг середины шума
+ * (`ridge = 1 - |2n - 1|`), возводится в квадрат для острых гребней и
+ * взвешивается результатом предыдущей октавы: детали живут на гребнях,
+ * а межгорные долины остаются гладкими. Нормировано в [0, 1].
+ */
+export function ridgedFbm(x: number, y: number, seed: number, octaves = 5): number {
+  let amp = 1, freq = 1, sum = 0, maxAmp = 0, weight = 1;
+  for (let i = 0; i < octaves; i++) {
+    const n = valueNoise2D(x * freq, y * freq, seed + i * 7919);
+    const ridge = 1 - Math.abs(2 * n - 1);
+    let sharp = ridge * ridge;
+    sharp *= weight;
+    weight = Math.min(1, Math.max(0, sharp * 1.6));
+    sum += sharp * amp;
+    maxAmp += amp;
+    amp *= 0.5;
+    freq *= 2.0;
+  }
+  return maxAmp > 0 ? sum / maxAmp : 0;   // нормализовано в [0, 1]
+}
+
 // ---- Box Blur (separable, 2 прохода) ----
 export function boxBlurSeparable(src: Float32Array, w: number, h: number, kernelRadius: number): Float32Array {
   const dst = new Float32Array(w * h);
@@ -1155,9 +1178,29 @@ function skirtPlanetaryHeight(
   // seaLevel держит свой уровень и за шестигранным воротником, не проваливаясь
   // к z = 0.
   const waterMirrorM = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+
+  // Stage-8.3: гребневые горные хребты только на суше и только за пределами
+  // активного гекса (r > collarEndM). Огибающая плавно выводит рельеф из
+  // природной долины в предгорья на 1.45 · R_patch и слегка (на 35%) гасит
+  // пики к самому горизонту; крупномасштабная маска macroBasin разделяет
+  // азимуты на выразительные хребты и открытые межгорные долины/перевалы.
+  // На воде горный рельеф строго ноль — зеркало Stage-8.2.1 не трогаем.
+  let mountainM = 0;
+  if (!water && r > collarEndM) {
+    const mountainEnvelope = smooth01((r - collarEndM) / (1.45 * radiusPatchM))
+      * (1 - 0.35 * smooth01((r - 3.2 * radiusPatchM) / (outerRadiusM - 3.2 * radiusPatchM)));
+    const ridgeVal = ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, cellSeed ^ 0x5A17C3, 5);
+    const macroBasin = valueNoise2D(
+      x * noiseScale * 0.14 + 3.7, y * noiseScale * 0.14 - 5.1, cellSeed ^ 0x3391B7,
+    );
+    const basinMask = smooth01((macroBasin - 0.34) / 0.38);
+    const peakAmpM = Math.min(420, Math.max(190, radiusPatchM * 0.32));
+    mountainM = peakAmpM * mountainEnvelope * basinMask * Math.pow(ridgeVal, 1.35);
+  }
+
   const nearHeight = water
     ? waterMirrorM
-    : (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + fbmM + detailM;
+    : (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + fbmM + detailM + mountainM;
   if (r <= radiusPatchM || !elevLattice) return nearHeight;
 
   // Калибровка сэмпла макро-решётки относительно центра патча: непрерывное
@@ -1175,7 +1218,7 @@ function skirtPlanetaryHeight(
     const shoreBlend = smooth01(Math.max(0, calibratedM - waterMirrorM) / 45);
     latticeHeight = Math.max(waterMirrorM, calibratedM) + (fbmM + detailM) * shoreBlend;
   } else {
-    latticeHeight = calibratedM + fbmM + detailM;
+    latticeHeight = calibratedM + fbmM + detailM + mountainM;
   }
   const latticeBlend = smooth01((r - radiusPatchM) / (1.2 * radiusPatchM));
   return nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
