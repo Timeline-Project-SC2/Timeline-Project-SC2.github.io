@@ -62,7 +62,7 @@ export type LocalMapRendererWorkerResponse = LocalMapWorkerResponse & {
 export interface LocalMapRingStats {
   /** Число активных ячеек колец 1…5. */
   cells: number;
-  /** Занятые ими байты в общих position/normal/index-буферах рельефа. */
+  /** Занятые ими байты в общих position/normal/water/index-буферах рельефа. */
   bytes: number;
 }
 
@@ -145,6 +145,7 @@ const DEFAULT_FOG_COLOR: readonly [number, number, number] = [0.68, 0.75, 0.82];
 const DEFAULT_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
 const FOG_START_RATIO = 0.72;
 const FOG_END_RATIO = 0.98;
+const ZERO_RING_OFFSET = new Float32Array([0, 0, 0]);
 
 /** Стадии staged-догрузки (Патч 8). */
 const STAGE_TEXTURES = 0;
@@ -154,8 +155,9 @@ const STAGE_INSTANCES = 3;
 const STAGE_RING_INDICES = 4;
 const STAGE_RING_POSITIONS = 5;
 const STAGE_RING_NORMALS = 6;
+const STAGE_RING_WATER = 7;
 const STAGE_COUNT = 4;
-const STAGE_COUNT_WITH_RINGS = 7;
+const STAGE_COUNT_WITH_RINGS = 8;
 
 /** Контракт LOD Stage-8.7: индекс соответствует номеру кольца. */
 const RING_LEVELS = 5;
@@ -178,6 +180,7 @@ interface RingDrawItem {
   readonly vertexOffset: number;
   readonly indexOffset: number;
   readonly indexCount: number;
+  readonly offsetUniform: Float32Array;
 }
 
 function buildRingSlotLayout(): readonly RingSlotLayout[] {
@@ -268,6 +271,7 @@ export class StructureRenderer {
   private terrainVAO: WebGLVertexArrayObject | null;
   private terrainPosBuf: WebGLBuffer | null;
   private terrainNormBuf: WebGLBuffer | null;
+  private terrainWaterBuf: WebGLBuffer | null;
   private terrainIdxBuf: WebGLBuffer | null;
   private terrainRes: number;
   private terrainIndexCount: number;
@@ -308,6 +312,7 @@ export class StructureRenderer {
     this.terrainVAO = null;
     this.terrainPosBuf = null;
     this.terrainNormBuf = null;
+    this.terrainWaterBuf = null;
     this.terrainIdxBuf = null;
     this.terrainRes = 0;
     this.terrainIndexCount = 0;
@@ -403,7 +408,7 @@ export class StructureRenderer {
     if (rings.length > 0) this.ensureRingStorage();
     this.activeRings = rings;
     this.ringBytes = rings.reduce(
-      (sum, item) => sum + item.res * item.res * VERTEX_STRIDE_BYTES * 2
+      (sum, item) => sum + item.res * item.res * (VERTEX_STRIDE_BYTES * 2 + 1)
         + item.indexCount * INDEX_STRIDE_BYTES,
       0,
     );
@@ -520,6 +525,14 @@ export class StructureRenderer {
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
 
+    // Байтовая водная маска колец: normalized UNSIGNED_BYTE → float 0..1.
+    // Центральная часть остаётся нулевой и использует прежнюю terraform-текстуру.
+    this.terrainWaterBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, res * res, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+
     this.terrainIdxBuf = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
@@ -543,7 +556,7 @@ export class StructureRenderer {
       const maxRes = RING_HF_RES[level];
       const slot = usedByRing[level] as number;
       if (!maxRes || res < 2 || res > maxRes || slot >= level * 6) continue;
-      if (cell.heightfield.length < res * res) continue;
+      if (cell.heightfield.length < res * res || cell.waterMask.length < res * res) continue;
       const layout = RING_SLOT_LAYOUT[(RING_SLOT_BASE[level] as number) + slot];
       if (!layout) continue;
       usedByRing[level] = slot + 1;
@@ -554,6 +567,7 @@ export class StructureRenderer {
         vertexOffset: centralVertexCount + layout.vertexOffset,
         indexOffset: this.terrainIndexCount + layout.indexOffset,
         indexCount: (res - 1) * (res - 1) * 6,
+        offsetUniform: new Float32Array([cell.offsetM[0], cell.offsetM[1], 0]),
       });
     }
     return items;
@@ -576,6 +590,8 @@ export class StructureRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, totalVertices * VERTEX_STRIDE_BYTES, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainNormBuf);
     gl.bufferData(gl.ARRAY_BUFFER, totalVertices * VERTEX_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, totalVertices, gl.DYNAMIC_DRAW);
 
     const indices = new Uint32Array(totalIndices);
     writeGridIndices(indices, 0, res, 0, 0, res - 1);
@@ -769,14 +785,16 @@ export class StructureRenderer {
     }
   }
 
-  /** Одна порция индексов, позиций или нормалей кольцевой ячейки. */
+  /** Одна порция индексов, позиций, нормалей или водной маски ячейки. */
   private uploadNextRingChunk(stage: number): boolean {
     const pending = this.pending;
     if (!pending) return true;
     const gl = this.gl;
     if (pending.ringIndex >= pending.rings.length) {
-      if (stage === STAGE_RING_NORMALS) return true;
-      pending.stage = stage === STAGE_RING_INDICES ? STAGE_RING_POSITIONS : STAGE_RING_NORMALS;
+      if (stage === STAGE_RING_WATER) return true;
+      pending.stage = stage === STAGE_RING_INDICES
+        ? STAGE_RING_POSITIONS
+        : stage === STAGE_RING_POSITIONS ? STAGE_RING_NORMALS : STAGE_RING_WATER;
       pending.ringIndex = 0;
       pending.ringRow = 0;
       return false;
@@ -785,10 +803,11 @@ export class StructureRenderer {
     const item = pending.rings[pending.ringIndex] as RingDrawItem;
     const res = item.res;
     const isIndices = stage === STAGE_RING_INDICES;
+    const isWater = stage === STAGE_RING_WATER;
     const rowCount = isIndices ? res - 1 : res;
     const rowBytes = isIndices
       ? (res - 1) * 6 * INDEX_STRIDE_BYTES
-      : res * VERTEX_STRIDE_BYTES;
+      : isWater ? res : res * VERTEX_STRIDE_BYTES;
     const rowsPerChunk = Math.max(1, Math.floor(UPLOAD_CHUNK_BYTES / Math.max(1, rowBytes)));
     const from = pending.ringRow;
     const to = Math.min(rowCount, from + rowsPerChunk);
@@ -797,19 +816,19 @@ export class StructureRenderer {
     if (isIndices) {
       const indexCount = lines * (res - 1) * 6;
       if (this.indexScratch.length < indexCount) this.indexScratch = new Uint32Array(indexCount);
-      writeGridIndices(
-        this.indexScratch,
-        0,
-        res,
-        item.vertexOffset,
-        from,
-        to,
-      );
+      writeGridIndices(this.indexScratch, 0, res, item.vertexOffset, from, to);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuf);
       gl.bufferSubData(
         gl.ELEMENT_ARRAY_BUFFER,
         (item.indexOffset + from * (res - 1) * 6) * INDEX_STRIDE_BYTES,
         this.indexScratch.subarray(0, indexCount),
+      );
+    } else if (isWater) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainWaterBuf);
+      gl.bufferSubData(
+        gl.ARRAY_BUFFER,
+        item.vertexOffset + from * res,
+        item.cell.waterMask.subarray(from * res, to * res),
       );
     } else {
       const floatCount = lines * res * 3;
@@ -1064,6 +1083,36 @@ export class StructureRenderer {
   }
 
   // ---- Render Loop ----
+  /** Кольцевые ячейки используют тот же VAO и независимые диапазоны индексов. */
+  private drawRingTerrain(shaderProgram: WebGLProgram): void {
+    if (!this.ready || this.activeRings.length === 0) return;
+    const gl = this.gl;
+    gl.useProgram(shaderProgram);
+    gl.uniform1f(this.uniform(shaderProgram, 'u_isSkirt'), 0.0);
+    gl.bindVertexArray(this.terrainVAO);
+    for (let level = RING_LEVELS; level >= 1; level--) {
+      for (const item of this.activeRings) {
+        if (item.level !== level) continue;
+        gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), level);
+        gl.uniform1f(
+          this.uniform(shaderProgram, 'u_ringFade'),
+          (level - 1) / (RING_LEVELS - 1),
+        );
+        gl.uniform3fv(this.uniform(shaderProgram, 'u_ringOffsetM'), item.offsetUniform);
+        gl.drawElements(
+          gl.TRIANGLES,
+          item.indexCount,
+          gl.UNSIGNED_INT,
+          item.indexOffset * INDEX_STRIDE_BYTES,
+        );
+      }
+    }
+    gl.bindVertexArray(null);
+    gl.uniform1f(this.uniform(shaderProgram, 'u_ringLevel'), 0.0);
+    gl.uniform1f(this.uniform(shaderProgram, 'u_ringFade'), 0.0);
+    gl.uniform3fv(this.uniform(shaderProgram, 'u_ringOffsetM'), ZERO_RING_OFFSET);
+  }
+
   drawTerrain(shaderProgram: WebGLProgram): void {
     if (!this.ready) return;
     const gl = this.gl;
@@ -1167,6 +1216,9 @@ export class StructureRenderer {
     gl.uniform1f(this.uniform(terrainProgram, 'u_hexSizeM'), hexSizeM);
     gl.uniform1i(this.uniform(terrainProgram, 'u_zoning_map'), 0);
     gl.uniform1i(this.uniform(terrainProgram, 'u_terraform_map'), 1);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_ringLevel'), 0.0);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_ringFade'), 0.0);
+    gl.uniform3fv(this.uniform(terrainProgram, 'u_ringOffsetM'), ZERO_RING_OFFSET);
 
     // Текстуры читает только центральный участок; ветка юбки в шейдере
     // игнорирует их, поэтому CLAMP_TO_EDGE не растягивает зоны на горизонт.
@@ -1174,6 +1226,8 @@ export class StructureRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.texZoning);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.texTerraform);
+
+    this.drawRingTerrain(terrainProgram);
 
     if (this.skirt && this.skirtVAO) {
       gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
@@ -1248,10 +1302,12 @@ export class StructureRenderer {
     const gl = this.gl;
     if (this.terrainPosBuf) gl.deleteBuffer(this.terrainPosBuf);
     if (this.terrainNormBuf) gl.deleteBuffer(this.terrainNormBuf);
+    if (this.terrainWaterBuf) gl.deleteBuffer(this.terrainWaterBuf);
     if (this.terrainIdxBuf) gl.deleteBuffer(this.terrainIdxBuf);
     if (this.terrainVAO) gl.deleteVertexArray(this.terrainVAO);
     this.terrainPosBuf = null;
     this.terrainNormBuf = null;
+    this.terrainWaterBuf = null;
     this.terrainIdxBuf = null;
     this.terrainVAO = null;
     this.terrainRes = 0;
