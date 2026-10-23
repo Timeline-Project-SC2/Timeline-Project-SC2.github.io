@@ -12,6 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 
@@ -444,4 +445,205 @@ test('stage7-globe: onCameraIntent приходит с debounce 180 мс и ва
   assert.ok(Math.abs(len - 1) < 1e-9, 'viewDirection единичный');
   assert.ok(intent.zoomRatio > 0.5 && intent.zoomRatio < 1, `zoomRatio в (0.5, 1) после зума: ${intent.zoomRatio}`);
   handle.dispose();
+});
+
+/* ------------- Stage-8.8.2 (A-1): прокси и финал одной генерации -------------
+   Один запрос с необязательным proxyV приносит обе геометрии того же
+   канонического расчёта. Проверяем эквивалентность отдельным запросам,
+   счётчик генерации поверхности, transfer-контракт и цвета по renderV. */
+
+function generateReady(handler, message) {
+  return handler.handle(Object.assign({ type: 'generate', token: 'a1', colorMode: 'biome' }, message))
+    .then((out) => out.find((m) => m.type === 'ready') || null);
+}
+
+function bytesOf(array) {
+  return Buffer.from(array.buffer, array.byteOffset, array.byteLength);
+}
+
+function assertSameBytes(actual, expected, label) {
+  assert.equal(actual.byteLength, expected.byteLength, label + ': длина массива');
+  assert.ok(bytesOf(actual).equals(bytesOf(expected)), label + ': байты совпадают');
+}
+
+function assertSameGeometry(actual, expected, label) {
+  assertSameBytes(actual.positions, expected.positions, label + ' positions');
+  assertSameBytes(actual.normals, expected.normals, label + ' normals');
+  assertSameBytes(actual.colors, expected.colors, label + ' colors');
+  assertSameBytes(actual.indices, expected.indices, label + ' indices');
+  assert.equal(actual.vertexCount, expected.vertexCount, label + ': vertexCount');
+  assert.equal(actual.triangleCount, expected.triangleCount, label + ': triangleCount');
+  assert.equal(actual.cellCount, expected.cellCount, label + ': cellCount');
+  assert.equal(actual.v, expected.v, label + ': v');
+}
+
+test('stage8.8.2-a1: совмещённый ответ побайтово равен двум отдельным запросам', async () => {
+  // Канон v=16 (radius 797): финал тоже проекция, прокси — вдвое грубее.
+  const merged = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'm1', profile: WORKER_PROFILE, renderV: 16, proxyV: 8 });
+  assert.ok(merged, 'совмещённый запрос завершается ready');
+  assert.ok(merged.proxy, 'в ответе есть прокси-слой');
+  assert.equal(merged.proxy.renderV, 8);
+  assert.equal(merged.proxy.cellCount, merged.proxy.geometry.cellCount);
+
+  const soloProxy = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'p1', profile: WORKER_PROFILE, renderV: 8 });
+  assert.ok(!('proxy' in soloProxy), 'отдельный запрос без proxyV поля proxy не содержит');
+  assertSameGeometry(merged.proxy.geometry, soloProxy.geometry, 'прокси ≠ отдельный запрос v=8');
+
+  const soloFinal = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'f1', profile: WORKER_PROFILE, renderV: 16 });
+  assertSameGeometry(merged.geometry, soloFinal.geometry, 'финал ≠ отдельный запрос v=16');
+
+  // Тот же контракт, когда финал тоже грубее канона.
+  const mergedSmall = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'm2', profile: WORKER_PROFILE, renderV: 8, proxyV: 4 });
+  assert.ok(mergedSmall.proxy && mergedSmall.proxy.renderV === 4);
+  const soloProxy4 = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'p2', profile: WORKER_PROFILE, renderV: 4 });
+  const soloFinal8 = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'f2', profile: WORKER_PROFILE, renderV: 8 });
+  assertSameGeometry(mergedSmall.proxy.geometry, soloProxy4.geometry, 'прокси v=4');
+  assertSameGeometry(mergedSmall.geometry, soloFinal8.geometry, 'финал v=8');
+});
+
+test('stage8.8.2-a1: одна генерация поверхности на запрос (было две)', async () => {
+  const original = PlanetSurface.generateSurfaceAsync;
+  let calls = 0;
+  PlanetSurface.generateSurfaceAsync = function (...args) {
+    calls += 1;
+    return original.apply(this, args);
+  };
+  try {
+    // Прежний сценарий страницы: прокси-запрос, затем отдельный финальный.
+    calls = 0;
+    const legacy = PlanetGlobeWorker.createWorkerHandler();
+    await generateReady(legacy, { requestId: 'l1', profile: WORKER_PROFILE, renderV: 8 });
+    await generateReady(legacy, { requestId: 'l2', profile: WORKER_PROFILE, renderV: 16 });
+    assert.equal(calls, 2, 'два запроса считают каноническую поверхность дважды (прежний код)');
+
+    // Совмещённый запрос: одна каноническая генерация, две геометрии.
+    calls = 0;
+    const merged = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+      { requestId: 'c1', profile: WORKER_PROFILE, renderV: 16, proxyV: 8 });
+    assert.equal(calls, 1, 'совмещённый запрос считает поверхность ровно один раз');
+    assert.ok(merged.proxy, 'обе геометрии на месте при одной генерации');
+  } finally {
+    PlanetSurface.generateSurfaceAsync = original;
+  }
+});
+
+test('stage8.8.2-a1: transfer list без дублей, прокси-буферы переносятся и отсоединяются', async () => {
+  const handler = PlanetGlobeWorker.createWorkerHandler();
+  const out = await handler.handle({
+    type: 'generate', token: 'a1', requestId: 'c2',
+    profile: WORKER_PROFILE, renderV: 16, proxyV: 8, colorMode: 'biome',
+  });
+  const readyIndex = out.findIndex((m) => m.type === 'ready');
+  assert.ok(readyIndex >= 0);
+  const ready = out[readyIndex];
+  const transfer = handler.lastTransfers()[readyIndex];
+  assert.ok(Array.isArray(transfer) && transfer.length >= 8, 'в transfer list оба слоя');
+
+  const unique = new Set(transfer);
+  assert.equal(unique.size, transfer.length, 'ни один ArrayBuffer не встречается дважды');
+
+  const finalBuffers = [ready.geometry.positions, ready.geometry.normals, ready.geometry.colors, ready.geometry.indices]
+    .map((array) => array.buffer);
+  const proxyBuffers = [ready.proxy.geometry.positions, ready.proxy.geometry.normals,
+    ready.proxy.geometry.colors, ready.proxy.geometry.indices].map((array) => array.buffer);
+  for (const buffer of finalBuffers.concat(proxyBuffers)) {
+    assert.ok(transfer.includes(buffer), 'буфер в transfer list');
+  }
+
+  // Фактический перенос в main thread: после него прокси-буферы отсоединены.
+  structuredClone({ geometry: ready.geometry, proxy: ready.proxy }, { transfer });
+  for (const buffer of proxyBuffers) assert.equal(buffer.byteLength, 0, 'прокси-буфер отсоединён переносом');
+  for (const buffer of finalBuffers) assert.equal(buffer.byteLength, 0, 'финальный буфер отсоединён переносом');
+
+  // Страница освобождает CPU-буферы прокси сразу после подмены VAO.
+  const page = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
+  assert.ok(/releaseProxyGeometryBuffers\(proxyGeometry\)/.test(page),
+    'страница освобождает прокси-буферы после подмены VAO');
+});
+
+test('stage8.8.2-a1: color-mode с renderV отвечает цветами того слоя, что на экране', async () => {
+  const handler = PlanetGlobeWorker.createWorkerHandler();
+  const ready = await generateReady(handler, { requestId: 'c3', profile: WORKER_PROFILE, renderV: 16, proxyV: 8 });
+  const proxyColors = (await handler.handle({
+    type: 'color-mode', token: 'a1', requestId: 'k1', mode: 'rivers', renderV: 8,
+  })).find((m) => m.type === 'colors');
+  const finalColors = (await handler.handle({
+    type: 'color-mode', token: 'a1', requestId: 'k2', mode: 'rivers',
+  })).find((m) => m.type === 'colors');
+  const otherV = (await handler.handle({
+    type: 'color-mode', token: 'a1', requestId: 'k3', mode: 'rivers', renderV: 99,
+  })).find((m) => m.type === 'colors');
+
+  assert.equal(proxyColors.colors.length, ready.proxy.geometry.colors.length, 'цвета прокси по числу вершин прокси');
+  assert.equal(proxyColors.colors.length, ready.proxy.geometry.vertexCount * 4);
+  assert.equal(finalColors.colors.length, ready.geometry.colors.length, 'цвета финала по числу вершин финала');
+  assert.equal(finalColors.colors.length, ready.geometry.vertexCount * 4);
+  assert.notEqual(proxyColors.colors.length, finalColors.colors.length, 'слои разной частоты');
+  assert.equal(otherV.colors.length, finalColors.colors.length, 'renderV вне слоёв — цвета по current (финал)');
+  assert.ok(bytesOf(proxyColors.colors).length > 0 && bytesOf(otherV.colors).length > 0);
+});
+
+test('stage8.8.2-a1: запрос без proxyV даёт побайтово прежний ответ и без поля proxy', async () => {
+  const plain = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'b1', profile: WORKER_PROFILE, renderV: 16 });
+  const sameV = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'b2', profile: WORKER_PROFILE, renderV: 16, proxyV: 16 });
+  const biggerV = await generateReady(PlanetGlobeWorker.createWorkerHandler(),
+    { requestId: 'b3', profile: WORKER_PROFILE, renderV: 16, proxyV: 32 });
+
+  for (const [label, msg] of [['proxyV = renderV', sameV], ['proxyV > renderV', biggerV]]) {
+    assert.ok(!('proxy' in plain), 'без proxyV поля proxy нет');
+    assert.ok(!('proxy' in msg), label + ': поля proxy нет');
+    assertSameGeometry(msg.geometry, plain.geometry, label);
+    for (const field of ['canonicalV', 'renderV', 'cellCount', 'renderCellCount', 'vertexCount',
+      'triangleCount', 'geometryBytes', 'generationKey', 'seaLevel']) {
+      assert.deepEqual(msg.summary[field], plain.summary[field], label + ': ' + field);
+    }
+  }
+
+  // pick и extract-patch после совмещённой генерации — по канонической сетке.
+  const handler = PlanetGlobeWorker.createWorkerHandler();
+  const merged = await generateReady(handler, { requestId: 'b4', profile: WORKER_PROFILE, renderV: 8, proxyV: 4 });
+  assert.equal(merged.summary.canonicalV, 16);
+  const grid = GeodesicGrid.build(16);
+  let hexCell = -1;
+  for (let c = 0; c < grid.cellCount; c++) {
+    if (grid.neighborCount[c] === 6) { hexCell = c; break; }
+  }
+  const pick = (await handler.handle({
+    type: 'pick', token: 'a1', requestId: 'b5', cell: hexCell, purpose: 'select',
+  })).find((m) => m.type === 'pick-result');
+  assert.ok(pick && pick.info, 'pick отвечает после совмещённой генерации');
+  assert.equal(pick.info.cell, hexCell, 'pick по-прежнему канонический (И-1)');
+  assert.match(pick.info.address, /^goldberg-gp-v1\/w0\/v16\//);
+  const patch = (await handler.handle({
+    type: 'extract-patch', token: 'a1', requestId: 'b6', cell: hexCell,
+  })).find((m) => m.type === 'patch-ready');
+  assert.ok(patch, 'extract-patch отвечает после совмещённой генерации');
+  assert.equal(patch.patch.v, 16, 'Patch7 канонический, не прокси-сетка');
+  assert.equal(patch.invariants.ok, true, JSON.stringify(patch.invariants.checks));
+});
+
+test('stage8.8.2-a1: страница отправляет прокси-частоту первым же запросом и не шлёт второй generate', () => {
+  const page = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
+  // 1. Первый запрос — сразу финальная renderV с прокси-частотой в том же сообщении.
+  assert.match(page, /requestRender\(profile, key, estimates\.target, estimates\.target,[\s\S]{0,80}firstV\)/,
+    'startGeneration отправляет один совмещённый запрос');
+  assert.ok(/const proxyV = proxyRequestV != null && proxyRequestV < renderV/.test(page),
+    'прокси-частота попадает в generate как proxyV');
+  assert.ok(/if \(proxyV > 0\) post\.proxyV = proxyV;/.test(page), 'поле proxyV заполняется в GenerateMessage');
+  // 2. Резервный scheduleUpgrade не отправляет второй generate для совмещённого ответа.
+  assert.match(page, /if \(request\.proxyV > 0 && request\.proxyV < request\.renderV\) return;/,
+    'scheduleUpgrade молчит, когда прокси пришёл в том же ответе');
+  // 3. Финал приходит волной transitionGeometry(..., 0.45) после кадра с прокси.
+  assert.match(page, /globe\.transitionGeometry\(target, 0\.45\)/, 'финал подменяется волной 0.45');
+  // 4. Слой во время показа прокси запрашивается с renderV показанной геометрии.
+  assert.match(page, /if \(proxyShown\) post\.renderV = displayedLayerV as number;/,
+    'color-mode в окне прокси несёт renderV прокси-слоя');
 });

@@ -25,6 +25,7 @@ import type {
   GenerateMessage,
   GlobePickInfo,
   GlobeSummary,
+  GlobeWireGeometry,
   PickMessage,
   PrefetchMessage,
   WorkerPatchReadyResponse,
@@ -241,6 +242,8 @@ interface ActiveRequest {
   profileKey: string;
   renderV: number;
   targetV: number;
+  /** Stage-8.8.2 (A-1): прокси-частота того же запроса (0 — прокси нет). */
+  proxyV: number;
   phase: string;
   startedAt: number;
 }
@@ -262,6 +265,12 @@ let displayedToken = '';
 let requestSeq = 0;
 let activeRequest: ActiveRequest | null = null;
 let pendingGpuReady: { msg: WorkerReadyResponse; request: ActiveRequest | null } | null = null;
+/** Stage-8.8.2 (A-1): прокси-слой совмещённого ответа на GPU-заливке. */
+let pendingProxyReady: { msg: WorkerReadyResponse; request: ActiveRequest | null } | null = null;
+/** renderV геометрии, которая сейчас на экране (для color-mode в окне прокси). */
+let displayedLayerV: number | null = null;
+/** renderV финала для показанной геометрии: proxyShown = displayedLayerV < это. */
+let displayedFinalV: number | null = null;
 let displayedSummary: GlobeSummary | null = null;
 let latestPickRequest = 0;
 let latestHoverRequest = 0;
@@ -2448,6 +2457,7 @@ function ensureWorker(): Worker {
     discardStagedLocalPatch();
     activeRequest = null;
     pendingGpuReady = null;
+    pendingProxyReady = null;
     if (globe) globe.setAdaptiveQualityHold(false);
     showLoading(false);
     setStatus('Ошибка worker: ' + (event.message || 'неизвестная ошибка'), 'error');
@@ -2481,13 +2491,18 @@ function requestRender(
   renderV: number,
   targetV: number,
   phase: string,
+  proxyRequestV?: number,
 ): void {
   ensureWorker();
   pendingGpuReady = null;
+  pendingProxyReady = null;
   if (globe) globe.setAdaptiveQualityHold(true);
   const id = ++requestSeq;
+  // Stage-8.8.2 (A-1): прокси-частота в том же запросе. Сетка прокси грубее
+  // финальной, иначе поле не нужно — ответ остаётся прежним (одна геометрия).
+  const proxyV = proxyRequestV != null && proxyRequestV < renderV ? Math.round(proxyRequestV) : 0;
   activeRequest = {
-    id, profile, profileKey: key, renderV, targetV, phase,
+    id, profile, profileKey: key, renderV, targetV, proxyV, phase,
     startedAt: performance.now(),
   };
   const post: GenerateMessage = {
@@ -2500,10 +2515,19 @@ function requestRender(
     reliefScale: Number(els.relief.value),
     fallbackPreview: !webglAvailable,
   };
+  if (proxyV > 0) post.proxyV = proxyV;
   (worker as Worker).postMessage(post);
-  const phaseName = renderV === targetV ? 'Финал' : 'Прокси';
-  showLoading(true, phase === 'upgrade', phaseName + ' v=' + renderV + (renderV === targetV ? '' : ' → финал v=' + targetV));
-  setStatus('Генерация: ' + String(profile.planetId) + ', ' + phaseName.toLowerCase() + ' v=' + renderV + '…', 'info');
+  showLoading(true, phase === 'upgrade', requestPhaseLabel(activeRequest));
+  setStatus('Генерация: ' + String(profile.planetId) + ', ' + requestPhaseLabel(activeRequest).toLowerCase() + '…', 'info');
+}
+
+/** Подпись фазы запроса: совмещённый запрос — «Прокси v=X → финал v=Y»,
+ *  прежние запросы — ровно как раньше («Финал v=…» / «Прокси v=…»). */
+function requestPhaseLabel(request: ActiveRequest): string {
+  if (request.proxyV > 0 && request.proxyV < request.renderV) {
+    return 'Прокси v=' + request.proxyV + ' → финал v=' + request.renderV;
+  }
+  return (request.renderV === request.targetV ? 'Финал' : 'Прокси') + ' v=' + request.renderV;
 }
 
 function startGeneration(restart: boolean, reason: string): void {
@@ -2537,16 +2561,23 @@ function startGeneration(restart: boolean, reason: string): void {
   if (restart) restartWorker(); else ensureWorker();
   if (globe) globe.clearSelection();
   renderSelection(null);
+  // Stage-8.8.2 (A-1): один запрос вместо двух — сразу финальный renderV,
+  // прокси-слой приезжает в том же ответе той же канонической генерации.
   const firstV = proxyRenderV(estimates.target);
-  requestRender(profile, key, firstV, estimates.target, reason || (firstV === estimates.target ? 'final' : 'proxy'));
+  requestRender(profile, key, estimates.target, estimates.target,
+    reason || (firstV === estimates.target ? 'final' : 'proxy'), firstV);
 }
 
 function scheduleUpgrade(request: ActiveRequest | null): void {
   window.clearTimeout(upgradeTimer);
   upgradeTimer = window.setTimeout(() => {
-    // Тот же worker сохраняет proxy-поверхность для pick, пока финал
-    // считается в фоне. Пользователь уже видит и крутит планету.
+    // Резервный путь Stage-8.8.2 (A-1): только когда прокси пришёл отдельным
+    // ответом — профиль с выключенным autoProxy, прокси === финал или ответ
+    // без поля proxy. Совмещённый ответ финал уже привёз, второй generate
+    // здесь не отправляется. Тот же worker сохраняет прокси-поверхность для
+    // pick, пока финал считается в фоне.
     if (!request) return;
+    if (request.proxyV > 0 && request.proxyV < request.renderV) return;
     requestRender(request.profile, request.profileKey, request.targetV, request.targetV, 'upgrade');
   }, 250);
 }
@@ -2557,8 +2588,7 @@ function onWorkerMessage(event: MessageEvent): void {
   if (msg.type === 'worker-ready') return;
   if (msg.type === 'progress') {
     if (!activeRequest || msg.requestId !== activeRequest.id || msg.token !== workerToken) return;
-    const phase = activeRequest.renderV === activeRequest.targetV ? 'Финал' : 'Прокси';
-    setProgress(msg.fraction, phase + ' v=' + activeRequest.renderV + ': ' + (msg.label || msg.stage));
+    setProgress(msg.fraction, requestPhaseLabel(activeRequest) + ': ' + (msg.label || msg.stage));
     return;
   }
   if (msg.type === 'ready') {
@@ -2568,7 +2598,10 @@ function onWorkerMessage(event: MessageEvent): void {
   }
   if (msg.type === 'colors') {
     if (msg.token !== displayedToken) return;
-    if (globe) globe.setColors(msg.colors);
+    // Stage-8.8.2 (A-1): пока идёт заливка финала, цветовой буфер принадлежит
+    // ему, а ответ мог быть посчитан для прокси-слоя (другое число вершин).
+    // Слой применится после финала — finalizeReady переотправит color-mode.
+    if (globe && !pendingGpuReady) globe.setColors(msg.colors);
     setStatus('Слой: ' + selectedColorLabel() + '.', 'ok');
     return;
   }
@@ -2628,11 +2661,41 @@ function onWorkerMessage(event: MessageEvent): void {
     if (msg.requestId === latestPickRequest || msg.requestId === latestHoverRequest) return;
     activeRequest = null;
     pendingGpuReady = null;
+    pendingProxyReady = null;
     if (globe) globe.setAdaptiveQualityHold(false);
     showLoading(false);
     setStatus('Ошибка: ' + (msg.message || msg.code || 'генерация не удалась'), 'error');
     els.stats.textContent = 'Генерация не удалась.\n' + (msg.message || '') + (msg.stack ? '\n\n' + msg.stack : '');
   }
+}
+
+/** Подпись этапа GPU-заливки: прокси-слой или финал совмещённого ответа.
+ *  null — заливается не та геометрия, о которой знает страница. */
+function uploadStageLabel(geometry: GlobeGeometry): string | null {
+  const proxyGeometry = pendingProxyReady && pendingProxyReady.msg.proxy ? pendingProxyReady.msg.proxy.geometry : null;
+  if (proxyGeometry && (geometry as unknown) === (proxyGeometry as unknown)) {
+    return 'Прокси v=' + proxyGeometry.v;
+  }
+  if (pendingGpuReady && (geometry as unknown) === (pendingGpuReady.msg.geometry as unknown)) {
+    return finalPhaseLabel(pendingGpuReady.msg, pendingGpuReady.request);
+  }
+  return null;
+}
+
+/** «Финал» / «Прокси» для заливаемой геометрии — прежняя подпись этапа. */
+function finalPhaseLabel(msg: WorkerReadyResponse, request: ActiveRequest | null): string {
+  const label = msg.summary.renderV >= (request ? request.targetV : 0) ? 'Финал' : 'Прокси';
+  return label + ' v=' + msg.summary.renderV;
+}
+
+/** Stage-8.8.2 (A-1): CPU-массивы прокси-слоя не нужны сразу после подмены
+ *  VAO — GPU-буферы уже заполнены. Объект остаётся уходящим слоем волны
+ *  (chunkRanges/indexCount), но его большие буферы освобождаются. */
+function releaseProxyGeometryBuffers(geometry: GlobeWireGeometry): void {
+  geometry.positions = new Float32Array(0);
+  geometry.normals = new Int16Array(0);
+  geometry.colors = new Uint8Array(0);
+  geometry.indices = new Uint32Array(0);
 }
 
 function handleReady(msg: WorkerReadyResponse): void {
@@ -2644,14 +2707,25 @@ function handleReady(msg: WorkerReadyResponse): void {
   els.diveLocalMap.disabled = true;
   updateLocalNeighborButtons(null);
   if (globe) {
+    globe.clearSelection();
+    renderSelection(null);
+    // Stage-8.8.2 (A-1): прокси и финал пришли одним ответом. Сначала видимый
+    // прокси-слой (быстрая заливка), затем финал той же генерации — волной
+    // transitionGeometry(0.45) сразу после кадра с прокси. Второго generate нет.
+    if (msg.proxy && msg.proxy.geometry) {
+      pendingProxyReady = { msg: msg, request: request };
+      setProgress(0.84, 'Прокси v=' + msg.proxy.renderV + ': GPU-заливка геометрии');
+      setStatus('CPU-часть готова: заливаю прокси v=' + msg.proxy.renderV +
+        ', финал v=' + msg.summary.renderV + ' — следом…', 'info');
+      globe.setGeometry(msg.proxy.geometry as unknown as GlobeGeometry);
+      globe.animateBuild(1.1);
+      return;
+    }
     // Worker закончил CPU-часть, но видимым глобус станет только после
     // порционной GPU-заливки и атомарной подмены VAO. До этого момента
     // не объявляем планету готовой и не сбрасываем steady-статистику.
     pendingGpuReady = { msg: msg, request: request };
-    globe.clearSelection();
-    renderSelection(null);
-    setProgress(0.84, (msg.summary.renderV >= (request ? request.targetV : 0) ? 'Финал' : 'Прокси') +
-      ' v=' + msg.summary.renderV + ': GPU-заливка геометрии');
+    setProgress(0.84, finalPhaseLabel(msg, request) + ': GPU-заливка геометрии');
     setStatus('CPU-часть готова: заливаю геометрию на GPU…', 'info');
     // wire-геометрия без vertexCellId/cellIndexStart — pick живёт в воркере.
     if (request && request.phase === 'upgrade') {
@@ -2668,6 +2742,9 @@ function handleReady(msg: WorkerReadyResponse): void {
 function finalizeReady(msg: WorkerReadyResponse, request: ActiveRequest | null): void {
   displayedToken = String(msg.token || '');
   displayedSummary = msg.summary;
+  // На экране финальная геометрия ответа: color-mode снова идёт без renderV.
+  displayedLayerV = msg.summary.renderV;
+  displayedFinalV = msg.summary.renderV;
   syncDossierSummary(msg.summary);
   setProgress(1, 'Готово');
   if (!globe && msg.preview) drawFallback(msg.preview);
@@ -2737,7 +2814,11 @@ function selectedColorLabel(): string {
 }
 
 function sendColorMode(): void {
-  if (!worker || !displayedToken || activeRequest || pendingGpuReady) return;
+  if (!worker || !displayedToken) return;
+  // Окно показа прокси: на экране геометрия прокси-сетки, поэтому цвет слоя
+  // запрашивается ровно для её renderV (Stage-8.8.2, A-1).
+  const proxyShown = displayedLayerV !== null && displayedFinalV !== null && displayedLayerV < displayedFinalV;
+  if (!proxyShown && (activeRequest || pendingGpuReady)) return;
   const id = ++requestSeq;
   const post: ColorModeMessage = {
     type: 'color-mode',
@@ -2745,6 +2826,7 @@ function sendColorMode(): void {
     requestId: id,
     mode: els.colorMode.value,
   };
+  if (proxyShown) post.renderV = displayedLayerV as number;
   worker.postMessage(post);
 }
 
@@ -3285,13 +3367,34 @@ function init(): void {
       atmosphere: true,
       maxPixelRatio: coarseScreen ? 1.5 : 2,
       onGeometryUploadProgress: function (info: { geometry: GlobeGeometry; fraction: number }): void {
-        if (!pendingGpuReady || (info.geometry as unknown) !== (pendingGpuReady.msg.geometry as unknown)) return;
-        const labelPhase = pendingGpuReady.msg.summary.renderV >= (pendingGpuReady.request ? pendingGpuReady.request.targetV : 0)
-          ? 'Финал' : 'Прокси';
-        setProgress(0.84 + 0.16 * Math.max(0, Math.min(1, info.fraction || 0)),
-          labelPhase + ' v=' + pendingGpuReady.msg.summary.renderV + ': GPU-заливка геометрии');
+        const label = uploadStageLabel(info.geometry);
+        if (!label) return;
+        setProgress(0.84 + 0.16 * Math.max(0, Math.min(1, info.fraction || 0)), label + ': GPU-заливка геометрии');
       },
       onGeometryReady: function (geometry: GlobeGeometry): void {
+        // Stage-8.8.2 (A-1): VAO прокси подменён — кадр с прокси уже нарисован
+        // (заливка идёт до отрисовки кадра), а CPU-буферы прокси больше не нужны.
+        const proxyStage = pendingProxyReady;
+        const proxyLayer = proxyStage && proxyStage.msg.proxy ? proxyStage.msg.proxy : null;
+        if (proxyStage && proxyLayer && geometry === (proxyLayer.geometry as unknown as GlobeGeometry)) {
+          pendingProxyReady = null;
+          const proxyGeometry = proxyLayer.geometry;
+          releaseProxyGeometryBuffers(proxyGeometry);
+          displayedLayerV = proxyGeometry.v;
+          displayedFinalV = proxyStage.msg.summary.renderV;
+          // Финал той же генерации — центробежной волной 0.45 после кадра с прокси.
+          const finalStage = { msg: proxyStage.msg, request: proxyStage.request };
+          pendingGpuReady = finalStage;
+          const target = proxyStage.msg.geometry as unknown as GlobeGeometry;
+          window.requestAnimationFrame(function (): void {
+            if (!globe || pendingGpuReady !== finalStage) return;
+            globe.transitionGeometry(target, 0.45);
+          });
+          setProgress(0.84, finalPhaseLabel(proxyStage.msg, proxyStage.request) + ': GPU-заливка геометрии');
+          setStatus('Финал v=' + proxyStage.msg.summary.renderV + ' поверх прокси v=' +
+            proxyGeometry.v + ': заливаю геометрию…', 'info');
+          return;
+        }
         if (!pendingGpuReady || geometry !== (pendingGpuReady.msg.geometry as unknown as GlobeGeometry)) return;
         const pending = pendingGpuReady;
         pendingGpuReady = null;
