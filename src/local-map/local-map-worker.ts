@@ -941,7 +941,8 @@ export function mapNeighborCellsToSlots(patch: LocalMapPatch): readonly PatchCel
   for (let k = 0; k < SKIRT_RING_COUNT; k++) {
     const slotAngle = (k * Math.PI) / 3;
     for (let c = 0; c < neighbors.length; c++) {
-      let dist = Math.abs((tangentAngle[c] as number) - slotAngle);
+      // Модуль с приведением к [0, 2π): разница углов может превысить 2π.
+      let dist = Math.abs((tangentAngle[c] as number) - slotAngle) % (2 * Math.PI);
       if (dist > Math.PI) dist = 2 * Math.PI - dist;
       pairs.push({ slot: k, cell: c, dist });
     }
