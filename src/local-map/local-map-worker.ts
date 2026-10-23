@@ -1173,7 +1173,9 @@ function skirtPlanetaryHeight(
   // воротником масштаб плавно (на 0.85 · R_patch) выходит на планетарный, и
   // все 6 соседних ячеек Patch7 реально формируют рельеф даже при radiusM = 600.
   const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
-  const coordScale = r > collarEndM
+  const blendEndM = SKIRT_COLLAR_BLEND_END_RATIO
+    * CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusPatchM;
+  const coordScale = r > collarEndM && clusterHexMetric(x, y) > blendEndM
     ? 1 + (planetCoordScale - 1) * smooth01((r - collarEndM) / (0.85 * radiusPatchM))
     : 1;
   const dir = localPointToDirection(patch, x * coordScale, y * coordScale);
