@@ -1395,33 +1395,56 @@ const LOCAL_HEX_FACE_APOTHEM_RATIO = 0.8054;
 const LOCAL_HEX_SLOT_STEP_RAD = Math.PI / 3;
 
 let localMapQuickNav: LocalMapQuickNav | null = null;
+let localMapQuickNavHost: HTMLElement | null = null;
 let localQuickNavInitialized = false;
 
 /** Освобождает оверлей квик-навигации при выходе из локальной карты. */
 function disposeLocalMapQuickNav(): void {
   const nav = localMapQuickNav;
+  const host = localMapQuickNavHost;
   localMapQuickNav = null;
+  localMapQuickNavHost = null;
   localQuickNavInitialized = false;
-  if (!nav) return;
-  try { nav.dispose(); } catch (_) { /* модуль мог не успеть инициализироваться */ }
+  if (nav) {
+    try { nav.dispose(); } catch (_) { /* модуль мог не успеть инициализироваться */ }
+  }
+  // Stage-8.7.3: снимаем собственный слой оверлея, не трогая сцену локальной карты.
+  if (host) host.remove();
 }
 
 /**
  * Создаёт модуль квик-навигации один раз на сессию локальной карты.
- * Хост — вся сцена #localMapStage; выбор гекса идёт тем же путём, что у кнопок
- * «СОСЕДИ PATCH7» (requestLocalNeighbor → latest-wins переход).
+ * Хост — собственный слой оверлея внутри #localMapStage; выбор гекса идёт тем же
+ * путём, что у кнопок «СОСЕДИ PATCH7» (requestLocalNeighbor → latest-wins переход).
  */
 function ensureLocalMapQuickNav(): LocalMapQuickNav | null {
   if (localMapQuickNav) return localMapQuickNav;
   if (localQuickNavInitialized) return null;
   localQuickNavInitialized = true;
-  localMapQuickNav = createLocalMapQuickNav(els.localMapStage, (slot: number, cell: number) => {
-    if (requestLocalNeighborByCellId(cell)) return;
-    setLocalMapStatus(
-      'Квик-навигация: ячейка #' + String(cell) + ' (слот ' + String(slot) + ') отсутствует в активном Patch7.',
-      'warn',
-    );
-  });
+  // Stage-8.7.3: хост оверлея — отдельный слой поверх сцены. В #localMapStage
+  // живут канвас, шапка с кнопкой «← На глобус планеты», селектор ширины,
+  // «Соседи Patch7» и HUD, поэтому передавать сцену как хост нельзя:
+  // оверлей получает её содержимое целиком и ломает возврат на планетарный уровень.
+  const host = document.createElement('div');
+  host.id = 'localMapQuickNav';
+  host.className = 'local-quick-nav-layer';
+  els.localMapStage.append(host);
+  localMapQuickNavHost = host;
+  try {
+    localMapQuickNav = createLocalMapQuickNav(host, (slot: number, cell: number) => {
+      if (requestLocalNeighborByCellId(cell)) return;
+      setLocalMapStatus(
+        'Квик-навигация: ячейка #' + String(cell) + ' (слот ' + String(slot) + ') отсутствует в активном Patch7.',
+        'warn',
+      );
+    });
+  } catch (error) {
+    // Оверлей не создался — не оставляем пустой слой и не ломаем локальную карту.
+    host.remove();
+    localMapQuickNavHost = null;
+    console.warn('quick-nav: оверлей не создан', error);
+    return null;
+  }
   return localMapQuickNav;
 }
 

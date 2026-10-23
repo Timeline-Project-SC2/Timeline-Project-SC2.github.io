@@ -281,7 +281,9 @@ export function createLocalMapQuickNav(
   };
   layer.addEventListener('click', clickListener);
 
-  host.replaceChildren(styleElement, layer);
+  // Stage-8.7.3: хост может содержать разметку страницы (канвас, шапку,
+  // HUD). Свои узлы только добавляем, а не заменяем содержимое целиком.
+  host.append(styleElement, layer);
 
   function hideButtons(): void {
     layer.setAttribute('aria-hidden', 'true');
@@ -363,7 +365,10 @@ export function createLocalMapQuickNav(
     hideButtons();
     layer.removeEventListener('click', clickListener);
     buttons.clear();
-    host.replaceChildren();
+    // Stage-8.7.3: убираем только собственные узлы — чужая разметка хоста
+    // остаётся на месте.
+    layer.remove();
+    styleElement.remove();
 
     if (originalHostAttribute === null) host.removeAttribute(QUICK_NAV_HOST_ATTRIBUTE);
     else host.setAttribute(QUICK_NAV_HOST_ATTRIBUTE, originalHostAttribute);
