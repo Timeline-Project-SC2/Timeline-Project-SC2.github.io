@@ -74,8 +74,8 @@ interface LocalCameraAnim {
 }
 
 /** Палитра атмосферы планетарного горизонта (Stage-8). */
-const LOCAL_HORIZON_COLOR: readonly [number, number, number] = [0.22, 0.52, 0.68];
-const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.07, 0.20, 0.30];
+const LOCAL_HORIZON_COLOR: readonly [number, number, number] = [0.34, 0.58, 0.74];
+const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.16, 0.31, 0.42];
 /** Рабочий панорамный наклон и азимут камеры локальной карты. */
 const LOCAL_REST_PITCH = 0.44;
 const LOCAL_REST_YAW = -0.65;
@@ -740,9 +740,11 @@ function drawLocalMapFallback(viewProj: Float32Array): void {
   if (!gl || !renderer || !programs || !renderer.ready) return;
   const light = normalizeLocalVec3([0.46, -0.36, 0.81]);
   const ambient: LocalVec3 = [0.28, 0.34, 0.39];
-  const fog: LocalVec3 = [0.025, 0.09, 0.13];
-  const fogStart = localMapRadiusM * 0.72;
-  const fogEnd = localMapRadiusM;
+  const skirt = localSkirtData;
+  const fog: LocalVec3 = skirt ? [...LOCAL_SKIRT_FOG_COLOR] : [0.025, 0.09, 0.13];
+  const horizon: LocalVec3 = skirt ? [...LOCAL_HORIZON_COLOR] : [0.025, 0.09, 0.13];
+  const fogStart = skirt ? localMapRadiusM * 1.05 : localMapRadiusM * 0.72;
+  const fogEnd = skirt ? skirt.outerRadiusM * 0.94 : localMapRadiusM;
 
   gl.useProgram(programs.terrainProgram);
   const terrainView = gl.getUniformLocation(programs.terrainProgram, 'u_viewProj');
@@ -750,6 +752,7 @@ function drawLocalMapFallback(viewProj: Float32Array): void {
   setUniform3(gl, programs.terrainProgram, 'u_lightDir', light);
   setUniform3(gl, programs.terrainProgram, 'u_ambientColor', ambient);
   setUniform3(gl, programs.terrainProgram, 'u_fogColor', fog);
+  setUniform3(gl, programs.terrainProgram, 'u_horizonColor', horizon);
   setUniform1f(gl, programs.terrainProgram, 'u_fogStart', fogStart);
   setUniform1f(gl, programs.terrainProgram, 'u_fogEnd', fogEnd);
   setUniform1f(gl, programs.terrainProgram, 'u_terrainSize', localMapRadiusM * 2);
@@ -794,10 +797,9 @@ function updateLocalMapHud(): void {
   els.localBuildableFraction.textContent = fmtPct(localMapBuildableFraction, 1);
   const skirt = localSkirtData;
   if (skirt) {
-    const outerKm = skirt.outerRadiusM / 1000;
-    const horizonDropKm = planetCurvatureDropM(skirt.planetRadiusM, skirt.outerRadiusM) / 1000;
+    const horizonDropM = planetCurvatureDropM(skirt.planetRadiusM, skirt.outerRadiusM);
     els.localFogStatus.textContent =
-      '6 колец · R ' + fmtNum(outerKm, 0) + ' км (Δz ' + fmtNum(horizonDropKm, 1) + ' км)';
+      `6 колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (Δz ${fmtNum(horizonDropM / 1000, 2)} км)`;
   } else {
     els.localFogStatus.textContent = 'активен · R ' + fmtInt(localMapRadiusM) + ' м';
   }
@@ -812,7 +814,8 @@ function renderLocalMapFrame(): void {
   if (!gl || !renderer || gl.isContextLost()) return;
   resizeLocalMapCanvas();
   if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
-  gl.clearColor(0.025, 0.09, 0.13, 1);
+  const clearFog = localSkirtData ? LOCAL_SKIRT_FOG_COLOR : [0.025, 0.09, 0.13] as const;
+  gl.clearColor(clearFog[0], clearFog[1], clearFog[2], 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   applyLocalCameraAnim(performance.now());
   const viewProj = localViewProjection();
@@ -824,8 +827,8 @@ function renderLocalMapFrame(): void {
       fogColor: skirt
         ? new Float32Array(LOCAL_SKIRT_FOG_COLOR)
         : new Float32Array([0.025, 0.09, 0.13]),
-      fogStart: skirt ? skirt.outerRadiusM * 0.22 : localMapRadiusM * 0.72,
-      fogEnd: skirt ? skirt.outerRadiusM * 0.96 : localMapRadiusM,
+      fogStart: skirt ? localMapRadiusM * 1.05 : localMapRadiusM * 0.72,
+      fogEnd: skirt ? skirt.outerRadiusM * 0.94 : localMapRadiusM,
       radiusM: localMapRadiusM,
     };
     if (skirt) {

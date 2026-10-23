@@ -671,6 +671,13 @@ test('шейдеры Этапа 8: тонирование водных низи�
   for (const name of ['u_zoning_map', 'u_terraform_map', 'u_lightDir', 'u_ambientColor', 'u_fogColor']) {
     assert.ok(terrain.includes(name), `юниформ ${name} сохранён`);
   }
+  assert.ok(terrain.includes('dist > u_focusRadiusM * 0.93'), 'квадратные углы центрального меша отбрасываются');
+  assert.ok(terrain.includes('smoothstep(0.465, 0.495, edgeCoord)'), 'гекс-сетка имеет тонкую деликатную линию');
+  assert.ok(terrain.includes('* (1.0 - u_isSkirt)'), 'изолинии полностью погашены на юбке');
+  assert.ok(terrain.includes('smoothstep(0.35, 0.98, v_fog)'), 'рельеф полностью растворяется в цвете горизонта');
+  const sky = Shaders.SKY_DOME_FRAGMENT_SHADER;
+  assert.ok(sky.includes('smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta)'), 'широкий мягкий переход через лимб');
+  assert.ok(sky.includes('smoothstep(horizonAngle, horizonAngle + 0.85, beta)'), 'плавный градиент неба к зениту');
   for (const shader of [Shaders.TERRAIN_VERTEX_SHADER, Shaders.STRUCTURE_VERTEX_SHADER]) {
     assert.ok(shader.includes('#version 300 es'), 'GLSL ES 3.00');
     assert.ok(shader.includes('u_fogStart') && shader.includes('u_fogEnd'), 'круговой туман сохранён');
@@ -816,13 +823,13 @@ test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое п
     renderer.renderFrame(viewProj, {
       lightDir: [0.46, -0.36, 0.81],
       ambientColor: [0.28, 0.34, 0.39],
-      fogColor: [0.07, 0.2, 0.3],
-      fogStart: skirt.outerRadiusM * 0.22,
-      fogEnd: skirt.outerRadiusM * 0.96,
+      fogColor: [0.16, 0.31, 0.42],
+      fogStart: RADIUS_M * 1.05,
+      fogEnd: skirt.outerRadiusM * 0.94,
       planetRadiusM: skirt.planetRadiusM,
       focusRadiusM: RADIUS_M,
       hexSizeM: skirt.hexSpacingM,
-      horizonColor: [0.22, 0.52, 0.68],
+      horizonColor: [0.34, 0.58, 0.74],
       camera: { pitch: 0.44, yaw: -0.65, fovY: 0.87, aspect: 1.5, heightM: 3000 },
     });
   }, 'setHorizonSkirt + renderFrame отрабатывают на mock WebGL2');

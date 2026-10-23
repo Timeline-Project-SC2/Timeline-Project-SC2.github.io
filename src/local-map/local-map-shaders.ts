@@ -230,15 +230,26 @@ vec3 roundHexCube(vec3 cube) {
 }
 
 void main() {
-  uvec4 zoneData = texture(u_zoning_map, v_uv);
-  uint zone = zoneData.r;
-  float terraformBlend = texture(u_terraform_map, v_uv).r;
-
   float dist = length(v_worldPos.xy);
-  // Оптический блюр: мелкие складки рельефа и сетки растворяются к горизонту.
+  // Квадратный heightfield обрезается по кругу внутри перекрытия с юбкой:
+  // его углы (до 1.414 · R_patch) больше не образуют выступающий «остров».
+  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.93) {
+    discard;
+  }
+
+  // Юбка не наследует краевые тексели карт центрального участка.
+  uint zone = 0u;
+  float terraformBlend = 0.0;
+  if (u_isSkirt < 0.5) {
+    uvec4 zoneData = texture(u_zoning_map, v_uv);
+    zone = zoneData.r;
+    terraformBlend = texture(u_terraform_map, v_uv).r;
+  }
+
+  // Оптический блюр начинается у границы участка и нарастает к 6-му кольцу.
   // При u_focusRadiusM <= 1 (старый путь без юбки) эффекты Stage-8 выключены.
   float blur = (u_focusRadiusM > 1.0)
-    ? smoothstep(u_focusRadiusM * 0.75, u_fogEnd * 0.82, dist)
+    ? smoothstep(u_focusRadiusM * 0.85, u_fogEnd * 0.88, dist)
     : 0.0;
 
   // Гипсометрия и изолинии рельефа: низины зеленее, склоны и гребни каменистее.
@@ -248,10 +259,12 @@ void main() {
   vec3 naturalColor  = mix(lowlandColor, ZONE_COLORS[0], smoothstep(0.0, 0.45, hNorm));
   naturalColor       = mix(naturalColor, highlandColor, smoothstep(0.45, 1.0, hNorm));
 
-  // Тонкие топографические изолинии каждые 16 м высоты; к горизонту гаснут.
+  // Тонкие изолинии каждые 16 м остаются только на детальном участке:
+  // на крупных треугольниках юбки они не ломаются угловатыми зигзагами.
   float contourPhase = abs(fract(v_worldPos.z / 16.0) - 0.5);
   float contourLine  = (1.0 - smoothstep(0.0, 0.045, contourPhase))
-    * (1.0 - blur * 0.92);
+    * (1.0 - smoothstep(u_focusRadiusM * 0.70, u_focusRadiusM * 1.15, dist))
+    * (1.0 - u_isSkirt);
   naturalColor      *= (1.0 - 0.12 * contourLine);
 
   vec3 zoneColor    = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
@@ -276,8 +289,12 @@ void main() {
     baseColor = mix(baseColor, waterColor, waterBlend * 0.92);
   }
 
+  // Дальняя оптика усредняет мелкие цветовые пятна в спокойный тон биома.
+  vec3 distantBiomeColor = mix(lowlandColor, highlandColor, 0.38);
+  baseColor = mix(baseColor, distantBiomeColor, blur * 0.55);
+
   // Освещение: нормаль сглаживается к вертикали по мере оптического блюра.
-  vec3 N   = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur * 0.78));
+  vec3 N   = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur));
   float NdL = max(dot(N, u_lightDir), 0.0);
   vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8));
 
@@ -296,24 +313,25 @@ void main() {
       max(abs(cube.x - rounded.x), abs(cube.y - rounded.y)),
       abs(cube.z - rounded.z)
     );
-    float hexLine = smoothstep(0.36, 0.5, edgeCoord);
+    float hexLine = smoothstep(0.465, 0.495, edgeCoord);
     float ringK = (abs(rounded.x) + abs(rounded.y) + abs(rounded.z)) * 0.5;
     float ringFade = 1.0 - smoothstep(
       float(SKIRT_RING_COUNT), float(SKIRT_RING_COUNT + 1), ringK);
-    float hexFade = hexLine * ringFade * (1.0 - blur * 0.85);
+    float outsideFocus = smoothstep(u_focusRadiusM * 0.85, u_focusRadiusM * 1.25, dist);
+    float hexFade = hexLine * outsideFocus * ringFade * (1.0 - blur * 0.82);
     vec3 hexCyan = vec3(0.30, 0.72, 0.78);
     vec3 hexGold = vec3(0.83, 0.68, 0.32);
     vec3 hexColor = mix(hexCyan, hexGold, clamp(ringK / float(SKIRT_RING_COUNT), 0.0, 1.0));
-    lit = mix(lit, hexColor, clamp(hexFade * 0.5, 0.0, 0.6));
+    lit = mix(lit, hexColor, clamp(hexFade * 0.28, 0.0, 0.28));
   }
 
-  // Атмосферная перспектива (Rayleigh/Mie): сначала голубоватая дымка лимба
-  // по экспоненте, у самого края 6-го кольца — полное растворение в u_fogColor.
+  // Сначала воздушная дымка лимба, затем полное растворение в цвете диска:
+  // на внешнем крае v_fog → 1 цвет рельефа в точности равен u_fogColor.
   vec3 finalColor;
   if (u_focusRadiusM > 1.0) {
-    float haze = 1.0 - exp(-2.6 * v_fog * v_fog);
-    vec3 hazed = mix(lit, u_horizonColor, clamp(haze, 0.0, 1.0));
-    finalColor = mix(hazed, u_fogColor, smoothstep(0.82, 1.0, v_fog));
+    float haze = smoothstep(0.0, 0.72, v_fog) * 0.68;
+    vec3 hazed = mix(lit, u_horizonColor, haze);
+    finalColor = mix(hazed, u_fogColor, smoothstep(0.35, 0.98, v_fog));
   } else {
     finalColor = mix(lit, u_fogColor, v_fog);
   }
@@ -389,9 +407,9 @@ void main() {
   float horizonAngle = -acos(horizonCos);
   float beta = asin(clamp(ray.z, -1.0, 1.0));
 
-  // Небо: глубокий космос в зените → светящийся атмосферный лимб у горизонта.
+  // Небо: глубокий синий космос в зените → атмосферный лимб у горизонта.
   vec3 deepSpace = u_fogColor * 0.55;
-  float skyT = smoothstep(horizonAngle, horizonAngle + 0.95, beta);
+  float skyT = smoothstep(horizonAngle, horizonAngle + 0.85, beta);
   vec3 sky = mix(u_horizonColor, deepSpace, skyT);
 
   // Мягкий солнечный ореол по u_lightDir.
@@ -401,9 +419,9 @@ void main() {
 
   // Диск планеты ниже линии горизонта: плотная дымка, в неё без шва
   // уходит внешнее (6-е) кольцо гексов.
-  float diskT = smoothstep(horizonAngle - 0.28, horizonAngle, beta);
+  float diskT = smoothstep(horizonAngle - 0.12, horizonAngle, beta);
   vec3 disk = mix(u_fogColor, u_horizonColor, diskT);
-  float above = smoothstep(horizonAngle - 0.015, horizonAngle + 0.015, beta);
+  float above = smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta);
 
   vec3 color = mix(disk, sky, above);
   fragColor = vec4(color, 1.0);

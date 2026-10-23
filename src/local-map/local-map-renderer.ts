@@ -803,8 +803,8 @@ export class StructureRenderer {
     gl.uniform1i(this.uniform(terrainProgram, 'u_zoning_map'), 0);
     gl.uniform1i(this.uniform(terrainProgram, 'u_terraform_map'), 1);
 
-    // Текстуры нужны и юбке (её v_uv выходит за [0,1] — CLAMP_TO_EDGE даёт
-    // зону 0 и нулевой терраформинг на периферии).
+    // Текстуры читает только центральный участок; ветка юбки в шейдере
+    // игнорирует их, поэтому CLAMP_TO_EDGE не растягивает зоны на горизонт.
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texZoning);
     gl.activeTexture(gl.TEXTURE1);
