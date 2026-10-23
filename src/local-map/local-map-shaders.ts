@@ -274,6 +274,14 @@ void main() {
     ? smoothstep(hexApothem, u_fogEnd * 0.88, centerHexDist)
     : ((u_focusRadiusM > 1.0 && centerHexDist > hexApothem) ? 1.0 : 0.0);
 
+  // Признак горизонтального водного зеркала: у воды/озера (зона 0) нормаль
+  // строго вертикальна, поэтому xy-составляющая нормали равна нулю. Такой
+  // фрагмент не получает ни сухопутной текстуры, ни изолиний — иначе на
+  // континентальном озере выше seaLevel (z > 0) рисовались бы полосатые
+  // кольца и «каменные» склоны.
+  float normalHoriz = length(v_normal.xy);
+  bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015);
+
   // Гипсометрия и изолинии рельефа: низины зеленее, склоны и гребни каменистее.
   float hNorm = clamp((v_worldPos.z - 15.0) / 140.0, 0.0, 1.0);
   vec3 lowlandColor  = vec3(0.31, 0.39, 0.30);
@@ -287,14 +295,16 @@ void main() {
   float contourFade  = (u_focusRadiusM > 1.0)
     ? (1.0 - smoothstep(hexApothem * 0.72, hexApothem * 0.96, centerHexDist))
     : 1.0;
-  float contourLine  = (1.0 - smoothstep(0.0, 0.045, contourPhase))
-    * contourFade
-    * (1.0 - u_isSkirt);
+  float contourLine  = isFlatWaterMirror
+    ? 0.0
+    : (1.0 - smoothstep(0.0, 0.045, contourPhase)) * contourFade * (1.0 - u_isSkirt);
   naturalColor      *= (1.0 - 0.12 * contourLine);
 
   // 3 каскада процедурной текстуры поверхности суши (v_worldPos.z > 0.0)
   // в нормированных мировых координатах (единое поле для центра и юбки).
-  if (v_worldPos.z > 0.0) {
+  // Ровное водное зеркало (в том числе озеро выше seaLevel) сухопутной
+  // текстуры не получает вовсе.
+  if (v_worldPos.z > 0.0 && !isFlatWaterMirror) {
     vec2 surfCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
     const mat2 OCTAVE_ROT = mat2(0.80, 0.60, -0.60, 0.80);
 
@@ -305,17 +315,21 @@ void main() {
     vec3 gritTint = mix(vec3(0.90, 0.89, 0.87), vec3(1.11, 1.09, 1.06), microGrain);
     naturalColor *= mix(vec3(1.0), gritTint, microFade * 0.85);
 
-    // 2. Среднемасштабная стратификация склонов и пятнистость биома за гексом.
+    // 2. Среднемасштабная пятнистость биома и непериодическое затенение
+    //    крутых склонов. Периодическая стратификация по высоте (fract(z / 30))
+    //    убрана: она рисовала концентрические «зебровые» кольца каждые 30 м
+    //    на склонах. Теперь тон склонов задаёт их крутизна (slopeSteep /
+    //    slopeRock) в сочетании с 2D-шумом mesoPatch — без периодичности.
     float mesoFade = 1.0 - smoothstep(0.15, 0.78, blur);
     float mesoPatch = terrainValueNoise(surfCoord * 7.5 + vec2(4.2, -9.1)) * 0.60
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 17.5 + vec2(-6.4, 15.3)) * 0.40;
     float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
-    float strataPhase = abs(fract(v_worldPos.z / 30.0 + (mesoPatch - 0.5) * 0.42) - 0.5) * 2.0;
-    float strataTerrace = smoothstep(0.18, 0.82, strataPhase);
-    float strataStrength = 0.35 + 0.65 * smoothstep(0.02, 0.28, slopeSteep);
+    float slopeRock = smoothstep(0.02, 0.28, slopeSteep);
     vec3 biomeMottle = mix(vec3(0.28, 0.37, 0.28), vec3(0.55, 0.50, 0.43), mesoPatch);
+    vec3 slopeRockTone = mix(vec3(0.30, 0.28, 0.25), vec3(0.50, 0.46, 0.41), mesoPatch);
     naturalColor = mix(naturalColor, biomeMottle, mesoFade * 0.26);
-    naturalColor *= 1.0 + (strataTerrace - 0.5) * 0.16 * strataStrength * mesoFade;
+    naturalColor = mix(naturalColor, slopeRockTone, slopeRock * 0.38 * mesoFade);
+    naturalColor *= 1.0 - 0.18 * slopeRock * (0.45 + 0.55 * mesoPatch) * mesoFade;
 
     // 3. Дальние макро-тона вершин и ложбин, читаемые вплоть до дымки горизонта.
     float macroBasin = terrainValueNoise(surfCoord * 1.35 + vec2(-11.2, 5.8)) * 0.65
@@ -337,11 +351,14 @@ void main() {
   vec3 baseColor    = mix(naturalColor, zoneColor, terraformBlend * 0.72);
 
   // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
-  // воды/озёр канонической ячейки лежит ровно на уровне seaLevel (z == 0),
-  // врез речного русла уходит ниже, поэтому условие — z <= 0.
-  if (zone == 0u && v_worldPos.z <= 0.0) {
+  // океана канонической ячейки лежит ровно на уровне seaLevel (z == 0), врез
+  // речного русла уходит ниже — условие z <= 0. Континентальные озёра выше
+  // seaLevel держат зенит ровной горизонтальной площадки (isFlatWaterMirror)
+  // и тонируются тем же водным градиентом SHALLOW_WATER_COLOR /
+  // DEEP_WATER_COLOR, что и океан.
+  if (zone == 0u && (v_worldPos.z <= 0.0 || isFlatWaterMirror)) {
     float depthBelowZero = max(0.0, -v_worldPos.z);
-    float waterBlend = smoothstep(0.0, 3.0, depthBelowZero);
+    float waterBlend = isFlatWaterMirror ? 1.0 : smoothstep(0.0, 3.0, depthBelowZero);
     vec3 waterColor = mix(SHALLOW_WATER_COLOR, DEEP_WATER_COLOR, smoothstep(0.0, 24.0, depthBelowZero));
     baseColor = mix(baseColor, waterColor, waterBlend * 0.92);
   }

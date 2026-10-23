@@ -266,17 +266,37 @@ export function generateTerraformMap(): Uint8Array {
  * попавшие в водные канонические ячейки Patch7, переводятся в зону 0 (пустошь)
  * с нулевой плотностью — шейдер рельефа по `zone == 0u` и глубине ниже
  * `seaLevel` плавно тонирует их водно-бирюзовым оттенком, а `scatterInstances`
- * не ставит над ними ни одного здания.
+ * не ставит над ними ни одного здания. При переданном `radiusM > 0` тексель
+ * проверяется и на размахе `patchSpanMeters(patch)`, и на локальном размахе
+ * `2 · radiusM` — малый детальный участок не наследует зонирование сухих
+ * соседей, попавших на края полного патча.
  */
-export function applyWaterZoning(zoneMap: Uint8Array, patch: LocalMapPatch): Uint8Array {
+export function applyWaterZoning(
+  zoneMap: Uint8Array,
+  patch: LocalMapPatch,
+  radiusM?: number,
+): Uint8Array {
   const zRes = ZONE_RES;
   const span = patchSpanMeters(patch);
+  // При малом radiusM детальный участок занимает лишь центральную часть
+  // patchSpanMeters, поэтому тексель проверяется ещё и на локальном размахе
+  // 2 · radiusM: иначе зонирование «сухих соседей» перекрывало бы озеро.
+  const localSpan = typeof radiusM === 'number' && radiusM > 0 ? 2 * radiusM : 0;
+  const isWaterOrRiver = (u: number, v: number): boolean => {
+    const cell = nearestPatchCell(patch, localPointToDirection(patch, u, v));
+    return isWaterCell(cell, patch.seaLevel) || cell.streamWeight > 0;
+  };
   for (let zy = 0; zy < zRes; zy++) {
     const v = ((zy + 0.5) / zRes - 0.5) * span;
+    const vLocal = localSpan > 0 ? ((zy + 0.5) / zRes - 0.5) * localSpan : 0;
     for (let zx = 0; zx < zRes; zx++) {
       const u = ((zx + 0.5) / zRes - 0.5) * span;
-      const cell = nearestPatchCell(patch, localPointToDirection(patch, u, v));
-      if (!isWaterCell(cell, patch.seaLevel) && cell.streamWeight <= 0) continue;
+      const wetOnSpan = isWaterOrRiver(u, v);
+      if (!wetOnSpan) {
+        if (localSpan <= 0) continue;
+        const uLocal = ((zx + 0.5) / zRes - 0.5) * localSpan;
+        if (!isWaterOrRiver(uLocal, vLocal)) continue;
+      }
       const idx = (zy * zRes + zx) * 2;
       zoneMap[idx] = 0;
       zoneMap[idx + 1] = 0;
@@ -747,6 +767,12 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 
       // И-3.1: (u, v) → 3D-направление → ближайшая каноническая ячейка Patch7.
       const cell = nearestPatchCell(patch, localPointToDirection(patch, wx, wy));
+      // И-3.2/И-3.4: маска спавна растеризуется на весь patchSpanMeters, а
+      // детальный участок при малом radiusM занимает лишь его центр, поэтому
+      // локальная точка воды/озера/русла гасит спавн независимо от того, куда
+      // попал соответствующий тексель маски (иначе сухие соседи разрешали бы
+      // застройку на континентальном озере).
+      if (isWaterCell(cell, patch.seaLevel) || cell.streamWeight > 0) spawnMask[idx] = 0;
       if (spawnMask[idx] === 1) buildablePoints++;
 
       let height: number;
@@ -787,7 +813,9 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   }
 
   // 5. Zone map: вода/озёра/русла остаются без зонирования (И-3.2/И-3.4).
-  const zoneMap = applyWaterZoning(generateZoneMap(cellSeed, placeId), patch);
+  //    radiusM передаётся, чтобы зонирование учитывало и локальный размах
+  //    детального участка, а не только полный patchSpanMeters.
+  const zoneMap = applyWaterZoning(generateZoneMap(cellSeed, placeId), patch, radiusM);
 
   // 6. Scatter (И-3.4: маска запрета спавна отбраковывает воду/озёра/русла/склоны)
   const instances = scatterInstances(zoneMap, heightfield, radiusM, cellSeed, placeId, spawnMask);
@@ -835,6 +863,12 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 // с детальным мешем центрального гекса строго по гексагональной метрике
 // `clusterHexMetric(x, y)` (бесшовный шестиугольный срез), а весь горизонт
 // получает честный радиус кривизны планеты.
+//
+// Stage-8.2.1 (хотфикс): юбка держит зеркало континентальных озёр выше
+// seaLevel (waterLevelOf вместо Math.min(0, ...)), калибрует канал `elevation`
+// макро-решётки относительно канонического центра патча и гасит сухопутный
+// шум у уреза воды — вместо 253-метровой шестигранной «столовой горы»
+// посреди круглого кратера/рва.
 // ---------------------------------------------------------------------------
 
 /** Угловых сегментов контура горизонта: 6 секторов × 16 шагов (97 узлов с замыканием). */
@@ -1066,7 +1100,9 @@ function sampleSkirtLatticeAt(lattice: Float32Array, extentM: number, x: number,
  * Планетарная высота точки юбки относительно seaLevel, м. Частота, seed и
  * положительный базовый уровень fBm/detail совпадают с generateLocalMap,
  * поэтому на стыке больше нет ступеньки +60 м. От R_patch до 2.2 · R_patch
- * дискретный якорь Patch7 плавно уступает непрерывной макро-решётке.
+ * дискретный якорь Patch7 плавно уступает непрерывной макро-решётке, а канал
+ * `elevation` решётки калибруется сдвигом `elevCalibration` относительно
+ * канонического центра патча (озеро выше seaLevel держит filledElevation).
  */
 function skirtPlanetaryHeight(
   patch: LocalMapPatch,
@@ -1077,6 +1113,7 @@ function skirtPlanetaryHeight(
   cellSeed: number,
   noiseScale: number,
   elevLattice: SkirtElevationLattice | null,
+  elevCalibration: number,
   outerRadiusM: number,
 ): number {
   const dir = localPointToDirection(patch, x, y);
@@ -1093,15 +1130,33 @@ function skirtPlanetaryHeight(
     : 0.5 * PROFILE_DETAIL_AMPLITUDE_M) * detailFade;
 
   const water = isWaterCell(cell, patch.seaLevel);
+  // И-3.2: зеркало воды в ближней зоне считается ровно той же формулой, что и
+  // в generateLocalMap (тождество берега), поэтому континентальное озеро выше
+  // seaLevel держит свой уровень и за шестигранным воротником, не проваливаясь
+  // к z = 0.
+  const waterMirrorM = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
   const nearHeight = water
-    ? Math.min(0, (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT)
+    ? waterMirrorM
     : (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + fbmM + detailM;
   if (r <= radiusPatchM || !elevLattice) return nearHeight;
 
+  // Калибровка сэмпла макро-решётки относительно центра патча: непрерывное
+  // поле elevation продолжает канонический якорь центральной ячейки
+  // (waterLevelOf для воды, baseElevationOf для суши), а не абсолютную
+  // некалиброванную высоту сэмплера.
   const elev = sampleSkirtLatticeAt(elevLattice.elevation, outerRadiusM, x, y);
-  let latticeHeight = (elev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + fbmM + detailM;
-  // Океан/озёра за пределами детального участка не поднимаются над зеркалом.
-  if (elev < patch.seaLevel) latticeHeight = Math.min(0, latticeHeight);
+  const calibratedElev = elev + elevCalibration;
+  const calibratedM = (calibratedElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+  let latticeHeight: number;
+  if (water) {
+    // Вода не проваливается ниже зеркала: решётка поднимает её только там,
+    // где поле действительно выходит на берег, а сухопутный шум гаснет у
+    // уреза воды плавным shoreBlend.
+    const shoreBlend = smooth01(Math.max(0, calibratedM - waterMirrorM) / 45);
+    latticeHeight = Math.max(waterMirrorM, calibratedM) + (fbmM + detailM) * shoreBlend;
+  } else {
+    latticeHeight = calibratedM + fbmM + detailM;
+  }
   const latticeBlend = smooth01((r - radiusPatchM) / (1.2 * radiusPatchM));
   return nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
 }
@@ -1149,6 +1204,19 @@ export function generateHorizonSkirt(
     : null;
   const cellSeed = (request.seed ^ Math.imul((patch.centerCell + 1) >>> 0, 0x9E3779B1)) >>> 0;
   const noiseScale = (3.5 + Math.log2(Math.max(1, radiusPatchM / 600)) * 0.65) / Math.max(radiusPatchM, 1);
+
+  // И-3.2: калибровка канала `elevation` макро-решётки относительно центра
+  // патча. Сэмплер c100-soft-v2 отдаёт «сырую» высоту, а канонический центр
+  // держит filledElevation (вода) или baseElevationOf (суша); без сдвига
+  // юбка уезжала бы от зеркала континентального озера на сотни метров.
+  const centerCell = patch.cells[0] as PatchCell;
+  const centerCanonElev = isWaterCell(centerCell, patch.seaLevel)
+    ? waterLevelOf(centerCell, patch.seaLevel)
+    : baseElevationOf(centerCell);
+  const rawCenterElev = elevLattice
+    ? sampleSkirtLatticeAt(elevLattice.elevation, outerRadiusM, 0, 0)
+    : centerCanonElev;
+  const elevCalibration = centerCanonElev - rawCenterElev;
 
   const innerRes = HEIGHTFIELD_RES;
   const hasCollar = !!innerHeightfield && innerHeightfield.length >= innerRes * innerRes;
@@ -1198,13 +1266,13 @@ export function generateHorizonSkirt(
         } else {
           const blend = smooth01((hexDist - blendStartM) / blendSpanM);
           const planetaryZ = skirtPlanetaryHeight(
-            patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, outerRadiusM,
+            patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
           );
           z = innerZ + (planetaryZ - innerZ) * blend;
         }
       } else {
         z = skirtPlanetaryHeight(
-          patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, outerRadiusM,
+          patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
         );
       }
 
