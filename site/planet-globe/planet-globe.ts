@@ -1756,7 +1756,10 @@ function stageLocalPatchSwap(
       programs = renderer.compilePrograms();
       programsOwned = true;
     } else {
-      programs = localMapPrograms ?? compileLocalMapPrograms(gl);
+      // Страховка для сборок без compilePrograms: собственные программы
+      // подменяемого рендерера не переиспользуем, иначе его dispose() удалит
+      // GL-объекты, на которые уже ссылается новый участок.
+      programs = compileLocalMapPrograms(gl);
     }
     if (typeof renderer.enqueueWorkerData === 'function') {
       renderer.enqueueWorkerData(data, 3.0);
