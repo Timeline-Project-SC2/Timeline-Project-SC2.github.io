@@ -898,7 +898,7 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 
 // ---------------------------------------------------------------------------
 // Stage-8.2: непрерывная сферическая юбка горизонта вокруг выделенного
-// центрального гекса активной ячейки. Единая полярная сетка 97 × 57 без
+// центрального гекса активной ячейки. Единая полярная сетка 145 × 85 без
 // 6 отдельных плит-лепестков и без провалов фасок: высоты воротника сшиваются
 // с детальным мешем центрального гекса строго по гексагональной метрике
 // `clusterHexMetric(x, y)` (бесшовный шестиугольный срез), а весь горизонт
@@ -911,12 +911,12 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
 // посреди круглого кратера/рва.
 // ---------------------------------------------------------------------------
 
-/** Угловых сегментов контура горизонта: 6 секторов × 16 шагов (97 узлов с замыканием). */
-export const SKIRT_ANGULAR_SEGMENTS = 96;
-/** Радиальных шагов единой полярной сетки горизонта: 14 плотных + 42 до сферы (57 рядов). */
-export const SKIRT_RADIAL_RINGS = 56;
-/** Радиальных шагов плотного воротника: от R_inner до 1.10 · R_patch (остальные 42 — к горизонту). */
-export const SKIRT_COLLAR_RINGS = 14;
+/** Угловых сегментов контура горизонта: 6 секторов × 24 шагов (145 узлов с замыканием). */
+export const SKIRT_ANGULAR_SEGMENTS = 144;
+/** Радиальных шагов единой полярной сетки горизонта: 24 плотных + 60 до сферы (85 рядов). */
+export const SKIRT_RADIAL_RINGS = 84;
+/** Радиальных шагов плотного воротника: от R_inner до 1.15 · R_patch (остальные 60 — к горизонту). */
+export const SKIRT_COLLAR_RINGS = 24;
 /** Число соседних гексов кластера Patch7 (шестиугольное кольцо slot 0..5). */
 export const SKIRT_RING_COUNT = 6;
 /** √3/2 — отношение апофемы правильного шестиугольника к радиусу описанной окружности. */
@@ -926,23 +926,23 @@ export const CENTER_HEX_RADIUS_RATIO = 0.93;
 /** Доля R_patch: внутренний радиус непрерывной юбки (воротник перекрывает центральный гекс). */
 export const SKIRT_INNER_RADIUS_RATIO = 0.72;
 /** Доля R_patch: внешний радиус плотного воротника вокруг выделенного гекса. */
-export const SKIRT_COLLAR_END_RADIUS_RATIO = 1.1;
+export const SKIRT_COLLAR_END_RADIUS_RATIO = 1.15;
 /** Доля R_patch: шаг центров соседних гексов канонической сетки кластера Patch7. */
 export const SKIRT_HEX_SPACING_RATIO = 1.15;
-/** Число шагов d_hex от центра юбки до сферического горизонта (R_outer = 6.5 · d_hex). */
-export const SKIRT_OUTER_SPACING_RATIO = 6.5;
+/** Число шагов d_hex от центра юбки до сферического горизонта (R_outer = 10.0 · d_hex). */
+export const SKIRT_OUTER_SPACING_RATIO = 10.0;
 /** Отношение радиуса планеты к внешнему радиусу юбки (плавная кривизна горизонта). */
 export const SKIRT_PLANET_RADIUS_SPACING_RATIO = 3.6;
 /** Доля апофемы центрального гекса: начало полосы смешивания высот воротника. */
 export const SKIRT_COLLAR_BLEND_START_RATIO = 1.005;
-/** Доля апофемы центрального гекса: конец полосы смешивания (срез + 0.195 · A). */
-export const SKIRT_COLLAR_BLEND_END_RATIO = 1.2;
+/** Доля апофемы центрального гекса: конец полосы смешивания (срез + 0.345 · A). */
+export const SKIRT_COLLAR_BLEND_END_RATIO = 1.35;
 /** Доля R_patch: страховочная граница точной выборки heightfield (сетка res × res). */
 export const SKIRT_HEIGHTFIELD_GUARD_RATIO = 0.98;
 /** Число ячеек канонической сетки Голдберга v = 128: 10v² + 2. */
 const GOLDBERG_V128_CELLS = 10 * 128 * 128 + 2;
-/** Узлов макро-решётки 3D-сэмплера на сторону (25×25 = 625 опросов). */
-const SKIRT_LATTICE_STEPS = 24;
+/** Узлов макро-решётки 3D-сэмплера на сторону (33×33 = 1 089 опросов). */
+const SKIRT_LATTICE_STEPS = 32;
 
 /**
  * Единая гексагональная метрика кластера: точное расстояние от центра
@@ -974,7 +974,7 @@ export function clusterHexMetric(x: number, y: number): number {
 
 /**
  * Геометрия непрерывной сферической юбки горизонта вокруг выделенного
- * центрального гекса активной ячейки (единая полярная сетка 97 × 57).
+ * центрального гекса активной ячейки (единая полярная сетка 145 × 85).
  */
 export interface HorizonSkirtData {
   /** (x, y, z) в метрах; сферическое проседание добавляет вершинный шейдер. */
@@ -984,7 +984,7 @@ export interface HorizonSkirtData {
   readonly indices: Uint32Array;
   /** R_inner = 0.72 · R_patch — внутреннее кольцо непрерывной юбки. */
   readonly innerRadiusM: number;
-  /** R_outer = 6.5 · d_hex = 7.475 · R_patch — сферический горизонт юбки. */
+  /** R_outer = 10.0 · d_hex = 11.5 · R_patch — сферический горизонт юбки. */
   readonly outerRadiusM: number;
   /** R_planet = 3.6 · R_outer — честный радиус кривизны горизонта, м. */
   readonly planetRadiusM: number;
@@ -1103,7 +1103,7 @@ interface SkirtElevationLattice {
  * `(x · planetCoordScale, y · planetCoordScale)`, где `planetCoordScale` —
  * отношение физического шага гексов планеты (`hexSpacingMeters`, ~60 км для
  * Земли v=128) к визуальному шагу юбки (`1.15 · radiusM`). Поэтому решётка
- * 25×25 охватывает реальные 6 колец канонических ячеек вокруг активного
+ * 33×33 охватывает реальные 10 колец канонических ячеек вокруг активного
  * гекса при любом `radiusM`, а не крошечный пятачок в центре одной ячейки.
  */
 function sampleSkirtElevationLattice(
@@ -1145,11 +1145,47 @@ function sampleSkirtLatticeAt(lattice: Float32Array, extentM: number, x: number,
   return top * (1 - ay) + bottom * ay;
 }
 
+/** Плавный радиально-угловой якорь Patch7 без границ Вороного и скачков воды. */
+function smoothPatchBaseElevation(
+  patch: LocalMapPatch,
+  neighborSlots: readonly PatchCell[],
+  centerCanonElev: number,
+  radiusPatchM: number,
+  x: number,
+  y: number,
+  r: number,
+): { elevation: number; water: number; waterLevel: number } {
+  const center = patch.cells[0] as PatchCell;
+  const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
+  const phi = (Math.atan2(y, x) + 2 * Math.PI) % (2 * Math.PI);
+  const slot = phi / (Math.PI / 3);
+  const k0 = Math.floor(slot) % SKIRT_RING_COUNT;
+  const c0 = neighborSlots[k0] as PatchCell;
+  const c1 = neighborSlots[(k0 + 1) % SKIRT_RING_COUNT] as PatchCell;
+  const angularBlend = smooth01(slot - Math.floor(slot));
+  const neighborBlend = smooth01((r - collarEndM) / (2.4 * radiusPatchM));
+  const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+  const canon = (cell: PatchCell): number => isWaterCell(cell, patch.seaLevel)
+    ? waterLevelOf(cell, patch.seaLevel) : baseElevationOf(cell);
+  const centerWater = isWaterCell(center, patch.seaLevel);
+  // Озеро гарантированно держит зеркало до 1.8 R, затем водность меняется
+  // непрерывно, а не переключается булевым флагом на границе соседней ячейки.
+  const waterBlend = centerWater
+    ? smooth01((r - 1.8 * radiusPatchM) / (2.4 * radiusPatchM)) : neighborBlend;
+  return {
+    elevation: mix(centerCanonElev, mix(canon(c0), canon(c1), angularBlend), neighborBlend),
+    water: mix(Number(centerWater), mix(Number(isWaterCell(c0, patch.seaLevel)),
+      Number(isWaterCell(c1, patch.seaLevel)), angularBlend), waterBlend),
+    waterLevel: mix(waterLevelOf(center, patch.seaLevel),
+      mix(waterLevelOf(c0, patch.seaLevel), waterLevelOf(c1, patch.seaLevel), angularBlend), waterBlend),
+  };
+}
+
 /**
  * Планетарная высота точки юбки относительно seaLevel, м. Частота, seed и
  * положительный базовый уровень fBm/detail совпадают с generateLocalMap,
- * поэтому на стыке больше нет ступеньки +60 м. От R_patch до 2.2 · R_patch
- * дискретный якорь Patch7 плавно уступает непрерывной макро-решётке, а канал
+ * поэтому на стыке больше нет ступеньки +60 м. На первых 3–4 кольцах
+ * гладкий якорь Patch7 плавно уступает непрерывной макро-решётке, а канал
  * `elevation` решётки калибруется сдвигом `elevCalibration` относительно
  * канонического центра патча (озеро выше seaLevel держит filledElevation).
  */
@@ -1164,22 +1200,15 @@ function skirtPlanetaryHeight(
   elevLattice: SkirtElevationLattice | null,
   elevCalibration: number,
   outerRadiusM: number,
-  planetCoordScale = 1,
+  planetCoordScale: number,
+  neighborSlots: readonly PatchCell[],
+  centerCanonElev: number,
 ): number {
-  // Stage-8.3: внутри радиуса участка и плотного воротника (r <= collarEndM,
-  // полоса hexDist <= blendEndM) координаты НЕ растягиваются (coordScale = 1) —
-  // выбор канонической ячейки там бит-в-бит совпадает с generateLocalMap, и
-  // шестигранная сшивка Stage-8.2/8.2.1 остаётся точной до миллиметров. За
-  // воротником масштаб плавно (на 0.85 · R_patch) выходит на планетарный, и
-  // все 6 соседних ячеек Patch7 реально формируют рельеф даже при radiusM = 600.
+  // Stage-8.4: масштаб и опорная высота разгоняются на первых 3–4 кольцах.
   const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
-  const blendEndM = SKIRT_COLLAR_BLEND_END_RATIO
-    * CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusPatchM;
-  const coordScale = r > collarEndM && clusterHexMetric(x, y) > blendEndM
-    ? 1 + (planetCoordScale - 1) * smooth01((r - collarEndM) / (0.85 * radiusPatchM))
-    : 1;
-  const dir = localPointToDirection(patch, x * coordScale, y * coordScale);
-  const cell = nearestPatchCell(patch, dir);
+  const coordScale = 1 + (planetCoordScale - 1)
+    * smooth01((r - collarEndM) / (3.2 * radiusPatchM));
+  const base = smoothPatchBaseElevation(patch, neighborSlots, centerCanonElev, radiusPatchM, x, y, r);
   const distRatio = clampScalar((r - radiusPatchM) / (outerRadiusM - radiusPatchM), 0, 1);
   const fbmNear = fBm(x * noiseScale, y * noiseScale, cellSeed, 5) * LAND_FBM_AMPLITUDE_M;
   const fbmFar = (
@@ -1191,23 +1220,23 @@ function skirtPlanetaryHeight(
     ? (sampleSkirtLatticeAt(elevLattice.detail, outerRadiusM, x, y) * 0.5 + 0.5) * PROFILE_DETAIL_AMPLITUDE_M
     : 0.5 * PROFILE_DETAIL_AMPLITUDE_M) * detailFade;
 
-  const water = isWaterCell(cell, patch.seaLevel);
+  const water = base.water;
   // И-3.2: зеркало воды в ближней зоне считается ровно той же формулой, что и
   // в generateLocalMap (тождество берега), поэтому континентальное озеро выше
   // seaLevel держит свой уровень и за шестигранным воротником, не проваливаясь
   // к z = 0.
-  const waterMirrorM = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+  const waterMirrorM = (base.waterLevel - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
 
   // Stage-8.3: гребневые горные хребты только на суше и только за пределами
   // активного гекса (r > collarEndM). Огибающая плавно выводит рельеф из
-  // природной долины в предгорья на 1.45 · R_patch и слегка (на 35%) гасит
+  // природной долины в предгорья на 2.8 · R_patch и слегка (на 30%) гасит
   // пики к самому горизонту; крупномасштабная маска macroBasin разделяет
   // азимуты на выразительные хребты и открытые межгорные долины/перевалы.
   // На воде горный рельеф строго ноль — зеркало Stage-8.2.1 не трогаем.
   let mountainM = 0;
-  if (!water && r > collarEndM) {
-    const mountainEnvelope = smooth01((r - collarEndM) / (1.45 * radiusPatchM))
-      * (1 - 0.35 * smooth01((r - 3.2 * radiusPatchM) / (outerRadiusM - 3.2 * radiusPatchM)));
+  if (water < 1 && r > collarEndM) {
+    const mountainEnvelope = smooth01((r - collarEndM) / (2.8 * radiusPatchM))
+      * (1 - 0.30 * smooth01((r - 6.0 * radiusPatchM) / (outerRadiusM - 6.0 * radiusPatchM)));
     const ridgeVal = ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, cellSeed ^ 0x5A17C3, 5);
     const macroBasin = valueNoise2D(
       x * noiseScale * 0.14 + 3.7, y * noiseScale * 0.14 - 5.1, cellSeed ^ 0x3391B7,
@@ -1217,29 +1246,24 @@ function skirtPlanetaryHeight(
     mountainM = peakAmpM * mountainEnvelope * basinMask * Math.pow(ridgeVal, 1.35);
   }
 
-  const nearHeight = water
-    ? waterMirrorM
-    : (baseElevationOf(cell) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT + fbmM + detailM + mountainM;
+  const landHeight = (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
+    + fbmM + detailM + mountainM;
+  const nearHeight = waterMirrorM * water + landHeight * (1 - water);
   if (r <= radiusPatchM || !elevLattice) return nearHeight;
 
   // Калибровка сэмпла макро-решётки относительно центра патча: непрерывное
   // поле elevation продолжает канонический якорь центральной ячейки
   // (waterLevelOf для воды, baseElevationOf для суши), а не абсолютную
   // некалиброванную высоту сэмплера.
-  const elev = sampleSkirtLatticeAt(elevLattice.elevation, outerRadiusM, x, y);
+  const elev = sampleSkirtLatticeAt(
+    elevLattice.elevation, outerRadiusM, x * coordScale / planetCoordScale, y * coordScale / planetCoordScale,
+  );
   const calibratedElev = elev + elevCalibration;
   const calibratedM = (calibratedElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
-  let latticeHeight: number;
-  if (water) {
-    // Вода не проваливается ниже зеркала: решётка поднимает её только там,
-    // где поле действительно выходит на берег, а сухопутный шум гаснет у
-    // уреза воды плавным shoreBlend.
-    const shoreBlend = smooth01(Math.max(0, calibratedM - waterMirrorM) / 45);
-    latticeHeight = Math.max(waterMirrorM, calibratedM) + (fbmM + detailM) * shoreBlend;
-  } else {
-    latticeHeight = calibratedM + fbmM + detailM + mountainM;
-  }
-  const latticeBlend = smooth01((r - radiusPatchM) / (1.2 * radiusPatchM));
+  const shoreBlend = smooth01(Math.max(0, calibratedM - waterMirrorM) / 45);
+  const waterHeight = Math.max(waterMirrorM, calibratedM) + (fbmM + detailM) * shoreBlend;
+  const latticeHeight = waterHeight * water + (calibratedM + fbmM + detailM + mountainM) * (1 - water);
+  const latticeBlend = smooth01((r - collarEndM) / (3.4 * radiusPatchM));
   return nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
 }
 
@@ -1248,12 +1272,12 @@ function skirtPlanetaryHeight(
  * центрального гекса активной ячейки (Stage-8.2, вместо кластера из 7 плит):
  *
  * - Единая полярная сетка `(SKIRT_ANGULAR_SEGMENTS + 1) × (SKIRT_RADIAL_RINGS + 1)`
- *   = 97 × 57 = 5 529 вершин и 96 × 56 × 6 = 32 256 индексов: горизонт
+ *   = 145 × 85 = 12 325 вершин и 96 × 56 × 6 = 32 256 индексов: горизонт
  *   непрерывен по всем направлениям, без 6 отдельных плит-лепестков и без
  *   физических провалов фасок `bevelDropM`.
- * - Первые `SKIRT_COLLAR_RINGS = 14` радиальных шагов — плотный воротник от
- *   `R_inner = 0.72 · R_patch` до `1.10 · R_patch`; остальные 42 шага — от
- *   `1.10 · R_patch` до `R_outer = 6.5 · d_hex = 7.475 · R_patch` по степени
+ * - Первые `SKIRT_COLLAR_RINGS = 24` радиальных шагов — плотный воротник от
+ *   `R_inner = 0.72 · R_patch` до `1.15 · R_patch`; остальные 60 шагов — от
+ *   `1.15 · R_patch` до `R_outer = 10.0 · d_hex = 11.5 · R_patch` по степени
  *   `Math.pow(t, 1.35)` (сгущение линий у выделенного гекса).
  * - Гексагональная сшивка высот воротника: шейдер обрезает центральный меш
  *   257 × 257 строго по контуру `clusterHexMetric(x, y) <= A`, где
@@ -1271,6 +1295,7 @@ export function generateHorizonSkirt(
   innerHeightfield?: Float32Array,
 ): HorizonSkirtData {
   const patch = request.patch;
+  const neighborSlots = mapNeighborCellsToSlots(patch);
   const radiusPatchM = request.radiusM;
   // Апофема выделенного центрального гекса: ровно тот контур, по которому шейдер
   // обрезает центральный меш 257 × 257 (hexApothem = 0.8054 · R_patch).
@@ -1312,13 +1337,13 @@ export function generateHorizonSkirt(
   const hasCollar = !!innerHeightfield && innerHeightfield.length >= innerRes * innerRes;
   const collarHeights = hasCollar ? (innerHeightfield as Float32Array) : null;
 
-  const angularCount = SKIRT_ANGULAR_SEGMENTS + 1;   // 97 узлов с угловым замыканием
-  const radialCount = SKIRT_RADIAL_RINGS + 1;        // 57 радиальных рядов
-  const vertexCount = angularCount * radialCount;    // 5 529 вершин
+  const angularCount = SKIRT_ANGULAR_SEGMENTS + 1;   // 145 узлов с угловым замыканием
+  const radialCount = SKIRT_RADIAL_RINGS + 1;        // 85 радиальных рядов
+  const vertexCount = angularCount * radialCount;    // 12 325 вершин
   const positions = new Float32Array(vertexCount * 3);
 
-  // Радиусы рядов: 14 плотных шагов воротника от R_inner до 1.10 · R_patch,
-  // затем 42 шага к горизонту по степени t^1.35.
+  // Радиусы рядов: 24 плотных шага воротника от R_inner до 1.15 · R_patch,
+  // затем 60 шагов к горизонту по степени t^1.35.
   const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
   const outerSteps = SKIRT_RADIAL_RINGS - SKIRT_COLLAR_RINGS;
   const ringRadius = new Float64Array(radialCount);
@@ -1343,13 +1368,13 @@ export function generateHorizonSkirt(
       const y = r * Math.sin(phi);
       // Гексагональная метрика кластера: внутри выделенного гекса hexDist <= A.
       const hexDist = clusterHexMetric(x, y);
-      const insideGuard = Math.abs(x) <= guardM && Math.abs(y) <= guardM;
 
       let z: number;
-      if (collarHeights && insideGuard && hexDist <= blendEndM) {
+      if (collarHeights && hexDist <= blendEndM) {
         // Точная билинейная выборка детального heightfield участка: тот же
         // рельеф, что у обрезанного по гексу центрального меша 257 × 257.
-        const innerZ = sampleInnerHeightfield(collarHeights, innerRes, radiusPatchM, x, y);
+        const innerZ = sampleInnerHeightfield(collarHeights, innerRes, radiusPatchM,
+          clampScalar(x, -guardM, guardM), clampScalar(y, -guardM, guardM));
         if (hexDist <= blendStartM) {
           // Шестиугольный срез: высота совпадает 1-в-1 (blend = 0, без ступеньки).
           z = innerZ;
@@ -1357,14 +1382,14 @@ export function generateHorizonSkirt(
           const blend = smooth01((hexDist - blendStartM) / blendSpanM);
           const planetaryZ = skirtPlanetaryHeight(
             patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
-            planetCoordScale,
+            planetCoordScale, neighborSlots, centerCanonElev,
           );
           z = innerZ + (planetaryZ - innerZ) * blend;
         }
       } else {
         z = skirtPlanetaryHeight(
           patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
-          planetCoordScale,
+          planetCoordScale, neighborSlots, centerCanonElev,
         );
       }
 
@@ -1375,7 +1400,7 @@ export function generateHorizonSkirt(
     }
   }
 
-  // Индексы непрерывной полярной сетки: (96 × 56) quad'ов = 32 256 индексов.
+  // Индексы непрерывной полярной сетки: (144 × 84) quad'ов = 72 576 индексов.
   // Порядок обхода — CCW из +z (грань вверх), как у плоского меша рельефа.
   const indices = new Uint32Array(SKIRT_ANGULAR_SEGMENTS * SKIRT_RADIAL_RINGS * 6);
   let ptr = 0;
