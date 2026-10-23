@@ -529,31 +529,58 @@ function resizeLocalMapCanvas(): void {
 }
 
 /**
- * Stage-8.5: дистанция камеры по выбранной видимой ширине `widthKm`.
- * Физический размер участка фиксирован (LOCAL_PATCH_BASE_RADIUS_M), а селектор
- * «Видимая ширина» задаёт только охват кадра камеры — от близкого вида у долины
- * (1.2 км) до высотного тактического обзора всех 10 колец гексов.
+ * Stage-8.5.2: равномерная логарифмическая шкала селектора «Видимая ширина»
+ * по 11 ступеням (1.2 … 1250 км) — шаги 0.0 … 1.0 без мёртвых зон выше 70 км.
+ */
+function scaleStep01(widthKm: number): number {
+  const safeKm = Math.max(1.2, Number(widthKm) || 1.2);
+  return clampLocal(Math.log2(safeKm / 1.2) / Math.log2(1250 / 1.2), 0, 1);
+}
+
+/**
+ * Stage-8.5.2: дистанция камеры по выбранной видимой ширине `widthKm` без
+ * мёртвого потолка на 55 км — каждая из 11 ступеней селектора ощутимо
+ * меняет высоту камеры (≈×1.47 за шаг), а максимальная дистанция остаётся
+ * ниже localMaxCameraDistance().
  */
 function cameraDistanceForWidthKm(widthKm: number): number {
   const rect = els.localMapCanvas.getBoundingClientRect();
   const aspect = rect.height > 0 ? rect.width / rect.height : 1;
   const fit = Math.max(0.45, Math.min(1, aspect || 1));
-  const clampedWidthM = clampLocal(widthKm * 1000, 800, localMapRadiusM * 22);
-  return Math.max(localMinCameraDistance(), (clampedWidthM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit));
+  const u = scaleStep01(widthKm);
+  const baseUnit = (localMapRadiusM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit);
+  const minCloseDist = Math.max(localMinCameraDistance(), baseUnit * 0.24); // ~566 м при 1,2 км (внутри долины у построек)
+  const maxOverviewDist = baseUnit * 11.2; // ~26,4 км при 1250 км (весь 10-кольцевой диск в кадре, ниже localMaxCameraDistance = 35 км)
+  return minCloseDist * Math.pow(maxOverviewDist / minCloseDist, u);
 }
 
 /**
- * Stage-8.5: целевой наклон камеры по видимой ширине.
- * На близких масштабах (1.2–5 км) камера смотрит вдоль долины на горный горизонт
- * (LOCAL_REST_PITCH ≈ 0.31 рад), а на обзорных масштабах (≥39 км) плавно
- * поднимается до высотного тактического обзора (0.68 рад) всех 10 колец.
+ * Stage-8.5.2: целевой наклон камеры по видимой ширине без потолка на 39 км.
+ * От LOCAL_REST_PITCH у долины (1.2 км) до 0.76 рада на обзоре 1250 км.
  */
 function cameraPitchForWidthKm(widthKm: number): number {
-  const restPitch = LOCAL_REST_PITCH;
-  const overviewPitch = 0.68;
-  // Линейная интерполяция между 5 км (restPitch) и 39 км (overviewPitch).
-  const t = clampLocal((widthKm - 5) / (39 - 5), 0, 1);
-  return restPitch + (overviewPitch - restPitch) * t;
+  const u = scaleStep01(widthKm);
+  return LOCAL_REST_PITCH + (0.76 - LOCAL_REST_PITCH) * Math.pow(u, 0.85);
+}
+
+/**
+ * Stage-8.5.2: каноническая точка прицела локальной камеры — чуть впереди по
+ * текущему yaw от центра heightfield и чуть выше уровня долины. Смещение
+ * вперёд сужается с ростом ширины, чтобы при удалении камеры прицеливать
+ * центр кадра в саму долину, а не за её край.
+ */
+function defaultLocalCameraTarget(yaw: number, widthKm = localMapWidthKm): LocalVec3 {
+  const hf = localMapData?.heightfield;
+  const res = Math.round(Math.sqrt(hf?.length || 0));
+  const rawCenterZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
+  const centerZ = Number.isFinite(rawCenterZ) ? rawCenterZ : 0;
+  const u = scaleStep01(widthKm);
+  const forwardOffset = localMapRadiusM * 0.14 * (1 - 0.65 * u);
+  return [
+    -Math.cos(yaw) * forwardOffset,
+    -Math.sin(yaw) * forwardOffset,
+    centerZ + Math.max(14, localMapRadiusM * 0.025),
+  ];
 }
 
 function resetLocalCamera(): void {
@@ -561,17 +588,9 @@ function resetLocalCamera(): void {
   // Stage-8.5: наклон зависит от выбранной видимой ширины — плавно переходит
   // от панорамного вида вдоль долины к высотному тактическому обзору.
   localCameraPitch = cameraPitchForWidthKm(localMapWidthKm);
-  const hf = localMapData?.heightfield;
-  const res = Math.round(Math.sqrt(hf?.length || 0));
-  const centerZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
-  // Точка прицела ставится чуть впереди по направлению взгляда и чуть выше уровня
-  // центра: взгляд идёт вдоль долины к горному массиву на горизонте.
-  const forwardOffset = localMapRadiusM * 0.14;
-  localCameraTarget = [
-    -Math.cos(localCameraYaw) * forwardOffset,
-    -Math.sin(localCameraYaw) * forwardOffset,
-    (Number.isFinite(centerZ) ? centerZ : 0) + Math.max(14, localMapRadiusM * 0.025),
-  ];
+  // Точка прицела — каноническая точка долины; при уменьшении ширины камера
+  // возвращается в неё точно, без остаточного смещения.
+  localCameraTarget = defaultLocalCameraTarget(localCameraYaw, localMapWidthKm);
   // Stage-8.5: дистанция вычисляется через cameraDistanceForWidthKm() по
   // выбранной видимой ширине localMapWidthKm (физический R гекса фиксирован).
   localCameraDistance = cameraDistanceForWidthKm(localMapWidthKm);
@@ -612,7 +631,7 @@ function startLocalDiveInAnim(): void {
     fromYaw: LOCAL_REST_YAW - 0.24,
     toYaw: LOCAL_REST_YAW,
     fromPitch: 1.32,
-    toPitch: LOCAL_REST_PITCH,
+    toPitch: cameraPitchForWidthKm(localMapWidthKm),
     fromDist: targetDist * 5.2,
     toDist: targetDist,
     fromTarget: [0, 0, target[2] + localMapRadiusM * 0.25],
@@ -632,18 +651,9 @@ function startLocalDiveInAnim(): void {
  */
 function startLocalNeighborFlyAnim(azimuth: number): void {
   const targetZ = localCameraTarget[2];
-  // Высота центра нового патча и целевая точка прицела — та же формула,
-  // что и в resetLocalCamera, но вдоль текущего (пользовательского) yaw.
-  const hf = localMapData?.heightfield;
-  const res = Math.round(Math.sqrt(hf?.length || 0));
-  const rawCenterZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
-  const centerZ = Number.isFinite(rawCenterZ) ? rawCenterZ : 0;
-  const forwardOffset = localMapRadiusM * 0.14;
-  const toTarget: LocalVec3 = [
-    -Math.cos(localCameraYaw) * forwardOffset,
-    -Math.sin(localCameraYaw) * forwardOffset,
-    centerZ + Math.max(14, localMapRadiusM * 0.025),
-  ];
+  // Целевая точка прицела — каноническая точка долины вдоль текущего yaw,
+  // та же формула, что и в resetLocalCamera/defaultLocalCameraTarget.
+  const toTarget = defaultLocalCameraTarget(localCameraYaw, localMapWidthKm);
   // Азимут перехода считаем как atan2(east, north); предыдущий гекс лежит
   // строго против направления перехода относительно нового центра.
   const offset = localMapRadiusM * 1.05;
@@ -658,7 +668,7 @@ function startLocalNeighborFlyAnim(azimuth: number): void {
     fromYaw: localCameraYaw,
     toYaw: localCameraYaw,
     fromPitch: localCameraPitch,
-    toPitch: LOCAL_REST_PITCH,
+    toPitch: cameraPitchForWidthKm(localMapWidthKm),
     fromDist: localCameraDistance,
     toDist: localCameraDistance,
     fromTarget,
@@ -1386,7 +1396,7 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
       fromDist: localCameraDistance,
       toDist: targetDistance,
       fromTarget: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
-      toTarget: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+      toTarget: defaultLocalCameraTarget(localCameraYaw, scale),
       easeInOut: true,
     };
     updateLocalMapUrl(patchReady, scale);
