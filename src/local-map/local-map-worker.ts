@@ -232,7 +232,13 @@ export function boxBlurSeparable(src: Float32Array, w: number, h: number, kernel
 
 // ---- Генерация текстурных карт (CPU) ----
 export function generateZoneMap(seed: number, placeId: number): Uint8Array {
-  // Простейшая радиальная зонация: ядро → пром → жилой → периметр → пустошь
+  // Stage-8.3: органические поселковые кластеры и хутора в природной долине
+  // вместо сплошной концентрической «мишени» до d = 0.95. Гладкий 2D-шум
+  // clusterNoise вырезает компактные гроздья застройки только в долине
+  // (d < 0.78): большая часть гекса остаётся природным ландшафтом
+  // (zone = 0, density = 0 — луга и склоны), а внутри гроздей радиус по-прежнему
+  // задаёт характер застройки (ядро → пром → жилая → периметр) и плотность,
+  // достаточную для спавна зданий в scatterInstances.
   const map = new Uint8Array(ZONE_RES * ZONE_RES * 2); // RG
   const cx = ZONE_RES / 2, cy = ZONE_RES / 2;
   const maxR = ZONE_RES / 2;
@@ -241,22 +247,30 @@ export function generateZoneMap(seed: number, placeId: number): Uint8Array {
   for (let y = 0; y < ZONE_RES; y++) {
     for (let x = 0; x < ZONE_RES; x++) {
       const dx = x - cx, dy = y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy) / maxR;  // 0..1+
-      const noise = hashFloat(x, y, baseSeed) * 0.15;    // jitter зон
+      const d = Math.sqrt(dx * dx + dy * dy) / maxR;  // 0..1+
+      const clusterNoise = valueNoise2D(x * 0.14, y * 0.14, baseSeed ^ 0x71C9);
 
-      let zone: number, density: number;
-      const d = dist + noise;
-
-      if (d > 0.95) {
-        zone = 0; density = 0;                            // Пустошь
-      } else if (d > 0.70) {
-        zone = 3; density = Math.floor((1 - d) * 400);    // Периметр
-      } else if (d > 0.35) {
-        zone = 1; density = Math.floor((1 - d) * 300);    // Лёгкая застройка
-      } else if (d > 0.12) {
-        zone = 2; density = Math.floor((1 - d) * 350);    // Пром
-      } else {
-        zone = 4; density = Math.floor(200 + hashFloat(x, y, baseSeed + 1) * 55); // Ядро
+      let zone = 0, density = 0;                      // Природный ландшафт
+      if (d < 0.78) {
+        // Порог грозди растёт к краю долины: у ядра посёлок плотнее и шире,
+        // к периферии остаются лишь редкие хутора на сильных гребнях шума.
+        const radialT = Math.min(1, Math.max(0, (d - 0.10) / 0.68));
+        const radialSmooth = radialT * radialT * (3 - 2 * radialT);
+        const threshold = 0.51 + 0.15 * radialSmooth;
+        if (clusterNoise > threshold) {
+          // Сила грозди: 0 на органической границе пятна, 1 в его сердцевине.
+          const strength = Math.min(1, (clusterNoise - threshold) / 0.22);
+          const jitter = hashFloat(x, y, baseSeed + 1) * 20;
+          if (d < 0.13) {
+            zone = 4; density = Math.floor(190 + strength * 55 + jitter);   // Ядро
+          } else if (d < 0.32) {
+            zone = 2; density = Math.floor(150 + strength * 75 + jitter);   // Пром
+          } else if (d < 0.60) {
+            zone = 1; density = Math.floor(120 + strength * 75 + jitter);   // Лёгкая застройка
+          } else {
+            zone = 3; density = Math.floor(95 + strength * 65 + jitter);    // Периметр/хутора
+          }
+        }
       }
 
       const idx = (y * ZONE_RES + x) * 2;
@@ -268,16 +282,19 @@ export function generateZoneMap(seed: number, placeId: number): Uint8Array {
 }
 
 export function generateTerraformMap(): Uint8Array {
-  // Gaussian falloff от центра
+  // Stage-8.3: мягкий гауссов спад от центра. Радиус «разутюживания» уменьшен
+  // (sigma = 0.18 · рез.), а максимальная альфа ограничена 0.42 вместо 1.0 —
+  // долина внутри гекса сохраняет живой природный микрорельеф холмов и ложбин,
+  // а не превращается в плоский бетонный стол под застройкой.
   const map = new Uint8Array(TERRAFORM_RES * TERRAFORM_RES);
   const cx = TERRAFORM_RES / 2, cy = TERRAFORM_RES / 2;
-  const sigma = TERRAFORM_RES * 0.3;
+  const sigma = TERRAFORM_RES * 0.18;
 
   for (let y = 0; y < TERRAFORM_RES; y++) {
     for (let x = 0; x < TERRAFORM_RES; x++) {
       const dx = x - cx, dy = y - cy;
       const r2 = dx * dx + dy * dy;
-      const alpha = Math.exp(-r2 / (2 * sigma * sigma));
+      const alpha = Math.min(0.42, Math.exp(-r2 / (2 * sigma * sigma)));
       map[y * TERRAFORM_RES + x] = Math.floor(alpha * 255);
     }
   }
