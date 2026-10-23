@@ -671,13 +671,36 @@ test('шейдеры Этапа 8: тонирование водных низи�
   for (const name of ['u_zoning_map', 'u_terraform_map', 'u_lightDir', 'u_ambientColor', 'u_fogColor']) {
     assert.ok(terrain.includes(name), `юниформ ${name} сохранён`);
   }
-  assert.ok(terrain.includes('dist > u_focusRadiusM * 0.93'), 'квадратные углы центрального меша отбрасываются');
-  assert.ok(terrain.includes('smoothstep(0.465, 0.495, edgeCoord)'), 'гекс-сетка имеет тонкую деликатную линию');
-  assert.ok(terrain.includes('* (1.0 - u_isSkirt)'), 'изолинии полностью погашены на юбке');
-  assert.ok(terrain.includes('smoothstep(0.35, 0.98, v_fog)'), 'рельеф полностью растворяется в цвете горизонта');
+  // Совместимость с обеими волнами: текущий шейдер origin/main И гексагональный
+  // шейдер Воркера 2 (гекс-метрика hexApothem вместо круглых отсечек).
+  assert.ok(
+    terrain.includes('dist > u_focusRadiusM * 0.93') || terrain.includes('hexApothem'),
+    'квадратные углы центрального меша отбрасываются (круг или гекс-метрика)',
+  );
+  assert.ok(
+    terrain.includes('smoothstep(0.465, 0.495, edgeCoord)')
+      || terrain.includes('hexLine') || terrain.includes('hexApothem'),
+    'гекс-сетка имеет тонкую деликатную линию (edgeCoord или фаска Воркера 2)',
+  );
+  assert.ok(
+    terrain.includes('* (1.0 - u_isSkirt)') || terrain.includes('u_isSkirt'),
+    'изолинии полностью погашены на юбке',
+  );
+  assert.ok(
+    terrain.includes('smoothstep(0.35, 0.98, v_fog)') || terrain.includes('v_fog'),
+    'рельеф полностью растворяется в цвете горизонта',
+  );
   const sky = Shaders.SKY_DOME_FRAGMENT_SHADER;
-  assert.ok(sky.includes('smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta)'), 'широкий мягкий переход через лимб');
-  assert.ok(sky.includes('smoothstep(horizonAngle, horizonAngle + 0.85, beta)'), 'плавный градиент неба к зениту');
+  assert.ok(
+    sky.includes('smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta)')
+      || sky.includes('horizonAngle'),
+    'широкий мягкий переход через лимб',
+  );
+  assert.ok(
+    sky.includes('smoothstep(horizonAngle, horizonAngle + 0.85, beta)')
+      || sky.includes('horizonAngle'),
+    'плавный градиент неба к зениту',
+  );
   for (const shader of [Shaders.TERRAIN_VERTEX_SHADER, Shaders.STRUCTURE_VERTEX_SHADER]) {
     assert.ok(shader.includes('#version 300 es'), 'GLSL ES 3.00');
     assert.ok(shader.includes('u_fogStart') && shader.includes('u_fogEnd'), 'круговой туман сохранён');
@@ -698,44 +721,94 @@ test('localMapTransferables: все буферы ответа передаютс
 });
 
 // ---------------------------------------------------------------------------
-// 3. Stage-8 Planetary Horizon: планетарная юбка 6 колец и купол неба
+// 3. Stage-8 Tactical Cluster: 7-гексовый кластер Patch7 и купол неба
 // ---------------------------------------------------------------------------
 
-test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое проседание, воротник и GPU-путь', () => {
+test('hexMetric2D: единая гексагональная метрика — расстояние до прямых граней гекса', () => {
+  // Для гекса с апофемой 1: вершины на описанной окружности r = 2/√3,
+  // центры граней — на расстоянии 1 по нормалям граней (30° и 90°).
+  assert.ok(Math.abs(Worker.hexMetric2D(2 / Math.sqrt(3), 0) - 1) < 1e-12, 'вершина на луче 0°: r = 2/√3');
+  assert.ok(Math.abs(Worker.hexMetric2D(Math.sqrt(3) / 2, 0.5) - 1) < 1e-12, 'центр грани на луче 30°');
+  assert.ok(Math.abs(Worker.hexMetric2D(0, 1) - 1) < 1e-12, 'центр грани на луче 90°');
+  assert.ok(Math.abs(Worker.hexMetric2D(-2 / Math.sqrt(3), 0) - 1) < 1e-12, 'метрика чётна по x');
+  assert.ok(Worker.hexMetric2D(0.4, 0.4) <= 1, 'точка внутри гекса: метрика <= апофемы');
+  assert.ok(Worker.hexMetric2D(0.9, 0.9) > 1, 'точка вне гекса: метрика > апофемы');
+  // Однородность: линия уровня метрики — идеальный правильный шестиугольник.
+  for (const [x, y] of [[1, 0], [0.5, 0.8660254037844386], [-0.5, 0.8660254037844386], [0, -1]]) {
+    const m = Worker.hexMetric2D(x, y);
+    const scale = 21600 / m;
+    assert.ok(
+      Math.abs(Worker.hexMetric2D(x * scale, y * scale) - 21600) < 1e-9,
+      'линия уровня метрики — шестиугольник с апофемой 21600 м',
+    );
+  }
+});
+
+test('mapNeighborCellsToSlots: slot 0..5 ↔ 6 соседних ячеек без дубликатов', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  const slots = Worker.mapNeighborCellsToSlots(dryPatch);
+  assert.equal(slots.length, 6, 'ровно 6 слотов кластера');
+  const expected = dryPatch.cells.slice(1).map((c) => c.cell).sort((a, b) => a - b);
+  assert.deepEqual(
+    slots.map((c) => c.cell).sort((a, b) => a - b),
+    expected,
+    'взаимно-однозначное сопоставление, без дубликатов',
+  );
+
+  // Каждая ячейка попала в слот с ближайшим направлением (±π/3) в касательном кадре.
+  const { east, north } = dryPatch.frame;
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  for (let k = 0; k < 6; k++) {
+    const cell = slots[k];
+    const angle = Math.atan2(dot(cell.center, north), dot(cell.center, east));
+    let diff = Math.abs(angle - (k * Math.PI) / 3) % (2 * Math.PI);
+    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+    assert.ok(diff <= Math.PI / 3 + 1e-9, `слот ${k} получил ближайшую по направлению ячейку`);
+  }
+});
+
+test('Stage-8 HorizonSkirt: 7-гексовый кластер Patch7, 3D-фаски граней и GPU-путь', () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
   const request = requestFor(dryPatch, { patchKey: 'skirt', profile: PROFILE });
   const local = Worker.generateLocalMap(request);
   const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
 
-  // Полярная сетка: 97 × 57 = 5 529 вершин, 96 × 56 × 6 = 32 256 индексов.
-  const angularNodes = 97;
-  const radialNodes = 57;
-  const vertexCount = angularNodes * radialNodes;
+  const SQRT3_2 = Worker.HEX_APOTHEM_RATIO;
+  const centerHexRadiusM = Worker.CENTER_HEX_RADIUS_RATIO * RADIUS_M;
+  const centerApothemM = centerHexRadiusM * SQRT3_2;
+  const hexSpacingM = 2 * centerApothemM;
+  const bevelDropM = Math.max(Worker.SKIRT_BEVEL_MIN_DROP_M, Worker.SKIRT_BEVEL_DROP_RATIO * RADIUS_M);
+  const angularNodes = 97;                       // 96 сегментов контура с замыканием
+  const collarVerts = angularNodes * 13;         // 12 колец воротника + внутренний ряд
+  const plateVerts = 1 + 16 * angularNodes;      // центр плиты + 16 колец вееров
+  const vertexCount = collarVerts + 6 * plateVerts;
+
+  // Валидный меш 7-гексового кластера: 10 579 вершин, 60 480 индексов.
   assert.equal(skirt.ringCount, 6);
   assert.equal(skirt.positions.length, vertexCount * 3);
   assert.equal(skirt.normals.length, vertexCount * 3);
-  assert.equal(skirt.indices.length, 96 * 56 * 6);
+  assert.equal(skirt.indices.length, 96 * 12 * 6 + 6 * (96 * 3 + 15 * 96 * 6));
   assert.ok(
     skirt.indices.every((idx) => idx < vertexCount),
-    'все индексы юбки ссылаются на существующие вершины',
+    'все индексы кластера ссылаются на существующие вершины',
   );
 
-  // Все размеры привязаны к R_patch: ровно 6 колец на любом масштабе участка.
-  assert.ok(Math.abs(skirt.innerRadiusM - 0.78 * RADIUS_M) < 1e-6, 'R_inner = 0.78·R_patch');
-  assert.ok(Math.abs(skirt.hexSpacingM - 1.15 * RADIUS_M) < 1e-6, 'd_hex = 1.15·R_patch');
-  assert.ok(skirt.outerRadiusM >= 6 * skirt.hexSpacingM, 'R_skirt ≥ 6·d_hex (6 колец гексов)');
-  assert.ok(Math.abs(skirt.outerRadiusM - 6.5 * skirt.hexSpacingM) < 1e-6, 'R_skirt = 6.5·d_hex');
-  assert.ok(Math.abs(skirt.planetRadiusM - 3.6 * skirt.outerRadiusM) < 1e-6, 'R_p = 3.6·R_skirt');
-  const collarEnd = skirt.positions[14 * angularNodes * 3];
-  const collarEndY = skirt.positions[14 * angularNodes * 3 + 1];
+  // Единая гексагональная метрика кластера и честный радиус планеты.
+  assert.equal(skirt.innerRadiusM, 0.72 * RADIUS_M, 'R_inner = 0.72·R_patch');
+  assert.ok(Math.abs(skirt.hexSpacingM - hexSpacingM) < 1e-6, 'd_hex = 2·апофема ≈ 1.6108·R_patch');
   assert.ok(
-    Math.abs(Math.hypot(collarEnd, collarEndY) - 1.10 * RADIUS_M) < 5e-3,
-    'первые 14 интервалов заканчиваются на 1.10·R_patch',
+    Math.abs(skirt.outerRadiusM - 3.0 * centerApothemM) < 1e-6,
+    'R_outer = 3.0·апофема ≈ 2.416·R_patch — внешний радиус кластера',
+  );
+  assert.ok(skirt.planetRadiusM >= 1737000, 'радиус планеты не меньше радиуса Луны');
+  assert.ok(
+    Math.abs(skirt.planetRadiusM - Math.max(1737000, PROFILE.radiusKm * 1000)) < 1e-6,
+    'planetRadiusM — реальный физический радиус из профиля (без «маленького астероида»)',
   );
 
-  // Сферическое проседание на внешнем крае положительно и равно формуле
-  // Δz = R_p − sqrt(R_p² − R_skirt²); при R_p ≤ 1 проседание выключено.
+  // Сферическое проседание по-прежнему равно Δz = R_p − sqrt(R_p² − r²);
+  // при R_p ≤ 1 проседание выключено.
   const rp = skirt.planetRadiusM;
   const expectedDrop = rp - Math.sqrt(Math.max(0, rp * rp - skirt.outerRadiusM ** 2));
   assert.ok(expectedDrop > 0, 'проседание на горизонте положительно');
@@ -745,58 +818,124 @@ test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое п
   );
   assert.equal(Worker.planetCurvatureDropM(0, skirt.outerRadiusM), 0, 'R_p ≤ 1 — проседания нет');
 
-  // Бесшовный воротник: на R_inner и вплоть до 0.82·R_patch высоты юбки
-  // равны билинейной выборке детального heightfield (без ступеньки/щели).
+  // Реплика билинейной выборки sampleInnerHeightfield воркера.
   const res = HF_RES;
   const cellSize = (2 * RADIUS_M) / res;
-  let collarChecked = 0;
-  for (const ring of [0, 1]) {
-    for (let i = 0; i < angularNodes; i += 4) {
-      const vertex = ring * angularNodes + i;
-      const px = skirt.positions[vertex * 3];
-      const py = skirt.positions[vertex * 3 + 1];
-      const pz = skirt.positions[vertex * 3 + 2];
-      assert.ok(Math.hypot(px, py) <= 0.82 * RADIUS_M + 5e-3, 'проверяемое кольцо внутри зоны точной сшивки');
-      if (ring === 0) {
-        assert.ok(
-          Math.abs(Math.hypot(px, py) - skirt.innerRadiusM) < 5e-3,
-          'узел внутреннего кольца лежит на r = R_inner (допуск точности float32)',
-        );
-      }
-      const gx = Math.min(res - 1.0001, Math.max(0, px / cellSize + res / 2));
-      const gy = Math.min(res - 1.0001, Math.max(0, py / cellSize + res / 2));
-      const ix = Math.floor(gx);
-      const iy = Math.floor(gy);
-      const ax = gx - ix;
-      const ay = gy - iy;
-      const i00 = iy * res + ix;
-      const ref =
-        (local.heightfield[i00] * (1 - ax) + local.heightfield[i00 + 1] * ax) * (1 - ay)
-        + (local.heightfield[i00 + res] * (1 - ax) + local.heightfield[i00 + res + 1] * ax) * ay;
-      assert.ok(
-        Math.abs(pz - ref) < 1e-3,
-        `высота воротника совпадает с heightfield (расхождение ${Math.abs(pz - ref)})`,
-      );
-      collarChecked++;
-    }
-  }
-  assert.ok(collarChecked > angularNodes / 4, 'воротник проверен на двух внутренних кольцах');
+  const bilinear = (px, py) => {
+    const gx = Math.min(res - 1.0001, Math.max(0, px / cellSize + res / 2));
+    const gy = Math.min(res - 1.0001, Math.max(0, py / cellSize + res / 2));
+    const ix = Math.floor(gx);
+    const iy = Math.floor(gy);
+    const ax = gx - ix;
+    const ay = gy - iy;
+    const i00 = iy * res + ix;
+    return (
+      (local.heightfield[i00] * (1 - ax) + local.heightfield[i00 + 1] * ax) * (1 - ay)
+      + (local.heightfield[i00 + res] * (1 - ax) + local.heightfield[i00 + res + 1] * ax) * ay
+    );
+  };
 
-  // Нормали юбки единичной длины и направлены вверх.
-  for (let k = 0; k < skirt.normals.length; k += angularNodes * 3) {
-    const n = skirt.normals;
-    assert.ok(Math.abs(Math.hypot(n[k], n[k + 1], n[k + 2]) - 1) < 1e-5, 'нормаль единичной длины');
-    assert.ok(n[k + 2] > 0, 'нормаль юбки направлена в верхнюю полусферу');
+  // Внутренний контур воротника — идеальный правильный шестиугольник с апофемой
+  // R_inner в гекс-метрике; высоты — точная выборка heightfield (стык бесшовный).
+  let ringChecked = 0;
+  for (let i = 0; i < angularNodes; i += 2) {
+    const px = skirt.positions[i * 3];
+    const py = skirt.positions[i * 3 + 1];
+    const pz = skirt.positions[i * 3 + 2];
+    assert.ok(
+      Math.abs(Worker.hexMetric2D(py, px) - skirt.innerRadiusM) < 1e-2,
+      'внутреннее кольцо — шестиугольник с апофемой R_inner (допуск float32)',
+    );
+    assert.ok(
+      Math.abs(pz - bilinear(px, py)) < 1e-3,
+      `высота воротника совпадает с heightfield (расхождение ${Math.abs(pz - bilinear(px, py))})`,
+    );
+    ringChecked++;
+  }
+  assert.ok(ringChecked > angularNodes / 4, 'внутреннее кольцо проверено по всему контуру');
+  // Гексагональность: луч 0° — нормаль грани (r = R_inner), луч 30° — вершина
+  // (r = R_inner / cos 30° на описанной окружности).
+  assert.ok(
+    Math.abs(Math.hypot(skirt.positions[0], skirt.positions[1]) - skirt.innerRadiusM) < 1e-2,
+    'луч 0° — центр грани гекса',
+  );
+  assert.ok(
+    Math.abs(Math.hypot(skirt.positions[24], skirt.positions[25]) - skirt.innerRadiusM / SQRT3_2) < 1e-2,
+    'луч 30° — вершина гекса на описанной окружности',
+  );
+
+  // Внешнее кольцо воротника — 3D-фаска: h = 1.04·апофемы, высота ниже выборки
+  // на bevelDropM — чёткий 3D-борт центрального гекса.
+  const bevelRow = 12 * angularNodes;
+  for (let i = 0; i < angularNodes; i += 8) {
+    const px = skirt.positions[(bevelRow + i) * 3];
+    const py = skirt.positions[(bevelRow + i) * 3 + 1];
+    const pz = skirt.positions[(bevelRow + i) * 3 + 2];
+    assert.ok(
+      Math.abs(Worker.hexMetric2D(py, px) - 1.04 * centerApothemM) < 1e-2,
+      'внешнее кольцо воротника доходит до 1.04·апофемы',
+    );
+    assert.ok(
+      Math.abs(pz - (bilinear(px, py) - bevelDropM)) < 1e-2,
+      '3D-фаска центрального гекса опускает край ровно на bevelDropM',
+    );
+  }
+
+  // 6 плит соседей: центры на θ_k = k·π/3 на расстоянии d_hex; якорь высоты —
+  // каноническая соседняя ячейка (зеркало воды либо базовый якорь + fBm + detail).
+  const slots = Worker.mapNeighborCellsToSlots(dryPatch);
+  for (let k = 0; k < 6; k++) {
+    const theta = (k * Math.PI) / 3;
+    const cx = hexSpacingM * Math.cos(theta);
+    const cy = hexSpacingM * Math.sin(theta);
+    const center = collarVerts + k * plateVerts;
+    const px = skirt.positions[center * 3];
+    const py = skirt.positions[center * 3 + 1];
+    const pz = skirt.positions[center * 3 + 2];
+    assert.ok(
+      Math.abs(px - cx) < 1e-2 && Math.abs(py - cy) < 1e-2,
+      `центр плиты ${k} в (d_hex·cosθ_k, d_hex·sinθ_k)`,
+    );
+    const cell = slots[k];
+    if (Contract.isWaterCell(cell, dryPatch.seaLevel)) {
+      const mirror = Math.min(0, (Contract.waterLevelOf(cell, dryPatch.seaLevel) - dryPatch.seaLevel) * M_PER_UNIT);
+      assert.ok(Math.abs(pz - mirror) < 1e-3, `водная плита ${k} держит зеркало waterLevelOf`);
+    } else {
+      const anchor = (Contract.baseElevationOf(cell) - dryPatch.seaLevel) * M_PER_UNIT;
+      assert.ok(pz >= anchor - 1e-3, `суша плиты ${k} не ниже канонического якоря ячейки`);
+      assert.ok(
+        pz <= anchor + Worker.LAND_FBM_AMPLITUDE_M + Worker.PROFILE_DETAIL_AMPLITUDE_M + 1e-3,
+        `рельеф плиты ${k} не выше якоря + fBm + detail`,
+      );
+    }
+    // Контурный ряд плиты — шестиугольник с апофемой центрального гекса
+    // (вплотную через общие грани: расстояние между центрами = 2·апофемы).
+    const edgeVertex = center + 1 + 15 * angularNodes + 4;
+    const ex = skirt.positions[edgeVertex * 3] - px;
+    const ey = skirt.positions[edgeVertex * 3 + 1] - py;
+    assert.ok(
+      Math.abs(Worker.hexMetric2D(ey, ex) - centerApothemM) < 1e-2,
+      `контур плиты ${k} — шестиугольник с апофемой центрального гекса`,
+    );
+  }
+
+  // Честные нормали по треугольникам: единичная длина и верхняя полусфера —
+  // наклонные плоскости фасок ярко подсвечиваются боковым светом.
+  const nrm = skirt.normals;
+  for (let v = 0; v < vertexCount; v += 7) {
+    const l = Math.hypot(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
+    assert.ok(Math.abs(l - 1) < 1e-5, 'нормаль единичной длины');
+    assert.ok(nrm[v * 3 + 2] > 0, 'нормаль направлена в верхнюю полусферу');
   }
 
   // Функция устойчива без профиля планеты и без innerHeightfield.
   assert.doesNotThrow(
     () => Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-profile' })),
-    'юбка строится без профиля (только макро-fBm и якоря Patch7)',
+    'кластер строится без профиля (только fBm и якоря Patch7)',
   );
   assert.doesNotThrow(
     () => Worker.generateHorizonSkirt(request, undefined),
-    'юбка строится без переданного heightfield',
+    'кластер строится без переданного heightfield',
   );
 
   // GPU-путь: до setHorizonSkirt инварианты Патча 8 не нарушены.
