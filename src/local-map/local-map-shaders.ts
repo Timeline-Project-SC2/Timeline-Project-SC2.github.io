@@ -460,7 +460,7 @@ float skyStars(vec3 dir) {
   vec2 starCenter = vec2(0.24, 0.24) + 0.52 * vec2(fract(h1 * 31.7), h2);
   float d = length(f - starCenter);
   float brightness = smoothstep(0.915, 0.998, h1);
-  return smoothstep(0.14, 0.02, d) * (0.35 + 0.65 * brightness);
+  return (1.0 - smoothstep(0.02, 0.14, d)) * (0.35 + 0.65 * brightness);
 }
 
 void main() {
