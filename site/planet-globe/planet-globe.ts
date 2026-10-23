@@ -102,6 +102,12 @@ const LOCAL_DIVE_ANIM_MS = 1150;
  * ширина» больше не растягивает меш, а управляет только дистанцией/наклоном камеры.
  */
 const LOCAL_PATCH_BASE_RADIUS_M = 2500;
+/**
+ * Stage-8.7: шаг центров соседних гексов `d_hex = 1.15 · R_patch` — та же
+ * величина, что у решётки Patch7/юбки. Переход между гексами переносит точку
+ * прицела ровно на этот шаг, поэтому мировая точка взгляда не смещается.
+ */
+export const LOCAL_HEX_STEP_RATIO = 1.15;
 
 interface LocalMapPrograms {
   terrainProgram: WebGLProgram;
@@ -589,6 +595,39 @@ function defaultLocalCameraTarget(yaw: number, widthKm = localMapWidthKm): Local
     -Math.sin(yaw) * forwardOffset,
     centerZ + Math.max(14, localMapRadiusM * 0.025),
   ];
+}
+
+/**
+ * Stage-8.7: ре-бейзинг камеры при подмене патча.
+ *
+ * Локальная система координат каждого участка привязана к центру своего гекса,
+ * поэтому при переходе на соседа меняется начало координат: центр нового гекса
+ * лежит в старой системе на расстоянии `d_hex = 1.15 · R_patch` вдоль азимута
+ * перехода `azimuth = atan2(east, north)`. Функция переносит состояние камеры в
+ * новую систему так, чтобы МИРОВАЯ точка прицела и ракурс остались неизменными:
+ * к `target` прибавляется вектор `-d_hex · (sin azimuth, cos azimuth)` (старый
+ * центр в координатах нового гекса), а `yaw`/`pitch`/`distance` не меняются —
+ * пользовательский ракурс сохраняется непрерывно.
+ *
+ * Функция чистая (без обращения к состоянию модуля), чтобы её можно было
+ * проверить тестом и переиспользовать в обе стороны перехода.
+ */
+export function rebaseLocalCameraState(
+  prev: { target: LocalVec3; yaw: number; pitch: number; distance: number },
+  azimuth: number,
+  patchRadiusM: number,
+): { target: LocalVec3; yaw: number; pitch: number; distance: number } {
+  const stepM = LOCAL_HEX_STEP_RATIO * Math.max(0, patchRadiusM);
+  return {
+    target: [
+      prev.target[0] - Math.sin(azimuth) * stepM,
+      prev.target[1] - Math.cos(azimuth) * stepM,
+      prev.target[2],
+    ],
+    yaw: prev.yaw,
+    pitch: prev.pitch,
+    distance: prev.distance,
+  };
 }
 
 function resetLocalCamera(): void {
