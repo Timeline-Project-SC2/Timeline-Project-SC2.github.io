@@ -498,6 +498,13 @@ function createMockGl() {
     drawElementsInstanced(mode, count, type, offset, instances) {
       calls.draws.push({ kind: 'instances', count, instances });
     },
+    // Stage-8: полноэкранный треугольник купола неба и управление depthMask.
+    drawArrays(mode, first, count) { calls.draws.push({ kind: 'sky', mode, first, count }); },
+    depthMask() {},
+    enable() {},
+    disable() {},
+    POLYGON_OFFSET_FILL: 0x8037,
+    polygonOffset() {},
   };
   return { gl, calls };
 }
@@ -681,4 +688,172 @@ test('localMapTransferables: все буферы ответа передаютс
   assert.ok(transferables.includes(res.heightfield.buffer));
   assert.ok(transferables.includes(res.zoneMap.buffer));
   assert.ok(transferables.includes(res.terraformMap.buffer));
+});
+
+// ---------------------------------------------------------------------------
+// 3. Stage-8 Planetary Horizon: планетарная юбка 6 колец и купол неба
+// ---------------------------------------------------------------------------
+
+test('Stage-8 HorizonSkirt: 6 колец гексов, сферическое проседание, воротник и GPU-путь', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  Worker.clearLocalMapCache();
+  const request = requestFor(dryPatch, { patchKey: 'skirt', profile: PROFILE });
+  const local = Worker.generateLocalMap(request);
+  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+
+  // Полярная сетка: 97 × 57 = 5 529 вершин, 96 × 56 × 6 = 32 256 индексов.
+  const angularNodes = 97;
+  const radialNodes = 57;
+  const vertexCount = angularNodes * radialNodes;
+  assert.equal(skirt.ringCount, 6);
+  assert.equal(skirt.positions.length, vertexCount * 3);
+  assert.equal(skirt.normals.length, vertexCount * 3);
+  assert.equal(skirt.indices.length, 96 * 56 * 6);
+  assert.ok(
+    skirt.indices.every((idx) => idx < vertexCount),
+    'все индексы юбки ссылаются на существующие вершины',
+  );
+
+  // Радиусы: R_inner = 0.88·R_patch; внешний край покрывает минимум 6 колец.
+  assert.ok(Math.abs(skirt.innerRadiusM - 0.88 * RADIUS_M) < 1e-6, 'R_inner = 0.88·R_patch');
+  assert.ok(skirt.outerRadiusM >= 6 * skirt.hexSpacingM, 'R_skirt ≥ 6·d_hex (6 колец гексов)');
+  assert.ok(skirt.outerRadiusM >= 4.5 * RADIUS_M, 'R_skirt ≥ 4.5·R_patch');
+  assert.ok(skirt.planetRadiusM >= 300000, 'радиус планеты не ниже 300 км');
+  const expectedSpacing = Math.sqrt(
+    (8 * Math.PI * skirt.planetRadiusM * skirt.planetRadiusM) / (Math.sqrt(3) * 163842),
+  );
+  assert.ok(Math.abs(skirt.hexSpacingM - expectedSpacing) < 1e-6, 'd_hex по формуле сетки v=128');
+
+  // Сферическое проседание на внешнем крае положительно и равно формуле
+  // Δz = R_p − sqrt(R_p² − R_skirt²); при R_p ≤ 1 проседание выключено.
+  const rp = skirt.planetRadiusM;
+  const expectedDrop = rp - Math.sqrt(Math.max(0, rp * rp - skirt.outerRadiusM ** 2));
+  assert.ok(expectedDrop > 0, 'проседание на горизонте положительно');
+  assert.ok(
+    Math.abs(Worker.planetCurvatureDropM(rp, skirt.outerRadiusM) - expectedDrop) < 1e-6,
+    'planetCurvatureDropM совпадает с формулой',
+  );
+  assert.equal(Worker.planetCurvatureDropM(0, skirt.outerRadiusM), 0, 'R_p ≤ 1 — проседания нет');
+
+  // Бесшовный воротник: на внутреннем кольце r = R_inner высоты юбки равны
+  // билинейной выборке детального heightfield (без ступеньки/щели на стыке).
+  const res = HF_RES;
+  const cellSize = (2 * RADIUS_M) / res;
+  let collarChecked = 0;
+  for (let i = 0; i < angularNodes; i += 4) {
+    const px = skirt.positions[i * 3];
+    const py = skirt.positions[i * 3 + 1];
+    const pz = skirt.positions[i * 3 + 2];
+    assert.ok(
+      Math.abs(Math.hypot(px, py) - skirt.innerRadiusM) < 5e-3,
+      'узел внутреннего кольца лежит на r = R_inner (допуск точности float32)',
+    );
+    const gx = Math.min(res - 1.0001, Math.max(0, px / cellSize + res / 2));
+    const gy = Math.min(res - 1.0001, Math.max(0, py / cellSize + res / 2));
+    const ix = Math.floor(gx);
+    const iy = Math.floor(gy);
+    const ax = gx - ix;
+    const ay = gy - iy;
+    const i00 = iy * res + ix;
+    const ref =
+      (local.heightfield[i00] * (1 - ax) + local.heightfield[i00 + 1] * ax) * (1 - ay)
+      + (local.heightfield[i00 + res] * (1 - ax) + local.heightfield[i00 + res + 1] * ax) * ay;
+    assert.ok(
+      Math.abs(pz - ref) < 1e-3,
+      `высота воротника совпадает с heightfield (расхождение ${Math.abs(pz - ref)})`,
+    );
+    collarChecked++;
+  }
+  assert.ok(collarChecked > 0, 'воротник проверен в нескольких угловых узлах');
+
+  // Нормали юбки единичной длины и направлены вверх.
+  for (let k = 0; k < skirt.normals.length; k += angularNodes * 3) {
+    const n = skirt.normals;
+    assert.ok(Math.abs(Math.hypot(n[k], n[k + 1], n[k + 2]) - 1) < 1e-5, 'нормаль единичной длины');
+    assert.ok(n[k + 2] > 0, 'нормаль юбки направлена в верхнюю полусферу');
+  }
+
+  // Функция устойчива без профиля планеты и без innerHeightfield.
+  assert.doesNotThrow(
+    () => Worker.generateHorizonSkirt(requestFor(dryPatch, { patchKey: 'skirt-no-profile' })),
+    'юбка строится без профиля (только макро-fBm и якоря Patch7)',
+  );
+  assert.doesNotThrow(
+    () => Worker.generateHorizonSkirt(request, undefined),
+    'юбка строится без переданного heightfield',
+  );
+
+  // GPU-путь: до setHorizonSkirt инварианты Патча 8 не нарушены.
+  const { gl, calls } = createMockGl();
+  const renderer = new RendererModule.StructureRenderer(gl);
+  renderer.initMeshLibrary(meshLibrary);
+  renderer.onWorkerData(local);
+  renderer.compilePrograms();
+  assert.equal(calls.createProgram, 2, 'без юбки createProgram вызывается ровно дважды');
+  assert.equal(
+    calls.createVertexArray,
+    MODULE_COUNT + 1,
+    'до setHorizonSkirt VAO-инвариант (MODULE_COUNT + 1) не нарушен',
+  );
+
+  const viewProj = new Float32Array([
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+  ]);
+  assert.doesNotThrow(() => {
+    renderer.setHorizonSkirt(skirt);
+    renderer.renderFrame(viewProj, {
+      lightDir: [0.46, -0.36, 0.81],
+      ambientColor: [0.28, 0.34, 0.39],
+      fogColor: [0.07, 0.2, 0.3],
+      fogStart: skirt.outerRadiusM * 0.22,
+      fogEnd: skirt.outerRadiusM * 0.96,
+      planetRadiusM: skirt.planetRadiusM,
+      focusRadiusM: RADIUS_M,
+      hexSizeM: skirt.hexSpacingM,
+      horizonColor: [0.22, 0.52, 0.68],
+      camera: { pitch: 0.44, yaw: -0.65, fovY: 0.87, aspect: 1.5, heightM: 3000 },
+    });
+  }, 'setHorizonSkirt + renderFrame отрабатывают на mock WebGL2');
+  assert.equal(calls.createProgram, 3, 'программа купола неба создана лениво в setHorizonSkirt');
+
+  const skyDraws = calls.draws.filter((draw) => draw.kind === 'sky');
+  assert.equal(skyDraws.length, 1, 'купол неба рисуется один раз за кадр');
+  assert.equal(skyDraws[0].count, 3, 'купол — полноэкранный треугольник из 3 вершин');
+  const terrainDraws = calls.draws.filter((draw) => draw.kind === 'terrain');
+  assert.equal(terrainDraws.length, 2, 'юбка (u_isSkirt=1) и центральный рельеф (u_isSkirt=0)');
+  const uniform = (name) => calls.uniforms.filter((entry) => entry[0] === name).map((entry) => entry[1]);
+  assert.deepEqual(uniform('u_isSkirt'), [1, 0], 'юбка рисуется с u_isSkirt=1, центр — с 0');
+  assert.ok(
+    uniform('u_planetRadiusM').some((value) => Math.abs(value - rp) < 1e-6),
+    'u_planetRadiusM передан в шейдеры',
+  );
+  assert.ok(
+    uniform('u_hexSizeM').some((value) => Math.abs(value - skirt.hexSpacingM) < 1e-6),
+    'u_hexSizeM передан в шейдер рельефа',
+  );
+
+  renderer.dispose();
+  assert.equal(renderer.ready, false, 'после dispose рендерер выключен');
+
+  // setHorizonSkirt(null) полностью снимает горизонт и не ломает кадр.
+  const mock2 = createMockGl();
+  const second = new RendererModule.StructureRenderer(mock2.gl);
+  second.initMeshLibrary(meshLibrary);
+  second.onWorkerData(local);
+  second.setHorizonSkirt(skirt);
+  assert.doesNotThrow(() => second.setHorizonSkirt(null), 'снятие юбки освобождает ресурсы');
+  assert.doesNotThrow(
+    () => second.renderFrame(viewProj, {
+      lightDir: [0, 0, 1],
+      ambientColor: [0.3, 0.3, 0.3],
+      fogColor: [0.5, 0.6, 0.7],
+    }),
+    'кадр без юбки после setHorizonSkirt(null) работает',
+  );
+  const secondSky = mock2.calls.draws.filter((draw) => draw.kind === 'sky');
+  assert.equal(secondSky.length, 0, 'после снятия юбки купол не рисуется');
+  second.dispose();
 });

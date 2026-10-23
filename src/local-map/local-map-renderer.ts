@@ -23,12 +23,18 @@
 // Типы wire-протокола — только import type: value-импорт из модуля воркера
 // тащил бы его побочный эффект регистрации onmessage в главный поток.
 import {
+  SKY_DOME_FRAGMENT_SHADER,
+  SKY_DOME_VERTEX_SHADER,
   STRUCTURE_FRAGMENT_SHADER,
   STRUCTURE_VERTEX_SHADER,
   TERRAIN_FRAGMENT_SHADER,
   TERRAIN_VERTEX_SHADER,
 } from './local-map-shaders.ts';
-import type { LocalMapWorkerResponse, InstanceBuffers } from './local-map-worker.ts';
+import type {
+  HorizonSkirtData,
+  LocalMapWorkerResponse,
+  InstanceBuffers,
+} from './local-map-worker.ts';
 import type { MeshData, MeshLibrary } from './local-map-mesh.ts';
 
 /** Хард-кап инстансов на модуль (зеркало контракта воркера: MAX_INSTANCES). */
@@ -64,6 +70,15 @@ export interface LocalMapPrograms {
   readonly structureProgram: WebGLProgram;
 }
 
+/** Состояние камеры для купола неба (Stage-8 Planetary Horizon). */
+export interface LocalMapCameraState {
+  readonly pitch: number;
+  readonly yaw: number;
+  readonly fovY: number;
+  readonly aspect: number;
+  readonly heightM: number;
+}
+
 export interface LocalMapRenderOptions {
   readonly lightDir?: readonly [number, number, number];
   readonly ambientColor?: readonly [number, number, number];
@@ -72,11 +87,26 @@ export interface LocalMapRenderOptions {
   readonly fogStartRatio?: number;
   /** Конец кругового тумана в долях radiusM (по умолчанию 0.98). */
   readonly fogEndRatio?: number;
+  /** Абсолютное начало тумана, м (приоритетнее fogStartRatio). */
+  readonly fogStart?: number;
+  /** Абсолютный конец тумана, м (приоритетнее fogEndRatio). */
+  readonly fogEnd?: number;
+  /** Радиус планеты R_p для сферического проседания, м (0 — выключено). */
+  readonly planetRadiusM?: number;
+  /** Радиус детального участка R_patch для оптического блюра, м. */
+  readonly focusRadiusM?: number;
+  /** Шаг гексов d_hex для сетки 6 колец, м. */
+  readonly hexSizeM?: number;
+  /** Цвет атмосферного лимба у горизонта. */
+  readonly horizonColor?: readonly [number, number, number];
+  /** Камера для купола неба; без неё скайдом не рисуется. */
+  readonly camera?: LocalMapCameraState;
 }
 
 const DEFAULT_LIGHT_DIR: readonly [number, number, number] = [0.42, 0.28, 0.86];
 const DEFAULT_AMBIENT: readonly [number, number, number] = [0.32, 0.34, 0.38];
 const DEFAULT_FOG_COLOR: readonly [number, number, number] = [0.58, 0.66, 0.74];
+const DEFAULT_HORIZON_COLOR: readonly [number, number, number] = [0.22, 0.52, 0.68];
 const FOG_START_RATIO = 0.72;
 const FOG_END_RATIO = 0.98;
 
@@ -131,6 +161,17 @@ export class StructureRenderer {
   private stats: LocalMapVaoStats;
   /** Бюджет порции по умолчанию (переопределяется enqueueWorkerData). */
   private uploadBudgetMs: number;
+  // Stage-8: ресурсы планетарной юбки 6 колец и купола неба создаются
+  // ЛЕНИВО только в setHorizonSkirt — initMeshLibrary/onWorkerData/
+  // compilePrograms инварианты тестов (VAO/программы) не нарушают.
+  private skirtVAO: WebGLVertexArrayObject | null;
+  private skirtPosBuf: WebGLBuffer | null;
+  private skirtNormBuf: WebGLBuffer | null;
+  private skirtIdxBuf: WebGLBuffer | null;
+  private skyVAO: WebGLVertexArrayObject | null;
+  private skyProgram: WebGLProgram | null;
+  private skirtIndexCount: number;
+  private skirt: HorizonSkirtData | null;
   ready: boolean;
   /** Метка размеров последнего принятого payload (hfRes/zoneRes/tfRes/radiusM). */
   meta: LocalMapWorkerResponse['meta'] | null;
@@ -154,6 +195,14 @@ export class StructureRenderer {
     this.uniformCache = new Map();
     this.stats = { terrainVaoCreates: 0, moduleVaoCreates: 0, stagedSubDataCalls: 0 };
     this.uploadBudgetMs = DEFAULT_UPLOAD_BUDGET_MS;
+    this.skirtVAO = null;
+    this.skirtPosBuf = null;
+    this.skirtNormBuf = null;
+    this.skirtIdxBuf = null;
+    this.skyVAO = null;
+    this.skyProgram = null;
+    this.skirtIndexCount = 0;
+    this.skirt = null;
     this.ready = false;
     this.meta = null;
   }
@@ -494,6 +543,120 @@ export class StructureRenderer {
     return true;
   }
 
+  // ---- Stage-8: планетарная юбка 6 колец и купол неба (ленивая инициализация) ----
+  /**
+   * Назначает геометрию планетарной юбки. VAO/буферы юбки и программа купола
+   * неба создаются ТОЛЬКО здесь (не в initMeshLibrary/onWorkerData/
+   * compilePrograms), поэтому инварианты staged-догрузки Патча 8 сохраняются.
+   * Передача `null` освобождает все GPU-ресурсы горизонта.
+   */
+  setHorizonSkirt(skirt: HorizonSkirtData | null): void {
+    const gl = this.gl;
+    if (!skirt) {
+      this.disposeSkirt();
+      return;
+    }
+    if (!this.skirtVAO) {
+      this.skirtVAO = gl.createVertexArray();
+      gl.bindVertexArray(this.skirtVAO);
+
+      this.skirtPosBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtPosBuf);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+
+      this.skirtNormBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtNormBuf);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+
+      this.skirtIdxBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.skirtIdxBuf);
+      gl.bindVertexArray(null);
+
+      // Пустой VAO для полноэкранного треугольника купола (без атрибутов).
+      this.skyVAO = gl.createVertexArray();
+      // Скайдом — третья программа: на createProgram это влияет только при
+      // реально включённом горизонте.
+      this.skyProgram = this.linkProgram(
+        SKY_DOME_VERTEX_SHADER, SKY_DOME_FRAGMENT_SHADER, 'sky-dome');
+    }
+
+    gl.bindVertexArray(this.skirtVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtPosBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, skirt.positions, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtNormBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, skirt.normals, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.skirtIdxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, skirt.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+
+    this.skirtIndexCount = skirt.indices.length;
+    this.skirt = skirt;
+  }
+
+  /** Рисует купол неба/лимба полноэкранным треугольником без записи глубины. */
+  private drawSky(
+    program: WebGLProgram,
+    fogColor: readonly [number, number, number],
+    horizonColor: readonly [number, number, number],
+    lightDir: readonly [number, number, number],
+    camera: LocalMapCameraState,
+  ): void {
+    const gl = this.gl;
+    const planetRadiusM = this.skirt ? this.skirt.planetRadiusM : 0;
+    gl.useProgram(program);
+    gl.uniform1f(this.uniform(program, 'u_camPitch'), camera.pitch);
+    gl.uniform1f(this.uniform(program, 'u_camYaw'), camera.yaw);
+    gl.uniform1f(this.uniform(program, 'u_fovY'), camera.fovY);
+    gl.uniform1f(this.uniform(program, 'u_aspect'), camera.aspect);
+    gl.uniform1f(this.uniform(program, 'u_camHeightM'), camera.heightM);
+    gl.uniform1f(this.uniform(program, 'u_planetRadiusM'), planetRadiusM);
+    gl.uniform3fv(this.uniform(program, 'u_lightDir'), lightDir);
+    gl.uniform3fv(this.uniform(program, 'u_fogColor'), fogColor);
+    gl.uniform3fv(this.uniform(program, 'u_horizonColor'), horizonColor);
+
+    gl.depthMask(false);
+    gl.bindVertexArray(this.skyVAO);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+  }
+
+  /** Рисует планетарную юбку 6 колец текущей terrain-программой. */
+  private drawSkirt(program: WebGLProgram): void {
+    if (!this.skirtVAO || this.skirtIndexCount === 0) return;
+    const gl = this.gl;
+    gl.useProgram(program);
+    // В зоне воротника юбка перекрывается с центральным мешем: небольшой
+    // polygon offset уводит её назад по глубине, чтобы центральный рельеф
+    // гарантированно выигрывал без z-fighting на совпадающих высотах.
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 1.0);
+    gl.bindVertexArray(this.skirtVAO);
+    gl.drawElements(gl.TRIANGLES, this.skirtIndexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+  }
+
+  private disposeSkirt(): void {
+    const gl = this.gl;
+    if (this.skirtPosBuf) gl.deleteBuffer(this.skirtPosBuf);
+    if (this.skirtNormBuf) gl.deleteBuffer(this.skirtNormBuf);
+    if (this.skirtIdxBuf) gl.deleteBuffer(this.skirtIdxBuf);
+    if (this.skirtVAO) gl.deleteVertexArray(this.skirtVAO);
+    if (this.skyVAO) gl.deleteVertexArray(this.skyVAO);
+    if (this.skyProgram) gl.deleteProgram(this.skyProgram);
+    this.skirtPosBuf = null;
+    this.skirtNormBuf = null;
+    this.skirtIdxBuf = null;
+    this.skirtVAO = null;
+    this.skyVAO = null;
+    this.skyProgram = null;
+    this.skirtIndexCount = 0;
+    this.skirt = null;
+  }
+
   // ---- Программы шейдеров ----
   compilePrograms(): LocalMapPrograms {
     if (this.programs) return this.programs;
@@ -598,7 +761,7 @@ export class StructureRenderer {
     gl.bindVertexArray(null);
   }
 
-  /** Полный кадр локальной карты: юниформы + рельеф + инстансы построек. */
+  /** Полный кадр локальной карты: купол неба → юбка 6 колец → рельеф → постройки. */
   renderFrame(viewProj: Float32Array, options: LocalMapRenderOptions = {}): void {
     const gl = this.gl;
     const { terrainProgram, structureProgram } = this.compilePrograms();
@@ -606,22 +769,57 @@ export class StructureRenderer {
     const lightDir = options.lightDir ?? DEFAULT_LIGHT_DIR;
     const ambient = options.ambientColor ?? DEFAULT_AMBIENT;
     const fogColor = options.fogColor ?? DEFAULT_FOG_COLOR;
-    const fogStart = radiusM * (options.fogStartRatio ?? FOG_START_RATIO);
-    const fogEnd = radiusM * (options.fogEndRatio ?? FOG_END_RATIO);
+    const horizonColor = options.horizonColor ?? DEFAULT_HORIZON_COLOR;
+    // Абсолютные метры тумана (Stage-8) имеют приоритет над ratio-вариантами.
+    const fogStart = Number.isFinite(options.fogStart)
+      ? (options.fogStart as number)
+      : radiusM * (options.fogStartRatio ?? FOG_START_RATIO);
+    const fogEnd = Number.isFinite(options.fogEnd)
+      ? (options.fogEnd as number)
+      : radiusM * (options.fogEndRatio ?? FOG_END_RATIO);
     const terrainSize = 2 * radiusM;
+    const planetRadiusM = options.planetRadiusM ?? this.skirt?.planetRadiusM ?? 0;
+    const focusRadiusM = options.focusRadiusM ?? radiusM;
+    const hexSizeM = options.hexSizeM ?? this.skirt?.hexSpacingM ?? 0;
 
+    // 1. Купол атмосферы и горизонта (depthMask выключен внутри drawSky).
+    if (this.skirt && this.skyProgram && this.skyVAO && options.camera) {
+      this.drawSky(this.skyProgram, fogColor, horizonColor, lightDir, options.camera);
+    }
+
+    // 2. Рельеф: общие юниформы для юбки и центрального участка.
     gl.useProgram(terrainProgram);
     gl.uniformMatrix4fv(this.uniform(terrainProgram, 'u_viewProj'), false, viewProj);
     gl.uniform1f(this.uniform(terrainProgram, 'u_terrainSize'), terrainSize);
     gl.uniform3fv(this.uniform(terrainProgram, 'u_lightDir'), lightDir);
     gl.uniform3fv(this.uniform(terrainProgram, 'u_ambientColor'), ambient);
     gl.uniform3fv(this.uniform(terrainProgram, 'u_fogColor'), fogColor);
+    gl.uniform3fv(this.uniform(terrainProgram, 'u_horizonColor'), horizonColor);
     gl.uniform1f(this.uniform(terrainProgram, 'u_fogStart'), fogStart);
     gl.uniform1f(this.uniform(terrainProgram, 'u_fogEnd'), fogEnd);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_planetRadiusM'), planetRadiusM);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_focusRadiusM'), focusRadiusM);
+    gl.uniform1f(this.uniform(terrainProgram, 'u_hexSizeM'), hexSizeM);
     gl.uniform1i(this.uniform(terrainProgram, 'u_zoning_map'), 0);
     gl.uniform1i(this.uniform(terrainProgram, 'u_terraform_map'), 1);
+
+    // Текстуры нужны и юбке (её v_uv выходит за [0,1] — CLAMP_TO_EDGE даёт
+    // зону 0 и нулевой терраформинг на периферии).
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texZoning);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.texTerraform);
+
+    if (this.skirt && this.skirtVAO) {
+      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 1.0);
+      this.drawSkirt(terrainProgram);
+      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+    } else {
+      gl.uniform1f(this.uniform(terrainProgram, 'u_isSkirt'), 0.0);
+    }
     this.drawTerrain(terrainProgram);
 
+    // 3. 3D-структуры (с тем же сферическим проседанием).
     gl.useProgram(structureProgram);
     gl.uniformMatrix4fv(this.uniform(structureProgram, 'u_viewProj'), false, viewProj);
     gl.uniform3fv(this.uniform(structureProgram, 'u_lightDir'), lightDir);
@@ -629,6 +827,7 @@ export class StructureRenderer {
     gl.uniform3fv(this.uniform(structureProgram, 'u_fogColor'), fogColor);
     gl.uniform1f(this.uniform(structureProgram, 'u_fogStart'), fogStart);
     gl.uniform1f(this.uniform(structureProgram, 'u_fogEnd'), fogEnd);
+    gl.uniform1f(this.uniform(structureProgram, 'u_planetRadiusM'), planetRadiusM);
     this.drawStructures(structureProgram);
   }
 
@@ -636,6 +835,7 @@ export class StructureRenderer {
   dispose(): void {
     const gl = this.gl;
     this.disposeTerrain();
+    this.disposeSkirt();
 
     for (const [moduleId, entry] of Object.entries(this.instanceVBOs)) {
       if (entry.vbo) gl.deleteBuffer(entry.vbo);
