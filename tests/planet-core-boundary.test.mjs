@@ -30,7 +30,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -138,10 +139,19 @@ test('boundary: импорт хоста и модулей главного по�
     'импорт planet-core-host.ts не должен создавать ядро');
   assert.equal(Host.peekSharedPlanetCore(), null, 'до первого обращения синглтона нет');
 
-  // Модули главного потока: рендерер, география, поверхность.
-  const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
+  // Модули главного потока: рендерер, география, поверхность, а также упаковщик.
+  const PlanetGlobeModule = require('../site/shared/planet-globe.ts');
+  const PlanetGlobe = PlanetGlobeModule.default;
+  require('../site/shared/planet-globe-pack.ts');
   require('../site/shared/planet-geography.ts');
   require('../site/shared/planet-surface.ts');
+
+  for (const moved of ['buildVertexColors', 'buildGlobeGeometry']) {
+    assert.equal(moved in PlanetGlobeModule, false,
+      `planet-globe.ts не должен реэкспортировать ${moved}`);
+    assert.equal(moved in PlanetGlobe, false,
+      `объект PlanetGlobe не должен содержать ${moved}`);
+  }
 
   const afterImport = Host.getPlanetCoreCreationCounters();
   assert.equal(afterImport.full, 0,
@@ -236,6 +246,7 @@ test('boundary: импорт не компилирует Wasm, ядро подн
     'site/shared/planet-geography.ts',
     'site/shared/planet-surface.ts',
     'site/shared/planet-globe.ts',
+    'site/shared/planet-globe-pack.ts',
   ].map(url);
 
   // Отдельный процесс: считаем КАЖДУЮ компиляцию WebAssembly.Module и
@@ -299,12 +310,28 @@ test('boundary: полную генерацию и упаковку геомет
       `страница /planet-globe/ не должна вызывать ${forbidden} на главном потоке`);
   }
 
-  // В рендерере планеты ядро не упоминается на пути отрисовки.
+  // Stage-8.10a (A-12a): в рендерере planet-globe.ts ядра и упаковщиков больше нет совсем.
   const globe = read('site/shared/planet-globe.ts');
-  assert.equal((globe.match(/getSharedPlanetCore\(/g) || []).length, 1,
-    'в planet-globe.ts ровно одна точка доступа к ядру — внутри getCore()');
-  assert.ok(/function getCore\(\): PlanetCore \{\n  return getSharedPlanetCore\(\);\n\}/.test(globe),
-    'getCore() не должен кэшировать ядро на уровне модуля');
+  for (const forbidden of [
+    'getSharedPlanetCore',
+    'PlanetCore',
+    'getCore',
+    'planet-core-host',
+    'planet-globe-pack',
+    'buildVertexColors',
+    'buildGlobeGeometry',
+  ]) {
+    assert.ok(!globe.includes(forbidden),
+      `в site/shared/planet-globe.ts не должно быть ${forbidden}`);
+  }
+
+  // Упаковщик геометрии хранит единственную ленивую точку доступа к ядру для меша.
+  const pack = read('site/shared/planet-globe-pack.ts');
+  assert.equal((pack.match(/getSharedPlanetCore\(/g) || []).length, 1,
+    'в planet-globe-pack.ts ровно одна точка доступа к ядру — внутри getCore()');
+  assert.ok(/function getCore\(\): PlanetCore \{\n  return getSharedPlanetCore\(\);\n\}/.test(pack),
+    'getCore() в planet-globe-pack.ts не должен кэшировать ядро на уровне модуля');
+
   assert.ok(/let sharedPlanetCore: PlanetCore \| null = null;/.test(
     read('src/planet/planet-core-host.ts')),
     'синглтон хоста объявлен как ленивый (без new PlanetCore() на верхнем уровне)');
@@ -315,5 +342,48 @@ test('boundary: полную генерацию и упаковку геомет
     const source = read(rel);
     assert.ok(!/^const sharedCore = getSharedPlanetCore\(\);$/m.test(source),
       `${rel}: верхнеуровневый getSharedPlanetCore() запрещён`);
+  }
+});
+
+test('boundary (A-12a): planet-globe-pack.ts импортируется только воркером, тестами и бенчмарком', () => {
+  function walkCodeFiles(dir) {
+    const out = [];
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) out.push(...walkCodeFiles(full));
+      else if (/\.(?:ts|mts|js|mjs|html)$/.test(entry)) out.push(full);
+    }
+    return out;
+  }
+
+  const importers = [];
+  for (const subdir of ['site', 'src', 'tests', 'tools']) {
+    for (const full of walkCodeFiles(join(repoRoot, subdir))) {
+      const rel = relative(repoRoot, full).split('\\').join('/');
+      if (rel === 'site/shared/planet-globe-pack.ts') continue;
+      const source = readFileSync(full, 'utf8');
+      if (source.includes('planet-globe-pack')) importers.push(rel);
+    }
+  }
+
+  assert.ok(importers.includes('site/planet-globe/planet-globe-worker.ts'),
+    'воркер обязан импортировать planet-globe-pack.ts');
+  assert.ok(importers.includes('tools/bench_planet_stage6.mjs'),
+    'бенчмарк Stage 6 обязан импортировать planet-globe-pack.ts');
+  for (const expectedTest of [
+    'tests/planet-globe.test.mjs',
+    'tests/planet-globe-fx.test.mjs',
+    'tests/planet-stage7-worker.test.mjs',
+  ]) {
+    assert.ok(importers.includes(expectedTest), `${expectedTest} обязан импортировать planet-globe-pack.ts`);
+  }
+
+  for (const rel of importers) {
+    const allowed =
+      rel === 'site/planet-globe/planet-globe-worker.ts' ||
+      rel === 'tools/bench_planet_stage6.mjs' ||
+      /^tests\/[^/]+\.test\.mjs$/.test(rel);
+    assert.ok(allowed,
+      `недопустимый импорт planet-globe-pack.ts вне воркера/тестов/бенчмарка: ${rel}`);
   }
 });

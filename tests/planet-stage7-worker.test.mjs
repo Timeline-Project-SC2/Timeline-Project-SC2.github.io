@@ -23,6 +23,7 @@ globalThis.requestAnimationFrame = function (cb) { rafQueue.push(cb); return raf
 globalThis.cancelAnimationFrame = function () { rafQueue.length = 0; };
 
 const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
+const { buildGlobeGeometry } = require('../site/shared/planet-globe-pack.ts');
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const { PlanetGlobeWorker } = require('../site/planet-globe/planet-globe-worker.ts');
@@ -318,8 +319,8 @@ function makeGlobe() {
     onCameraIntent: (intent) => intents.push(intent),
   });
   assert.ok(handle, 'глобус создан на mock WebGL2');
-  const geometryA = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'biome' });
-  const geometryB = PlanetGlobe.buildGlobeGeometry(grid, surface, { colorMode: 'rivers' });
+  const geometryA = buildGlobeGeometry(grid, surface, { colorMode: 'biome' });
+  const geometryB = buildGlobeGeometry(grid, surface, { colorMode: 'rivers' });
   return { gl, state, canvas, intents, handle, geometryA, geometryB };
 }
 
