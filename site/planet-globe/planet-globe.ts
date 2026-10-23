@@ -108,6 +108,15 @@ const LOCAL_PATCH_BASE_RADIUS_M = 2500;
  * прицела ровно на этот шаг, поэтому мировая точка взгляда не смещается.
  */
 export const LOCAL_HEX_STEP_RATIO = 1.15;
+/**
+ * Stage-8.7: длительность сглаживания остаточного рассогласования камеры после
+ * ре-бейзинга. Точный ре-бейзинг оставляет нулевой остаток, поэтому в штатном
+ * переходе камера не двигается вовсе; ограничение в 220 мс гарантирует, что
+ * любой ненулевой остаток гасится короткой кривой easeOutCubic, а не перелётом.
+ */
+const LOCAL_REBASE_SETTLE_MS = 220;
+/** Stage-8.7: порог остатка (м), ниже которого сглаживание не запускается. */
+const LOCAL_REBASE_SETTLE_EPS_M = 0.25;
 
 interface LocalMapPrograms {
   terrainProgram: WebGLProgram;
@@ -287,21 +296,33 @@ let localCameraAnim: LocalCameraAnim | null = null;
 let localSkirtData: HorizonSkirtData | null = null;
 /**
  * Ожидаемый перелёт к соседу: азимут действителен только для своей ячейки.
- * Stage-8.4: дополнительно сохраняет смещение точки прицела и состояние
- * камеры до перехода (prevTargetOffset / prevYaw / prevPitch / prevDist),
- * чтобы после смены патча перелёт стартовал без рывка и без принудительного
- * возврата взгляда к LOCAL_REST_YAW.
+ * Stage-8.7: снимок камеры на момент запроса больше НЕ нужен — подмена патча
+ * атомарна, а ре-бейзинг берёт текущее состояние камеры, поэтому правки
+ * пользователя во время догрузки (панорама, зум) не теряются.
  */
-let pendingNeighborFly: {
-  cell: number;
-  azimuth: number;
-  prevTargetOffset?: [number, number, number];
-  prevYaw?: number;
-  prevPitch?: number;
-  prevDist?: number;
-} | null = null;
+let pendingNeighborFly: { cell: number; azimuth: number } | null = null;
 /** Пока запрошен новый Patch7, не запускаем второй переход по грани. */
 let localPatchLoading = false;
+/**
+ * Stage-8.7: новый патч, догружаемый в ОТДЕЛЬНОМ рендерере, пока старый кадр
+ * продолжает рисоваться. Подмена буферов, ре-бейзинг камеры и первый кадр
+ * нового участка выполняются в одном кадре (processStagedLocalPatch).
+ */
+interface StagedLocalPatch {
+  readonly patchReady: WorkerPatchReadyResponse;
+  readonly widthKm: number;
+  readonly data: LocalMapWorkerResponse;
+  readonly skirt: HorizonSkirtData | null;
+  readonly renderer: Stage8StructureRenderer;
+  readonly programs: LocalMapPrograms;
+  readonly programsOwned: boolean;
+  /** Направление перехода (азимут прихода нового гекса), рад. */
+  readonly azimuth: number;
+  readonly generationMs: number;
+  readonly instanceCount: number;
+  readonly buildableFraction: number;
+}
+let stagedLocalPatch: StagedLocalPatch | null = null;
 let localClickCandidate: { pointerId: number; x: number; y: number } | null = null;
 let localPointerMode: 'orbit' | 'pan' | null = null;
 let localPointerId: number | null = null;
@@ -687,44 +708,126 @@ function startLocalDiveInAnim(): void {
   };
 }
 
+/** Снимок состояния локальной камеры (для ре-бейзинга и сглаживания остатка). */
+interface LocalCameraState {
+  target: LocalVec3;
+  yaw: number;
+  pitch: number;
+  distance: number;
+}
+
+function snapshotLocalCameraState(): LocalCameraState {
+  return {
+    target: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+    yaw: localCameraYaw,
+    pitch: localCameraPitch,
+    distance: localCameraDistance,
+  };
+}
+
+function applyLocalCameraState(state: LocalCameraState): void {
+  localCameraTarget = [state.target[0], state.target[1], state.target[2]];
+  localCameraYaw = state.yaw;
+  localCameraPitch = state.pitch;
+  localCameraDistance = state.distance;
+}
+
 /**
- * Перелёт к соседнему гексу (Stage-8.4): 820 мс по плавной кривой
- * easeInOutCubic. Новая цель toTarget считается как в resetLocalCamera —
- * высота центра heightfield нового патча плюс сдвиг вперёд
- * `localMapRadiusM * 0.14` вдоль текущего localCameraYaw; fromTarget
- * стартует со стороны предыдущего гекса — Stage-8.6: ровно на шаг центров
- * соседних гексов `d_hex = 1.15 · R_patch` против азимута перехода, поэтому
- * камера въезжает в новый гекс тем же шагом, что и сетка Patch7.
- * Пользовательский yaw сохраняется (fromYaw = toYaw = localCameraYaw):
- * камера не принуждается крутиться обратно к LOCAL_REST_YAW.
+ * Stage-8.7: гасит остаточное рассогласование после ре-бейзинга короткой
+ * кривой easeOutCubic (<= 220 мс) от ФАКТИЧЕСКОГО состояния камеры.
+ * Точный ре-бейзинг на шаг `d_hex = 1.15 · R_patch` оставляет нулевой остаток,
+ * поэтому в штатном переходе функция не запускает анимацию: камера уже стоит
+ * там, где нужно, и мир не смещается ни на метр. Если остаток всё же есть
+ * (неканонический радиус участка, ручная правка камеры в момент подмены),
+ * он догоняется коротким сглаживанием вместо перелёта по процедурным точкам.
  */
-function startLocalNeighborFlyAnim(azimuth: number): void {
-  const targetZ = localCameraTarget[2];
-  // Целевая точка прицела — каноническая точка долины вдоль текущего yaw,
-  // та же формула, что и в resetLocalCamera/defaultLocalCameraTarget.
-  const toTarget = defaultLocalCameraTarget(localCameraYaw, localMapWidthKm);
-  // Азимут перехода считаем как atan2(east, north); предыдущий гекс лежит
-  // строго против направления перехода относительно нового центра.
-  // Stage-8.6: смещение равно шагу центров соседних гексов d_hex = 1.15 · R_patch.
-  const offset = localMapRadiusM * 1.15;
-  const fromTarget: LocalVec3 = [
-    -Math.sin(azimuth) * offset,
-    -Math.cos(azimuth) * offset,
-    targetZ,
-  ];
+function startLocalRebaseSettleAnim(from: LocalCameraState, to: LocalCameraState): void {
+  const deltaTarget = Math.hypot(
+    to.target[0] - from.target[0],
+    to.target[1] - from.target[1],
+    to.target[2] - from.target[2],
+  );
+  const deltaYaw = Math.abs(to.yaw - from.yaw);
+  const deltaPitch = Math.abs(to.pitch - from.pitch);
+  const deltaDist = Math.abs(to.distance - from.distance);
+  if (deltaTarget < LOCAL_REBASE_SETTLE_EPS_M && deltaYaw < 1e-4
+      && deltaPitch < 1e-4 && deltaDist < 1e-3) {
+    return;
+  }
   localCameraAnim = {
     startAt: performance.now(),
-    durationMs: 820,
-    fromYaw: localCameraYaw,
-    toYaw: localCameraYaw,
-    fromPitch: localCameraPitch,
-    toPitch: cameraPitchForWidthKm(localMapWidthKm),
-    fromDist: localCameraDistance,
-    toDist: localCameraDistance,
-    fromTarget,
-    toTarget,
-    easeInOut: true,
+    durationMs: LOCAL_REBASE_SETTLE_MS,
+    fromYaw: from.yaw,
+    toYaw: to.yaw,
+    fromPitch: from.pitch,
+    toPitch: to.pitch,
+    fromDist: from.distance,
+    toDist: to.distance,
+    fromTarget: from.target,
+    toTarget: to.target,
   };
+}
+
+/**
+ * Билинейная выборка heightfield участка в локальных метрах. Возвращает
+ * абсолютную высоту рельефа (м над уровнем моря) — без сферического проседания,
+ * его добавляет вызывающая сторона для экранной проекции.
+ */
+function localTerrainHeightAt(
+  data: LocalMapWorkerResponse | null,
+  x: number,
+  y: number,
+  radiusM: number,
+): number {
+  const hf = data?.heightfield;
+  if (!hf || !(radiusM > 0)) return 0;
+  const res = Math.round(Math.sqrt(hf.length));
+  if (!(res > 1)) return 0;
+  const cellSize = (2 * radiusM) / res;
+  const gx = x / cellSize + res / 2;
+  const gy = y / cellSize + res / 2;
+  const x0 = Math.min(res - 1, Math.max(0, Math.floor(gx)));
+  const y0 = Math.min(res - 1, Math.max(0, Math.floor(gy)));
+  const x1 = Math.min(res - 1, x0 + 1);
+  const y1 = Math.min(res - 1, y0 + 1);
+  const ax = Math.min(1, Math.max(0, gx - x0));
+  const ay = Math.min(1, Math.max(0, gy - y0));
+  const top = (hf[y0 * res + x0] as number) * (1 - ax) + (hf[y0 * res + x1] as number) * ax;
+  const bottom = (hf[y1 * res + x0] as number) * (1 - ax) + (hf[y1 * res + x1] as number) * ax;
+  return top * (1 - ay) + bottom * ay;
+}
+
+/**
+ * Stage-8.7: переносит камеру в систему координат нового гекса ОДНИМ кадром.
+ * Мировая точка прицела и ракурс остаются на месте: `target` сдвигается ровно
+ * на `d_hex` против азимута перехода, `yaw`/`pitch`/`distance` не меняются,
+ * поэтому глаз камеры в мировых координатах тоже не двигается.
+ *
+ * Остаточное рассогласование измеряется как разница высоты глаза над рельефом
+ * до и после подмены (два участка аппроксимируют одну планету независимо).
+ * Оно гасится коротким сглаживанием easeOutCubic за <= 220 мс от фактического
+ * состояния камеры — вместо прежнего перелёта по процедурным точкам.
+ */
+function applyLocalCameraRebase(
+  azimuth: number,
+  patchRadiusM: number,
+  nextData: LocalMapWorkerResponse | null,
+  prevClearanceM: number,
+): void {
+  cancelLocalCameraAnim();
+  const before = snapshotLocalCameraState();
+  const rebased = rebaseLocalCameraState(before, azimuth, patchRadiusM);
+  applyLocalCameraState(rebased);
+  if (!Number.isFinite(prevClearanceM)) return;
+  const terrainZ = localTerrainHeightAt(nextData, rebased.target[0], rebased.target[1], patchRadiusM);
+  const residualM = (rebased.target[2] - terrainZ) - prevClearanceM;
+  if (Math.abs(residualM) <= LOCAL_REBASE_SETTLE_EPS_M) return;
+  startLocalRebaseSettleAnim(rebased, {
+    target: [rebased.target[0], rebased.target[1], rebased.target[2] - residualM],
+    yaw: rebased.yaw,
+    pitch: rebased.pitch,
+    distance: rebased.distance,
+  });
 }
 
 /** Применяет очередной кадр анимации; по завершении снимает состояние. */
@@ -808,22 +911,59 @@ function nearestLocalNeighbor(azimuth: number): LocalPatchCell | null {
  */
 function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
   if (!localMapActive || !activePatchReady || !worker || !displayedToken) return;
-  // Stage-8.4: точка прицела НЕ сбрасывается мгновенно — прежний обнуляющий
-  // рывок localCameraTarget[0..1] ломал кадр ещё до прихода нового патча.
-  // Текущее состояние камеры сохраняется в pendingNeighborFly и разыгрывается
-  // плавным перелётом startLocalNeighborFlyAnim уже на новом патче.
-  pendingNeighborFly = {
-    cell: neighbor.cell,
-    azimuth,
-    prevTargetOffset: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
-    prevYaw: localCameraYaw,
-    prevPitch: localCameraPitch,
-    prevDist: localCameraDistance,
-  };
+  // Stage-8.7: камеру во время догрузки не трогаем вовсе — ни точку прицела,
+  // ни ракурс, ни дистанцию. Прибывший патч атомарно подменит буферы и
+  // ре-бейзится от того состояния, в котором пользователь держит камеру в
+  // этот момент, поэтому мир не смещается ни на один кадр.
+  pendingNeighborFly = { cell: neighbor.cell, azimuth };
   localPatchLoading = true;
-  cancelLocalCameraAnim();
   setLocalMapStatus('Перехожу на соседний гекс #' + String(neighbor.cell) + '…', 'info');
   requestCellPick(neighbor.cell);
+}
+
+/** Азимут соседа в касательном кадре активного патча: atan2(east, north). */
+function neighborAzimuthOf(cell: LocalPatchCell): number {
+  const frame = activePatchReady?.patch.frame;
+  if (!frame) return 0;
+  const dir = cell.center;
+  const u = dir[0] * frame.east[0] + dir[1] * frame.east[1] + dir[2] * frame.east[2];
+  const v = dir[0] * frame.north[0] + dir[1] * frame.north[1] + dir[2] * frame.north[2];
+  return Math.atan2(u, v);
+}
+
+/**
+ * Единая точка входа перехода по номеру канонической ячейки: кнопки
+ * «СОСЕДИ PATCH7», клик по гексу сцены и квик-навигация идут одним путём.
+ */
+function requestLocalNeighborByCellId(cellId: number): boolean {
+  const patch = activePatchReady?.patch;
+  if (!patch || !Number.isFinite(cellId)) return false;
+  const neighbor = patch.cells.find((cell) => cell.cell === cellId && cell.role !== 'center');
+  if (!neighbor) return false;
+  requestLocalNeighbor(neighbor, neighborAzimuthOf(neighbor));
+  return true;
+}
+
+/**
+ * Азимут прихода нового гекса для ре-бейзинга. Приоритет — фактическое
+ * направление центра прибывшей ячейки в касательном кадре предыдущего патча
+ * (точный шаг сетки), запасной вариант — азимут клика/слота.
+ */
+function localPatchArrivalAzimuth(
+  prevPatch: WorkerPatchReadyResponse['patch'] | null,
+  nextPatchReady: WorkerPatchReadyResponse,
+): number {
+  const fallback = pendingNeighborFly !== null
+    && pendingNeighborFly.cell === nextPatchReady.hexCenterCell
+    ? pendingNeighborFly.azimuth
+    : 0;
+  const dir = nextPatchReady.patch.cells[0]?.center;
+  if (!prevPatch || !dir) return fallback;
+  const { east, north } = prevPatch.frame;
+  const u = dir[0] * east[0] + dir[1] * east[1] + dir[2] * east[2];
+  const v = dir[0] * north[0] + dir[1] * north[1] + dir[2] * north[2];
+  if (!Number.isFinite(u) || !Number.isFinite(v) || Math.hypot(u, v) < 1e-9) return fallback;
+  return Math.atan2(u, v);
 }
 
 /** Строит луч через экранную точку и выбирает соседний гекс на плоскости участка. */
@@ -889,7 +1029,7 @@ function applyLocalPan(dx: number, dy: number): void {
     localCameraTarget[1] *= maxPan / panLength;
   }
   localCameraTarget[2] = clampLocal(localCameraTarget[2], -localMapRadiusM * 0.25, localMapRadiusM * 0.5);
-  if (panLength > localMapRadiusM * 1.15 && !localPatchLoading) {
+  if (panLength > localMapRadiusM * LOCAL_HEX_STEP_RATIO && !localPatchLoading) {
     const azimuth = Math.atan2(localCameraTarget[0], localCameraTarget[1]);
     const neighbor = nearestLocalNeighbor(azimuth);
     if (neighbor) requestLocalNeighbor(neighbor, azimuth);
@@ -1015,6 +1155,9 @@ function installLocalMapCanvasEvents(): void {
     setLocalMapStatus('WebGL-контекст локальной карты потерян; ожидаю восстановления…', 'warn');
   });
   canvas.addEventListener('webglcontextrestored', () => {
+    // Stage-8.7: буферы недогруженного перехода привязаны к потерянному
+    // контексту — освобождаем их до переинициализации сцены.
+    discardStagedLocalPatch();
     localMapRenderer = null;
     localMapPrograms = null;
     localMapProgramsOwnedByRenderer = false;
@@ -1084,8 +1227,11 @@ function localTotalInstances(data: LocalMapWorkerResponse): number {
 }
 
 function updateLocalMapHud(): void {
-  const renderer = localMapRenderer;
-  const data = localMapData;
+  // Stage-8.7: пока новый патч догружается в фоне, HUD честно показывает
+  // прогресс ЭТОЙ догрузки, хотя в кадре ещё прежний (нарисованный) участок.
+  const staged = stagedLocalPatch;
+  const renderer = staged ? staged.renderer : localMapRenderer;
+  const data = staged ? staged.data : localMapData;
   const uploading = !!renderer && typeof renderer.isUploading === 'function' && renderer.isUploading();
   let progress = uploading ? 0 : 1;
   if (renderer && typeof renderer.getUploadProgress === 'function') {
@@ -1094,10 +1240,13 @@ function updateLocalMapHud(): void {
   }
   els.localUploadProgress.value = progress;
   els.localUploadProgress.textContent = Math.round(progress * 100) + '%';
-  els.localUploadLabel.textContent = uploading ? Math.round(progress * 100) + '% · загрузка' : 'Готово';
-  els.localGenMs.textContent = fmtMs(localMapGenerationMs);
+  els.localUploadLabel.textContent = uploading
+    ? Math.round(progress * 100) + '% · ' + (staged ? 'догрузка соседа' : 'загрузка')
+    : 'Готово';
+  els.localGenMs.textContent = fmtMs(staged ? staged.generationMs : localMapGenerationMs);
   els.localInstanceCount.textContent = fmtInt(data ? localTotalInstances(data) : localMapInstanceCount);
-  els.localBuildableFraction.textContent = fmtPct(localMapBuildableFraction, 1);
+  els.localBuildableFraction.textContent =
+    fmtPct(staged ? staged.buildableFraction : localMapBuildableFraction, 1);
   const skirt = localSkirtData;
   if (skirt) {
     const horizonDropM = planetCurvatureDropM(skirt.planetRadiusM, skirt.outerRadiusM);
@@ -1118,9 +1267,14 @@ function renderLocalMapFrame(): void {
   if (!localMapActive) return;
   localMapFrameId = window.requestAnimationFrame(renderLocalMapFrame);
   const gl = localMapGl;
-  const renderer = localMapRenderer;
-  if (!gl || !renderer || gl.isContextLost()) return;
+  if (!gl || gl.isContextLost()) return;
   resizeLocalMapCanvas();
+  // Stage-8.7: пока новый патч заливается в отдельном рендерере, рисуется
+  // прежний участок. Подмена буферов, ре-бейзинг камеры и первый кадр нового
+  // гекса выполняются здесь, до рисования, — одним кадром и без пустой сцены.
+  processStagedLocalPatch();
+  const renderer = localMapRenderer;
+  if (!renderer) return;
   if (typeof renderer.processPendingUpload === 'function') renderer.processPendingUpload(3.0);
   // Stage-8.3: светлый дневной сизый тон атмосферы вместо космической черноты —
   // за локальной сценой не должен просвечивать уменьшенный глобус.
@@ -1252,6 +1406,192 @@ function extractShortFaceCoord(canonicalAddress: string): string {
   return segments.length >= 3 ? segments.slice(-3).join('/') : canonicalAddress;
 }
 
+interface LocalPatchMetrics {
+  generationMs: number;
+  instanceCount: number;
+  buildableFraction: number;
+}
+
+/** Читает метрики генерации участка, не трогая состояние модуля и HUD. */
+function readLocalPatchMeta(
+  data: LocalMapWorkerResponse,
+  patchReady: WorkerPatchReadyResponse,
+  measuredMs: number,
+): LocalPatchMetrics {
+  const meta = data.meta as LocalMapWorkerResponse['meta'] & {
+    genMs?: number;
+    totalInstances?: number;
+    buildableFraction?: number;
+  };
+  return {
+    generationMs: Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs,
+    instanceCount: localTotalInstances(data),
+    buildableFraction: Number.isFinite(meta.buildableFraction)
+      ? clampLocal(meta.buildableFraction as number, 0, 1)
+      : clampLocal(patchReady.buildableFraction, 0, 1),
+  };
+}
+
+/** Переносит метрики активного участка в состояние модуля (HUD и статистика). */
+function applyLocalPatchMeta(metrics: LocalPatchMetrics): void {
+  localMapGenerationMs = metrics.generationMs;
+  localMapInstanceCount = metrics.instanceCount;
+  localMapBuildableFraction = metrics.buildableFraction;
+}
+
+/** Заголовок, инварианты, кнопки соседей, хлебные крошки и URL активного патча. */
+function installLocalPatchUi(patchReady: WorkerPatchReadyResponse, widthKm: number): void {
+  const shortFaceCoord = extractShortFaceCoord(patchReady.canonicalAddress);
+  const planetName = selectedPlace?.name || 'Планета';
+  els.localMapTitle.textContent =
+    `${planetName} · ячейка #${patchReady.hexCenterCell} (${shortFaceCoord}) · ${patchReady.keys.patchKey}`;
+  els.localMapTitle.title =
+    `${patchReady.canonicalAddress} · patch_key ${patchReady.keys.patchKey}`;
+  els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
+    Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
+  els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
+  localMapActive = true;
+  updateLocalNeighborButtons(patchReady);
+  updateLocalBreadcrumb(true);
+  updateLocalMapUrl(patchReady, widthKm);
+  document.body.classList.add('local-map-active');
+  els.localMapStage.hidden = false;
+}
+
+/** Снимает недогруженный переход (latest-wins): его буферы сразу освобождаются. */
+function discardStagedLocalPatch(): void {
+  const staged = stagedLocalPatch;
+  if (!staged) return;
+  stagedLocalPatch = null;
+  try { staged.renderer.dispose?.(); } catch (_) { /* контекст мог быть потерян */ }
+}
+
+/**
+ * Stage-8.7: готовит новый участок в ОТДЕЛЬНОМ рендерере, не трогая ни сцену,
+ * ни камеру. Старый патч продолжает рисоваться, пока новый не залит целиком;
+ * подмена выполняется одним кадром в processStagedLocalPatch.
+ */
+function stageLocalPatchSwap(
+  patchReady: WorkerPatchReadyResponse,
+  widthKm: number,
+  data: LocalMapWorkerResponse,
+  skirtData: HorizonSkirtData | null,
+  measuredMs: number,
+): boolean {
+  const gl = localMapGl;
+  if (!gl || gl.isContextLost()) return false;
+  discardStagedLocalPatch();
+  let renderer: Stage8StructureRenderer | null = null;
+  let programs: LocalMapPrograms | null = null;
+  let programsOwned = false;
+  try {
+    renderer = new StructureRenderer(gl) as Stage8StructureRenderer;
+    renderer.initMeshLibrary(buildMeshLibrary());
+    if (typeof renderer.compilePrograms === 'function') {
+      programs = renderer.compilePrograms();
+      programsOwned = true;
+    } else {
+      programs = localMapPrograms ?? compileLocalMapPrograms(gl);
+    }
+    if (typeof renderer.enqueueWorkerData === 'function') {
+      renderer.enqueueWorkerData(data, 3.0);
+    } else {
+      renderer.onWorkerData(data);
+    }
+    // Юбка нового участка заливается здесь же — вне кадра подмены.
+    if (typeof renderer.setHorizonSkirt === 'function') renderer.setHorizonSkirt(skirtData);
+  } catch (error) {
+    try { renderer?.dispose?.(); } catch (_) { /* контекст мог быть потерян */ }
+    console.warn('Stage-8.7: не удалось подготовить новый участок:', error);
+    return false;
+  }
+  if (!programs) return false;
+  const metrics = readLocalPatchMeta(data, patchReady, measuredMs);
+  stagedLocalPatch = {
+    patchReady,
+    widthKm,
+    data,
+    skirt: skirtData,
+    renderer,
+    programs,
+    programsOwned,
+    azimuth: localPatchArrivalAzimuth(activePatchReady ? activePatchReady.patch : null, patchReady),
+    generationMs: metrics.generationMs,
+    instanceCount: metrics.instanceCount,
+    buildableFraction: metrics.buildableFraction,
+  };
+  localPatchLoading = true;
+  setLocalMapStatus(
+    'Участок #' + String(patchReady.hexCenterCell)
+      + ' догружается в фоне; текущий кадр не меняется.',
+    'info',
+  );
+  return true;
+}
+
+/**
+ * Stage-8.7: атомарная подмена патча в одном кадре — буферы, ре-бейзинг камеры
+ * и первый кадр нового участка. Мировая точка прицела и ракурс сохраняются,
+ * сцена ни на кадр не остаётся пустой, localCameraDistance не обнуляется.
+ */
+function commitLocalPatchSwap(staged: StagedLocalPatch): void {
+  stagedLocalPatch = null;
+  const prevRenderer = localMapRenderer;
+  const prevPrograms = localMapPrograms;
+  const prevProgramsOwned = localMapProgramsOwnedByRenderer;
+  const radiusM = Number(staged.data.meta.radiusM) > 0
+    ? Number(staged.data.meta.radiusM)
+    : localMapRadiusM;
+
+  // 1. Камера: мгновенный ре-бейзинг в систему координат нового гекса.
+  // Высота глаза над ПРЕЖНИМ рельефом — база для остаточного рассогласования.
+  const prevClearanceM = localCameraTarget[2]
+    - localTerrainHeightAt(localMapData, localCameraTarget[0], localCameraTarget[1], localMapRadiusM);
+  applyLocalCameraRebase(staged.azimuth, radiusM, staged.data, prevClearanceM);
+
+  // 2. Буферы и данные нового участка — тем же кадром, что и его первый кадр.
+  localMapRenderer = staged.renderer;
+  localMapPrograms = staged.programs;
+  localMapProgramsOwnedByRenderer = staged.programsOwned;
+  localMapData = staged.data;
+  localSkirtData = staged.skirt;
+  applyLocalPatchMeta({
+    generationMs: staged.generationMs,
+    instanceCount: staged.instanceCount,
+    buildableFraction: staged.buildableFraction,
+  });
+  activePatchReady = staged.patchReady;
+  localMapWidthKm = staged.widthKm;
+  pendingNeighborFly = null;
+  localPatchLoading = false;
+
+  // 3. Прежний патч освобождается только после подмены указателей.
+  if (prevRenderer && prevRenderer !== staged.renderer) {
+    try { prevRenderer.dispose?.(); } catch (_) { /* контекст мог быть потерян */ }
+  }
+  if (!prevProgramsOwned && prevPrograms && prevPrograms !== staged.programs && localMapGl) {
+    localMapGl.deleteProgram(prevPrograms.terrainProgram);
+    localMapGl.deleteProgram(prevPrograms.structureProgram);
+  }
+
+  installLocalPatchUi(staged.patchReady, staged.widthKm);
+  resizeLocalMapCanvas();
+  localMapHudLastAt = 0;
+  updateLocalMapHud();
+  setLocalMapStatus('Участок #' + String(staged.patchReady.hexCenterCell) + ' готов.', 'ok');
+}
+
+/** Догружает подготовленный участок и выполняет подмену, когда он залит целиком. */
+function processStagedLocalPatch(): void {
+  const staged = stagedLocalPatch;
+  if (!staged) return;
+  if (typeof staged.renderer.processPendingUpload === 'function') {
+    const done = staged.renderer.processPendingUpload(3.0);
+    if (!done) return;
+  }
+  commitLocalPatchSwap(staged);
+}
+
 function renderLocalMapFromPatch(
   patchReady: WorkerPatchReadyResponse,
   scale: number,
@@ -1296,21 +1636,22 @@ function renderLocalMapFromPatch(
     console.warn('generateHorizonSkirt не сработал, рисую плоскую карту:', error);
     skirtData = null;
   }
-  localSkirtData = skirtData;
   if (requestId !== localMapEntrySeq) return;
-
-  localMapData = localData;
-  const meta = localData.meta as LocalMapWorkerResponse['meta'] & {
-    genMs?: number;
-    totalInstances?: number;
-    buildableFraction?: number;
-  };
   const measuredMs = performance.now() - startedAt;
-  localMapGenerationMs = Number.isFinite(meta.genMs) ? Math.max(0, meta.genMs as number) : measuredMs;
-  localMapInstanceCount = localTotalInstances(localData);
-  localMapBuildableFraction = Number.isFinite(meta.buildableFraction)
-    ? clampLocal(meta.buildableFraction as number, 0, 1)
-    : clampLocal(patchReady.buildableFraction, 0, 1);
+
+  // Stage-8.7: локальная сцена уже нарисована для другого гекса — новый участок
+  // догружается в отдельный рендерер, старый кадр живёт до самой подмены.
+  const isPatchSwitch = localMapActive && !shouldFlyToPatch && localMapRenderer !== null
+    && activePatchReady !== null
+    && activePatchReady.hexCenterCell !== patchReady.hexCenterCell;
+  if (isPatchSwitch) {
+    if (stageLocalPatchSwap(patchReady, scale, localData, skirtData, measuredMs)) return;
+    console.warn('Stage-8.7: второй рендерер недоступен, перехожу по последовательному пути');
+  }
+
+  localSkirtData = skirtData;
+  localMapData = localData;
+  applyLocalPatchMeta(readLocalPatchMeta(localData, patchReady, measuredMs));
   if (!initializeLocalMapRenderer() || !localMapRenderer) return;
 
   const renderer = localMapRenderer;
@@ -1340,26 +1681,10 @@ function renderLocalMapFromPatch(
 
   activePatchReady = patchReady;
   localPatchLoading = false;
-  const shortFaceCoord = extractShortFaceCoord(patchReady.canonicalAddress);
-  const planetName = selectedPlace?.name || 'Планета';
-  els.localMapTitle.textContent =
-    `${planetName} · ячейка #${patchReady.hexCenterCell} (${shortFaceCoord}) · ${patchReady.keys.patchKey}`;
-  els.localMapTitle.title =
-    `${patchReady.canonicalAddress} · patch_key ${patchReady.keys.patchKey}`;
-  els.localInvariantStatus.textContent = (patchReady.invariants.ok ? 'OK' : 'ОШИБКА') + ' · ' +
-    Object.values(patchReady.invariants.checks).filter(Boolean).length + '/' + Object.keys(patchReady.invariants.checks).length;
-  els.localInvariantStatus.dataset.kind = patchReady.invariants.ok ? 'ok' : 'error';
-  localMapActive = true;
-  updateLocalNeighborButtons(patchReady);
-  updateLocalBreadcrumb(true);
-  updateLocalMapUrl(patchReady, scale);
-  document.body.classList.add('local-map-active');
-  els.localMapStage.hidden = false;
+  installLocalPatchUi(patchReady, scale);
   resizeLocalMapCanvas();
-  // Stage-8.6: при переходе к соседней ячейке ракурс предыдущего гекса
-  // сохраняется уже на ПЕРВОМ кадре нового патча — сброс в покой выполняется
-  // только при свежем Dive-in или при устаревшем/чужом ожидании перелёта.
-  // Иначе пользователь видел лишний кадр скачка камеры до finishLocalMapEntry.
+  // Stage-8.7: свежий Dive-in стартует из покоя; если сцена ещё не была
+  // открыта, камера в любом случае инициализируется канонической точкой.
   const neighborArrival = pendingNeighborFly !== null &&
     pendingNeighborFly.cell === patchReady.hexCenterCell;
   if (!neighborArrival) resetLocalCamera();
@@ -1376,41 +1701,17 @@ function renderLocalMapFromPatch(
 
 /**
  * Stage-8.2, фаза 2: проявляет `#localMapStage` и запускает плавный спуск
- * камеры до уровня выделенного гекса (или мгновенный перелёт к соседу внутри
- * уже открытой локальной карты — без задержки 320 мс).
+ * камеры до уровня выделенного гекса. Stage-8.7: переходы между гексами этот
+ * таймер больше не разыгрывают — они подменяются атомарно в кадровом цикле.
  */
 function finishLocalMapEntry(requestId: number, shouldFlyToPatch: boolean): void {
   localRevealTimer = 0;
   if (requestId !== localMapEntrySeq || !localMapActive || !activePatchReady) return;
+  if (!shouldFlyToPatch) return;
   els.localMapStage.hidden = false;
   resizeLocalMapCanvas();
-  // Stage-8.6: ожидание перелёта валидно только для прибывшей ячейки.
-  const neighborFly = pendingNeighborFly && pendingNeighborFly.cell === activePatchReady.hexCenterCell
-    ? pendingNeighborFly
-    : null;
-  // Сброс в покой нужен только там, где камера действительно стартует заново
-  // (свежий Dive-in или устаревшее ожидание) — иначе переход к соседу
-  // обходится без единого кадра скачка ракурса.
-  if (shouldFlyToPatch) {
-    resetLocalCamera();
-    startLocalDiveInAnim();
-  } else if (neighborFly) {
-    // Перелёт к соседнему гексу: цель приезжает со стороны предыдущего гекса.
-    // Stage-8.4/8.6: камера сохраняет состояние, записанное в requestLocalNeighbor
-    // (или в обработчике «СОСЕДИ PATCH7») до перехода, — пользовательский
-    // yaw/pitch/zoom не теряется, кадр не дёргается.
-    const { azimuth, prevTargetOffset, prevYaw, prevPitch, prevDist } = neighborFly;
-    if (prevTargetOffset) {
-      localCameraTarget = [prevTargetOffset[0], prevTargetOffset[1], prevTargetOffset[2]];
-    }
-    if (prevYaw !== undefined) localCameraYaw = prevYaw;
-    if (prevPitch !== undefined) localCameraPitch = prevPitch;
-    if (prevDist !== undefined && prevDist > 0) localCameraDistance = prevDist;
-    pendingNeighborFly = null;
-    startLocalNeighborFlyAnim(azimuth);
-  } else {
-    resetLocalCamera();
-  }
+  resetLocalCamera();
+  startLocalDiveInAnim();
   els.localMapStage.classList.remove('is-active');
   void els.localMapStage.offsetWidth;
   els.localMapStage.classList.add('is-active');
@@ -1471,7 +1772,10 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
 
   const shouldFlyToPatch = !localMapActive;
   // Свежий Dive-in не должен подхватывать перелёт несостоявшегося соседнего запроса.
-  if (shouldFlyToPatch) pendingNeighborFly = null;
+  if (shouldFlyToPatch) {
+    pendingNeighborFly = null;
+    discardStagedLocalPatch();
+  }
   const requestId = ++localMapEntrySeq;
   window.clearTimeout(localMapHideTimer);
   localMapWidthKm = scale;
@@ -1494,6 +1798,7 @@ function exitLocalMap(): void {
   localSkirtData = null;
   localCameraAnim = null;
   pendingNeighborFly = null;
+  discardStagedLocalPatch();
   localPatchLoading = false;
   localClickCandidate = null;
   localPointers.clear();
@@ -1850,6 +2155,7 @@ function ensureWorker(): Worker {
   worker.onerror = function (event: ErrorEvent): void {
     localPatchLoading = false;
     pendingNeighborFly = null;
+    discardStagedLocalPatch();
     activeRequest = null;
     pendingGpuReady = null;
     if (globe) globe.setAdaptiveQualityHold(false);
@@ -1933,6 +2239,7 @@ function startGeneration(restart: boolean, reason: string): void {
   activePatchReady = null;
   localPatchLoading = false;
   pendingNeighborFly = null;
+  discardStagedLocalPatch();
   els.diveLocalMap.disabled = true;
   updateLocalNeighborButtons(null);
   updateUrl(profile);
@@ -2000,6 +2307,7 @@ function onWorkerMessage(event: MessageEvent): void {
       } else {
         localPatchLoading = false;
         pendingNeighborFly = null;
+        discardStagedLocalPatch();
         pendingInitialLocalView = false;
         syncBrowserUrl({ cell: null, localView: false });
       }
@@ -2024,6 +2332,7 @@ function onWorkerMessage(event: MessageEvent): void {
     if (msg.requestId === latestPickRequest || msg.requestId === latestPatchRequest) {
       localPatchLoading = false;
       pendingNeighborFly = null;
+      discardStagedLocalPatch();
     }
     if (activeRequest && msg.requestId && msg.requestId !== activeRequest.id) return;
     if (msg.requestId === latestPickRequest || msg.requestId === latestHoverRequest) return;
@@ -2356,35 +2665,11 @@ function initEvents(): void {
     const button = event.target.closest<HTMLButtonElement>('button[data-cell]');
     const cell = Number(button && button.dataset.cell);
     if (!button || button.disabled || !Number.isInteger(cell) || cell < 0) return;
-    // Азимут перехода в касательном кадре текущего патча (atan2(east, north)),
-    // чтобы перелёт камеры стартовал со стороны предыдущего гекса.
-    const slot = Number(button.dataset.slot);
-    const patch = activePatchReady;
-    const neighbor = patch && Number.isInteger(slot)
-      ? patch.patch.cells[slot + 1]
-      : undefined;
-    if (patch && neighbor) {
-      const { east, north } = patch.patch.frame;
-      const dir = neighbor.center;
-      const u = dir[0] * east[0] + dir[1] * east[1] + dir[2] * east[2];
-      const v = dir[0] * north[0] + dir[1] * north[1] + dir[2] * north[2];
-      // Stage-8.5.1: кнопка «СОСЕДИ PATCH7» и клик по гексу 3D-сцены идут
-      // ОДНИМ путём — сохраняем полное состояние камеры (как в
-      // requestLocalNeighbor), чтобы перелёт стартовал без рывка и не терял
-      // пользовательский yaw/pitch/zoom.
-      pendingNeighborFly = {
-        cell,
-        azimuth: Math.atan2(u, v),
-        prevTargetOffset: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
-        prevYaw: localCameraYaw,
-        prevPitch: localCameraPitch,
-        prevDist: localCameraDistance,
-      };
-    }
+    // Stage-8.7: кнопка «СОСЕДИ PATCH7», клик по гексу 3D-сцены и
+    // квик-навигация идут ОДНИМ путём — requestLocalNeighbor. Камеру при этом
+    // не трогаем: ре-бейзинг выполнится атомарно вместе с подменой патча.
+    if (requestLocalNeighborByCellId(cell)) return;
     cancelLocalCameraAnim();
-    // Stage-8.6: кнопка «СОСЕДИ PATCH7» идёт тем же путём, что и
-    // requestLocalNeighbor, — флаг загрузки выставляется сразу перед запросом,
-    // чтобы enterLocalMap не принял прибывший патч за смену масштаба.
     localPatchLoading = true;
     setLocalMapStatus('Запрашиваю соседнюю ячейку #' + cell + ' и новый Patch7…', 'info');
     requestCellPick(cell);
@@ -2644,9 +2929,14 @@ function renderPatchReady(msg: WorkerPatchReadyResponse): void {
   // масштаба на той же ячейке и делал `return` без `renderLocalMapFromPatch`.
   // При открытой карте `activePatchReady = patchReady` обновляет сам
   // `renderLocalMapFromPatch` — уже после генерации нового меша.
-  if (!localMapActive) activePatchReady = msg;
   els.diveLocalMap.disabled = !msg.invariants.ok;
-  updateLocalNeighborButtons(msg);
+  if (!localMapActive) {
+    activePatchReady = msg;
+    // Stage-8.7: во время догрузки перехода кнопки «СОСЕДИ PATCH7» продолжают
+    // показывать соседей ТЕКУЩЕГО (нарисованного) гекса — они обновляются в
+    // кадре атомарной подмены (commitLocalPatchSwap).
+    updateLocalNeighborButtons(msg);
+  }
 
   const planetKeyOut = document.getElementById('planetKeyOut');
   const regionKeyOut = document.getElementById('regionKeyOut');
@@ -2680,6 +2970,7 @@ function renderPatchReady(msg: WorkerPatchReadyResponse): void {
   if (!msg.invariants.ok) {
     localPatchLoading = false;
     pendingNeighborFly = null;
+    discardStagedLocalPatch();
     pendingInitialLocalView = false;
     if (localMapActive) exitLocalMap();
     else syncBrowserUrl({ localView: false });
@@ -2736,6 +3027,7 @@ function init(): void {
         activePatchReady = null;
         localPatchLoading = false;
         pendingNeighborFly = null;
+        discardStagedLocalPatch();
         pendingInitialLocalView = false;
         els.diveLocalMap.disabled = true;
         updateLocalNeighborButtons(null);
