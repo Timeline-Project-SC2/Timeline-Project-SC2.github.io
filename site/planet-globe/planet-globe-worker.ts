@@ -18,11 +18,18 @@
    continentTop1Id/drainageRegionId идентичны на телефоне и ПК на 100%,
    потому что pick всегда идёт по канонической сетке и поверхности.
 
+   Stage-8.8.2 (A-1): прокси и финал приезжают в ОДНОМ ответе. Запрос с
+   необязательным proxyV строит каноническую поверхность РОВНО ОДИН раз и
+   возвращает в ready два слоя той же генерации: proxy (сетка proxyV) и
+   geometry (сетка renderV). Без proxyV (или при proxyV >= renderV) ответ
+   прежний: одна геометрия, поля proxy в сообщении нет. pick/prefetch/
+   extract-patch по-прежнему считают по канонической сетке и поверхности.
+
    Протокол:
      generate { token, requestId, profile, renderV, colorMode, reliefScale,
-                fallbackPreview }
-       -> status/progress -> ready { geometry, summary, preview? }
-     color-mode { token, requestId, mode }
+                fallbackPreview, proxyV? }
+       -> status/progress -> ready { geometry, summary, preview?, proxy? }
+     color-mode { token, requestId, mode, renderV? }
        -> colors { colors:Uint8Array }
      pick { token, requestId, direction:[x,y,z], purpose:'select'|'hover' }
        -> pick-result { info }
@@ -64,6 +71,10 @@ export interface GenerateMessage {
   requestId?: string | number;
   profile?: GeographyProfileInput;
   renderV?: number;
+  /** Stage-8.8.2 (A-1): частота прокси-сетки для того же канонического
+   *  расчёта. Необязательное поле: нет значения или proxyV >= renderV —
+   *  прежний ответ с одной геометрией (обратная совместимость). */
+  proxyV?: number;
   colorMode?: string;
   reliefScale?: number;
   fallbackPreview?: boolean;
@@ -74,6 +85,9 @@ export interface ColorModeMessage {
   token?: string;
   requestId?: string | number;
   mode?: string;
+  /** Stage-8.8.2 (A-1): слой цветов для указанной renderV (во время показа
+   *  прокси). Нет поля — цвета по current (финальная геометрия), как раньше. */
+  renderV?: number;
 }
 
 export interface PickMessage {
@@ -251,6 +265,14 @@ export interface WorkerProgressResponse {
   label: string;
 }
 
+/** Stage-8.8.2 (A-1): прокси-слой совмещённого ответа — геометрия прокси-сетки
+ *  (proxyV), построенная из той же канонической поверхности, что и финал. */
+export interface GlobeProxyGeometry {
+  renderV: number;
+  geometry: GlobeWireGeometry;
+  cellCount: number;
+}
+
 export interface WorkerReadyResponse {
   type: 'ready';
   token?: string;
@@ -259,6 +281,8 @@ export interface WorkerReadyResponse {
   summary: GlobeSummary;
   colorMode?: string;
   preview?: { width: number; height: number; data: Uint8ClampedArray } | null;
+  /** Stage-8.8.2 (A-1): есть только когда запрос пришёл с proxyV < renderV. */
+  proxy?: GlobeProxyGeometry;
 }
 
 export interface WorkerColorsResponse {
@@ -388,6 +412,21 @@ function gridKey(v: number): string { return 'gp-v1-bin:' + v; }
 
 /* --------------------------------------------------------------- состояние */
 
+/** Слой цветов: финальная renderSurface либо прокси-слой того же расчёта. */
+interface ColorLayer {
+  renderSurface: SurfaceResult;
+  vertexCellId: Uint32Array;
+  cellCount: number;
+}
+
+/** Stage-8.8.2 (A-1): прокси-слой совмещённой генерации. Живёт рядом с
+ *  финалом, чтобы color-mode с renderV = proxyV отвечал цветами ровно того
+ *  числа вершин, которое сейчас на экране. */
+interface CurrentProxyLayer extends ColorLayer {
+  renderV: number;
+  renderGrid: PlanetGrid;
+}
+
 interface CurrentPlanet {
   token: string | undefined;
   /** Канонический профиль генерации (geographyVersion и нормы для И-1). */
@@ -403,6 +442,8 @@ interface CurrentPlanet {
   renderSurface: SurfaceResult;
   vertexCellId: Uint32Array;
   cellCount: number;
+  /** Stage-8.8.2 (A-1): прокси-слой совмещённого ответа или null. */
+  proxy: CurrentProxyLayer | null;
   reliefScale: number;
   colorMode: string;
   /** Кэш последнего среза Patch7 (упреждающая сборка prefetch). */
@@ -441,6 +482,16 @@ function fnv1a64Hex(text: string): string {
 function clampRenderV(requested: number, canonicalV: number): number {
   const v = Math.max(4, Math.min(256, Math.round(Number(requested) || canonicalV)));
   return Math.min(v, canonicalV);
+}
+
+/** Stage-8.8.2 (A-1): частота прокси-сетки из необязательного proxyV.
+ *  Отсутствие поля или proxyV >= renderV означает «прокси не нужен»:
+ *  вызывающий получает renderV и прежний ответ с одной геометрией. */
+function normalizeProxyV(requested: number | undefined, renderV: number): number {
+  if (requested == null) return renderV;
+  const v = Math.round(Number(requested));
+  if (!Number.isFinite(v)) return renderV;
+  return Math.max(4, Math.min(256, v));
 }
 
 /** Ближайшая ячейка сетки к единичному направлению (обёртка GeodesicGrid.pick). */
@@ -700,6 +751,26 @@ function surfaceSummary(info: CanonicalInfo, surface: SurfaceResult, geometry: G
   };
 }
 
+/** Геометрия на проводе: без vertexCellId/cellIndexStart (pick живёт в
+ *  воркере). Один и тот же срез для финала и прокси-слоя. */
+function wireGeometry(geometry: GlobeGeometry): GlobeWireGeometry {
+  return {
+    version: geometry.version,
+    v: geometry.v,
+    cellCount: geometry.cellCount,
+    vertexCount: geometry.vertexCount,
+    triangleCount: geometry.triangleCount,
+    indexCount: geometry.indexCount,
+    positions: geometry.positions,
+    normals: geometry.normals,
+    colors: geometry.colors,
+    indices: geometry.indices,
+    chunkRanges: geometry.chunkRanges,
+    reliefScale: geometry.reliefScale,
+    typedBytes: geometry.typedBytes,
+  };
+}
+
 async function runGenerate(message: GenerateMessage): Promise<void> {
   const token = message.token;
   const requestId = message.requestId;
@@ -741,12 +812,35 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
     progress(token, requestId, 'geometry', 0.84, 'GPU-геометрия ячеек');
     await yieldLoop();
     const geometryStarted = performance.now();
+    // Stage-8.8.2 (A-1): прокси-слой совмещённого ответа. Поверхность НЕ
+    // пересчитывается — канонические поля проецируются на прокси-сетку теми
+    // же вызовами, что и в прежней прокси-ветке.
+    const proxyV = normalizeProxyV(message.proxyV, renderV);
+    let proxyLayer: CurrentProxyLayer | null = null;
+    let proxyGeometry: GlobeGeometry | null = null;
+    if (proxyV < renderV) {
+      const proxyGridResult = await getGrid(proxyV, token, requestId, 0.845);
+      const proxyRenderGrid = proxyGridResult.grid;
+      const proxyRenderSurface = projectSurfaceToRender(grid, surface, proxyRenderGrid);
+      proxyGeometry = PlanetGlobe.buildGlobeGeometry(proxyRenderGrid, proxyRenderSurface, {
+        colorMode: colorMode,
+        reliefScale: reliefScale,
+      });
+      proxyLayer = {
+        renderV: proxyV,
+        renderGrid: proxyRenderGrid,
+        renderSurface: proxyRenderSurface,
+        vertexCellId: proxyGeometry.vertexCellId,
+        cellCount: proxyGeometry.cellCount,
+      };
+    }
+
     let renderGrid = grid;
     let renderSurface = surface;
     if (renderV !== info.canonicalV) {
       // Мобильный прокси-меш (И-1): геометрия грубее, поля — канонические.
-      const proxy = await getGrid(renderV, token, requestId, 0.845);
-      renderGrid = proxy.grid;
+      const render = await getGrid(renderV, token, requestId, 0.845);
+      renderGrid = render.grid;
       renderSurface = projectSurfaceToRender(grid, surface, renderGrid);
     }
     const geometry = PlanetGlobe.buildGlobeGeometry(renderGrid, renderSurface, {
@@ -785,29 +879,35 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
       renderSurface: renderSurface,
       vertexCellId: geometry.vertexCellId,
       cellCount: geometry.cellCount,
+      proxy: proxyLayer,
       reliefScale: reliefScale,
       colorMode: colorMode,
       lastPatchCache: null,
     };
 
-    const payloadGeometry = {
-      version: geometry.version,
-      v: geometry.v,
-      cellCount: geometry.cellCount,
-      vertexCount: geometry.vertexCount,
-      triangleCount: geometry.triangleCount,
-      indexCount: geometry.indexCount,
-      positions: geometry.positions,
-      normals: geometry.normals,
-      colors: geometry.colors,
-      indices: geometry.indices,
-      chunkRanges: geometry.chunkRanges,
-      reliefScale: geometry.reliefScale,
-      typedBytes: geometry.typedBytes,
-    };
+    const payloadGeometry = wireGeometry(geometry);
+    // Каждый ArrayBuffer попадает в transfer list ровно один раз: сначала
+    // финал, затем прокси-слой той же генерации (Stage-8.8.2, A-1).
     const transfer: Transferable[] =
       PlanetGlobe.listGeometryTransferables(payloadGeometry as unknown as GlobeGeometry, false) as Transferable[];
-    if (preview && preview.data && preview.data.buffer) transfer.push(preview.data.buffer as ArrayBuffer);
+    let payloadProxy: GlobeProxyGeometry | null = null;
+    if (proxyLayer && proxyGeometry) {
+      const wireProxy = wireGeometry(proxyGeometry);
+      payloadProxy = {
+        renderV: proxyLayer.renderV,
+        geometry: wireProxy,
+        cellCount: wireProxy.cellCount,
+      };
+      const proxyBuffers =
+        PlanetGlobe.listGeometryTransferables(wireProxy as unknown as GlobeGeometry, false) as Transferable[];
+      for (let i = 0; i < proxyBuffers.length; i++) {
+        if (transfer.indexOf(proxyBuffers[i] as Transferable) < 0) transfer.push(proxyBuffers[i] as Transferable);
+      }
+    }
+    if (preview && preview.data && preview.data.buffer) {
+      const previewBuffer = preview.data.buffer as ArrayBuffer;
+      if (transfer.indexOf(previewBuffer as Transferable) < 0) transfer.push(previewBuffer as Transferable);
+    }
     const summary = surfaceSummary(info, surface, geometry, {
       mesh: round(meshMs, 1),
       surface: round(surfaceMs, 1),
@@ -817,13 +917,17 @@ async function runGenerate(message: GenerateMessage): Promise<void> {
     summary.gridSource = gridResult.source;
     // 100% страница покажет только после GPU-подмены; worker завершил CPU-часть.
     progress(token, requestId, 'ready', 0.84, 'CPU-часть готова');
-    post('ready', {
+    const readyPayload: Record<string, unknown> = {
       token: token, requestId: requestId,
       geometry: payloadGeometry,
       summary: summary,
       preview: preview,
       colorMode: colorMode,
-    }, transfer);
+    };
+    // Поле proxy появляется только в совмещённом ответе: без proxyV сообщение
+    // побайтово прежнее (критерий E).
+    if (payloadProxy) readyPayload.proxy = payloadProxy;
+    post('ready', readyPayload, transfer);
   } catch (err) {
     const e = err as CodedError;
     post('error', {
@@ -1096,6 +1200,17 @@ function runExtractPatch(message: ExtractPatchMessage): void {
   });
 }
 
+/** Stage-8.8.2 (A-1): слой цветов для запрошенной renderV. Без поля — финал
+ *  (как раньше). С renderV прокси-сетки — прокси-слой, чтобы число вершин
+ *  совпадало с геометрией, которая сейчас на экране. */
+function colorLayerFor(planet: CurrentPlanet, requestedV?: number): ColorLayer {
+  if (requestedV == null) return planet;
+  const v = Math.round(Number(requestedV));
+  if (!Number.isFinite(v)) return planet;
+  if (planet.proxy && v === planet.proxy.renderV) return planet.proxy;
+  return planet;
+}
+
 /** Маршрутизация одного входного сообщения: общий контур для реального
  *  workerScope.onmessage и тестируемого PlanetGlobeWorker.createWorkerHandler. */
 async function routeMessage(message: WorkerMessage): Promise<void> {
@@ -1105,7 +1220,8 @@ async function routeMessage(message: WorkerMessage): Promise<void> {
     } else if (message.type === 'color-mode') {
       if (!current) throw new Error('Планета ещё не сгенерирована');
       const mode = message.mode || 'biome';
-      const colors = PlanetGlobe.buildVertexColors(current.renderSurface, current.vertexCellId, mode, current.cellCount);
+      const layer = colorLayerFor(current, message.renderV);
+      const colors = PlanetGlobe.buildVertexColors(layer.renderSurface, layer.vertexCellId, mode, layer.cellCount);
       current.colorMode = mode;
       post('colors', {
         token: message.token, requestId: message.requestId, mode: mode, colors: colors,
@@ -1149,6 +1265,9 @@ async function routeMessage(message: WorkerMessage): Promise<void> {
  *  Worker-скоупа и возвращает исходящие ответы каждого вызова по порядку. */
 export interface WorkerTestHandler {
   handle(message: WorkerMessage): Promise<WorkerResponse[]>;
+  /** Stage-8.8.2 (A-1), критерий C: transfer-списки последнего handle(),
+   *  по одному на каждое исходящее сообщение в том же порядке. */
+  lastTransfers(): Transferable[][];
 }
 
 export const PlanetGlobeWorker = {
@@ -1157,17 +1276,25 @@ export const PlanetGlobeWorker = {
   SURFACE_VERSION: PlanetSurface.SURFACE_VERSION,
   createWorkerHandler: function (): WorkerTestHandler {
     const outbox: WorkerResponse[] = [];
+    let transfers: Transferable[][] = [];
     return {
       handle: async function (message: WorkerMessage): Promise<WorkerResponse[]> {
         outbox.length = 0;
+        transfers = [];
         const previousSink = postSink;
-        postSink = function (payload) { outbox.push(payload as WorkerResponse); };
+        postSink = function (payload, transfer) {
+          outbox.push(payload as WorkerResponse);
+          transfers.push(transfer ? transfer.slice() : []);
+        };
         try {
           await routeMessage(message);
         } finally {
           postSink = previousSink;
         }
         return outbox.slice();
+      },
+      lastTransfers: function (): Transferable[][] {
+        return transfers.map(function (list) { return list.slice(); });
       },
     };
   },
