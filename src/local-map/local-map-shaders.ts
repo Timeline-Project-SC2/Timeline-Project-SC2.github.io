@@ -266,13 +266,18 @@ void main() {
     uvec4 zoneData = texture(u_zoning_map, v_uv);
     zone = zoneData.r;
     terraformBlend = texture(u_terraform_map, v_uv).r;
+    // Цвет зон полностью гасим до границы активного гекса: на срезе центральный
+    // меш и юбка используют один и тот же природный цвет без скачка.
+    float innerEdgeFade = 1.0 - smoothstep(hexApothem * 0.58, hexApothem * 0.90, centerHexDist);
+    terraformBlend *= innerEdgeFade;
   }
 
-  // Внутри активного гекса (centerHexDist <= hexApothem) оптическое размытие
-  // строго нулевое (blur = 0.0), а за его пределами плавно нарастает к горизонту.
-  float blur = (u_focusRadiusM > 1.0 && u_fogEnd * 0.88 > hexApothem)
-    ? smoothstep(hexApothem, u_fogEnd * 0.88, centerHexDist)
-    : ((u_focusRadiusM > 1.0 && centerHexDist > hexApothem) ? 1.0 : 0.0);
+  // Первые 3–4 круга гексов остаются чёткими: оптическое размытие начинается
+  // только за clearHexRadius и плавно нарастает к дальним кольцам горизонта.
+  float clearHexRadius = hexApothem * 3.6;
+  float blur = (u_focusRadiusM > 1.0 && u_fogEnd * 0.92 > clearHexRadius)
+    ? smoothstep(clearHexRadius, u_fogEnd * 0.92, centerHexDist)
+    : ((u_focusRadiusM > 1.0 && centerHexDist > clearHexRadius) ? 1.0 : 0.0);
 
   // Признак горизонтального водного зеркала: у воды/озера (зона 0) нормаль
   // строго вертикальна, поэтому xy-составляющая нормали равна нулю. Такой
@@ -311,7 +316,7 @@ void main() {
 
     // 1. Ближний каскад: микрозерно травы и дернины, вкрапления мелких
     //    камней и редкие светлые эрозионные ложбинки/тропы без сетки.
-    float microFade = 1.0 - smoothstep(0.0, 0.35, blur);
+    float microFade = 1.0 - smoothstep(0.0, 0.52, blur);
     float microGrain = terrainValueNoise(surfCoord * 44.0) * 0.62
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 96.0 + vec2(13.7, 7.9)) * 0.38;
     vec3 meadowGrain = mix(vec3(0.84, 0.91, 0.76), vec3(1.12, 1.08, 0.96), microGrain);
@@ -326,7 +331,7 @@ void main() {
     // 2. Средний каскад: два геологических пояса по крутизне. Светлые
     //    песчано-охристые конусы осыпей занимают переходные склоны и подножия,
     //    а крутые обрывы получают серо-каменный тон и продольные кулуары.
-    float mesoFade = 1.0 - smoothstep(0.15, 0.78, blur);
+    float mesoFade = 1.0 - smoothstep(0.20, 0.86, blur);
     float mesoPatch = terrainValueNoise(surfCoord * 7.5 + vec2(4.2, -9.1)) * 0.60
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 17.5 + vec2(-6.4, 15.3)) * 0.40;
     float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
@@ -402,19 +407,15 @@ void main() {
       * (1.0 - smoothstep(hexApothem * 0.999, hexApothem * 1.004, centerHexDist));
   }
 
-  // Нормаль плавно сглаживается к вертикали по мере роста blur; едва
-  // заметный разворот нормали не нарушает естественный рельеф у кромки.
-  vec3 N = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur * 0.82));
-  if (u_focusRadiusM > 1.0) {
-    vec3 rimNormal = normalize(vec3((v_worldPos.xy / max(dist, 1e-4)) * 0.74, 0.67));
-    N = normalize(mix(N, rimNormal, hexGlow * 0.08));
-  }
+  // Нормаль освещения едина для центра и юбки: без разворота к rimNormal,
+  // который создавал ложную фаску на границе активного гекса.
+  vec3 N = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur * 0.72));
   float NdL = max(dot(N, u_lightDir), 0.0);
   vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8));
 
   if (u_focusRadiusM > 1.0) {
     vec3 hexRimColor = mix(vec3(0.56, 0.67, 0.45), vec3(0.78, 0.82, 0.62), hexCoreLine);
-    float hexRimWeight = clamp(hexGlow * 0.06 + hexCoreLine * 0.14, 0.0, 0.20);
+    float hexRimWeight = clamp(hexGlow * 0.05 + hexCoreLine * 0.12, 0.0, 0.16);
     lit = mix(lit, hexRimColor, hexRimWeight);
   }
 
