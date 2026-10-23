@@ -231,6 +231,10 @@ const els = {
   localFogStatus: must<HTMLElement>('localFogStatus'),
   localInvariantStatus: must<HTMLElement>('localInvariantStatus'),
   localMapStatus: must<HTMLElement>('localMapStatus'),
+  localMapDiag: must<HTMLElement>('localMapDiag'),
+  localDiagDeltaEye: must<HTMLElement>('localDiagDeltaEye'),
+  localDiagDeltaYaw: must<HTMLElement>('localDiagDeltaYaw'),
+  localDiagJump: must<HTMLElement>('localDiagJump'),
 };
 
 const PREFERRED_SURFACE_CLASS: Record<string, string> = {
@@ -288,6 +292,8 @@ let cycleActive = false;
 let completedPlanets = 0;
 let generationHistory: HistoryEntry[] = [];
 const initialUrlParams = new URLSearchParams(window.location.search);
+/** Stage-8.7: замеры переходов G6.1 выводятся только при `?debug=local`. */
+const LOCAL_DEBUG_QUERY = (initialUrlParams.get('debug') || '') === 'local';
 const initialCellRaw = (initialUrlParams.get('cell') || '').trim();
 let placesCatalog: CsvRow[] = [];
 let systemsCatalog: CsvRow[] = [];
@@ -349,6 +355,8 @@ interface StagedLocalPatch {
   readonly programsOwned: boolean;
   /** Направление перехода (азимут прихода нового гекса), рад. */
   readonly azimuth: number;
+  /** false — подмена на ТУ ЖЕ ячейку: камеру не ре-бейзим. */
+  readonly rebase: boolean;
   readonly generationMs: number;
   readonly instanceCount: number;
   readonly buildableFraction: number;
@@ -948,6 +956,7 @@ function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
   // этот момент, поэтому мир не смещается ни на один кадр.
   pendingNeighborFly = { cell: neighbor.cell, azimuth };
   localPatchLoading = true;
+  startLocalCameraDiagWindow();
   setLocalMapStatus('Перехожу на соседний гекс #' + String(neighbor.cell) + '…', 'info');
   requestCellPick(neighbor.cell);
 }
@@ -1293,6 +1302,109 @@ function updateLocalMapHud(): void {
   }
 }
 
+/* --------------------------------------- Диагностика переходов G6.1 (Stage-8.7) */
+
+/**
+ * Порог «скачка» по глазу: 2 % радиуса участка (50 м при R = 2500 м), но не
+ * меньше 8 м. Порог по yaw — 0.05 рад за кадр. Замеры ведутся только внутри
+ * окна перехода между гексами, поэтому обычная орбита и зум их не накручивают.
+ */
+const LOCAL_DIAG_JUMP_EYE_RATIO = 0.02;
+const LOCAL_DIAG_JUMP_MIN_EYE_M = 8;
+const LOCAL_DIAG_JUMP_YAW_RAD = 0.05;
+/** Stage-8.7: окно замера после подмены патча — чтобы поймать возможный рывок. */
+const LOCAL_DIAG_LINGER_MS = 400;
+/** Stage-8.7: страховочное ограничение окна, если переход так и не завершился. */
+const LOCAL_DIAG_MAX_WINDOW_MS = 15000;
+
+interface LocalCameraDiag {
+  active: boolean;
+  until: number;
+  prevEye: LocalVec3 | null;
+  prevYaw: number;
+  maxDeltaEyeM: number;
+  maxDeltaYawRad: number;
+  jumpFrames: number;
+  lastHudAt: number;
+}
+
+const localCameraDiag: LocalCameraDiag = {
+  active: false,
+  until: 0,
+  prevEye: null,
+  prevYaw: 0,
+  maxDeltaEyeM: 0,
+  maxDeltaYawRad: 0,
+  jumpFrames: 0,
+  lastHudAt: 0,
+};
+
+/** Открывает окно замеров в момент запроса перехода (только ?debug=local). */
+function startLocalCameraDiagWindow(): void {
+  if (!LOCAL_DEBUG_QUERY) return;
+  const diag = localCameraDiag;
+  const now = performance.now();
+  diag.active = true;
+  diag.until = now + LOCAL_DIAG_MAX_WINDOW_MS;
+  diag.prevEye = localCameraEye();
+  diag.prevYaw = localCameraYaw;
+  diag.maxDeltaEyeM = 0;
+  diag.maxDeltaYawRad = 0;
+  diag.jumpFrames = 0;
+  diag.lastHudAt = 0;
+  els.localMapDiag.hidden = false;
+}
+
+function renderLocalCameraDiag(): void {
+  const diag = localCameraDiag;
+  els.localDiagDeltaEye.textContent = fmtNum(diag.maxDeltaEyeM, 2) + ' м';
+  els.localDiagDeltaYaw.textContent = fmtNum(diag.maxDeltaYawRad, 4) + ' рад';
+  els.localDiagJump.textContent = diag.jumpFrames === 0 ? 'нет' : String(diag.jumpFrames);
+  els.localDiagJump.dataset.kind = diag.jumpFrames === 0 ? 'ok' : 'error';
+}
+
+/** Закрывает окно замеров и печатает сводку перехода (только ?debug=local). */
+function closeLocalCameraDiagWindow(): void {
+  const diag = localCameraDiag;
+  if (!diag.active) return;
+  diag.active = false;
+  diag.prevEye = null;
+  renderLocalCameraDiag();
+  console.info(
+    '[G6.1] переход между гексами: max |Δeye| = ' + fmtNum(diag.maxDeltaEyeM, 2) + ' м, max |Δyaw| = '
+      + fmtNum(diag.maxDeltaYawRad, 4) + ' рад, кадров-скачков = ' + String(diag.jumpFrames),
+  );
+}
+
+/** Замеряет |Δeye| и |Δyaw| за кадр внутри окна перехода. */
+function updateLocalCameraDiag(now: number): void {
+  const diag = localCameraDiag;
+  if (!diag.active) return;
+  const eye = localCameraEye();
+  const prevEye = diag.prevEye;
+  // Ручное вращение/панорама во время догрузки — это движение пользователя,
+  // а не скачок подмены: такие кадры только переставляют базу замера.
+  const manual = localPointerMode !== null || localPointers.size > 0;
+  if (prevEye && !manual) {
+    const deltaEye = Math.hypot(eye[0] - prevEye[0], eye[1] - prevEye[1], eye[2] - prevEye[2]);
+    const deltaYaw = Math.abs(Math.atan2(
+      Math.sin(localCameraYaw - diag.prevYaw),
+      Math.cos(localCameraYaw - diag.prevYaw),
+    ));
+    diag.maxDeltaEyeM = Math.max(diag.maxDeltaEyeM, deltaEye);
+    diag.maxDeltaYawRad = Math.max(diag.maxDeltaYawRad, deltaYaw);
+    const jumpEyeM = Math.max(LOCAL_DIAG_JUMP_MIN_EYE_M, localMapRadiusM * LOCAL_DIAG_JUMP_EYE_RATIO);
+    if (deltaEye > jumpEyeM || deltaYaw > LOCAL_DIAG_JUMP_YAW_RAD) diag.jumpFrames++;
+  }
+  diag.prevEye = eye;
+  diag.prevYaw = localCameraYaw;
+  if (now - diag.lastHudAt > 200) {
+    diag.lastHudAt = now;
+    renderLocalCameraDiag();
+  }
+  if (now > diag.until) closeLocalCameraDiagWindow();
+}
+
 /* --------------------------------------------- Квик-навигация по граням (Stage-8.7) */
 
 /** Апофема активного гекса в долях R_patch — та же, что в шейдере рельефа. */
@@ -1470,6 +1582,7 @@ function renderLocalMapFrame(): void {
   // Stage-8.7: подсказки 6 граней активного гекса считаются по актуальной
   // матрице кадра — после ре-бейзинга они сразу попадают на новую сцену.
   updateLocalMapQuickNav(viewProj);
+  updateLocalCameraDiag(performance.now());
   if (performance.now() - localMapHudLastAt > 100) {
     localMapHudLastAt = performance.now();
     updateLocalMapHud();
@@ -1628,6 +1741,7 @@ function stageLocalPatchSwap(
   data: LocalMapWorkerResponse,
   skirtData: HorizonSkirtData | null,
   measuredMs: number,
+  rebase: boolean,
 ): boolean {
   const gl = localMapGl;
   if (!gl || gl.isContextLost()) return false;
@@ -1666,7 +1780,10 @@ function stageLocalPatchSwap(
     renderer,
     programs,
     programsOwned,
-    azimuth: localPatchArrivalAzimuth(activePatchReady ? activePatchReady.patch : null, patchReady),
+    azimuth: rebase
+      ? localPatchArrivalAzimuth(activePatchReady ? activePatchReady.patch : null, patchReady)
+      : 0,
+    rebase,
     generationMs: metrics.generationMs,
     instanceCount: metrics.instanceCount,
     buildableFraction: metrics.buildableFraction,
@@ -1696,9 +1813,12 @@ function commitLocalPatchSwap(staged: StagedLocalPatch): void {
 
   // 1. Камера: мгновенный ре-бейзинг в систему координат нового гекса.
   // Высота глаза над ПРЕЖНИМ рельефом — база для остаточного рассогласования.
-  const prevClearanceM = localCameraTarget[2]
-    - localTerrainHeightAt(localMapData, localCameraTarget[0], localCameraTarget[1], localMapRadiusM);
-  applyLocalCameraRebase(staged.azimuth, radiusM, staged.data, prevClearanceM);
+  // При подмене на ту же ячейку базис не меняется и камеру не трогаем.
+  if (staged.rebase) {
+    const prevClearanceM = localCameraTarget[2]
+      - localTerrainHeightAt(localMapData, localCameraTarget[0], localCameraTarget[1], localMapRadiusM);
+    applyLocalCameraRebase(staged.azimuth, radiusM, staged.data, prevClearanceM);
+  }
 
   // 2. Буферы и данные нового участка — тем же кадром, что и его первый кадр.
   localMapRenderer = staged.renderer;
@@ -1729,6 +1849,11 @@ function commitLocalPatchSwap(staged: StagedLocalPatch): void {
   resizeLocalMapCanvas();
   localMapHudLastAt = 0;
   updateLocalMapHud();
+  // Окно G6.1 не закрывается на кадре подмены: ещё 400 мс замеров ловят рывок,
+  // если бы он был (в норме |Δeye| на кадре подмены равен нулю).
+  if (localCameraDiag.active) {
+    localCameraDiag.until = performance.now() + LOCAL_DIAG_LINGER_MS;
+  }
   setLocalMapStatus('Участок #' + String(staged.patchReady.hexCenterCell) + ' готов.', 'ok');
 }
 
@@ -1793,10 +1918,13 @@ function renderLocalMapFromPatch(
   // Stage-8.7: локальная сцена уже нарисована для другого гекса — новый участок
   // догружается в отдельный рендерер, старый кадр живёт до самой подмены.
   const isPatchSwitch = localMapActive && !shouldFlyToPatch && localMapRenderer !== null
-    && activePatchReady !== null
-    && activePatchReady.hexCenterCell !== patchReady.hexCenterCell;
+    && activePatchReady !== null;
   if (isPatchSwitch) {
-    if (stageLocalPatchSwap(patchReady, scale, localData, skirtData, measuredMs)) return;
+    // Ре-бейзинг нужен только при смене гекса; подмена на ту же ячейку
+    // выполняется атомарно, но базис камеры не меняется.
+    const rebase = activePatchReady !== null
+      && activePatchReady.hexCenterCell !== patchReady.hexCenterCell;
+    if (stageLocalPatchSwap(patchReady, scale, localData, skirtData, measuredMs, rebase)) return;
     console.warn('Stage-8.7: второй рендерер недоступен, перехожу по последовательному пути');
   }
 
@@ -1954,6 +2082,7 @@ function exitLocalMap(): void {
   localClickCandidate = null;
   // Stage-8.7: оверлей квик-навигации живёт только пока открыта локальная карта.
   disposeLocalMapQuickNav();
+  closeLocalCameraDiagWindow();
   localPointers.clear();
   localPointerId = null;
   localPointerMode = null;

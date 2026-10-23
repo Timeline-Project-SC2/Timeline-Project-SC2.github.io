@@ -394,6 +394,20 @@ button[aria-pressed="true"] { background: rgba(0, 105, 145, .78); border-color: 
 }
 #localMapHud b { color: #fff; font-weight: 800; }
 #localMapStatus { grid-column: 1 / -1; color: var(--muted); }
+/* Stage-8.7: строка диагностики переходов G6.1 — только при ?debug=local;
+   в обычном режиме узел остаётся hidden и не обновляется. */
+#localMapDiag {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(89, 220, 255, .28);
+  color: #9fdcf5;
+}
+#localMapDiag[hidden] { display: none; }
+#localMapDiag b[data-kind="ok"] { color: #7cf0c1; }
+#localMapDiag b[data-kind="error"] { color: #ff9a8a; }
 .local-upload-hud { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .local-upload-hud progress {
   width: clamp(42px, 6vw, 88px);
