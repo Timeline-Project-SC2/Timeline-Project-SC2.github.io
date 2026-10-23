@@ -28,7 +28,22 @@
       планетарный шаг гексов и все 6 соседних ячеек Patch7, гребневой
       мультифрактал ridgedFbm даёт горно-долинный перепад > 120 м на внешнем
       кольце суши, сшивка воротника остаётся точной, а не менее 55% карты
-      зонирования остаётся природным ландшафтом (zone === 0). */
+      зонирования остаётся природным ландшафтом (zone === 0).
+   6. Stage-8.5: `terraform_map` несёт явный водный маркер — `0` на воде,
+      озере #53275 и континентальном зеркале, `>= 2` на любой суше во всех
+      масштабах участка (10 км … 1250 км), значение `1` зарезервировано, а
+      минимальная подложка суши не влияет на heightfield (нулевая альфа).
+      Базовая высота суши интерполируется по Patch7 гладко (без прямых рёбер
+      Вороного), поэтому перепад между соседними узлами сетки на масштабах
+      156…1250 км не превышает 30 м при жёстком поле И-3.2.
+   7. Stage-8.5: юбка горизонта без искусственного кругового вала — вокруг
+      равнинного гекса простирается равнина (размах внешнего кольца меньше
+      амплитуды fBm), на реально поднятых направлениях гребни вырастают, их
+      амплитуда зависит от перепада высот Patch7, а не от radiusPatchM, и на
+      кольцах юбки остаются широкие непрерывные равнинные сектора. Кривизна
+      горизонта `planetRadiusM = max(frame.radiusM, 3.6·R_outer)` — от
+      настоящего радиуса планеты, поэтому на малых масштабах проседание
+      горизонта плавное (Δz < 1 км на 10 км). */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -962,8 +977,11 @@ test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85
   assert.ok(Math.abs(skirt.outerRadiusM - 10.0 * skirt.hexSpacingM) < 1e-4, 'R_outer = 10.0·d_hex');
   assert.ok(Math.abs(skirt.outerRadiusM - 11.5 * R) < 1e-4, 'R_outer = 11.5·R_patch');
   assert.ok(
-    Math.abs(skirt.planetRadiusM - 3.6 * skirt.outerRadiusM) < 1e-4,
-    'R_planet = 3.6·R_outer — плавная кривизна горизонта',
+    Math.abs(
+      skirt.planetRadiusM
+      - Math.max(dryPatch.frame.radiusM || 0, 3.6 * skirt.outerRadiusM),
+    ) < 1e-4,
+    'R_planet = max(frame.radiusM, 3.6·R_outer) — кривизна от настоящего радиуса планеты',
   );
   assert.equal(skirt.ringCount, 6, '6 соседних гексов Patch7');
   assert.ok(
@@ -1535,4 +1553,341 @@ test('Stage-8.4: первые четыре кольца без радиальн�
   assert.ok(checkedRings >= 40, 'проверены воротник и переход до 4.5 R');
   assert.ok(maxRadialJump < 60, `нет радиальных ступенек: ${maxRadialJump} м`);
   assert.ok(maxAngularJump < 60, `нет угловых ступенек: ${maxAngularJump} м`);
+});
+
+// ---------------------------------------------------------------------------
+// 6. Stage-8.5: явный водный маркер terraform_map — ложная вода исключена
+// ---------------------------------------------------------------------------
+
+test('Stage-8.5: terraform_map кодирует воду нулём, а сушу байтом >= 2 (нет ложной воды)', () => {
+  assert.ok(dryPatch, 'нужен сухой пологий центр');
+  assert.ok(waterPatch, 'нужен полностью водный патч');
+  assert.equal(Worker.TERRAFORM_LAND_MIN, 2, 'минимальная подложка суши — 2');
+  assert.equal(Worker.TERRAFORM_ALPHA_SPAN, 253, 'знаменатель альфы терраформинга — 255 − 2');
+
+  // 1. Базовый гауссов профиль: минимум 2 (нуль и единица зарезервированы под
+  //    воду), максимум по-прежнему ограничен альфой 0.42 (Stage-8.3).
+  const base = Worker.generateTerraformMap();
+  let baseMin = Infinity;
+  let baseMax = -Infinity;
+  for (const value of base) {
+    baseMin = Math.min(baseMin, value);
+    baseMax = Math.max(baseMax, value);
+  }
+  assert.ok(baseMin >= Worker.TERRAFORM_LAND_MIN, `подложка суши generateTerraformMap >= 2 (${baseMin})`);
+  assert.ok(baseMax <= Math.floor(0.42 * 255), `максимум terraform_map ограничен (${baseMax})`);
+
+  // 2. Сухой патч: во всех масштабах участка (10 км … 1250 км) каждый тексель
+  //    строго >= 2 — пологая суша больше не «тонет» в ложной воде.
+  for (const scaleKm of [10, 60, 600, 1250]) {
+    const radiusM = Math.max(600, (scaleKm * 1000) / 2);
+    Worker.clearLocalMapCache();
+    const dry = Worker.generateLocalMap(
+      requestFor(dryPatch, { radiusM, patchKey: `stage85-dry-${scaleKm}` }),
+    );
+    assert.equal(dry.terraformMap.length, Worker.TERRAFORM_RES * Worker.TERRAFORM_RES);
+    let dryMin = Infinity;
+    let reserved = 0;
+    for (let i = 0; i < dry.terraformMap.length; i++) {
+      const value = dry.terraformMap[i];
+      dryMin = Math.min(dryMin, value);
+      if (value === 1) reserved++;
+    }
+    assert.ok(
+      dryMin >= Worker.TERRAFORM_LAND_MIN,
+      `сухой патч ${scaleKm} км: нет нулей воды (min = ${dryMin})`,
+    );
+    assert.equal(reserved, 0, `сухой патч ${scaleKm} км: значение 1 зарезервировано и не встречается`);
+    assert.equal(dry.meta.waterFraction, 0, `сухой патч ${scaleKm} км: вода не найдена`);
+  }
+
+  // 3. Полностью водный патч: каждый тексель — явный маркер воды 0.
+  Worker.clearLocalMapCache();
+  const water = Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'stage85-water' }));
+  assert.equal(water.meta.waterFraction, 1, 'водный патч целиком под водой');
+  for (let i = 0; i < water.terraformMap.length; i++) {
+    assert.equal(water.terraformMap[i], 0, `водный тексель ${i} terraform_map равен 0`);
+  }
+
+  // 4. Континентальное озеро выше seaLevel (морфология ячейки #53275
+  //    «Корхал IV»): водное зеркало несёт маркер 0, а не «нулевую альфу суши».
+  const lakePatch = buildContinentalLakePatch(dryPatch);
+  Worker.clearLocalMapCache();
+  const lake = Worker.generateLocalMap({
+    patch: lakePatch,
+    seed: 12345,
+    placeId: 7,
+    radiusM: 600,
+    profile: PROFILE,
+    patchKey: 'stage85-lake-53275',
+  });
+  assert.equal(lake.meta.waterFraction, 1, 'локальный участок #53275 целиком под озером');
+  for (let i = 0; i < lake.terraformMap.length; i++) {
+    assert.equal(lake.terraformMap[i], 0, `тексель озера #53275 — маркер воды 0 (${lake.terraformMap[i]})`);
+  }
+
+  // 5. Смешанный участок того же озера на региональном масштабе: вода — 0,
+  //    суша сухих соседей — >= 2, промежуточных значений нет.
+  Worker.clearLocalMapCache();
+  const lakeWideRadiusM = 625000;
+  const lakeWide = Worker.generateLocalMap({
+    patch: lakePatch,
+    seed: 12345,
+    placeId: 7,
+    radiusM: lakeWideRadiusM,
+    patchKey: 'stage85-lake-wide',
+  });
+  const cellSize = (2 * lakeWideRadiusM) / HF_RES;
+  let wetTexels = 0;
+  let dryTexels = 0;
+  let reservedWide = 0;
+  for (let y = 0; y < HF_RES; y++) {
+    for (let x = 0; x < HF_RES; x++) {
+      const idx = y * HF_RES + x;
+      const value = lakeWide.terraformMap[idx];
+      if (value === 1) reservedWide++;
+      const cell = Contract.nearestPatchCell(
+        lakePatch,
+        Contract.localPointToDirection(
+          lakePatch,
+          (x - HF_RES / 2) * cellSize,
+          (y - HF_RES / 2) * cellSize,
+        ),
+      );
+      if (Contract.isWaterCell(cell, lakePatch.seaLevel)) {
+        wetTexels++;
+        assert.equal(value, 0, `водный тексель озера #53275 равен 0 (${value})`);
+      } else {
+        dryTexels++;
+        assert.ok(value >= Worker.TERRAFORM_LAND_MIN, `сухой тексель соседа >= 2 (${value})`);
+      }
+    }
+  }
+  assert.equal(reservedWide, 0, 'значение 1 не встречается и на смешанном участке');
+  assert.ok(wetTexels > 0 && dryTexels > 0, `смешанный участок: вода ${wetTexels} / суша ${dryTexels}`);
+  assert.ok(
+    Math.abs(lakeWide.meta.waterFraction - wetTexels / (HF_RES * HF_RES)) < 1e-9,
+    'meta.waterFraction совпадает с долей водных маркеров terraform_map',
+  );
+
+  // 6. Подложка 2 не влияет на рельеф: альфа терраформинга считается от
+  //    TERRAFORM_LAND_MIN, поэтому в точках без терраформинга heightfield
+  //    совпадает с природным даже при полностью разрешающей маске спавна.
+  Worker.clearLocalMapCache();
+  const strict = Worker.generateLocalMap(
+    requestFor(dryPatch, { spawnRule: STRICT_RULE, patchKey: 'stage85-alpha-strict' }),
+  );
+  Worker.clearLocalMapCache();
+  const mixed = Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'stage85-alpha-mixed' }));
+  const cornerIdx = 3 * HF_RES + 3;   // гауссов профиль здесь уже на подложке 2
+  assert.equal(mixed.terraformMap[cornerIdx], Worker.TERRAFORM_LAND_MIN, 'угловой тексель — подложка 2');
+  assert.ok(
+    Math.abs(strict.heightfield[cornerIdx] - mixed.heightfield[cornerIdx]) < 1e-9,
+    'подложка 2 даёт нулевую альфу: рельеф без терраформинга не меняется',
+  );
+  const tfIdx = Math.floor(HF_RES / 2) * HF_RES + Math.floor(HF_RES / 2);
+  assert.ok(
+    mixed.terraformMap[tfIdx] > Worker.TERRAFORM_LAND_MIN,
+    'в центре долины альфа терраформинга ненулевая',
+  );
+  assert.ok(
+    Math.abs(strict.heightfield[tfIdx] - mixed.heightfield[tfIdx]) > 1e-6,
+    'площадка терраформинга по-прежнему сглаживает рельеф в центре',
+  );
+
+  Worker.clearLocalMapCache();
+});
+
+test('Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах', () => {
+  // Фикстуры: геометрия канонического патча v=16 (dryPatch) сохраняется, а
+  // высоты ячеек задаются детерминированно; русло снято, чтобы инварианты И-3
+  // держались и рельеф юбки определялся только географией ячеек.
+  const variantPatch = (levels) => {
+    const patch = structuredClone(dryPatch);
+    patch.cells.forEach((cell, index) => {
+      cell.elevation = patch.seaLevel + levels[index % levels.length];
+      cell.filledElevation = cell.elevation;
+      cell.lakeWeight = 0;
+      cell.streamWeight = 0;
+      cell.depressionDepth = 0;
+      cell.flowReceiver = -1;
+    });
+    patch.river = {
+      centerCell: patch.river.centerCell,
+      flowsThroughCenter: false,
+      centerStreamWeight: 0,
+      centerRiverAccumulation: 0,
+      inlets: [],
+      outlet: null,
+    };
+    return patch;
+  };
+
+  const outerRing = SKIRT_RADIAL_COUNT - 1;
+  const ringOf = (label, patch, radiusM, profile, ring) => {
+    Worker.clearLocalMapCache();
+    const request = {
+      patch, radiusM, seed: 12345, placeId: 7, patchKey: label,
+      ...(profile ? { profile } : {}),
+    };
+    const local = Worker.generateLocalMap(request);
+    const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+    const heights = [];
+    for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) heights.push(skirtVertex(skirt, i, ring)[2]);
+    return { skirt, heights, radiusM };
+  };
+  const rangeOf = (heights) => Math.max(...heights) - Math.min(...heights);
+  /** Наибольший непрерывный сектор «равнины» (нижняя четверть размаха), градусы. */
+  const plainSectorDeg = (heights) => {
+    const min = Math.min(...heights);
+    const range = rangeOf(heights);
+    const total = heights.length;
+    let run = 0;
+    let best = 0;
+    for (let i = 0; i < total + 40; i++) {
+      if (heights[i % total] < min + 0.25 * range) {
+        run++;
+        best = Math.max(best, run);
+      } else run = 0;
+    }
+    return (best * 360) / Worker.SKIRT_ANGULAR_SEGMENTS;
+  };
+
+  // 1. Вокруг равнинного низкого гекса — равнина: размах внешнего кольца юбки
+  //    не превышает амплитуду fBm, значит замкнутого горного вала на 360° нет.
+  const plainPatch = variantPatch([0.02]);
+  assert.equal(
+    Contract.verifyPatchInvariants(plainPatch).ok,
+    true,
+    `фикстура равнины валидна по И-3: ${JSON.stringify(Contract.verifyPatchInvariants(plainPatch).checks)}`,
+  );
+  const plainRange = rangeOf(ringOf('stage85-skirt-plain', plainPatch, 600, null, outerRing).heights);
+  assert.ok(
+    plainRange < Worker.LAND_FBM_AMPLITUDE_M,
+    `вокруг равнинного гекса нет кругового вала: размах ${plainRange.toFixed(0)} м < ${Worker.LAND_FBM_AMPLITUDE_M} м (один fBm)`,
+  );
+
+  // 2. Та же геометрия, но реально поднятая и контрастная: гребни вырастают
+  //    там, где возвышенность направления настоящая, а не «вокруг гекса».
+  const upliftPatch = variantPatch([0.40, 0.55]);
+  assert.equal(Contract.verifyPatchInvariants(upliftPatch).ok, true, 'фикстура поднятого рельефа валидна');
+  const upliftRange = rangeOf(ringOf('stage85-skirt-uplift', upliftPatch, 600, null, outerRing).heights);
+  assert.ok(
+    upliftRange > plainRange + 80,
+    `на поднятом направлении гребни растут: ${upliftRange.toFixed(0)} м против ${plainRange.toFixed(0)} м у равнины`,
+  );
+
+  // 3. peakAmpM больше не масштабируется визуальным radiusPatchM: одно и то же
+  //    кольцо юбки одного патча даёт сопоставимый размах и на 600 м, и на 30 км.
+  const smallRing = ringOf('stage85-skirt-small', dryPatch, 600, PROFILE, outerRing);
+  const bigRing = ringOf('stage85-skirt-big', dryPatch, 30000, PROFILE, outerRing);
+  const smallRange = rangeOf(smallRing.heights);
+  const bigRange = rangeOf(bigRing.heights);
+  assert.ok(
+    Math.abs(smallRange - bigRange) < 0.25 * Math.max(smallRange, bigRange),
+    `амплитуда гребней от реального перепада высот, а не от radiusPatchM: ${smallRange.toFixed(0)} м (600 м) против ${bigRange.toFixed(0)} м (30 км)`,
+  );
+
+  // 4. Направленный рельеф: на внешнем и среднем кольцах юбки есть широкие
+  //    непрерывные равнинные сектора — гребни не замкнуты в кольцо на 360°.
+  const smallPlainDeg = plainSectorDeg(smallRing.heights);
+  assert.ok(
+    smallPlainDeg >= 30,
+    `на внешнем кольце есть открытый равнинный сектор ${smallPlainDeg.toFixed(0)}° >= 30°`,
+  );
+  const midRingIndex = 46;
+  const midRing = ringOf('stage85-skirt-mid', dryPatch, 600, PROFILE, midRingIndex);
+  const midRadiusM = skirtRadiusAt(midRing.skirt, 0, midRingIndex);
+  assert.ok(
+    midRadiusM > 3 * 600 && midRadiusM < 4.5 * 600,
+    `среднее кольцо юбки лежит в 3…4.5 R_patch (${midRadiusM.toFixed(0)} м)`,
+  );
+  const midPlainDeg = plainSectorDeg(midRing.heights);
+  assert.ok(
+    midPlainDeg >= 60,
+    `на среднем кольце равнинный сектор ещё шире: ${midPlainDeg.toFixed(0)}° >= 60°`,
+  );
+
+  // 5. Кривизна горизонта — от настоящего радиуса планеты: на малых и средних
+  //    масштабах побеждает `patch.frame.radiusM`, на крупнейших остаётся
+  //    нижняя граница 3.6·R_outer (иначе R_outer > R_planet и сферическое
+  //    проседание в касательной плоскости вырождается).
+  const skirtAt = (label, radiusM) => {
+    Worker.clearLocalMapCache();
+    const request = requestFor(dryPatch, { radiusM, patchKey: label });
+    const local = Worker.generateLocalMap(request);
+    return Worker.generateHorizonSkirt(request, local.heightfield);
+  };
+  const microSkirt = skirtAt('stage85-radius-micro', 5000);
+  assert.ok(
+    Math.abs(microSkirt.planetRadiusM - dryPatch.frame.radiusM) < 1e-6,
+    `на масштабе 10 км R_planet = frame.radiusM (${microSkirt.planetRadiusM} м)`,
+  );
+  const microDropM = Worker.planetCurvatureDropM(microSkirt.planetRadiusM, microSkirt.outerRadiusM);
+  assert.ok(
+    microDropM < 1000,
+    `кривизна настоящей планеты плавная: Δz на масштабе 10 км = ${(microDropM / 1000).toFixed(2)} км < 1 км`,
+  );
+  const wideSkirt = skirtAt('stage85-radius-wide', 625000);
+  assert.ok(
+    Math.abs(wideSkirt.planetRadiusM - 3.6 * wideSkirt.outerRadiusM) < 1e-3,
+    `на масштабе 1250 км действует нижняя граница 3.6·R_outer (${wideSkirt.planetRadiusM} м)`,
+  );
+
+  Worker.clearLocalMapCache();
+});
+
+test('Stage-8.5: базовая высота суши интерполируется по Patch7 гладко, без рёбер Вороного', () => {
+  const maxGridStep = (heightfield) => {
+    let maxStep = 0;
+    for (let y = 0; y < HF_RES; y++) {
+      for (let x = 0; x < HF_RES - 1; x++) {
+        maxStep = Math.max(maxStep, Math.abs(heightfield[y * HF_RES + x + 1] - heightfield[y * HF_RES + x]));
+      }
+    }
+    for (let y = 0; y < HF_RES - 1; y++) {
+      for (let x = 0; x < HF_RES; x++) {
+        maxStep = Math.max(maxStep, Math.abs(heightfield[(y + 1) * HF_RES + x] - heightfield[y * HF_RES + x]));
+      }
+    }
+    return maxStep;
+  };
+
+  // Масштабы приложения, на которых ступенчатый `nearestPatchCell` рисовал
+  // прямые диагональные рёбра Вороного: 156 км (границы ячеек у края кадра),
+  // 313 км и 625 км (до 6 соседей в кадре). 30 км — контроль: там участок
+  // целиком внутри одной ячейки, рельеф обязан остаться прежним.
+  for (const radiusM of [30000, 156000, 312500, 625000]) {
+    for (const withProfile of [false, true]) {
+      Worker.clearLocalMapCache();
+      const local = Worker.generateLocalMap(requestFor(dryPatch, {
+        radiusM,
+        patchKey: `stage85-smooth-${radiusM}-${withProfile ? 'p' : 'n'}`,
+        ...(withProfile ? { profile: PROFILE } : {}),
+      }));
+      const maxStep = maxGridStep(local.heightfield);
+      assert.ok(
+        maxStep < 30,
+        `radiusM=${radiusM} профиль=${withProfile ? 'да' : 'нет'}: нет ребра Вороного — максимальный перепад соседних узлов ${maxStep.toFixed(1)} м < 30 м`,
+      );
+      assert.ok(
+        Number.isFinite(local.meta.genMs) && local.meta.genMs <= 150,
+        `radiusM=${radiusM}: гейт G4 genMs=${local.meta.genMs.toFixed(1)} мс <= 150 мс`,
+      );
+    }
+  }
+
+  // Гладкость не куплена уплощением: на крупном масштабе реальный перепад
+  // высот между ячейками Patch7 обязан оставаться в heightfield.
+  Worker.clearLocalMapCache();
+  const wide = Worker.generateLocalMap(requestFor(dryPatch, {
+    radiusM: 625000, patchKey: 'stage85-smooth-wide',
+  }));
+  const reliefM = wide.meta.maxHeightM - wide.meta.minHeightM;
+  assert.ok(
+    reliefM > 100,
+    `на 1250 км перепад высот ячеек Patch7 сохранён: ${reliefM.toFixed(0)} м > 100 м`,
+  );
+
+  Worker.clearLocalMapCache();
 });
