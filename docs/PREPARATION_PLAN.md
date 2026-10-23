@@ -1526,6 +1526,14 @@ p95 frame time <=20 мс на десктопе и <=33.3 мс на Redmi Note 10
 
 - Биомы, переходы и оверлеи.
 - Интеграция в существующий конвейер изображений и кэш CI.
+- **Проектная стадия (23.10.2026):** архитектура гибридного атласа зафиксирована в
+  [`stages/stage-9-vegetation-atlas.md`](stages/stage-9-vegetation-atlas.md) — 8 морфологических
+  архетипов растительности, каналы тайла `Albedo` + `Height/FoliageMask/Roughness/OpticalDepth`,
+  `heightBlend` по `biomeTop1Weight`/`biomeTop2Weight`, климатический колорит в шейдере поверх
+  `riverInfluence`/`slope`/`volcanism`, UV-лестница `25 км / 6,25 км / 1,25 км / 312 м` и бюджеты
+  (`≈ 15,9 МБ` публикации, `32…64 МиБ` видеопамяти). Промпты генерации исходников —
+  [`prompts/stage-9-vegetation-tiles.md`](prompts/stage-9-vegetation-tiles.md). Код рантайма на этой
+  стадии не менялся.
 
 ### Этап 10. Страница системы (планово-типовой оценочный вариант)
 
@@ -1729,6 +1737,8 @@ place_id,profile_status,profile_revision,preset_id,surface_class,radius_km,axial
 - [`stages/stage-2-data-and-sync.md`](stages/stage-2-data-and-sync.md) — отчёт по данным `planet_generation`, валидатору и синку.
 - [`stages/stage-7-planet-page.md`](stages/stage-7-planet-page.md) — отчёт Этапа 7 (страница планеты, бесшовный зум и переход из атласа сектора).
 - [`stages/stage-8-local-map.md`](stages/stage-8-local-map.md) — отчёт Этапа 8 (локальная 3D-карта, порционная GPU-догрузка и гейт G4).
+- [`stages/stage-9-vegetation-atlas.md`](stages/stage-9-vegetation-atlas.md) — отчёт проектирования Этапа 9 (сравнение методов смены местности и растительности, матрица растительных биомов, каналы тайла, `heightBlend` и UV-лестница).
+- [`prompts/stage-9-vegetation-tiles.md`](prompts/stage-9-vegetation-tiles.md) — пакет промптов генерации бесшовных тайлов растительности (T1a, T1b, T2…T7) с техническими инвариантами и критериями приёмки.
 - [`HANDOFF.md`](HANDOFF.md) — рабочий конспект проекта.
 - [`AGENTS.md`](../AGENTS.md) — обязательные технические правила для будущих изменений.
 нений.
