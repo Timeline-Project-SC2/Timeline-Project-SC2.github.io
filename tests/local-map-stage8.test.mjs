@@ -43,7 +43,12 @@
       кольцах юбки остаются широкие непрерывные равнинные сектора. Кривизна
       горизонта `planetRadiusM = max(frame.radiusM, 3.6·R_outer)` — от
       настоящего радиуса планеты, поэтому на малых масштабах проседание
-      горизонта плавное (Δz < 1 км на 10 км). */
+      горизонта плавное (Δz < 1 км на 10 км).
+   8. Stage-8.5.1: на морском патче (все 7 ячеек — океан) прибрежная суша
+      юбки поднимается из моря с ненулевым рельефом холмов и гряд — амплитуда
+      гребней учитывает размах положительных высот макро-решётки `elevation`
+      (с капом `SKIRT_LATTICE_RELIEF_CAP_M`), — а водное зеркало воротника
+      (до 1.15 · R_patch) остаётся идеально плоским на уровне seaLevel. */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1887,6 +1892,115 @@ test('Stage-8.5: базовая высота суши интерполирует
   assert.ok(
     reliefM > 100,
     `на 1250 км перепад высот ячеек Patch7 сохранён: ${reliefM.toFixed(0)} м > 100 м`,
+  );
+
+  Worker.clearLocalMapCache();
+});
+
+// ---------------------------------------------------------------------------
+// 8. Stage-8.5.1: живой прибрежный рельеф юбки над морским Patch7
+// ---------------------------------------------------------------------------
+
+test('Stage-8.5.1: морской патч — рельеф прибрежной суши юбки и ровное зеркало воротника', () => {
+  assert.ok(waterPatch, 'нужен полностью водный патч');
+  const radiusM = 600;
+  Worker.clearLocalMapCache();
+  const request = requestFor(waterPatch, { radiusM, patchKey: 'stage851-sea-skirt', profile: PROFILE });
+  const local = Worker.generateLocalMap(request);
+  assert.equal(local.meta.waterFraction, 1, 'все 7 ячеек Patch7 — океан');
+  const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+
+  // 1. Воротник (до 1.15 · R_patch) — идеально плоское водное зеркало ocean
+  //    seaLevel (z === 0): новый прибрежный рельеф его не трогает.
+  const collarEndM = Worker.SKIRT_COLLAR_END_RADIUS_RATIO * radiusM;
+  let collarVertices = 0;
+  for (let j = 0; j <= Worker.SKIRT_COLLAR_RINGS; j++) {
+    for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
+      const [x, y, z] = skirtVertex(skirt, i, j);
+      // Позиции юбки хранятся во Float32, поэтому допуск на округление — 10 см.
+      assert.ok(
+        Math.hypot(x, y) <= collarEndM + 0.1,
+        `кольцо ${j} воротника лежит в пределах ${collarEndM.toFixed(0)} м`,
+      );
+      assert.ok(
+        Math.abs(z) < 1e-6,
+        `кольцо ${j}, луч ${i}: водное зеркало ровно на seaLevel (z = ${z.toFixed(3)} м)`,
+      );
+      collarVertices++;
+    }
+  }
+  assert.ok(collarVertices > 3000, `воротник проверен по всей окружности (${collarVertices} вершин)`);
+
+  // 2. За воротником из океана выходит настоящий берег: суша 2–4 колец юбки
+  //    поднимается с НЕНУЛЕВЫМ рельефом (холмы и гряды), а не остаётся
+  //    плоским зеркалом. Вода при этом нигде не проваливается ниже seaLevel.
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let landVertices = 0;
+  for (let j = Worker.SKIRT_COLLAR_RINGS + 1; j < SKIRT_RADIAL_COUNT; j++) {
+    for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
+      const z = skirtVertex(skirt, i, j)[2];
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+      if (z > 1) landVertices++;
+    }
+  }
+  assert.ok(minZ > -1e-6, `юбка не проваливается ниже зеркала океана (min z = ${minZ.toFixed(3)} м)`);
+  assert.ok(
+    landVertices > 200,
+    `прибрежная суша 2–4 колец поднялась из моря (${landVertices} вершин выше 1 м)`,
+  );
+  assert.ok(
+    maxZ > 100,
+    `прибрежные холмы и гряды юбки имеют реальный рельеф (max z = ${maxZ.toFixed(0)} м > 100 м)`,
+  );
+
+  // 3. Внешнее кольцо — живой рельеф, а не гладкий вал: несколько локальных
+  //    вершин-гряд по окружности и заметный размах высот вдоль кольца.
+  const outerRing = SKIRT_RADIAL_COUNT - 1;
+  const outerHeights = [];
+  for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
+    outerHeights.push(skirtVertex(skirt, i, outerRing)[2]);
+  }
+  const outerRangeM = Math.max(...outerHeights) - Math.min(...outerHeights);
+  assert.ok(
+    outerRangeM > Worker.LAND_FBM_AMPLITUDE_M,
+    `на внешнем кольце юбки выраженный рельеф (размах ${outerRangeM.toFixed(0)} м)`,
+  );
+  const localRidges = outerHeights.filter((z, i) => {
+    const next = outerHeights[(i + 1) % outerHeights.length];
+    const prev = outerHeights[(i - 1 + outerHeights.length) % outerHeights.length];
+    return z > next && z > prev;
+  }).length;
+  assert.ok(localRidges >= 5, `вдоль горизонта несколько гряд, а не один вал (${localRidges} локальных вершин)`);
+
+  // 4. Амплитуда гребней учитывает размах ПОЛОЖИТЕЛЬНЫХ высот макро-решётки:
+  //    перепад морского Patch7 равен нулю, поэтому без решётки гребней нет, а
+  //    с ней появляются прибрежные холмы (с капом SKIRT_LATTICE_RELIEF_CAP_M).
+  const slots = Worker.mapNeighborCellsToSlots(waterPatch);
+  const centerCell = waterPatch.cells[0];
+  const centerCanonElev = Contract.waterLevelOf(centerCell, waterPatch.seaLevel);
+  const patchOnlyAmpM = Worker.skirtLocalReliefAmplitudeM(waterPatch, slots, centerCanonElev, null);
+  assert.equal(patchOnlyAmpM, 0, 'перепад высот морского Patch7 равен нулю');
+  const nodes = 33;
+  const elevation = new Float32Array(nodes * nodes);
+  const detail = new Float32Array(nodes * nodes);
+  for (let n = 0; n < elevation.length; n++) elevation[n] = waterPatch.seaLevel + (n % 5) * 0.06;
+  const latticeAmpM = Worker.skirtLocalReliefAmplitudeM(
+    waterPatch, slots, centerCanonElev, { elevation, detail }, 0,
+  );
+  assert.ok(
+    latticeAmpM > patchOnlyAmpM + Worker.LAND_FBM_AMPLITUDE_M,
+    `берег из макро-решётки даёт амплитуду гребней ${latticeAmpM.toFixed(0)} м`,
+  );
+  for (let n = 0; n < elevation.length; n++) elevation[n] = waterPatch.seaLevel + (n % 5) * 0.12;
+  const cappedAmpM = Worker.skirtLocalReliefAmplitudeM(
+    waterPatch, slots, centerCanonElev, { elevation, detail }, 0,
+  );
+  assert.equal(
+    cappedAmpM,
+    Worker.SKIRT_LATTICE_RELIEF_CAP_M,
+    `размах решётки ограничен разумным капом ${Worker.SKIRT_LATTICE_RELIEF_CAP_M} м`,
   );
 
   Worker.clearLocalMapCache();
