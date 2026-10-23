@@ -1,10 +1,10 @@
 /* LocalMapShaders — GLSL ES 3.00 шейдеры локальной карты (Этапы 8/9, CR-01 PR 5;
    Stage-8 Planetary Horizon: кривизна планеты, оптический блюр горизонта,
    атмосферная дымка и купол неба.
-   Stage-8.2: выделение только активного центрального гекса тонкой тактической
-   кромкой, бесшовный простирающийся сферический горизонт с 3-каскадными
-   процедурными текстурами рельефа, плавным ухудшением видимости от границы
-   гекса к лимбу и непрозрачным куполом неба со звёздами.
+   Stage-8.2/8.3: выделение только активного центрального гекса тонкой
+   деликатной кромкой, бесшовный сферический горизонт с 3-каскадной живой
+   альпийской долиной, скальными хребтами и дневным куполом со слоисто-кучевыми
+   облаками, плавно растворяющимися в атмосферной дымке.
    --------------------------------------------------------------------------
    Поля шейдеров обязаны совпадать с контрактом VAO рендерера
    (local-map-renderer.ts):
@@ -201,13 +201,13 @@ uniform float u_hexSizeM;            // шаг гексов d_hex в метра�
 
 out vec4 fragColor;
 
-// Палитра зон (грунт)
+// Палитра живой долины: солнечные луга и тёплые грунтовые площадки усадеб.
 const vec3 ZONE_COLORS[5] = vec3[5](
-  vec3(0.45, 0.40, 0.35),   // 0: пустошь (натуральный грунт)
-  vec3(0.50, 0.48, 0.45),   // 1: жилая зона (слегка серее)
-  vec3(0.42, 0.40, 0.38),   // 2: промзона (тёмный бетон)
-  vec3(0.35, 0.38, 0.30),   // 3: периметр (камуфляж)
-  vec3(0.55, 0.55, 0.58)    // 4: ядро (чистый бетон)
+  vec3(0.36, 0.49, 0.20),   // 0: залитый солнцем травянистый склон
+  vec3(0.46, 0.48, 0.28),   // 1: жилая усадьба (травяно-землистый двор)
+  vec3(0.56, 0.49, 0.37),   // 2: хозяйственная площадка (тёплая терракота)
+  vec3(0.52, 0.47, 0.35),   // 3: периметр (утоптанный грунт)
+  vec3(0.58, 0.52, 0.42)    // 4: центральный двор (светлая песчаная почва)
 );
 
 // Вода/озёра/русла (И-3.2, И-3.3): мелководье и глубина ниже уровня моря.
@@ -282,10 +282,11 @@ void main() {
   float normalHoriz = length(v_normal.xy);
   bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015);
 
-  // Гипсометрия и изолинии рельефа: низины зеленее, склоны и гребни каменистее.
+  // Гипсометрия живой долины: сочные луга внизу, светлая каменистая
+  // осыпь и субальпийский пояс на верхних склонах и у подножий пиков.
   float hNorm = clamp((v_worldPos.z - 15.0) / 140.0, 0.0, 1.0);
-  vec3 lowlandColor  = vec3(0.31, 0.39, 0.30);
-  vec3 highlandColor = vec3(0.57, 0.53, 0.47);
+  vec3 lowlandColor  = vec3(0.30, 0.45, 0.16);
+  vec3 highlandColor = vec3(0.66, 0.60, 0.50);
   vec3 naturalColor  = mix(lowlandColor, ZONE_COLORS[0], smoothstep(0.0, 0.45, hNorm));
   naturalColor       = mix(naturalColor, highlandColor, smoothstep(0.45, 1.0, hNorm));
 
@@ -298,7 +299,7 @@ void main() {
   float contourLine  = isFlatWaterMirror
     ? 0.0
     : (1.0 - smoothstep(0.0, 0.045, contourPhase)) * contourFade * (1.0 - u_isSkirt);
-  naturalColor      *= (1.0 - 0.12 * contourLine);
+  naturalColor      *= (1.0 - 0.05 * contourLine);
 
   // 3 каскада процедурной текстуры поверхности суши (v_worldPos.z > 0.0)
   // в нормированных мировых координатах (единое поле для центра и юбки).
@@ -308,47 +309,74 @@ void main() {
     vec2 surfCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
     const mat2 OCTAVE_ROT = mat2(0.80, 0.60, -0.60, 0.80);
 
-    // 1. Ближняя микротекстура породы/грунта (внутри гекса и у его кромки).
+    // 1. Ближний каскад: микрозерно травы и дернины, вкрапления мелких
+    //    камней и редкие светлые эрозионные ложбинки/тропы без сетки.
     float microFade = 1.0 - smoothstep(0.0, 0.35, blur);
     float microGrain = terrainValueNoise(surfCoord * 44.0) * 0.62
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 96.0 + vec2(13.7, 7.9)) * 0.38;
-    vec3 gritTint = mix(vec3(0.90, 0.89, 0.87), vec3(1.11, 1.09, 1.06), microGrain);
-    naturalColor *= mix(vec3(1.0), gritTint, microFade * 0.85);
+    vec3 meadowGrain = mix(vec3(0.84, 0.91, 0.76), vec3(1.12, 1.08, 0.96), microGrain);
+    naturalColor *= mix(vec3(1.0), meadowGrain, microFade * 0.72);
+    float erosionNoise = terrainValueNoise((OCTAVE_ROT * surfCoord) * 10.5 + vec2(7.3, -4.8));
+    float erosionThread = 1.0 - smoothstep(0.025, 0.095, abs(erosionNoise - 0.50));
+    float trailBreakup = smoothstep(0.36, 0.72, terrainValueNoise(surfCoord * 5.2 + vec2(-8.1, 3.6)));
+    float trailMask = erosionThread * trailBreakup * microFade
+      * (1.0 - smoothstep(0.55, 0.95, hNorm));
+    naturalColor = mix(naturalColor, vec3(0.61, 0.55, 0.39), trailMask * 0.22);
 
-    // 2. Среднемасштабная пятнистость биома и непериодическое затенение
-    //    крутых склонов. Периодическая стратификация по высоте (fract(z / 30))
-    //    убрана: она рисовала концентрические «зебровые» кольца каждые 30 м
-    //    на склонах. Теперь тон склонов задаёт их крутизна (slopeSteep /
-    //    slopeRock) в сочетании с 2D-шумом mesoPatch — без периодичности.
+    // 2. Средний каскад: два геологических пояса по крутизне. Светлые
+    //    песчано-охристые конусы осыпей занимают переходные склоны и подножия,
+    //    а крутые обрывы получают серо-каменный тон и продольные кулуары.
     float mesoFade = 1.0 - smoothstep(0.15, 0.78, blur);
     float mesoPatch = terrainValueNoise(surfCoord * 7.5 + vec2(4.2, -9.1)) * 0.60
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 17.5 + vec2(-6.4, 15.3)) * 0.40;
     float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
     float slopeRock = smoothstep(0.02, 0.28, slopeSteep);
-    vec3 biomeMottle = mix(vec3(0.28, 0.37, 0.28), vec3(0.55, 0.50, 0.43), mesoPatch);
-    vec3 slopeRockTone = mix(vec3(0.30, 0.28, 0.25), vec3(0.50, 0.46, 0.41), mesoPatch);
-    naturalColor = mix(naturalColor, biomeMottle, mesoFade * 0.26);
-    naturalColor = mix(naturalColor, slopeRockTone, slopeRock * 0.38 * mesoFade);
-    naturalColor *= 1.0 - 0.18 * slopeRock * (0.45 + 0.55 * mesoPatch) * mesoFade;
+    vec3 biomeMottle = mix(vec3(0.25, 0.39, 0.14), vec3(0.47, 0.52, 0.25), mesoPatch);
+    vec3 slopeRockTone = mix(vec3(0.34, 0.32, 0.29), vec3(0.54, 0.50, 0.45), mesoPatch);
+    float talusMask = smoothstep(0.025, 0.085, slopeSteep)
+      * (1.0 - smoothstep(0.16, 0.32, slopeSteep));
+    vec3 talusTone = vec3(0.74, 0.68, 0.58) * mix(0.94, 1.04, mesoPatch);
+    naturalColor = mix(naturalColor, biomeMottle, mesoFade * 0.22);
+    naturalColor = mix(naturalColor, slopeRockTone, slopeRock * 0.66 * mesoFade);
+    naturalColor = mix(naturalColor, talusTone, talusMask * 0.78 * mesoFade);
 
-    // 3. Дальние макро-тона вершин и ложбин, читаемые вплоть до дымки горизонта.
+    vec2 gullyCoord = vec2(
+      dot(surfCoord, vec2(0.92, 0.39)) * 23.0,
+      dot(surfCoord, vec2(-0.39, 0.92)) * 3.6
+    );
+    float gullyNoise = terrainValueNoise(gullyCoord + vec2(11.7, -6.2));
+    float couloir = (1.0 - smoothstep(0.035, 0.13, abs(gullyNoise - 0.50)))
+      * smoothstep(0.32, 0.70, mesoPatch);
+    naturalColor *= 1.0 - 0.22 * couloir * slopeRock * mesoFade;
+
+    // 3. Дальний каскад: контраст зелёных долин и скалисто-охристых
+    //    хребтов, постепенно растворяющийся в голубовато-серой горной дымке.
     float macroBasin = terrainValueNoise(surfCoord * 1.35 + vec2(-11.2, 5.8)) * 0.65
       + terrainValueNoise((OCTAVE_ROT * surfCoord) * 3.10 + vec2(8.6, -14.4)) * 0.35;
-    float ridgeFactor = clamp(hNorm * 0.58 + macroBasin * 0.42, 0.0, 1.0);
-    vec3 valleyMacroTone = vec3(0.26, 0.35, 0.30);
-    vec3 ridgeMacroTone  = vec3(0.60, 0.55, 0.47);
+    float ridgeFactor = clamp(hNorm * 0.50 + macroBasin * 0.26 + slopeRock * 0.24, 0.0, 1.0);
+    vec3 valleyMacroTone = vec3(0.28, 0.41, 0.19);
+    vec3 ridgeMacroTone  = vec3(0.64, 0.59, 0.50);
     vec3 macroColor = mix(valleyMacroTone, ridgeMacroTone, smoothstep(0.12, 0.88, ridgeFactor));
-    naturalColor = mix(naturalColor, macroColor, mix(0.22, 0.48, blur));
+    naturalColor = mix(naturalColor, macroColor, mix(0.18, 0.42, blur));
+    vec3 mountainHaze = mix(u_fogColor, u_horizonColor, 0.42);
+    float aerialPerspective = smoothstep(0.12, 0.92, v_fog) * mix(0.06, 0.26, blur);
+    naturalColor = mix(naturalColor, mountainHaze, aerialPerspective);
   }
 
-  vec3 zoneColor    = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
+  // Застройка остаётся маленькими усадьбами в зелени: вместо бетонной
+  // сетки 64×64 — мягкие проплешины и тропинки тёплого грунта.
+  vec3 zoneColor = (zone < 5u) ? ZONE_COLORS[zone] : naturalColor;
   if (zone > 0u && zone < 5u) {
-    vec2 gridCell = abs(fract(v_uv * 64.0) - 0.5);
-    float padGrid = (1.0 - smoothstep(0.44, 0.49, max(gridCell.x, gridCell.y)))
-      * (1.0 - blur * 0.9);
-    zoneColor *= (0.92 + 0.08 * padGrid);
+    vec2 padCoord = v_worldPos.xy / max(u_focusRadiusM, 1.0);
+    float padPatch = terrainValueNoise(padCoord * 9.5 + vec2(3.8, 12.4));
+    float pathNoise = terrainValueNoise(padCoord * 4.2 + vec2(-15.1, 2.7));
+    float footpath = 1.0 - smoothstep(0.035, 0.13, abs(pathNoise - 0.50));
+    float padFade = 1.0 - blur * 0.80;
+    vec3 bareSoil = mix(zoneColor, vec3(0.64, 0.56, 0.40), 0.48);
+    zoneColor = mix(zoneColor, bareSoil, smoothstep(0.34, 0.72, padPatch) * 0.55 * padFade);
+    zoneColor = mix(zoneColor, vec3(0.62, 0.55, 0.41), footpath * 0.28 * padFade);
   }
-  vec3 baseColor    = mix(naturalColor, zoneColor, terraformBlend * 0.72);
+  vec3 baseColor = mix(naturalColor, zoneColor, terraformBlend * 0.36);
 
   // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
   // океана канонической ячейки лежит ровно на уровне seaLevel (z == 0), врез
@@ -363,30 +391,30 @@ void main() {
     baseColor = mix(baseColor, waterColor, waterBlend * 0.92);
   }
 
-  // Тонкая тактическая кромка ТОЛЬКО вдоль границы активного центрального гекса:
-  // без широких фасок соседей, без FACET_BASE_COLOR и без 6-кольцевой сетки.
+  // Деликатная кромка ТОЛЬКО активного гекса: узкая приглушённая линия
+  // поверх непрерывного ландшафта, без светящихся фасок и сетки соседей.
   float hexGlow = 0.0;
   float hexCoreLine = 0.0;
   if (u_focusRadiusM > 1.0) {
-    hexGlow = smoothstep(hexApothem * 0.955, hexApothem * 0.996, centerHexDist)
-      * (1.0 - smoothstep(hexApothem * 0.996, hexApothem * 1.045, centerHexDist));
-    hexCoreLine = smoothstep(hexApothem * 0.986, hexApothem * 0.998, centerHexDist)
-      * (1.0 - smoothstep(hexApothem * 0.998, hexApothem * 1.012, centerHexDist));
+    hexGlow = smoothstep(hexApothem * 0.988, hexApothem * 0.998, centerHexDist)
+      * (1.0 - smoothstep(hexApothem * 0.998, hexApothem * 1.008, centerHexDist));
+    hexCoreLine = smoothstep(hexApothem * 0.994, hexApothem * 0.999, centerHexDist)
+      * (1.0 - smoothstep(hexApothem * 0.999, hexApothem * 1.004, centerHexDist));
   }
 
-  // Нормаль плавно сглаживается к вертикали по мере роста blur; лёгкий разворот
-  // нормали (hexGlow * 0.28) действует только на тонкой кромке центрального гекса.
+  // Нормаль плавно сглаживается к вертикали по мере роста blur; едва
+  // заметный разворот нормали не нарушает естественный рельеф у кромки.
   vec3 N = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur * 0.82));
   if (u_focusRadiusM > 1.0) {
     vec3 rimNormal = normalize(vec3((v_worldPos.xy / max(dist, 1e-4)) * 0.74, 0.67));
-    N = normalize(mix(N, rimNormal, hexGlow * 0.28));
+    N = normalize(mix(N, rimNormal, hexGlow * 0.08));
   }
   float NdL = max(dot(N, u_lightDir), 0.0);
   vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8));
 
   if (u_focusRadiusM > 1.0) {
-    vec3 hexRimColor = mix(vec3(0.32, 0.78, 0.86), vec3(0.58, 0.94, 0.98), hexCoreLine);
-    float hexRimWeight = clamp(hexGlow * 0.26 + hexCoreLine * 0.48, 0.0, 0.62);
+    vec3 hexRimColor = mix(vec3(0.56, 0.67, 0.45), vec3(0.78, 0.82, 0.62), hexCoreLine);
+    float hexRimWeight = clamp(hexGlow * 0.06 + hexCoreLine * 0.14, 0.0, 0.20);
     lit = mix(lit, hexRimColor, hexRimWeight);
   }
 
@@ -453,31 +481,29 @@ float skyHash2D(vec2 p) {
   return fract((p3.x + p3.y) * p3.z);
 }
 
-/** Тонкое звёздное поле в мировых координатах луча (проекция на грани куба). */
-float skyStars(vec3 dir) {
-  vec3 a = abs(dir);
-  vec2 uv;
-  float face;
-  if (a.z >= a.x && a.z >= a.y) {
-    uv = dir.xy / max(a.z, 1e-4);
-    face = dir.z >= 0.0 ? 1.0 : 2.0;
-  } else if (a.x >= a.y) {
-    uv = dir.yz / max(a.x, 1e-4);
-    face = dir.x >= 0.0 ? 3.0 : 4.0;
-  } else {
-    uv = dir.xz / max(a.y, 1e-4);
-    face = dir.y >= 0.0 ? 5.0 : 6.0;
+/** Гладкий 2D value-шум для облачной проекции на плоскость небосвода. */
+float skyValueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = skyHash2D(i);
+  float b = skyHash2D(i + vec2(1.0, 0.0));
+  float c = skyHash2D(i + vec2(0.0, 1.0));
+  float d = skyHash2D(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/** Пять октав с поворотом: крупные облачные массы и мягкие кучевые края. */
+float skyFbm(vec2 p) {
+  const mat2 OCTAVE_ROT = mat2(0.80, 0.60, -0.60, 0.80);
+  float sum = 0.0;
+  float amplitude = 0.5;
+  for (int octave = 0; octave < 5; octave++) {
+    sum += skyValueNoise(p) * amplitude;
+    p = (OCTAVE_ROT * p) * 2.03 + vec2(13.1, 7.7);
+    amplitude *= 0.5;
   }
-  vec2 grid = uv * 46.0 + face * 37.0;
-  vec2 cell = floor(grid);
-  vec2 f = fract(grid);
-  float h1 = skyHash2D(cell);
-  if (h1 < 0.915) return 0.0;
-  float h2 = skyHash2D(cell + vec2(19.7, 41.3));
-  vec2 starCenter = vec2(0.24, 0.24) + 0.52 * vec2(fract(h1 * 31.7), h2);
-  float d = length(f - starCenter);
-  float brightness = smoothstep(0.915, 0.998, h1);
-  return (1.0 - smoothstep(0.02, 0.14, d)) * (0.35 + 0.65 * brightness);
+  return sum / 0.96875;
 }
 
 void main() {
@@ -495,7 +521,7 @@ void main() {
     -sin(u_camPitch) * sin(u_camYaw),
      cos(u_camPitch)
   );
-  vec3 ray = normalize(
+  vec3 dir = normalize(
     forward
     + right * (v_ndc.x * tanHalfY * u_aspect)
     + up * (v_ndc.y * tanHalfY)
@@ -507,19 +533,46 @@ void main() {
     0.0, 1.0
   );
   float horizonAngle = -acos(horizonCos);
-  float beta = asin(clamp(ray.z, -1.0, 1.0));
+  float beta = asin(clamp(dir.z, -1.0, 1.0));
 
-  // Небо: глубокий синий космос в зените → атмосферный лимб у горизонта.
-  vec3 deepSpace = u_fogColor * 0.55;
+  // Дневное небо: молочно-голубая дымка над горами переходит в глубокий
+  // серо-голубой зенит, без ночного космоса и звёзд.
+  vec3 zenithColor = vec3(0.38, 0.50, 0.66);
   float skyT = smoothstep(horizonAngle, horizonAngle + 0.85, beta);
-  vec3 sky = mix(u_horizonColor, deepSpace, skyT);
+  vec3 sky = mix(u_horizonColor, zenithColor, skyT);
+  float horizonMilk = 1.0 - smoothstep(horizonAngle, horizonAngle + 0.28, beta);
+  sky = mix(sky, mix(u_fogColor, u_horizonColor, 0.65), horizonMilk * 0.28);
 
-  // Мягкий солнечный ореол по u_lightDir и звёзды в высоком зените.
-  float sunDot = max(dot(ray, normalize(u_lightDir)), 0.0);
-  float halo = pow(sunDot, 18.0) * 0.5 + pow(sunDot, 90.0) * 0.9;
-  float starMask = skyT * skyT * (1.0 - smoothstep(0.35, 0.85, sunDot));
-  sky += vec3(0.84, 0.91, 1.0) * (skyStars(ray) * starMask * 0.85);
-  sky += vec3(1.0, 0.86, 0.62) * halo;
+  // Мягкий дневной солнечный ореол остаётся под облачным слоем.
+  float sunDot = max(dot(dir, normalize(u_lightDir)), 0.0);
+  float halo = pow(sunDot, 24.0) * 0.14 + pow(sunDot, 160.0) * 0.48;
+  sky += vec3(1.0, 0.94, 0.80) * halo;
+
+  // Слоисто-кучевая облачность на плоской проекции луча. Два масштаба
+  // пятиоктавного шума образуют отдельные нижний и высокий слои; разница
+  // полей даёт объёмные серебристые вершины и серо-сизые основания.
+  if (beta > horizonAngle - 0.04) {
+    vec2 cloudPlane = dir.xy / max(dir.z + 0.22, 0.12);
+    vec2 stratifiedPlane = cloudPlane * vec2(0.78, 1.22);
+    float cloudBase = skyFbm(stratifiedPlane * 0.82 + vec2(3.7, -8.2));
+    float cloudDetail = skyFbm(stratifiedPlane * 2.15 + vec2(-11.4, 5.6));
+    float cloudField = cloudBase * 0.74 + cloudDetail * 0.26;
+    float lowerCloud = smoothstep(0.47, 0.65, cloudField);
+    float upperCloud = smoothstep(0.57, 0.74, cloudDetail) * 0.34;
+    float cloudDensity = clamp(lowerCloud + upperCloud * (1.0 - lowerCloud), 0.0, 1.0);
+    float cloudHorizonFade = smoothstep(horizonAngle - 0.04, horizonAngle + 0.20, beta);
+    cloudDensity *= cloudHorizonFade;
+
+    float silverLining = clamp(0.46 + (cloudDetail - cloudBase) * 2.60 + sunDot * 0.16, 0.0, 1.0);
+    float topLight = smoothstep(0.18, 0.82, silverLining);
+    vec3 cloudBaseColor = vec3(0.52, 0.56, 0.62);
+    vec3 cloudTopColor = vec3(0.95, 0.96, 0.98);
+    vec3 cloudColor = mix(cloudBaseColor, cloudTopColor, topLight);
+    cloudColor = mix(cloudColor, cloudTopColor, upperCloud * 0.30);
+    float cloudDistanceHaze = 1.0 - smoothstep(horizonAngle + 0.02, horizonAngle + 0.38, beta);
+    cloudColor = mix(cloudColor, u_horizonColor, cloudDistanceHaze * 0.65);
+    sky = mix(sky, cloudColor, cloudDensity * mix(0.68, 0.90, skyT));
+  }
 
   // Диск планеты ниже линии горизонта: плотная дымка, в которую без шва
   // уходит сферическая юбка горизонта рельефа.
