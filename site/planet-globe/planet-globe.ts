@@ -263,8 +263,21 @@ let localCameraDistance = 0;
 let localCameraTarget: [number, number, number] = [0, 0, 20];
 let localCameraAnim: LocalCameraAnim | null = null;
 let localSkirtData: HorizonSkirtData | null = null;
-/** Ожидаемый перелёт к соседу: азимут действителен только для своей ячейки. */
-let pendingNeighborFly: { cell: number; azimuth: number } | null = null;
+/**
+ * Ожидаемый перелёт к соседу: азимут действителен только для своей ячейки.
+ * Stage-8.4: дополнительно сохраняет смещение точки прицела и состояние
+ * камеры до перехода (prevTargetOffset / prevYaw / prevPitch / prevDist),
+ * чтобы после смены патча перелёт стартовал без рывка и без принудительного
+ * возврата взгляда к LOCAL_REST_YAW.
+ */
+let pendingNeighborFly: {
+  cell: number;
+  azimuth: number;
+  prevTargetOffset?: [number, number, number];
+  prevYaw?: number;
+  prevPitch?: number;
+  prevDist?: number;
+} | null = null;
 /** Пока запрошен новый Patch7, не запускаем второй переход по грани. */
 let localPatchLoading = false;
 let localClickCandidate: { pointerId: number; x: number; y: number } | null = null;
@@ -575,29 +588,49 @@ function startLocalDiveInAnim(): void {
   };
 }
 
-/** Перелёт к соседнему гексу: 650 мс, цель смещается со стороны предыдущего гекса. */
+/**
+ * Перелёт к соседнему гексу (Stage-8.4): 820 мс по плавной кривой
+ * easeInOutCubic. Новая цель toTarget считается как в resetLocalCamera —
+ * высота центра heightfield нового патча плюс сдвиг вперёд
+ * `localMapRadiusM * 0.14` вдоль текущего localCameraYaw; fromTarget
+ * стартует со стороны предыдущего гекса (1.05·R против азимута перехода).
+ * Пользовательский yaw сохраняется (fromYaw = toYaw = localCameraYaw):
+ * камера не принуждается крутиться обратно к LOCAL_REST_YAW.
+ */
 function startLocalNeighborFlyAnim(azimuth: number): void {
-  const offset = localMapRadiusM * 0.9;
   const targetZ = localCameraTarget[2];
+  // Высота центра нового патча и целевая точка прицела — та же формула,
+  // что и в resetLocalCamera, но вдоль текущего (пользовательского) yaw.
+  const hf = localMapData?.heightfield;
+  const res = Math.round(Math.sqrt(hf?.length || 0));
+  const rawCenterZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
+  const centerZ = Number.isFinite(rawCenterZ) ? rawCenterZ : 0;
+  const forwardOffset = localMapRadiusM * 0.14;
+  const toTarget: LocalVec3 = [
+    -Math.cos(localCameraYaw) * forwardOffset,
+    -Math.sin(localCameraYaw) * forwardOffset,
+    centerZ + Math.max(14, localMapRadiusM * 0.025),
+  ];
   // Азимут перехода считаем как atan2(east, north); предыдущий гекс лежит
   // строго против направления перехода относительно нового центра.
+  const offset = localMapRadiusM * 1.05;
   const fromTarget: LocalVec3 = [
     -Math.sin(azimuth) * offset,
     -Math.cos(azimuth) * offset,
     targetZ,
   ];
-  const toTarget: LocalVec3 = [0, 0, targetZ];
   localCameraAnim = {
     startAt: performance.now(),
-    durationMs: 650,
+    durationMs: 820,
     fromYaw: localCameraYaw,
-    toYaw: LOCAL_REST_YAW,
+    toYaw: localCameraYaw,
     fromPitch: localCameraPitch,
     toPitch: LOCAL_REST_PITCH,
     fromDist: localCameraDistance,
     toDist: localCameraDistance,
     fromTarget,
     toTarget,
+    easeInOut: true,
   };
 }
 
@@ -676,9 +709,18 @@ function nearestLocalNeighbor(azimuth: number): LocalPatchCell | null {
 /** Запускает единый latest-wins переход на соседний канонический гекс. */
 function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
   if (!localMapActive || localPatchLoading || !activePatchReady || !worker || !displayedToken) return;
-  localCameraTarget[0] = 0;
-  localCameraTarget[1] = 0;
-  pendingNeighborFly = { cell: neighbor.cell, azimuth };
+  // Stage-8.4: точка прицела НЕ сбрасывается мгновенно — прежний обнуляющий
+  // рывок localCameraTarget[0..1] ломал кадр ещё до прихода нового патча.
+  // Текущее состояние камеры сохраняется в pendingNeighborFly и разыгрывается
+  // плавным перелётом startLocalNeighborFlyAnim уже на новом патче.
+  pendingNeighborFly = {
+    cell: neighbor.cell,
+    azimuth,
+    prevTargetOffset: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+    prevYaw: localCameraYaw,
+    prevPitch: localCameraPitch,
+    prevDist: localCameraDistance,
+  };
   localPatchLoading = true;
   cancelLocalCameraAnim();
   setLocalMapStatus('Перехожу на соседний гекс #' + String(neighbor.cell) + '…', 'info');
@@ -718,7 +760,9 @@ function pickLocalNeighborAt(clientX: number, clientY: number): void {
   const wx = eye[0] + ray[0] * rayDistance;
   const wy = eye[1] + ray[1] * rayDistance;
   const distance = Math.hypot(wx, wy);
-  if (!(distance > localMapRadiusM * 0.84 && distance < localMapRadiusM * 2.6)) return;
+  // Stage-8.4: внешний радиус клика расширен до 4.2·R — под 3–4 видимых
+  // круга гексов вокруг активного при расширенной 10-кольцевой прогрузке.
+  if (!(distance > localMapRadiusM * 0.84 && distance < localMapRadiusM * 4.2)) return;
   const azimuth = Math.atan2(wx, wy);
   const neighbor = nearestLocalNeighbor(azimuth);
   if (neighbor) requestLocalNeighbor(neighbor, azimuth);
@@ -736,14 +780,17 @@ function applyLocalPan(dx: number, dy: number): void {
   localCameraTarget[0] += (-dx * right[0] + dy * screenUp[0]) * worldPerPixel;
   localCameraTarget[1] += (-dx * right[1] + dy * screenUp[1]) * worldPerPixel;
   localCameraTarget[2] += (-dx * right[2] + dy * screenUp[2]) * worldPerPixel;
-  const maxPan = localMapRadiusM * 1.35;
+  // Stage-8.4: свободное панорамирование расширено до 2.4·R без сброса,
+  // а порог автоперехода на соседний гекс сдвинут к 1.15·R — пользователь
+  // плавно движется по всей долине и за её кромку к следующим кругам гексов.
+  const maxPan = localMapRadiusM * 2.4;
   const panLength = Math.hypot(localCameraTarget[0], localCameraTarget[1]);
   if (panLength > maxPan) {
     localCameraTarget[0] *= maxPan / panLength;
     localCameraTarget[1] *= maxPan / panLength;
   }
   localCameraTarget[2] = clampLocal(localCameraTarget[2], -localMapRadiusM * 0.25, localMapRadiusM * 0.5);
-  if (panLength > localMapRadiusM * 0.88 && !localPatchLoading) {
+  if (panLength > localMapRadiusM * 1.15 && !localPatchLoading) {
     const azimuth = Math.atan2(localCameraTarget[0], localCameraTarget[1]);
     const neighbor = nearestLocalNeighbor(azimuth);
     if (neighbor) requestLocalNeighbor(neighbor, azimuth);
@@ -756,9 +803,11 @@ function localMinCameraDistance(): number {
   return Math.max(2, localMapRadiusM * 0.045);
 }
 
-/** Stage-8.2: верхний предел зума — отдаление выше сферического горизонта. */
+/** Stage-8.2: верхний предел зума — отдаление выше сферического горизонта.
+ *  Stage-8.4: поднят с 5.8·R до 7.5·R, чтобы окинуть взглядом все 3–4 ближних
+ *  круга гексов и дальний 10-кольцевой горизонт расширенной прогрузки. */
 function localMaxCameraDistance(): number {
-  return localMapRadiusM * 5.8;
+  return localMapRadiusM * 7.5;
 }
 
 function currentLocalPinchDistance(): number {
@@ -896,7 +945,9 @@ function drawLocalMapFallback(viewProj: Float32Array): void {
   const skirt = localSkirtData;
   const fog: LocalVec3 = [...LOCAL_SKIRT_FOG_COLOR];
   const horizon: LocalVec3 = [...LOCAL_HORIZON_COLOR];
-  const fogStart = skirt ? skirt.outerRadiusM * 0.58 : localMapRadiusM * 0.85;
+  // Stage-8.4: старт тумана поднят до 0.64·R_outer — первые 3–4 круга гексов
+  // вокруг активного при 10-кольцевой прогрузке остаются прозрачными и детальными.
+  const fogStart = skirt ? skirt.outerRadiusM * 0.64 : localMapRadiusM * 0.85;
   const fogEnd = skirt ? skirt.outerRadiusM * 0.98 : localMapRadiusM;
 
   gl.useProgram(programs.terrainProgram);
@@ -951,8 +1002,11 @@ function updateLocalMapHud(): void {
   const skirt = localSkirtData;
   if (skirt) {
     const horizonDropM = planetCurvatureDropM(skirt.planetRadiusM, skirt.outerRadiusM);
+    // Stage-8.4: число колец горизонта берётся из фактических данных юбки
+    // (R_outer / d_hex), а не хардкодится — HUD честен и при 6, и при 10 кольцах.
+    const ringsLabel = Math.round(skirt.outerRadiusM / Math.max(1, skirt.hexSpacingM));
     els.localFogStatus.textContent =
-      `6 колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (Δz ${fmtNum(horizonDropM / 1000, 2)} км)`;
+      `${ringsLabel} колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (Δz ${fmtNum(horizonDropM / 1000, 2)} км)`;
   } else {
     els.localFogStatus.textContent = 'активен · R ' + fmtInt(localMapRadiusM) + ' м';
   }
@@ -983,7 +1037,9 @@ function renderLocalMapFrame(): void {
       fogColor: new Float32Array(LOCAL_SKIRT_FOG_COLOR),
       // Stage-8.3: туман отодвинут, чтобы горные хребты юбки читались объёмно
       // и растворялись только у самого дальнего края горизонта.
-      fogStart: skirt ? skirt.outerRadiusM * 0.58 : localMapRadiusM * 0.85,
+      // Stage-8.4: старт поднят до 0.64·R_outer под 10 колец прогрузки —
+      // первые 3–4 круга гексов вокруг активного остаются без шва и размытия.
+      fogStart: skirt ? skirt.outerRadiusM * 0.64 : localMapRadiusM * 0.85,
       fogEnd: skirt ? skirt.outerRadiusM * 0.98 : localMapRadiusM,
       radiusM: localMapRadiusM,
       // Stage-8.3: без объекта camera LocalMapRenderer.renderFrame не рисует
@@ -1223,7 +1279,16 @@ function finishLocalMapEntry(requestId: number, shouldFlyToPatch: boolean): void
     startLocalDiveInAnim();
   } else if (pendingNeighborFly && pendingNeighborFly.cell === activePatchReady.hexCenterCell) {
     // Перелёт к соседнему гексу: цель приезжает со стороны предыдущего гекса.
-    const { azimuth } = pendingNeighborFly;
+    // Stage-8.4: resetLocalCamera() выше сбросил камеру в покой — возвращаем
+    // состояние, сохранённое в requestLocalNeighbor до перехода, чтобы перелёт
+    // начинался без рывка и не терял пользовательский yaw/pitch/zoom.
+    const { azimuth, prevTargetOffset, prevYaw, prevPitch, prevDist } = pendingNeighborFly;
+    if (prevTargetOffset) {
+      localCameraTarget = [prevTargetOffset[0], prevTargetOffset[1], prevTargetOffset[2]];
+    }
+    if (prevYaw !== undefined) localCameraYaw = prevYaw;
+    if (prevPitch !== undefined) localCameraPitch = prevPitch;
+    if (prevDist !== undefined && prevDist > 0) localCameraDistance = prevDist;
     pendingNeighborFly = null;
     startLocalNeighborFlyAnim(azimuth);
   }
