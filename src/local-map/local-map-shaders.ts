@@ -154,6 +154,7 @@ out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;         // для сэмплинга зон
 out float v_fog;
+out vec3 v_viewVec;    // вектор от точки поверхности к камере (для Fresnel и блика воды)
 
 void main() {
   // v_worldPos хранит ИСХОДНУЮ гипсометрическую высоту a_position.z: вода
@@ -174,6 +175,16 @@ void main() {
     : 0.0;
   vec3 curvedPos = vec3(a_position.x, a_position.y, a_position.z - curvatureDrop);
   gl_Position = u_viewProj * vec4(curvedPos, 1.0);
+
+  // Положение камеры в мировых координатах из обратной матрицы перспективы:
+  // столбец invViewProj[2] пропорционален однородным координатам глаза камеры.
+  float vpDet = determinant(u_viewProj);
+  mat4 invViewProj = (abs(vpDet) > 1e-12) ? inverse(u_viewProj) : mat4(1.0);
+  vec4 camHom = invViewProj[2];
+  vec3 camEye = (abs(camHom.w) > 1e-7)
+    ? (camHom.xyz / camHom.w)
+    : vec3(0.0, -max(u_terrainSize * 0.45, 400.0), max(u_terrainSize * 0.35, 300.0));
+  v_viewVec = camEye - curvedPos;
 }
 `;
 
@@ -189,6 +200,7 @@ in vec3  v_worldPos;
 in vec3  v_normal;
 in vec2  v_uv;
 in float v_fog;
+in vec3  v_viewVec;
 
 uniform usampler2D u_zoning_map;     // RG8UI
 uniform sampler2D  u_terraform_map;  // R8
@@ -213,9 +225,10 @@ const vec3 ZONE_COLORS[5] = vec3[5](
   vec3(0.58, 0.52, 0.42)    // 4: центральный двор (светлая песчаная почва)
 );
 
-// Вода/озёра/русла (И-3.2, И-3.3): мелководье и глубина ниже уровня моря.
-const vec3 SHALLOW_WATER_COLOR = vec3(0.145, 0.375, 0.415);
-const vec3 DEEP_WATER_COLOR    = vec3(0.055, 0.235, 0.290);
+// Вода/озёра/русла (И-3.2, И-3.3, Stage-8.6): прозрачная бирюзовая отмель и
+// глубокая тёмно-индиговая океаническая бездна.
+const vec3 SHALLOW_WATER_COLOR = vec3(0.14, 0.46, 0.50);
+const vec3 DEEP_WATER_COLOR    = vec3(0.02, 0.13, 0.25);
 
 /**
  * Гексагональная метрика правильного шестиугольника: hexMetric2D(p) = 1 —
@@ -340,6 +353,9 @@ void main() {
   // Признак водного зеркала дополнительно проверяет сырую маску терраформинга
   // в центре и неизменность мировой высоты на юбке: пологая суша не может
   // ошибочно попасть в цвет океана ни при каком масштабе.
+  vec3 safeNormal = (dot(v_normal, v_normal) > 1e-8)
+    ? normalize(v_normal)
+    : vec3(0.0, 0.0, 1.0);
   float normalHoriz = length(v_normal.xy);
   float zStep = abs(dFdx(v_worldPos.z)) + abs(dFdy(v_worldPos.z));
   bool waterMirrorSurface = (u_isSkirt < 0.5)
@@ -373,7 +389,7 @@ void main() {
   float beltJitter = (terrainValueNoise(v_worldPos.xy / max(u_focusRadiusM, 600.0) * 2.6) - 0.5) * 18.0;
   float effAltM = max(0.0, altM + beltJitter);
   float beachAltM = max(0.0, altM + beltJitter * smoothstep(2.2, 16.0, altM) * 0.32);
-  float slopeSteep = clamp(1.0 - normalize(v_normal).z, 0.0, 1.0);
+  float slopeSteep = clamp(1.0 - safeNormal.z, 0.0, 1.0);
   float slopeRock = smoothstep(0.03, 0.28, slopeSteep);
 
   // Пояс 1 (0 … 7 м): тёплый песок и ракушечник с влажной кромкой у воды (0 … 2.2 м).
@@ -523,28 +539,122 @@ void main() {
   bool coastalBand = (u_isSkirt >= 0.5 || rawTerraform < 0.002);
   bool isCoastalShore = coastalBand && (effectiveShoreZ < 4.8);
 
-  // И-3.2/И-3.3: плавное тонирование водных низин и речных русел. Зеркало
-  // океана канонической ячейки лежит ровно на уровне seaLevel (z == 0), врез
-  // речного русла уходит ниже — условие z <= 0. Континентальные озёра выше
-  // seaLevel держат зенит ровной горизонтальной площадки (isFlatWaterMirror)
-  // и тонируются тем же водным градиентом SHALLOW_WATER_COLOR /
-  // DEEP_WATER_COLOR, что и океан.
-  if (zone == 0u && (v_worldPos.z <= 0.0 || isFlatWaterMirror || isCoastalShore)) {
+  // И-3.2/И-3.3 и Stage-8.6: объёмная глубокая вода с батиметрией, двухоктавной
+  // микро-рябью волн, Fresnel-отражением неба, солнечным бликом и пеной прибоя.
+  float waterSurfaceMask = 0.0;
+  float waterSpecTerm = 0.0;
+  vec3 waterSurfaceNormal = vec3(0.0, 0.0, 1.0);
+  if (zone == 0u && (v_worldPos.z <= 0.0 || isFlatWaterMirror || isCoastalShore || isRiverStream)) {
     float depthBelowZero = max(0.0, -v_worldPos.z);
     float waterBlend = isFlatWaterMirror ? 1.0 : smoothstep(0.0, 3.0, depthBelowZero);
-    // Плавный переход в воду на водном урезе: effectiveShoreZ <= 1.8 м — ещё
-    // вода (мелководье), выше — береговая кромка и прибрежная трава.
+
+    // Оптическая глубина waterDepthM: реальная отрицательная батиметрия,
+    // плавный уход в глубину от берега/центра и подводная батиметрическая волна.
+    float bathyWave = terrainValueNoise(shoreUv * 0.85) * 18.0;
+    float bathyShelf = terrainValueNoise(shoreUv * 2.35 + vec2(-4.8, 7.1)) * 6.0;
+    float openSeaProgress = smoothstep(0.08, 2.40, dist / max(u_focusRadiusM, 600.0));
+    float centerHexShoalFade = 1.0 - smoothstep(hexApothem * 0.62, hexApothem * 0.92, centerHexDist);
+    float nearLandInHex = (u_isSkirt < 0.5)
+      ? smoothstep(0.003, 0.0075, maxNeighborTf3) * centerHexShoalFade
+      : 0.0;
+    float surfShoal = 1.0 - smoothstep(0.0, 1.75, effectiveShoreZ);
+
+    float waterDepthM = 0.0;
+    if (isRiverStream) {
+      float thalweg = 1.0 - smoothstep(0.0, 0.0019, rawTerraform);
+      waterDepthM = mix(1.4, 8.8, thalweg) + terrainValueNoise(shoreUv * 14.0) * 3.2;
+    } else if (isFlatWaterMirror && v_worldPos.z > 0.0) {
+      waterDepthM = (openSeaProgress * 16.0 + bathyWave * 0.85 + bathyShelf * 0.60)
+        * (1.0 - nearLandInHex * 0.80);
+    } else {
+      // Единая C1-непрерывная формула через v_worldPos.z == 0.0: на океане
+      // (z <= 0) surfShoal == 1.0, а на прибрежных треугольниках юбки (z > 0)
+      // плавно выводит глубину к прозрачной отмели у линии прибоя без скачка по рёбрам.
+      float pelagicDepth = openSeaProgress * 22.0 + bathyWave + bathyShelf;
+      waterDepthM = (depthBelowZero * 1.35 + pelagicDepth) * surfShoal
+        * (1.0 - nearLandInHex * 0.78);
+    }
+
+    // Трёхступенчатый градиент глубины: прозрачная бирюзовая отмель
+    // (SHALLOW_WATER_COLOR) → морская лазурь → глубокая индиговая бездна.
+    vec3 midAzureWater = vec3(0.05, 0.30, 0.44);
+    vec3 abyssWater = mix(vec3(0.02, 0.13, 0.25), DEEP_WATER_COLOR, 0.5);
+    vec3 waterColor = mix(SHALLOW_WATER_COLOR, midAzureWater, smoothstep(0.7, 9.5, waterDepthM));
+    waterColor = mix(waterColor, abyssWater, smoothstep(8.5, 32.0, waterDepthM));
+
+    // Двухоктавная скрещённая микро-рябь волн (18.0 и 42.0), модулирующая
+    // нормаль водной глади, мягкий солнечный блик и Fresnel-отражение неба.
+    const mat2 WAVE_ROT = mat2(0.80, -0.60, 0.60, 0.80);
+    float waveOct1 = terrainValueNoise(shoreUv * 18.0);
+    float waveOct2 = terrainValueNoise(shoreUv * 42.0);
+    float waveCross1 = terrainValueNoise((WAVE_ROT * shoreUv) * 18.0 + vec2(6.3, -4.1));
+    float waveCross2 = terrainValueNoise((WAVE_ROT * shoreUv) * 42.0 + vec2(-9.2, 5.7));
+    float waveRipple = (waveOct1 - 0.5) * 0.36 + (waveCross1 - 0.5) * 0.32
+                     + (waveOct2 - 0.5) * 0.17 + (waveCross2 - 0.5) * 0.15;
+
+    float rippleFade = 1.0 - smoothstep(0.18, 0.86, blur);
+    float waveDx = (terrainValueNoise(shoreUv * 18.0 + vec2(0.32, 0.0)) - waveOct1) * 0.65
+                 + (terrainValueNoise((WAVE_ROT * shoreUv) * 42.0 + vec2(-8.88, 5.7)) - waveCross2) * 0.35;
+    float waveDy = (terrainValueNoise(shoreUv * 18.0 + vec2(0.0, 0.32)) - waveOct1) * 0.65
+                 + (terrainValueNoise(shoreUv * 42.0 + vec2(0.0, 0.32)) - waveOct2) * 0.35;
+    vec3 waterBaseN = isRiverStream
+      ? normalize(mix(safeNormal, vec3(0.0, 0.0, 1.0), 0.78))
+      : vec3(0.0, 0.0, 1.0);
+    waterSurfaceNormal = normalize(vec3(
+      waterBaseN.xy + vec2(waveDx, waveDy) * (0.26 * rippleFade),
+      waterBaseN.z
+    ));
+
+    waterColor += vec3(0.04, 0.07, 0.08) * waveRipple * rippleFade
+      * (1.0 - smoothstep(2.0, 16.0, waterDepthM));
+
+    vec3 viewDir = (dot(v_viewVec, v_viewVec) > 1e-6)
+      ? normalize(v_viewVec)
+      : normalize(vec3(-v_worldPos.xy * 0.35, max(u_focusRadiusM * 0.65, 300.0)));
+    vec3 sunDir = (dot(u_lightDir, u_lightDir) > 1e-6)
+      ? normalize(u_lightDir)
+      : vec3(0.0, 0.0, 1.0);
+    float NoV = clamp(dot(waterSurfaceNormal, viewDir), 0.0, 1.0);
+    float oneMinusNoV = 1.0 - NoV;
+    float fresnel = (oneMinusNoV * oneMinusNoV) * (oneMinusNoV * oneMinusNoV);
+    waterColor = mix(waterColor, u_horizonColor, fresnel * 0.32);
+
+    vec3 halfSum = sunDir + viewDir;
+    vec3 halfVec = (dot(halfSum, halfSum) > 1e-6) ? normalize(halfSum) : vec3(0.0, 0.0, 1.0);
+    float NoH = max(dot(waterSurfaceNormal, halfVec), 1e-4);
+    float horizonSpecFade = 1.0 - smoothstep(0.65, 0.98, v_fog);
+    float waterSpec = (pow(NoH, 44.0) * 0.24 + pow(NoH, 160.0) * 0.26)
+                    * mix(0.55, 1.0, rippleFade) * horizonSpecFade;
+
+    float riverWater = isRiverStream
+      ? (1.0 - smoothstep(0.0014, 0.0021, rawTerraform) * 0.24)
+      : 0.0;
     float shoreWater = isFlatWaterMirror
       ? 1.0
-      : max(waterBlend, 1.0 - smoothstep(0.0, 1.8, effectiveShoreZ));
-    vec3 waterColor = mix(SHALLOW_WATER_COLOR, DEEP_WATER_COLOR, smoothstep(0.0, 24.0, depthBelowZero));
-    baseColor = mix(baseColor, waterColor, shoreWater * 0.92);
-    // На полосе 1.4 < effectiveShoreZ < 4.8 м — мягкая песчано-галечная
-    // кромка, плавно переходящая от мелководья к прибрежной траве baseColor.
-    if (!isFlatWaterMirror && coastalBand) {
-      float beachBand = smoothstep(1.4, 2.8, effectiveShoreZ)
-        * (1.0 - smoothstep(3.4, 4.8, effectiveShoreZ));
-      baseColor = mix(baseColor, vec3(0.66, 0.63, 0.49), beachBand * 0.85);
+      : max(max(waterBlend, riverWater), 1.0 - smoothstep(0.0, 1.8, effectiveShoreZ));
+    float waterOpacity = mix(0.86, 0.99, smoothstep(1.5, 10.0, waterDepthM));
+    waterSurfaceMask = clamp(shoreWater * waterOpacity, 0.0, 1.0);
+    waterSpecTerm = waterSpec * shoreWater;
+    baseColor = mix(baseColor, waterColor, waterSurfaceMask);
+
+    // Тонкая светлая пенная кромка прибоя вдоль полосы 0.0 < effectiveShoreZ < 1.6.
+    if (!isFlatWaterMirror && !isRiverStream && coastalBand
+        && effectiveShoreZ > 0.0 && effectiveShoreZ < 1.6) {
+      float foamNoise = terrainValueNoise(shoreUv * 28.0 + vec2(3.7, -6.2)) * 0.62 + waveOct2 * 0.38;
+      float foamEnvelope = smoothstep(0.02, 0.36, effectiveShoreZ)
+                         * (1.0 - smoothstep(0.88, 1.58, effectiveShoreZ));
+      float foamLine = foamEnvelope * smoothstep(0.26, 0.74, foamNoise) * (1.0 - blur * 0.68);
+      baseColor = mix(baseColor, vec3(0.90, 0.95, 0.97), foamLine * 0.76);
+    }
+
+    // Влажный тёмно-песчаный накат и сухая песчаная полоса пляжа выше прибоя.
+    if (!isFlatWaterMirror && !isRiverStream && coastalBand) {
+      float wetSwash = smoothstep(0.9, 1.8, effectiveShoreZ)
+        * (1.0 - smoothstep(2.0, 3.0, effectiveShoreZ));
+      float beachBand = smoothstep(1.8, 3.0, effectiveShoreZ)
+        * (1.0 - smoothstep(3.6, 4.8, effectiveShoreZ));
+      baseColor = mix(baseColor, vec3(0.55, 0.50, 0.38), wetSwash * 0.62);
+      baseColor = mix(baseColor, vec3(0.74, 0.68, 0.52), beachBand * 0.72);
     }
   }
 
@@ -559,11 +669,13 @@ void main() {
       * (1.0 - smoothstep(hexApothem * 0.999, hexApothem * 1.007, centerHexDist));
   }
 
-  // Нормаль освещения едина для центра и юбки: без разворота к rimNormal,
-  // который создавал ложную фаску на границе активного гекса.
-  vec3 N = normalize(mix(normalize(v_normal), vec3(0.0, 0.0, 1.0), blur * 0.72));
-  float NdL = max(dot(N, u_lightDir), 0.0);
-  vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8));
+  // Нормаль освещения едина для центра и юбки; на воде подмешивается рябь волн.
+  vec3 terrainN = normalize(mix(safeNormal, vec3(0.0, 0.0, 1.0), blur * 0.72));
+  vec3 N = normalize(mix(terrainN, waterSurfaceNormal, waterSurfaceMask));
+  vec3 lightVec = (dot(u_lightDir, u_lightDir) > 1e-6) ? normalize(u_lightDir) : vec3(0.0, 0.0, 1.0);
+  float NdL = max(dot(N, lightVec), 0.0);
+  vec3 lit  = baseColor * (u_ambientColor + vec3(NdL * 0.8))
+            + vec3(1.0, 0.96, 0.88) * waterSpecTerm;
 
   if (u_focusRadiusM > 1.0) {
     vec3 hexRimColor = mix(vec3(0.22, 0.78, 0.88), vec3(0.92, 0.97, 1.0), hexCoreLine);
