@@ -1,10 +1,10 @@
 /* LocalMapShaders — GLSL ES 3.00 шейдеры локальной карты (Этапы 8/9, CR-01 PR 5;
    Stage-8 Planetary Horizon: кривизна планеты, оптический блюр горизонта,
-   гекс-сетка 6 колец, атмосферная дымка и купол неба.
-   Stage-8 Hybrid A+B: гексагональное отсечение центрального участка,
-   тактические 3D-грани (Tactical Hex Facet Plane) гексов кластера и
-   прозрачный альфа-выход по внешнему краю кластера для композитинга над
-   живым 3D-глобусом планеты.
+   атмосферная дымка и купол неба.
+   Stage-8.2: выделение только активного центрального гекса тонкой тактической
+   кромкой, бесшовный простирающийся сферический горизонт с 3-каскадными
+   процедурными текстурами рельефа, плавным ухудшением видимости от границы
+   гекса к лимбу и непрозрачным куполом неба со звёздами.
    --------------------------------------------------------------------------
    Поля шейдеров обязаны совпадать с контрактом VAO рендерера
    (local-map-renderer.ts):
@@ -233,6 +233,25 @@ float hexMetric2D(vec2 p) {
   return max(a.x * 0.8660254 + a.y * 0.5, a.y);
 }
 
+/** Компактный детерминированный 2D-хеш без sin()-артефактов точности. */
+float terrainHash2D(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+/** Плавный 2D value-шум с эрмитовой интерполяцией в диапазоне [0, 1]. */
+float terrainValueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = terrainHash2D(i);
+  float b = terrainHash2D(i + vec2(1.0, 0.0));
+  float c = terrainHash2D(i + vec2(0.0, 1.0));
+  float d = terrainHash2D(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 /** Округление аксиальных кубических координат гекса к центру ближайшей ячейки. */
 vec3 roundHexCube(vec3 cube) {
   vec3 r = round(cube);
@@ -262,14 +281,12 @@ void main() {
   float centerHexDist = hexMetric2D(v_worldPos.yx);
 
   // Центральный участок обрезается строгим правильным шестиугольником:
-  // 6 прямых сторон вместо прежнего кругового среза. Страховочное круговое
-  // отсечение по радиусу 0.93·R_patch сохранено: описанный радиус гекса
-  // 0.8054 / 0.866 ≈ 0.9299·R_patch меньше 0.93·R_patch, поэтому контур
-  // остаётся строго шестиугольным.
-  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.93) {
+  // 6 прямых сторон активного гекса (с микрозапасом 1.003 для бесшовного
+  // перекрытия с воротником юбки) и страховочное круговое отсечение 0.935·R_patch.
+  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && dist > u_focusRadiusM * 0.935) {
     discard;
   }
-  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && centerHexDist > hexApothem) {
+  if (u_isSkirt < 0.5 && u_focusRadiusM > 1.0 && centerHexDist > hexApothem * 1.003) {
     discard;
   }
 
@@ -462,9 +479,42 @@ uniform float u_planetRadiusM;   // R_p, м
 uniform vec3  u_lightDir;        // направление на солнце, нормализовано
 uniform vec3  u_fogColor;        // плотная дымка планетарного диска
 uniform vec3  u_horizonColor;    // светящийся атмосферный лимб
-uniform float u_skyAlpha;        // 0 — купол прозрачен (виден живой 3D-глобус)
+uniform float u_skyAlpha;        // 1 — непрозрачный купол (по умолчанию)
 
 out vec4 fragColor;
+
+float skyHash2D(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+/** Тонкое звёздное поле в мировых координатах луча (проекция на грани куба). */
+float skyStars(vec3 dir) {
+  vec3 a = abs(dir);
+  vec2 uv;
+  float face;
+  if (a.z >= a.x && a.z >= a.y) {
+    uv = dir.xy / max(a.z, 1e-4);
+    face = dir.z >= 0.0 ? 1.0 : 2.0;
+  } else if (a.x >= a.y) {
+    uv = dir.yz / max(a.x, 1e-4);
+    face = dir.x >= 0.0 ? 3.0 : 4.0;
+  } else {
+    uv = dir.xz / max(a.y, 1e-4);
+    face = dir.y >= 0.0 ? 5.0 : 6.0;
+  }
+  vec2 grid = uv * 46.0 + face * 37.0;
+  vec2 cell = floor(grid);
+  vec2 f = fract(grid);
+  float h1 = skyHash2D(cell);
+  if (h1 < 0.915) return 0.0;
+  float h2 = skyHash2D(cell + vec2(19.7, 41.3));
+  vec2 starCenter = vec2(0.24, 0.24) + 0.52 * vec2(fract(h1 * 31.7), h2);
+  float d = length(f - starCenter);
+  float brightness = smoothstep(0.915, 0.998, h1);
+  return smoothstep(0.14, 0.02, d) * (0.35 + 0.65 * brightness);
+}
 
 void main() {
   float tanHalfY = tan(u_fovY * 0.5);
@@ -500,21 +550,20 @@ void main() {
   float skyT = smoothstep(horizonAngle, horizonAngle + 0.85, beta);
   vec3 sky = mix(u_horizonColor, deepSpace, skyT);
 
-  // Мягкий солнечный ореол по u_lightDir.
+  // Мягкий солнечный ореол по u_lightDir и звёзды в высоком зените.
   float sunDot = max(dot(ray, normalize(u_lightDir)), 0.0);
   float halo = pow(sunDot, 18.0) * 0.5 + pow(sunDot, 90.0) * 0.9;
+  float starMask = skyT * skyT * (1.0 - smoothstep(0.35, 0.85, sunDot));
+  sky += vec3(0.84, 0.91, 1.0) * (skyStars(ray) * starMask * 0.85);
   sky += vec3(1.0, 0.86, 0.62) * halo;
 
-  // Диск планеты ниже линии горизонта: плотная дымка, в неё без шва
-  // уходит внешнее (6-е) кольцо гексов.
+  // Диск планеты ниже линии горизонта: плотная дымка, в которую без шва
+  // уходит сферическая юбка горизонта рельефа.
   float diskT = smoothstep(horizonAngle - 0.12, horizonAngle, beta);
   vec3 disk = mix(u_fogColor, u_horizonColor, diskT);
   float above = smoothstep(horizonAngle - 0.12, horizonAngle + 0.08, beta);
 
   vec3 color = mix(disk, sky, above);
-  // Атмосферная виньетка купола по умолчанию полностью прозрачна (альфа 0):
-  // непрозрачная панорама перекрывала бы живой 3D-глобус планеты (#globe),
-  // который должен просвечивать сквозь растворяющийся край гексового стола.
   fragColor = vec4(color, clamp(u_skyAlpha, 0.0, 1.0));
 }
 `;
