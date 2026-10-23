@@ -474,3 +474,49 @@ exit code не меняет (§8.11).
 исправлено на 13 (фактическое число в `scripts.test`).
 Отдельно уточнено в `docs/CHANGE_REQUEST_PLAN.md` не место, а формулировка:
 `v = 64` входит только в 5 CRC32C проверок сеток, иначе счёт дал бы 230.
+
+### 8.14. A-12: уточнённая причина — две цепочки, а не одна (проверка 23.10)
+
+В §8.9 причиной назван «значимый импорт `PlanetGeography` в
+`src/local-map/local-map-contract.ts:28`». Проверка графа импортов это **не
+подтвердила**: контракт ни разу не импортируется модулем главного потока
+напрямую. Реальных цепочек две, и обе ведут в один файл байтов.
+
+**Цепочка 1 (основная).** `site/planet-globe/planet-globe.ts:15` берёт
+`PlanetGlobe` из `site/shared/planet-globe.ts` → тот импортирует
+`getSharedPlanetCore` из `src/planet/planet-core-host.ts` → тот импортирует
+`src/planet/planet-core-bytes.ts`, где лежат **оба** ядра:
+`PLANET_CORE_WASM_BASE64` (стр. 7) и `PLANET_NOISE_WASM_BASE64` (стр. 569).
+Этого одного импорта достаточно, чтобы в главном чанке оказались обе вставки
+`AGFzbQ`.
+
+Полное ядро нужно только двум функциям того же модуля —
+`buildVertexColors` (стр. 379) и `buildGlobeGeometry` (стр. 422), обе помечены
+`@workerOnly` и вызываются исключительно из `planet-globe-worker.ts`
+(стр. 752, 1108). Рендерер (`createPlanetGlobe`, `cellPolygon`,
+`buildCellColors`, `buildEquirectPreview`) ядро не использует.
+
+**Цепочка 2.** `site/planet-globe/planet-globe.ts:37–41` импортирует **значения**
+из `src/local-map/local-map-worker.ts`: `generateHorizonSkirt`, `generateLocalMap`,
+`mapNeighborCellsToSlots`, `planetCurvatureDropM`. Далее
+`local-map-worker.ts:19–24` → `local-map-contract.ts:28` → `planet-geography.ts`
+→ `planet-core-host.ts`.
+
+**Существенное обстоятельство.** `generateLocalMap` не просто попадает в бандл:
+он **исполняется на главном потоке** (`planet-globe.ts:1917`), а внутри вызывает
+`createPatchFieldSampler` (`local-map-worker.ts:1358`) → `PlanetGeography.createFieldSampler`,
+то есть поднимает полное ядро. Отдельного Worker для локальной карты нет:
+единственный `new Worker` в проекте — `planet-globe-worker.js`
+(`planet-globe.ts:2452`).
+
+**Вывод.** Задача A-12 распадается на две части с разной ценой:
+
+| Часть | Что делается | Риск |
+|---|---|---|
+| **A-12a** | Вынести `buildVertexColors` / `buildGlobeGeometry` из `site/shared/planet-globe.ts` в отдельный модуль, импортируемый только воркером | низкий: рендерер не меняется |
+| **A-12b** | Разорвать цепочку локальной карты: либо ленивый динамический импорт генерации, либо перенос её в воркер | высокий: флагманский экран, нужна визуальная приёмка |
+
+Критерий «одна вставка `AGFzbQ`» из §8.9 заменяется на честный: **ноль вставок
+в основном чанке страницы**, ядра — в отдельных чанках, загружаемых по
+требованию. Обе вставки лежат в одном файле байтов, поэтому «оставить одну»
+технически невозможно без разделения `planet-core-bytes.ts`.
