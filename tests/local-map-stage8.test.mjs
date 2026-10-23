@@ -32,7 +32,15 @@
    6. Stage-8.5: `terraform_map` несёт явный водный маркер — `0` на воде,
       озере #53275 и континентальном зеркале, `>= 2` на любой суше во всех
       масштабах участка (10 км … 1250 км), значение `1` зарезервировано, а
-      минимальная подложка суши не влияет на heightfield (нулевая альфа). */
+      минимальная подложка суши не влияет на heightfield (нулевая альфа).
+      Базовая высота суши интерполируется по Patch7 гладко (без прямых рёбер
+      Вороного), поэтому перепад между соседними узлами сетки на масштабах
+      156…1250 км не превышает 30 м при жёстком поле И-3.2.
+   7. Stage-8.5: юбка горизонта без искусственного кругового вала — вокруг
+      равнинного гекса простирается равнина (размах внешнего кольца меньше
+      амплитуды fBm), на реально поднятых направлениях гребни вырастают, их
+      амплитуда зависит от перепада высот Patch7, а не от radiusPatchM, и на
+      кольцах юбки остаются широкие непрерывные равнинные сектора. */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1679,6 +1687,174 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   assert.ok(
     Math.abs(strict.heightfield[tfIdx] - mixed.heightfield[tfIdx]) > 1e-6,
     'площадка терраформинга по-прежнему сглаживает рельеф в центре',
+  );
+
+  Worker.clearLocalMapCache();
+});
+
+test('Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах', () => {
+  // Фикстуры: геометрия канонического патча v=16 (dryPatch) сохраняется, а
+  // высоты ячеек задаются детерминированно; русло снято, чтобы инварианты И-3
+  // держались и рельеф юбки определялся только географией ячеек.
+  const variantPatch = (levels) => {
+    const patch = structuredClone(dryPatch);
+    patch.cells.forEach((cell, index) => {
+      cell.elevation = patch.seaLevel + levels[index % levels.length];
+      cell.filledElevation = cell.elevation;
+      cell.lakeWeight = 0;
+      cell.streamWeight = 0;
+      cell.depressionDepth = 0;
+      cell.flowReceiver = -1;
+    });
+    patch.river = {
+      centerCell: patch.river.centerCell,
+      flowsThroughCenter: false,
+      centerStreamWeight: 0,
+      centerRiverAccumulation: 0,
+      inlets: [],
+      outlet: null,
+    };
+    return patch;
+  };
+
+  const outerRing = SKIRT_RADIAL_COUNT - 1;
+  const ringOf = (label, patch, radiusM, profile, ring) => {
+    Worker.clearLocalMapCache();
+    const request = {
+      patch, radiusM, seed: 12345, placeId: 7, patchKey: label,
+      ...(profile ? { profile } : {}),
+    };
+    const local = Worker.generateLocalMap(request);
+    const skirt = Worker.generateHorizonSkirt(request, local.heightfield);
+    const heights = [];
+    for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) heights.push(skirtVertex(skirt, i, ring)[2]);
+    return { skirt, heights, radiusM };
+  };
+  const rangeOf = (heights) => Math.max(...heights) - Math.min(...heights);
+  /** Наибольший непрерывный сектор «равнины» (нижняя четверть размаха), градусы. */
+  const plainSectorDeg = (heights) => {
+    const min = Math.min(...heights);
+    const range = rangeOf(heights);
+    const total = heights.length;
+    let run = 0;
+    let best = 0;
+    for (let i = 0; i < total + 40; i++) {
+      if (heights[i % total] < min + 0.25 * range) {
+        run++;
+        best = Math.max(best, run);
+      } else run = 0;
+    }
+    return (best * 360) / Worker.SKIRT_ANGULAR_SEGMENTS;
+  };
+
+  // 1. Вокруг равнинного низкого гекса — равнина: размах внешнего кольца юбки
+  //    не превышает амплитуду fBm, значит замкнутого горного вала на 360° нет.
+  const plainPatch = variantPatch([0.02]);
+  assert.equal(
+    Contract.verifyPatchInvariants(plainPatch).ok,
+    true,
+    `фикстура равнины валидна по И-3: ${JSON.stringify(Contract.verifyPatchInvariants(plainPatch).checks)}`,
+  );
+  const plainRange = rangeOf(ringOf('stage85-skirt-plain', plainPatch, 600, null, outerRing).heights);
+  assert.ok(
+    plainRange < Worker.LAND_FBM_AMPLITUDE_M,
+    `вокруг равнинного гекса нет кругового вала: размах ${plainRange.toFixed(0)} м < ${Worker.LAND_FBM_AMPLITUDE_M} м (один fBm)`,
+  );
+
+  // 2. Та же геометрия, но реально поднятая и контрастная: гребни вырастают
+  //    там, где возвышенность направления настоящая, а не «вокруг гекса».
+  const upliftPatch = variantPatch([0.40, 0.55]);
+  assert.equal(Contract.verifyPatchInvariants(upliftPatch).ok, true, 'фикстура поднятого рельефа валидна');
+  const upliftRange = rangeOf(ringOf('stage85-skirt-uplift', upliftPatch, 600, null, outerRing).heights);
+  assert.ok(
+    upliftRange > plainRange + 80,
+    `на поднятом направлении гребни растут: ${upliftRange.toFixed(0)} м против ${plainRange.toFixed(0)} м у равнины`,
+  );
+
+  // 3. peakAmpM больше не масштабируется визуальным radiusPatchM: одно и то же
+  //    кольцо юбки одного патча даёт сопоставимый размах и на 600 м, и на 30 км.
+  const smallRing = ringOf('stage85-skirt-small', dryPatch, 600, PROFILE, outerRing);
+  const bigRing = ringOf('stage85-skirt-big', dryPatch, 30000, PROFILE, outerRing);
+  const smallRange = rangeOf(smallRing.heights);
+  const bigRange = rangeOf(bigRing.heights);
+  assert.ok(
+    Math.abs(smallRange - bigRange) < 0.25 * Math.max(smallRange, bigRange),
+    `амплитуда гребней от реального перепада высот, а не от radiusPatchM: ${smallRange.toFixed(0)} м (600 м) против ${bigRange.toFixed(0)} м (30 км)`,
+  );
+
+  // 4. Направленный рельеф: на внешнем и среднем кольцах юбки есть широкие
+  //    непрерывные равнинные сектора — гребни не замкнуты в кольцо на 360°.
+  const smallPlainDeg = plainSectorDeg(smallRing.heights);
+  assert.ok(
+    smallPlainDeg >= 30,
+    `на внешнем кольце есть открытый равнинный сектор ${smallPlainDeg.toFixed(0)}° >= 30°`,
+  );
+  const midRingIndex = 46;
+  const midRing = ringOf('stage85-skirt-mid', dryPatch, 600, PROFILE, midRingIndex);
+  const midRadiusM = skirtRadiusAt(midRing.skirt, 0, midRingIndex);
+  assert.ok(
+    midRadiusM > 3 * 600 && midRadiusM < 4.5 * 600,
+    `среднее кольцо юбки лежит в 3…4.5 R_patch (${midRadiusM.toFixed(0)} м)`,
+  );
+  const midPlainDeg = plainSectorDeg(midRing.heights);
+  assert.ok(
+    midPlainDeg >= 60,
+    `на среднем кольце равнинный сектор ещё шире: ${midPlainDeg.toFixed(0)}° >= 60°`,
+  );
+
+  Worker.clearLocalMapCache();
+});
+
+test('Stage-8.5: базовая высота суши интерполируется по Patch7 гладко, без рёбер Вороного', () => {
+  const maxGridStep = (heightfield) => {
+    let maxStep = 0;
+    for (let y = 0; y < HF_RES; y++) {
+      for (let x = 0; x < HF_RES - 1; x++) {
+        maxStep = Math.max(maxStep, Math.abs(heightfield[y * HF_RES + x + 1] - heightfield[y * HF_RES + x]));
+      }
+    }
+    for (let y = 0; y < HF_RES - 1; y++) {
+      for (let x = 0; x < HF_RES; x++) {
+        maxStep = Math.max(maxStep, Math.abs(heightfield[(y + 1) * HF_RES + x] - heightfield[y * HF_RES + x]));
+      }
+    }
+    return maxStep;
+  };
+
+  // Масштабы приложения, на которых ступенчатый `nearestPatchCell` рисовал
+  // прямые диагональные рёбра Вороного: 156 км (границы ячеек у края кадра),
+  // 313 км и 625 км (до 6 соседей в кадре). 30 км — контроль: там участок
+  // целиком внутри одной ячейки, рельеф обязан остаться прежним.
+  for (const radiusM of [30000, 156000, 312500, 625000]) {
+    for (const withProfile of [false, true]) {
+      Worker.clearLocalMapCache();
+      const local = Worker.generateLocalMap(requestFor(dryPatch, {
+        radiusM,
+        patchKey: `stage85-smooth-${radiusM}-${withProfile ? 'p' : 'n'}`,
+        ...(withProfile ? { profile: PROFILE } : {}),
+      }));
+      const maxStep = maxGridStep(local.heightfield);
+      assert.ok(
+        maxStep < 30,
+        `radiusM=${radiusM} профиль=${withProfile ? 'да' : 'нет'}: нет ребра Вороного — максимальный перепад соседних узлов ${maxStep.toFixed(1)} м < 30 м`,
+      );
+      assert.ok(
+        Number.isFinite(local.meta.genMs) && local.meta.genMs <= 150,
+        `radiusM=${radiusM}: гейт G4 genMs=${local.meta.genMs.toFixed(1)} мс <= 150 мс`,
+      );
+    }
+  }
+
+  // Гладкость не куплена уплощением: на крупном масштабе реальный перепад
+  // высот между ячейками Patch7 обязан оставаться в heightfield.
+  Worker.clearLocalMapCache();
+  const wide = Worker.generateLocalMap(requestFor(dryPatch, {
+    radiusM: 625000, patchKey: 'stage85-smooth-wide',
+  }));
+  const reliefM = wide.meta.maxHeightM - wide.meta.minHeightM;
+  assert.ok(
+    reliefM > 100,
+    `на 1250 км перепад высот ячеек Patch7 сохранён: ${reliefM.toFixed(0)} м > 100 м`,
   );
 
   Worker.clearLocalMapCache();

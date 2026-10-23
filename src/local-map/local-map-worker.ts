@@ -1549,6 +1549,43 @@ function smoothPatchBaseElevation(
 }
 
 /**
+ * Stage-8.5: амплитуда горных гребней юбки, м — РЕАЛЬНЫЙ перепад высот Patch7
+ * (канонические высоты центра и 6 угловых слотов `mapNeighborCellsToSlots`)
+ * плюс размах канала `detail` макро-решётки. Равнинный патч даёт малую
+ * амплитуду (открытая равнина вокруг гекса), контрастный горный — большую;
+ * искусственной зависимости от `radiusPatchM` больше нет.
+ */
+function skirtLocalReliefAmplitudeM(
+  patch: LocalMapPatch,
+  neighborSlots: readonly PatchCell[],
+  centerCanonElev: number,
+  elevLattice: SkirtElevationLattice | null,
+): number {
+  const canon = (cell: PatchCell): number => isWaterCell(cell, patch.seaLevel)
+    ? waterLevelOf(cell, patch.seaLevel) : baseElevationOf(cell);
+  let minElev = centerCanonElev;
+  let maxElev = centerCanonElev;
+  for (const cell of neighborSlots) {
+    const elev = canon(cell);
+    if (elev < minElev) minElev = elev;
+    if (elev > maxElev) maxElev = elev;
+  }
+  const patchReliefM = (maxElev - minElev) * METERS_PER_ELEVATION_UNIT;
+  if (!elevLattice) return patchReliefM;
+  let minDetail = Infinity;
+  let maxDetail = -Infinity;
+  for (let i = 0; i < elevLattice.detail.length; i++) {
+    const value = elevLattice.detail[i] as number;
+    if (value < minDetail) minDetail = value;
+    if (value > maxDetail) maxDetail = value;
+  }
+  const detailReliefM = Number.isFinite(minDetail) && Number.isFinite(maxDetail)
+    ? (maxDetail - minDetail) * PROFILE_DETAIL_AMPLITUDE_M
+    : 0;
+  return patchReliefM + detailReliefM;
+}
+
+/**
  * Планетарная высота точки юбки относительно seaLevel, м. Частота, seed и
  * положительный базовый уровень fBm/detail совпадают с generateLocalMap,
  * поэтому на стыке больше нет ступеньки +60 м. На первых 3–4 кольцах
@@ -1570,6 +1607,7 @@ function skirtPlanetaryHeight(
   planetCoordScale: number,
   neighborSlots: readonly PatchCell[],
   centerCanonElev: number,
+  localReliefAmpM: number,
 ): number {
   // Stage-8.4: масштаб и опорная высота разгоняются на первых 3–4 кольцах.
   const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
@@ -1597,20 +1635,49 @@ function skirtPlanetaryHeight(
   // Stage-8.3: гребневые горные хребты только на суше и только за пределами
   // активного гекса (r > collarEndM). Огибающая плавно выводит рельеф из
   // природной долины в предгорья на 2.8 · R_patch и слегка (на 30%) гасит
-  // пики к самому горизонту; крупномасштабная маска macroBasin разделяет
-  // азимуты на выразительные хребты и открытые межгорные долины/перевалы.
+  // пики к самому горизонту.
+  //
+  // Stage-8.5: гребни больше НЕ образуют замкнутое кольцо на 360° вокруг
+  // активного гекса («стадионный вал»). Их высота определяется реальной
+  // возвышенностью и уклоном направления — калиброванным каналом `elevation`
+  // макро-решётки (без профиля — гладким якорём Patch7), — а направленная
+  // тектоническая маска с высоким порогом оставляет широкие открытые
+  // равнинные сектора. Амплитуда `peakAmpM` масштабируется от настоящего
+  // перепада высот патча и размаха канала `detail`, поэтому вокруг равнинного
+  // гекса простирается равнина, а отдельные гряды стоят лишь на тех азимутах,
+  // где рельеф планеты действительно поднят.
   // На воде горный рельеф строго ноль — зеркало Stage-8.2.1 не трогаем.
   let mountainM = 0;
   if (water < 1 && r > collarEndM) {
     const mountainEnvelope = smooth01((r - collarEndM) / (2.8 * radiusPatchM))
       * (1 - 0.30 * smooth01((r - 6.0 * radiusPatchM) / (outerRadiusM - 6.0 * radiusPatchM)));
+    // Реальная возвышенность направления, м над seaLevel.
+    const macroElevM = elevLattice
+      ? (sampleSkirtLatticeAt(
+        elevLattice.elevation, outerRadiusM,
+        (x * coordScale) / planetCoordScale, (y * coordScale) / planetCoordScale,
+      ) + elevCalibration - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
+      : (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+    const centerElevM = (centerCanonElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+    // Низина и шельф гор не дают вовсе, пологая равнина — отдельные гряды,
+    // поднятое направление — полноценные хребты.
+    const upliftT = smooth01((macroElevM - 40) / 260);
+    // Превышение направления над центром патча — наклон рельефа планеты:
+    // спуск к бассейну гасит гребни, подъём от него — усиливает.
+    const riseT = smooth01((macroElevM - centerElevM + 110) / 320);
+    const reliefMask = upliftT * (0.35 + 0.65 * riseT);
     const ridgeVal = ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, cellSeed ^ 0x5A17C3, 5);
+    // Stage-8.5: тектоническая маска стала вдвое крупнее по масштабу (0.05
+    // вместо 0.14) и выше по порогу (0.52/0.32 вместо 0.34/0.38): сектора
+    // равнин широкие и непрерывные, а гребни собраны в отдельные хребты, а не
+    // в сплошное кольцо вокруг активного гекса.
     const macroBasin = valueNoise2D(
-      x * noiseScale * 0.14 + 3.7, y * noiseScale * 0.14 - 5.1, cellSeed ^ 0x3391B7,
+      x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, cellSeed ^ 0x3391B7,
     );
-    const basinMask = smooth01((macroBasin - 0.34) / 0.38);
-    const peakAmpM = Math.min(420, Math.max(190, radiusPatchM * 0.32));
-    mountainM = peakAmpM * mountainEnvelope * basinMask * Math.pow(ridgeVal, 1.35);
+    const basinMask = smooth01((macroBasin - 0.52) / 0.32);
+    // Stage-8.5: амплитуда — реальный перепад высот Patch7 и размах `detail`.
+    const peakAmpM = Math.min(320, Math.max(60, localReliefAmpM));
+    mountainM = peakAmpM * mountainEnvelope * reliefMask * basinMask * Math.pow(ridgeVal, 1.35);
   }
 
   const landHeight = (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
@@ -1700,6 +1767,12 @@ export function generateHorizonSkirt(
     : centerCanonElev;
   const elevCalibration = centerCanonElev - rawCenterElev;
 
+  // Stage-8.5: амплитуда горных гребней — от реального перепада высот патча и
+  // размаха канала `detail`, а не от визуального радиуса участка.
+  const localReliefAmpM = skirtLocalReliefAmplitudeM(
+    patch, neighborSlots, centerCanonElev, elevLattice,
+  );
+
   const innerRes = HEIGHTFIELD_RES;
   const hasCollar = !!innerHeightfield && innerHeightfield.length >= innerRes * innerRes;
   const collarHeights = hasCollar ? (innerHeightfield as Float32Array) : null;
@@ -1749,14 +1822,14 @@ export function generateHorizonSkirt(
           const blend = smooth01((hexDist - blendStartM) / blendSpanM);
           const planetaryZ = skirtPlanetaryHeight(
             patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
-            planetCoordScale, neighborSlots, centerCanonElev,
+            planetCoordScale, neighborSlots, centerCanonElev, localReliefAmpM,
           );
           z = innerZ + (planetaryZ - innerZ) * blend;
         }
       } else {
         z = skirtPlanetaryHeight(
           patch, radiusPatchM, x, y, r, cellSeed, noiseScale, elevLattice, elevCalibration, outerRadiusM,
-          planetCoordScale, neighborSlots, centerCanonElev,
+          planetCoordScale, neighborSlots, centerCanonElev, localReliefAmpM,
         );
       }
 
