@@ -10,30 +10,22 @@
      - `buildGlobeGeometry` (`globePack`: позиции `f32×3` + честные наклонные
        нормали рельефа `i16×4 normalized`, вершина 24 байта).
 
+   W24: коэффициенты вертикали не дублируются — `reliefDelta` берётся из
+   `planet-globe.ts` и читает общую таблицу `GLOBE_RELIEF`, поэтому упаковка
+   геометрии и CPU-полигоны (`cellPolygon`) не могут разъехаться.
+
    Допустимые потребители: `site/planet-globe/planet-globe-worker.ts`,
    Node-тесты (`tests/*`) и CPU-бенчмарк (`tools/bench_planet_stage6.mjs`).
    Ядро поднимается лениво при первом вызове функции, а не при импорте. */
 
 import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
-import PlanetGlobe from './planet-globe.ts';
+import PlanetGlobe, { reliefDelta } from './planet-globe.ts';
 import type { GlobeChunkRange, GlobeGeometry, GlobeGeometryOptions } from './planet-globe.ts';
 import type { SurfaceResult } from './planet-surface.ts';
 
 function getCore(): PlanetCore {
   return getSharedPlanetCore();
-}
-
-function clamp01(x: number): number { return x < 0 ? 0 : (x > 1 ? 1 : x); }
-
-function reliefDelta(surface: SurfaceResult, elevation: number, reliefScale: number): number {
-  const sea = surface.seaLevel || 0;
-  if (elevation >= sea) {
-    const span = Math.max(1e-9, (surface.elevationMax || sea) - sea);
-    return clamp01((elevation - sea) / span) * 0.022 * reliefScale;
-  }
-  const depthSpan = Math.max(1e-9, sea - (surface.elevationMin || sea));
-  return -clamp01((sea - elevation) / depthSpan) * 0.008 * reliefScale;
 }
 
 function assertGeometryInputs(grid: PlanetGrid, surface: SurfaceResult): void {

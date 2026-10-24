@@ -12,7 +12,7 @@
    CR-01 PR 5 (И-5): строгий TypeScript-порт planet-globe.js
    (Strict ESM + TypeScript). Интерфейс и комментарии — по-русски. */
 
-import PlanetGlobe from '../shared/planet-globe.ts';
+import PlanetGlobe, { GLOBE_CELL_SCALE } from '../shared/planet-globe.ts';
 import type { CellPolygon, GlobeGeometry, GlobeStats, PlanetGlobeHandle } from '../shared/planet-globe.ts';
 import { verifyGenerationKey } from '../shared/planet-generation-contract.ts';
 import type { PlanetGenerationProfileInput } from '../shared/planet-generation-contract.ts';
@@ -114,18 +114,29 @@ const LOCAL_DIVE_REVEAL_DELAY_MS = 320;
 /** Stage-8.2: длительность фазы 2 — плавного спуска до уровня гекса. */
 const LOCAL_DIVE_ANIM_MS = 1150;
 /**
- * Stage-8.5: фиксированный физический радиус генерируемого центрального участка
- * (диаметр активного гекса ~4.5 км). 10 колец горизонта охватывают R_outer ≈ 28.75 км
- * вокруг центра с плотной сеткой и нормальным размером домиков. Селектор «Видимая
- * ширина» больше не растягивает меш, а управляет только дистанцией/наклоном камеры.
+ * W24: физический радиус генерируемого центрального участка — ровно такой,
+ * чтобы шаг центров соседних клеток в локальной карте был равен планетарному
+ * (`GLOBE_CELL_SCALE.strategicPatchRadiusM` = 52,1 км при R = 6 371 км,
+ * v = 128; шаг 60,0 км при апофеме 30,0 км). До W24 здесь стояло 2 500 м,
+ * то есть нарисованный патч был сжат относительно глобуса в 21 раз и
+ * описывал не ту клетку, которую игрок выбрал на планете.
+ *
+ * Следствие: 10 колец горизонта охватывают R_outer ≈ 11,5 · R_patch ≈ 600 км —
+ * те же 10 канонических клеток планеты, что и раньше по замыслу юбки
+ * (`generateHorizonSkirt`), но теперь в честном масштабе 1:1. Селектор
+ * «Видимая ширина» по-прежнему не растягивает меш, а управляет только
+ * дистанцией/наклоном камеры; его ступени — доли радиуса участка.
  */
-const LOCAL_PATCH_BASE_RADIUS_M = 2500;
+const LOCAL_PATCH_BASE_RADIUS_M = GLOBE_CELL_SCALE.strategicPatchRadiusM;
 /**
  * Stage-8.7: шаг центров соседних гексов `d_hex = 1.15 · R_patch` — та же
- * величина, что у решётки Patch7/юбки. Переход между гексами переносит точку
- * прицела ровно на этот шаг, поэтому мировая точка взгляда не смещается.
+ * величина, что у решётки Patch7/юбки (`SKIRT_HEX_SPACING_RATIO` воркера).
+ * W24: отношение берётся из общей таблицы масштабов, чтобы шаг глобуса и
+ * шаг локальной карты не разъезжались.
+ * Переход между гексами переносит точку прицела ровно на этот шаг, поэтому
+ * мировая точка взгляда не смещается.
  */
-export const LOCAL_HEX_STEP_RATIO = 1.15;
+export const LOCAL_HEX_STEP_RATIO = GLOBE_CELL_SCALE.strategicHexStepRatio;
 /**
  * Stage-8.7: длительность сглаживания остаточного рассогласования камеры после
  * ре-бейзинга. Точный ре-бейзинг оставляет нулевой остаток, поэтому в штатном
@@ -1952,10 +1963,9 @@ async function renderLocalMapFromPatch(
   let localData: LocalMapWorkerResponse;
   let currentProfile: GeographyProfileInput | undefined;
   try { currentProfile = profileFromControls(); } catch (_) { currentProfile = undefined; }
-  // Stage-8.5: физический радиус центрального участка жёстко фиксирован
-  // (LOCAL_PATCH_BASE_RADIUS_M = 2500 м) и больше не растягивается от селектора
-  // «Видимая ширина» — домики и рельеф всегда нормального размера, а селектор
-  // управляет только высотой/наклоном камеры.
+  // W24: физический радиус участка — планетарная клетка (LOCAL_PATCH_BASE_RADIUS_M
+  // = 52,1 км) и не растягивается от селектора «Видимая ширина»: масштаб 1:1
+  // с глобусом, а селектор управляет только высотой/наклоном камеры.
   const mapRequest = {
     patch: patchReady.patch,
     seed: parseSeedUint32(els.seed.value),
@@ -2083,8 +2093,8 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
     return;
   }
   const scale = selectedLocalScale(Number(widthKm));
-  // Stage-8.5: физический радиус центрального участка стабилен
-  // (LOCAL_PATCH_BASE_RADIUS_M) и не зависит от селектора «Видимая ширина».
+  // W24: физический радиус центрального участка стабилен (планетарная клетка,
+  // LOCAL_PATCH_BASE_RADIUS_M) и не зависит от селектора «Видимая ширина».
   localMapRadiusM = LOCAL_PATCH_BASE_RADIUS_M;
   els.localScale.value = String(scale);
 
