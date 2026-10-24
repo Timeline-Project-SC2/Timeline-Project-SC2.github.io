@@ -814,6 +814,26 @@ export interface BaseHeightfield {
 }
 
 /**
+ * Stage-8.12d (A-31): единое полосно-ограниченное зерно сухопутного рельефа для
+ * центрального участка, воротника и юбки горизонта. Октавы ограничены полосой,
+ * разрешимой и сеткой heightfield (256×256), и полярным воротником (144×36):
+ * перепад соседних вершин суши остаётся <= 6 м, а на шестиугольном срезе нет
+ * смены зерна или бюджета амплитуд.
+ */
+export function sampleLandGrainT(
+  ux: number,
+  uy: number,
+  seed: number,
+  detailSigned: number | null,
+): number {
+  const fbmT = fBm(ux, uy, seed, 4, 2.0, 0.45);
+  if (detailSigned === null) return fbmT;
+  const detail01 = detailSigned * 0.5 + 0.5;
+  const ridgeT = ridgedFbm(ux * 0.55, uy * 0.55, seed ^ 0x2F5A11, 3);
+  return clampScalar(0.52 * fbmT + 0.30 * detail01 + 0.18 * ridgeT, 0, 1);
+}
+
+/**
  * Stage-8.12d: базовый рельеф участка БЕЗ русел. Формулы те же, что были в
  * первом проходе generateLocalMap: якорь Patch7 (И-3.2), гладкая интерполяция
  * (Stage-8.5), fBm и канал `detail` (И-3.1), батиметрия океана из канала
@@ -891,17 +911,12 @@ export function buildBaseHeightfield(
         const sampleM = smoothPatchSample(smoothContext, wx, wy);
         const baseM = Math.max(anchor, planetM, sampleM);
         const tiltM = clampScalar(sampleM - planetM, 0, landBudgetM);
-        // Stage-8.5: долину лепит fBm, а с профилем (И-3.1) — канал `detail`
-        // и гребневой мультифрактал ridgedFbm.
-        const fbmT = fBm(wx * noiseScale, wy * noiseScale, cellSeed, 6);
-        const reliefT = detailLattice
-          ? clampScalar(
-            0.52 * fbmT
-              + 0.30 * (sampleDetailAt(detailLattice.detail, x / hfRes, y / hfRes) * 0.5 + 0.5)
-              + 0.18 * ridgedFbm(wx * noiseScale * 1.7, wy * noiseScale * 1.7, cellSeed ^ 0x2F5A11, 4),
-            0, 1,
-          )
-          : fbmT;
+        // Stage-8.5 / Stage-8.12d (A-31): долину лепит единое с воротником
+        // и юбкой полосно-ограниченное зерно sampleLandGrainT.
+        const detailSigned = detailLattice
+          ? sampleDetailAt(detailLattice.detail, x / hfRes, y / hfRes)
+          : null;
+        const reliefT = sampleLandGrainT(wx * noiseScale, wy * noiseScale, cellSeed, detailSigned);
         height = baseM + (landBudgetM - tiltM) * reliefT;
       }
       heightM[idx] = height;

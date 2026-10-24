@@ -42,8 +42,8 @@ import {
   HEIGHTFIELD_RES, TERRAFORM_RES, METERS_PER_ELEVATION_UNIT, LAND_FBM_AMPLITUDE_M,
   PROFILE_DETAIL_AMPLITUDE_M, TERRAFORM_LAND_MIN, TERRAFORM_ALPHA_SPAN, RING_LEVELS,
   HEX_APOTHEM_RATIO, CENTER_HEX_RADIUS_RATIO, SKIRT_HEX_SPACING_RATIO, hashFloat, hashFloat2,
-  valueNoise2D, fBm, ridgedFbm, clusterHexMetric, buildNeighborRingCells, sampleDetailLattice,
-  smooth01, clampScalar, buildBaseHeightfield,
+  valueNoise2D, ridgedFbm, sampleLandGrainT, clusterHexMetric, buildNeighborRingCells,
+  sampleDetailLattice, smooth01, clampScalar, buildBaseHeightfield,
 } from './local-map-heightfield.ts';
 import type { LocalMapRingCell } from './local-map-heightfield.ts';
 import { RIVER_HALF_WIDTH_RATIO, RIVER_DEPTH_RATIO, riverSegments, riverCarveFactor, applyRiverCarve } from './local-map-rivers.ts';
@@ -896,18 +896,20 @@ function smoothPatchBaseElevation(
   const c0 = neighborSlots[k0] as PatchCell;
   const c1 = neighborSlots[(k0 + 1) % SKIRT_RING_COUNT] as PatchCell;
   const angularBlend = smooth01(slot - Math.floor(slot));
-  // A-17: видимый центр соседа лежит на collarEndM = 1.15 R_patch, поэтому
-  // каноническое поле обязано успеть перейти от активной ячейки к соседней
-  // между гранью центрального гекса и этим центром. Прежний переход заканчивался
-  // лишь на 2.5 R_patch: воротник показывал всё ещё активную ячейку там, где
-  // кольца и растянутая макро-решётка уже показывали соседа.
-  const neighborBlend = smooth01(
-    (r - centerApothemM) / Math.max(1, collarEndM - centerApothemM),
-  );
   const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
   const isOcean = (cell: PatchCell): boolean =>
     cell.elevation < patch.seaLevel && cell.lakeWeight === 0;
   const isLake = (cell: PatchCell): boolean => cell.lakeWeight > 0;
+  const centerIsOcean = isOcean(center);
+  const oceanBlendStartM = collarEndM + 0.12 * radiusPatchM;
+  // A-17 / A-29 / A-31: на суше видимый центр соседа лежит на collarEndM,
+  // а на океанском центре каноническая батиметрия и водность проходят через
+  // воротник и 6 шагов профиля (collarEndM + 0.12·R) единым расписанием с
+  // oceanProfileBlend и плавно переходят к соседям вдоль юбки — прибрежный
+  // сосед не поднимает дно и не разбавляет water до окончания полосы воротника.
+  const neighborBlend = centerIsOcean
+    ? smooth01((r - oceanBlendStartM) / (0.8 * radiusPatchM))
+    : smooth01((r - centerApothemM) / Math.max(1, collarEndM - centerApothemM));
   // Океан несёт честную отрицательную отметку дна, а не зеркало seaLevel.
   // Минимум -0.035 единицы (~ -31.5 м) предотвращает ложный зелёный берег
   // из-за мелких численных колебаний прямо на уровне моря.
@@ -1070,27 +1072,18 @@ function skirtPlanetaryHeight(
   // достигаем полного planetCoordScale. Прежний разгон ещё на 3.2 R_patch
   // сдвигал берег относительно кольцевых ячеек на несколько километров.
   const centerApothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusPatchM;
-  const coordScale = 1 + (planetCoordScale - 1) * smooth01(
-    (r - centerApothemM) / Math.max(1, collarEndM - centerApothemM),
-  );
+  const centerIsOcean = center.elevation < patch.seaLevel && center.lakeWeight === 0;
+  const bathymetryBlendStartM = collarEndM + 0.12 * radiusPatchM;
+  const oceanTransitionBlend = smooth01((r - bathymetryBlendStartM) / (0.8 * radiusPatchM));
+  const coordScale = 1 + (planetCoordScale - 1) * (centerIsOcean
+    ? oceanTransitionBlend
+    : smooth01((r - centerApothemM) / Math.max(1, collarEndM - centerApothemM)));
   const base = smoothPatchBaseElevation(patch, neighborSlots, centerCanonElev, radiusPatchM, x, y, r);
   const baseElevM = (base.elevation - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
   const water = clampScalar(base.water, 0, 1);
-  const landWeight = clampScalar(1 - water, 0, 1) * smooth01((baseElevM + 18) / 28);
-  const distRatio = clampScalar((r - radiusPatchM) / (outerRadiusM - radiusPatchM), 0, 1);
-  const fbmNear = blendNoise(
-    fBm(x * noiseScale, y * noiseScale, cellSeed, 5),
-    fBm(x * noiseScale, y * noiseScale, planetSeed, 5),
-  ) * LAND_FBM_AMPLITUDE_M;
-  const fbmFar = blendNoise(
-    0.5 + (fBm(x * noiseScale * 0.35, y * noiseScale * 0.35, cellSeed, 3) - 0.5) * 0.85,
-    0.5 + (fBm(x * noiseScale * 0.35, y * noiseScale * 0.35, planetSeed, 3) - 0.5) * 0.85,
-  ) * LAND_FBM_AMPLITUDE_M;
-  const fbmM = fbmNear * (1 - distRatio) + fbmFar * distRatio;
-  const detailFade = 1 - smooth01(distRatio);
-  const detailM = (elevLattice
-    ? (sampleSkirtLatticeAt(elevLattice.detail, outerRadiusM, x, y) * 0.5 + 0.5) * PROFILE_DETAIL_AMPLITUDE_M
-    : 0.5 * PROFILE_DETAIL_AMPLITUDE_M) * detailFade;
+  // A-31: прибрежный вес шума выходит из нуля у уреза воды (-2..+16 м), чтобы
+  // низменные пляжи (+4 м) не вздувались до 80-метровых холмов над мелким заливом.
+  const landWeight = clampScalar(1 - water, 0, 1) * smooth01((baseElevM + 2) / 18);
 
   // И-3.2: континентальное озеро сохраняет положительное зеркало. У океана
   // waterMirrorM == 0, а ниже используется реальная отрицательная отметка дна.
@@ -1102,22 +1095,59 @@ function skirtPlanetaryHeight(
       + elevCalibration - patch.seaLevel) * METERS_PER_ELEVATION_UNIT
     : baseElevM;
 
+  // A-31: единый бюджет и зерно sampleLandGrainT без detailFade — патч и
+  // воротник имеют строго одинаковую частоту и амплитуду, а за воротником шаг
+  // шума плавно согласуется с угловым разрешением полярных колец (без провала
+  // амплитуды и без высокочастотного углового алиасинга на дальних кольцах).
+  const landBudgetM = LAND_FBM_AMPLITUDE_M + (elevLattice ? PROFILE_DETAIL_AMPLITUDE_M : 0);
+  const detailSigned = elevLattice
+    ? sampleSkirtLatticeAt(elevLattice.detail, outerRadiusM, latticeX, latticeY)
+    : null;
+  const polarSpanRatio = Math.max(0, r / Math.max(1, collarEndM) - 1);
+  const grainScale = noiseScale / (1 + 0.55 * polarSpanRatio);
+  const gx = x * grainScale;
+  const gy = y * grainScale;
+  const ux = x * noiseScale;
+  const uy = y * noiseScale;
+  let grainT: number;
+  if (collarNoiseBlend <= 0) {
+    grainT = sampleLandGrainT(gx, gy, cellSeed, detailSigned);
+  } else if (collarNoiseBlend >= 1) {
+    grainT = sampleLandGrainT(gx, gy, planetSeed, detailSigned);
+  } else {
+    grainT = blendNoise(
+      sampleLandGrainT(gx, gy, cellSeed, detailSigned),
+      sampleLandGrainT(gx, gy, planetSeed, detailSigned),
+    );
+  }
+  const grainM = grainT * landBudgetM;
+
+  const centerOceanDepthM = (
+    Math.min(center.elevation, patch.seaLevel - 0.035) - patch.seaLevel
+  ) * METERS_PER_ELEVATION_UNIT;
+  const centerElevM = (centerCanonElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+  const centerIsLake = center.lakeWeight > 0 && centerCanonElev > patch.seaLevel;
+  const centerScaleM = centerIsOcean
+    ? Math.abs(centerOceanDepthM)
+    : centerIsLake
+      ? Math.max(31.5, Math.abs(centerElevM))
+      : Math.max(31.5, Math.abs(centerElevM) + 0.52 * landBudgetM);
+
   let mountainM = 0;
   if (landWeight > 0.01 && r > collarEndM) {
     const mountainEnvelope = smooth01((r - collarEndM) / (2.8 * radiusPatchM))
       * (1 - 0.30 * smooth01((r - 6.0 * radiusPatchM) / (outerRadiusM - 6.0 * radiusPatchM)));
     const macroElevM = calibratedM;
-    const centerElevM = (centerCanonElev - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
     const upliftT = smooth01((macroElevM - 40) / 260);
     const riseT = smooth01((macroElevM - centerElevM + 110) / 320);
     const reliefMask = upliftT * (0.35 + 0.65 * riseT);
     const ridgeVal = blendNoise(
-      ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, cellSeed ^ 0x5A17C3, 5),
-      ridgedFbm(x * noiseScale * 0.42, y * noiseScale * 0.42, planetSeed ^ 0x5A17C3, 5),
+      ridgedFbm(ux * 0.42, uy * 0.42, cellSeed ^ 0x5A17C3, 5),
+      ridgedFbm(ux * 0.42, uy * 0.42, planetSeed ^ 0x5A17C3, 5),
     );
     const macroBasin = blendNoise(
-      valueNoise2D(x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, cellSeed ^ 0x3391B7),
-      valueNoise2D(x * noiseScale * 0.05 + 3.7, y * noiseScale * 0.05 - 5.1, planetSeed ^ 0x3391B7),
+      valueNoise2D(ux * 0.05 + 3.7, uy * 0.05 - 5.1, cellSeed ^ 0x3391B7),
+      valueNoise2D(ux * 0.05 + 3.7, uy * 0.05 - 5.1, planetSeed ^ 0x3391B7),
     );
     const basinMask = smooth01((macroBasin - 0.52) / 0.32);
     const peakAmpM = Math.min(320, Math.max(60, localReliefAmpM));
@@ -1125,20 +1155,13 @@ function skirtPlanetaryHeight(
   }
 
   // Положительный сухопутный шум никогда не поднимает океанское дно: при
-  // water -> 1 или baseElevM < -18 его вес плавно уходит к нулю.
-  const landNoiseM = (fbmM + detailM + mountainM) * landWeight;
+  // water -> 1 или baseElevM <= -2 его вес плавно уходит к нулю.
+  const landNoiseM = (grainM + mountainM) * landWeight;
   const defaultWaterHeightM = waterMirrorM > 0 ? waterMirrorM : Math.min(baseElevM, 0);
-  const centerIsOcean = center.elevation < patch.seaLevel && center.lakeWeight === 0;
-  const centerOceanDepthM = (
-    Math.min(center.elevation, patch.seaLevel - 0.035) - patch.seaLevel
-  ) * METERS_PER_ELEVATION_UNIT;
-  // A-29: тот же канонический профиль проходит через воротник и ещё 0.12 R
-  // снаружи. Затем глубина плавно возвращается к соседним ячейкам Patch7.
-  const oceanProfileBlend = smooth01(
-    (r - (collarEndM + 0.12 * radiusPatchM)) / (0.8 * radiusPatchM),
-  );
+  // A-29 / A-31: тот же канонический профиль проходит через воротник и ещё 0.12 R
+  // снаружи, после чего плавно переходит к соседним ячейкам Patch7.
   const nearWaterHeightM = centerIsOcean
-    ? centerOceanDepthM + (defaultWaterHeightM - centerOceanDepthM) * oceanProfileBlend
+    ? centerOceanDepthM + (defaultWaterHeightM - centerOceanDepthM) * oceanTransitionBlend
     : defaultWaterHeightM;
   const landHeight = baseElevM + landNoiseM;
   const nearHeight = nearWaterHeightM * water + landHeight * (1 - water);
@@ -1146,21 +1169,17 @@ function skirtPlanetaryHeight(
   let height = nearHeight;
   if (r > radiusPatchM && elevLattice) {
     // Для отрицательного океанского сэмпла не используем Math.max(0, ...):
-    // дно опускается ниже seaLevel сразу за воротником и остаётся видимым как
-    // настоящая батиметрия до горизонта. Положительное зеркало озера — особый
-    // случай и по-прежнему удерживается выше нуля.
+    // дно опускается ниже seaLevel за контрольной полосой воротника и остаётся
+    // видимым как настоящая батиметрия до горизонта.
     const waterHeight = waterMirrorM > 0
       ? waterMirrorM
       : (calibratedM < 0
-        ? calibratedM * smooth01((r - collarEndM) / (0.8 * radiusPatchM))
+        ? nearWaterHeightM + (calibratedM - nearWaterHeightM) * smooth01((r - bathymetryBlendStartM) / (0.8 * radiusPatchM))
         : Math.min(baseElevM, 0));
     const latticeLandHeight = calibratedM + landNoiseM;
     const latticeHeight = waterHeight * water + latticeLandHeight * (1 - water);
     // A-29: первые 0.12 R после воротника сохраняют тот же канонический
-    // профиль глубины, что край центрального патча. Макро-батиметрия начинает
-    // проявляться после контрольных шести шагов (~270 м при R=2500), без
-    // кольцевого уступа; дальняя точка полного blend остаётся прежней.
-    const bathymetryBlendStartM = collarEndM + 0.12 * radiusPatchM;
+    // профиль глубины, что край центрального патча.
     const latticeBlend = smooth01(
       (r - bathymetryBlendStartM) / (3.28 * radiusPatchM),
     );
@@ -1180,6 +1199,23 @@ function skirtPlanetaryHeight(
       patch, neighborSlots, x, y, r, radiusPatchM, riverHalfWidthM * 2.4,
     );
     height -= riverDepthM * (0.45 * valley + 0.55 * channel);
+  }
+
+  // A-31: при активном профиле (elevLattice) за контрольной полосой воротника
+  // вертикальный размах дальнего горизонта C^1-гладко согласуется с собственным
+  // масштабом участка centerScaleM: внутри ±0.90·centerScaleM профиль проходит
+  // тождественно (z = 0 и береговая линия инвариантны), а выбросы сжатой по
+  // горизонтали макро-решётки мягко насыщаются к ±1.18·centerScaleM.
+  if (elevLattice && !centerIsLake && r > bathymetryBlendStartM) {
+    const kneeM = 1.02 * centerScaleM;
+    const maxM = 1.38 * centerScaleM;
+    const absH = Math.abs(height);
+    const boundedAbs = absH <= kneeM
+      ? absH
+      : kneeM + (maxM - kneeM) * Math.tanh((absH - kneeM) / Math.max(1, maxM - kneeM));
+    const boundedHeight = height < 0 ? -boundedAbs : boundedAbs;
+    const envBlend = smooth01((r - bathymetryBlendStartM) / (0.8 * radiusPatchM));
+    height = height + (boundedHeight - height) * envBlend;
   }
   return height;
 }
