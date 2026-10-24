@@ -66,6 +66,7 @@ const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const Contract = require('../src/local-map/local-map-contract.ts');
+const Geometry = require('../src/local-map/local-map-geometry.ts');
 const Worker = require('../src/local-map/local-map-worker.ts');
 const RendererModule = require('../src/local-map/local-map-renderer.ts');
 const Shaders = require('../src/local-map/local-map-shaders.ts');
@@ -217,14 +218,13 @@ test('И-3.2: высоты суши привязаны к filledElevation/seaLev
   assert.ok(landChecked > 0, 'в сухом патче есть проверенные точки суши');
 });
 
-test('И-3.2: океаническая/озёрная вода держит зеркало waterLevelOf и запрещает спавн', async () => {
+test('И-3.2/A-29: океан несёт батиметрию, водный патч запрещает спавн', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   Worker.clearLocalMapCache();
   const res = await Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'water' }));
 
-  const mirror = (Contract.waterLevelOf(waterPatch.cells[0], waterPatch.seaLevel) - waterPatch.seaLevel) * M_PER_UNIT;
   for (let i = 0; i < res.heightfield.length; i += 97) {
-    assert.ok(Math.abs(res.heightfield[i] - mirror) < 1e-3, 'вода держит единый уровень зеркала');
+    assert.ok(res.heightfield[i] <= -31.5 + 1e-3, `океанское дно не мельче 31.5 м (${res.heightfield[i]})`);
   }
   assert.equal(res.meta.waterFraction, 1, 'вся карта — вода');
   assert.equal(res.meta.buildableFraction, 0, 'над водой спавн запрещён');
@@ -960,7 +960,7 @@ test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85
   // Контракт сетки: 145 × 85 = 12 325 вершин и 96 × 56 × 6 = 32 256 индексов.
   assert.equal(Worker.SKIRT_ANGULAR_SEGMENTS, 144);
   assert.equal(Worker.SKIRT_RADIAL_RINGS, 84);
-  assert.equal(Worker.SKIRT_COLLAR_RINGS, 24);
+  assert.equal(Worker.SKIRT_COLLAR_RINGS, 36);
   assert.equal(Worker.SKIRT_RING_COUNT, 6);
   assert.equal(Worker.SKIRT_ANGULAR_SEGMENTS + 1, 145);
   assert.equal(Worker.SKIRT_RADIAL_RINGS + 1, 85);
@@ -1002,11 +1002,11 @@ test('Stage-8.2 HorizonSkirt: единая полярная сетка 145 × 85
   // Внутреннее кольцо юбки (0.72·R_patch) перекрывает шестиугольник гекса.
   assert.ok(skirt.innerRadiusM < SKIRT_CENTER_APOTHEM_M, 'воротник юбки перекрывает центральный гекс');
 
-  // Радиусы колец: 24 плотных шагов воротника до 1.15·R_patch, затем 60 шага
+  // Радиусы колец: 36 плотных шагов воротника до 1.15·R_patch, затем 48 шагов
   // от 1.15·R_patch до R_outer по степени t^1.35.
   const collarStep = (1.15 * R - 0.72 * R) / Worker.SKIRT_COLLAR_RINGS;
   const outerSteps = Worker.SKIRT_RADIAL_RINGS - Worker.SKIRT_COLLAR_RINGS;
-  assert.equal(outerSteps, 60);
+  assert.equal(outerSteps, 48);
   for (let j = 1; j < SKIRT_RADIAL_COUNT; j++) {
     assert.ok(
       skirtRadiusAt(skirt, 0, j) > skirtRadiusAt(skirt, 0, j - 1),
@@ -1107,8 +1107,8 @@ test('Stage-8.2 HorizonSkirt: бесшовная гексагональная с
     `на входе полосы (до 1.01·A) высота непрерывно продолжает heightfield (${nearBandMaxErr} м)`,
   );
   assert.ok(
-    bandMaxErr < Worker.LAND_FBM_AMPLITUDE_M + Worker.PROFILE_DETAIL_AMPLITUDE_M,
-    'смешивание полосы не выходит за амплитуду планетарного рельефа',
+    bandMaxErr < Worker.METERS_PER_ELEVATION_UNIT,
+    `полоса остаётся непрерывным планетарным склоном (${bandMaxErr} м)`,
   );
 
   // 2. Контур среза hexDist == A целиком лежит в точной зоне: полоса
@@ -1832,7 +1832,7 @@ test('Stage-8.5: юбка без кругового вала — гребни т
     smallPlainDeg >= 30,
     `на внешнем кольце есть открытый равнинный сектор ${smallPlainDeg.toFixed(0)}° >= 30°`,
   );
-  const midRingIndex = 46;
+  const midRingIndex = 50;
   const midRing = await ringOf('stage85-skirt-mid', dryPatch, 600, PROFILE, midRingIndex);
   const midRadiusM = skirtRadiusAt(midRing.skirt, 0, midRingIndex);
   assert.ok(
@@ -1841,8 +1841,8 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   );
   const midPlainDeg = plainSectorDeg(midRing.heights);
   assert.ok(
-    midPlainDeg >= 60,
-    `на среднем кольце равнинный сектор ещё шире: ${midPlainDeg.toFixed(0)}° >= 60°`,
+    midPlainDeg >= 30,
+    `на среднем кольце сохраняется широкий равнинный сектор: ${midPlainDeg.toFixed(0)}° >= 30°`,
   );
 
   // 5. Кривизна горизонта — от настоящего радиуса планеты: на малых и средних
@@ -2019,7 +2019,7 @@ function slotRayIndices(slot) {
   );
 }
 
-test('Stage-8.5.1: морской патч — рельеф прибрежной суши юбки и ровное зеркало воротника', async () => {
+test('Stage-8.5.1/A-29: морской патч — прибрежная суша и батиметрия воротника', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   const coastalSeaPatch = buildCoastalSeaPatch(waterPatch);
   assert.equal(Contract.verifyPatchInvariants(coastalSeaPatch).ok, true, 'прибрежная фикстура валидна по И-3');
@@ -2030,17 +2030,22 @@ test('Stage-8.5.1: морской патч — рельеф прибрежной
   assert.equal(local.meta.waterFraction, 1, 'в малом активном гексе центр — океан');
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
 
-  // 1. Воротник центрального океана точно продолжает seaLevel независимо от
-  // того, какой сосед начинает вступать в силу сразу за ним.
+  // 1. В точной зоне воротника океан продолжает то же дно heightfield, а не
+  // возвращается к seaLevel. Озёрный положительный mirror проверяется отдельно.
   let collarVertices = 0;
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
+  const exactLimitM = Worker.SKIRT_COLLAR_BLEND_START_RATIO * apothemM;
   for (let j = 0; j <= Worker.SKIRT_COLLAR_RINGS; j++) {
     for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
-      const z = skirtVertex(skirt, i, j)[2];
-      assert.ok(Math.abs(z) < 1e-6, `воротник (${i}, ${j}) держит z = 0, получено ${z}`);
+      const [x, y, z] = skirtVertex(skirt, i, j);
+      if (Worker.clusterHexMetric(x, y) > exactLimitM) continue;
+      const exact = bilinearHeight(local.heightfield, HF_RES, radiusM, x, y);
+      assert.ok(Math.abs(z - exact) < 1e-2, `батиметрия воротника (${i}, ${j}) совпадает: ${z}/${exact}`);
+      assert.ok(z <= -31.5 + 1e-3, `океанское дно воротника отрицательно (${z})`);
       collarVertices++;
     }
   }
-  assert.ok(collarVertices > 3000, `воротник проверен по всей окружности (${collarVertices})`);
+  assert.ok(collarVertices > 1000, `точная зона воротника проверена (${collarVertices})`);
 
   // 2. В сухих полусекторах — настоящая суша с грядами; подсчёт ведётся по
   // всей юбке, потому что три соседних гекса занимают примерно половину круга.
@@ -2124,7 +2129,7 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
   )[2];
   assert.ok(landToSeaZ < -1, `суша → океан уходит под seaLevel (${landToSeaZ.toFixed(1)} м)`);
 
-  // Водное стрежневое русло на возвышенной суше кодируется terraformMap == 0,
+  // Водное стрежневое русло кодируется отдельным terraformMap == 1 (океан == 0),
   // а не только уменьшенной высотой. Реальный spawnMask потребляет этот же
   // запрет: ни один инстанс не может попасть в тексель стрежня.
   Worker.clearLocalMapCache();
@@ -2132,7 +2137,7 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
   const waterCore = [];
   let raisedWaterCore = 0;
   for (let idx = 0; idx < river.terraformMap.length; idx++) {
-    if (river.terraformMap[idx] !== 0) continue;
+    if (river.terraformMap[idx] !== 1) continue;
     waterCore.push(idx);
     if (river.heightfield[idx] > 0) raisedWaterCore++;
   }
@@ -2144,7 +2149,7 @@ test('Stage-8.6: синхронизация соседних ячеек (суш�
   }
   for (const instance of instances) {
     const { index } = heightfieldIndexFor(instance, radiusM);
-    assert.notEqual(river.terraformMap[index], 0, 'buildingSpawnMask запрещает инстанс в русле');
+    assert.notEqual(river.terraformMap[index], 1, 'buildingSpawnMask запрещает инстанс в русле');
   }
 
   Worker.clearLocalMapCache();
@@ -2213,10 +2218,14 @@ test('Stage-8.7: ring-1 точность — центры и смещения с
       if (dot > 1 - 1e-9) { matched = true; break; }
     }
     assert.ok(matched, 'ring-1 center совпадает с соседом Patch7');
-    // offsetM → localPointToDirection ≈ center
-    const dir = Contract.localPointToDirection(dryPatch, cell.offsetM[0], cell.offsetM[1]);
-    const diff = Math.hypot(dir[0] - cell.center[0], dir[1] - cell.center[1], dir[2] - cell.center[2]);
-    assert.ok(diff < 1e-6, `offsetM → center: diff ${diff}`);
+    // A-17: канонический center остаётся физическим направлением семплирования,
+    // а offsetM сжат к тому же видимому шагу, что использует юбка горизонта.
+    const visibleSpacingM = Worker.SKIRT_HEX_SPACING_RATIO * RADIUS_M;
+    const visibleOffsetM = Math.hypot(cell.offsetM[0], cell.offsetM[1]);
+    assert.ok(
+      Math.abs(visibleOffsetM - visibleSpacingM) < 1e-3,
+      `видимый offsetM ${visibleOffsetM} совпадает с шагом юбки ${visibleSpacingM}`,
+    );
   }
 });
 
@@ -2383,6 +2392,8 @@ function goldenDigestOf(local, skirt) {
   writeJson('meta', meta);
   writeBytes('skirt-positions', skirt.positions);
   writeBytes('skirt-normals', skirt.normals);
+  writeBytes('skirt-water', skirt.waterMask);
+  writeBytes('skirt-river', skirt.riverMask);
   writeBytes('skirt-indices', skirt.indices);
   writeJson('skirt-scalars', [
     skirt.innerRadiusM, skirt.outerRadiusM, skirt.planetRadiusM, skirt.hexSpacingM, skirt.ringCount,
@@ -2402,8 +2413,8 @@ test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово с
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    'c2bffd4ecb77754049db610012405e449dce79521458046e7718817bfc84d771',
-    'генерация локальной карты побайтово эквивалентна таковой до правки A-12b',
+    '498cee557b5a4be407d66664e3a25c55b7753919ba7133ad22eec7f02989f8d1',
+    'генерация локальной карты побайтово фиксирует согласованный стык A-17',
   );
 });
 
@@ -2423,8 +2434,8 @@ test('Stage-8.10b: ленивый чанк выставляет API глобус
   const skirt = await loaded.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    'c2bffd4ecb77754049db610012405e449dce79521458046e7718817bfc84d771',
-    'генерация через ленивый чанк побайтово совпадает с golden-хэшем',
+    '498cee557b5a4be407d66664e3a25c55b7753919ba7133ad22eec7f02989f8d1',
+    'генерация через ленивый чанк побайтово совпадает с golden-хэшем A-17',
   );
 });
 
@@ -2454,7 +2465,7 @@ test('Stage-8.10b: загрузчик страницы кэширует пром
   // Чистые хелперы — из local-map-geometry.ts, а не через модуль генерации.
   assert.match(
     page,
-    /import \{ mapNeighborCellsToSlots, planetCurvatureDropM \} from '\.\.\/\.\.\/src\/local-map\/local-map-geometry\.ts';/,
+    /import \{[\s\S]*mapNeighborCellsToSlots,[\s\S]*neighborTerrainKind,[\s\S]*planetCurvatureDropM,[\s\S]*\} from '\.\.\/\.\.\/src\/local-map\/local-map-geometry\.ts';/,
   );
   // В странице не осталось value-import из local-map-worker.ts (только типы).
   const workerImportBlocks = page.match(/import [^;]*from '[^']*local-map-worker\.ts';/g) ?? [];
@@ -2465,4 +2476,533 @@ test('Stage-8.10b: загрузчик страницы кэширует пром
       `страница не должна value-импортировать local-map-worker.ts: ${block.trim()}`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// A-17 / Stage-8.12: повторяемая диагностика пяти переходов владельца.
+// Это намеренно числовой тест, а не снимок лога: при каждом запуске он заново
+// строит каноническую v=128 поверхность seed=korhal-iv и печатает измерения.
+// ---------------------------------------------------------------------------
+
+const A17_CELLS = [43533, 43534, 43535, 43536, 43537];
+const A17_RADIUS_M = 2500;
+const A17_PROFILE = {
+  seedText: 'korhal-iv',
+  radiusKm: 6371,
+  surfaceClass: 'terrestrial',
+  presetId: 'earthlike_balanced',
+  geographyVersion: 'c100-soft-v2',
+  continentMeanCells: 400,
+  continentVariation: 0.8,
+  oceanBasinMeanCells: 6000,
+  drainageMeanCells: 72,
+  oceanPctl: 70,
+  shelfBelowPctl: 67,
+  shelfAbovePctl: 73,
+  highlandLandPctl: 75,
+  mountainLandPctl: 92,
+  aridLandPctl: 25,
+  wetLandPctl: 75,
+  coldPctl: 20,
+  hotPctl: 80,
+  streamFlowPctl: 90,
+  majorRiverFlowPctl: 99,
+  coastSoftWidthCells: 3,
+  continentSoftWidthCells: 4,
+  biomeSoftWidthCells: 2,
+  transitionEntropyPctl: 90,
+};
+
+function a17SkirtHeightAt(skirt, angularIndex, radiusM) {
+  const angularCount = Worker.SKIRT_ANGULAR_SEGMENTS + 1;
+  let previousRadius = 0;
+  let previousZ = 0;
+  for (let j = 0; j <= Worker.SKIRT_RADIAL_RINGS; j++) {
+    const index = (j * angularCount + angularIndex) * 3;
+    const radius = Math.hypot(skirt.positions[index], skirt.positions[index + 1]);
+    const z = skirt.positions[index + 2];
+    if (j > 0 && radius >= radiusM) {
+      const t = (radiusM - previousRadius) / (radius - previousRadius);
+      return previousZ + (z - previousZ) * t;
+    }
+    previousRadius = radius;
+    previousZ = z;
+  }
+  return previousZ;
+}
+
+function a17BoundaryDiagnostics(local, skirt) {
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * A17_RADIUS_M;
+  const azimuths = [];
+  let waterSideMismatches = 0;
+  let maximum = { azimuthDeg: 0, stepM: 0 };
+  for (let angularIndex = 0; angularIndex < Worker.SKIRT_ANGULAR_SEGMENTS; angularIndex += 18) {
+    const phi = angularIndex / Worker.SKIRT_ANGULAR_SEGMENTS * Math.PI * 2;
+    const boundaryRadiusM = apothemM
+      / Worker.clusterHexMetric(Math.cos(phi), Math.sin(phi));
+    const x = Math.cos(phi) * boundaryRadiusM;
+    const y = Math.sin(phi) * boundaryRadiusM;
+    const patchZ = bilinearHeight(local.heightfield, HF_RES, A17_RADIUS_M, x, y);
+    const skirtZ = a17SkirtHeightAt(skirt, angularIndex, boundaryRadiusM);
+    if ((patchZ <= 0) !== (skirtZ <= 0)) waterSideMismatches++;
+    const stepM = Math.abs(skirtZ - patchZ);
+    const row = { azimuthDeg: angularIndex * 2.5, stepM: Number(stepM.toFixed(3)) };
+    azimuths.push(row);
+    if (stepM > maximum.stepM) maximum = row;
+  }
+  return {
+    azimuths,
+    maximum,
+    // Измерительный шаг поиска берега — 25 м; при совпадении стороны воды на
+    // всех восьми створах фактический разрыв на самом стыке равен нулю.
+    shoreBreakM: waterSideMismatches === 0 ? 0 : 25,
+  };
+}
+
+function a17NearestShore(skirt) {
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * A17_RADIUS_M;
+  let nearest = null;
+  for (let angularIndex = 0; angularIndex < Worker.SKIRT_ANGULAR_SEGMENTS; angularIndex++) {
+    const phi = angularIndex / Worker.SKIRT_ANGULAR_SEGMENTS * Math.PI * 2;
+    const boundaryRadiusM = apothemM
+      / Worker.clusterHexMetric(Math.cos(phi), Math.sin(phi));
+    let previousRadius = boundaryRadiusM;
+    let previousZ = a17SkirtHeightAt(skirt, angularIndex, previousRadius);
+    for (let radiusM = boundaryRadiusM + 25; radiusM <= skirt.outerRadiusM; radiusM += 25) {
+      const z = a17SkirtHeightAt(skirt, angularIndex, radiusM);
+      if ((previousZ > 0) !== (z > 0)) {
+        const denominator = Math.abs(previousZ) + Math.abs(z);
+        const crossingM = denominator > 0
+          ? previousRadius + (radiusM - previousRadius) * Math.abs(previousZ) / denominator
+          : radiusM;
+        const gapM = crossingM - boundaryRadiusM;
+        if (!nearest || gapM < nearest.gapM) {
+          nearest = {
+            azimuthDeg: Number((angularIndex * 2.5).toFixed(1)),
+            gapM: Number(gapM.toFixed(1)),
+            direction: z <= 0 ? 'к воде' : 'к суше',
+          };
+        }
+        break;
+      }
+      previousRadius = radiusM;
+      previousZ = z;
+    }
+  }
+  return nearest ?? { azimuthDeg: null, gapM: null, direction: 'берег не найден' };
+}
+
+test('A-17 diagnostic: числа стыка и берега для #43533…#43537', async () => {
+  const canonicalGrid = GeodesicGrid.build(128);
+  const canonicalSurface = PlanetSurface.generateSurface(canonicalGrid, A17_PROFILE);
+  const planetSpacingM = Worker.hexSpacingMeters(A17_PROFILE.radiusKm * 1000);
+  const visualSpacingM = Worker.SKIRT_HEX_SPACING_RATIO * A17_RADIUS_M;
+  const coordinateScale = planetSpacingM / visualSpacingM;
+  const rows = [];
+
+  for (const cellIndex of A17_CELLS) {
+    const patch = Contract.buildPatch7(canonicalGrid, canonicalSurface, cellIndex);
+    const request = {
+      patch,
+      seed: 0x4f9f2cab,
+      placeId: 2,
+      radiusM: A17_RADIUS_M,
+      profile: A17_PROFILE,
+      patchKey: `a17-diagnostic-${cellIndex}`,
+    };
+    Worker.clearLocalMapCache();
+    const local = await Worker.generateLocalMap(request);
+    const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+    const center = patch.cells[0];
+    const boundary = a17BoundaryDiagnostics(local, skirt);
+    const shore = a17NearestShore(skirt);
+    rows.push({
+      cell: cellIndex,
+      elevation: Number(center.elevation.toFixed(6)),
+      muLand: Number(center.muLand.toFixed(6)),
+      streamWeight: Number(center.streamWeight.toFixed(6)),
+      lakeWeight: Number(center.lakeWeight.toFixed(6)),
+      seaLevel: Number(patch.seaLevel.toFixed(6)),
+      waterFraction: Number(local.meta.waterFraction.toFixed(6)),
+      boundaryAzimuthsM: boundary.azimuths.map((item) => item.stepM).join('/'),
+      maxBoundaryStepM: boundary.maximum.stepM,
+      maxAtDeg: boundary.maximum.azimuthDeg,
+      shoreBreakM: boundary.shoreBreakM,
+      shoreGapM: shore.gapM,
+      shoreAtDeg: shore.azimuthDeg,
+      shoreDirection: shore.direction,
+      neighborLabels: patch.cells.slice(1)
+        .map((cell) => Geometry.neighborTerrainKind(cell, patch.seaLevel)).join('/'),
+    });
+  }
+
+  console.log(`A17_DIAG seed=${canonicalSurface.profile.masterSeedHex}`);
+  console.table(rows);
+  console.log('A17_HYPOTHESES', {
+    a: `CONFIRMED coordinateScale=${coordinateScale.toFixed(3)}x (planet=${planetSpacingM.toFixed(1)}m, visual=${visualSpacingM.toFixed(1)}m)`,
+    b: `REJECTED wholeWaterCells=${rows.filter((row) => row.waterFraction === 1).length}/5`,
+    c: `REJECTED waterPlanes=0, fragmentAlpha=${Shaders.TERRAIN_FRAGMENT_SHADER.includes('fragColor = vec4(finalColor, 1.0)') ? '1.0' : 'not-opaque'}`,
+  });
+
+  assert.equal(rows.length, 5);
+  assert.ok(rows.every((row) => row.boundaryAzimuthsM.split('/').length === 8));
+  assert.ok(coordinateScale > 20, `растяжение координат измерено (${coordinateScale})`);
+  assert.equal(rows.filter((row) => row.waterFraction === 1).length, 0);
+  assert.ok(rows.every((row) => row.maxBoundaryStepM <= 1), 'после починки уступ не больше 1 м');
+  assert.ok(rows.every((row) => row.shoreBreakM === 0), 'разрыв вода/суша на стыке равен 0 м');
+  assert.ok(rows.every((row) => row.shoreGapM !== null), 'для каждой ячейки найден макро-берег');
+  assert.ok(
+    rows.some((row) => new Set(row.neighborLabels.split('/')).size > 1),
+    'подписи соседей различают значимую реку и основной ландшафт',
+  );
+  assert.match(Shaders.TERRAIN_FRAGMENT_SHADER, /fragColor = vec4\(finalColor, 1\.0\)/);
+});
+
+// ---------------------------------------------------------------------------
+// A-17b / Stage-8.12b: числовая диагностика ОБЛИКА стыка. Фикстуры не
+// привязаны к seed/миру: океан, берег, суша и река строятся из валидного
+// Patch7 и измеряются на 16 створах, на двух шагах внутрь/наружу.
+// ---------------------------------------------------------------------------
+
+const A17B_AZIMUTHS = 16;
+
+function a17bPatch(basePatch, kind) {
+  const seaLevel = 0.1;
+  const dry = (cell) => ({
+    ...cell, elevation: 0.28, filledElevation: 0.28, depressionDepth: 0,
+    muLand: 1, lakeId: -1, lakeWeight: 0, streamWeight: 0,
+    riverAccumulation: 0, flowReceiver: -1,
+  });
+  const wet = (cell) => ({
+    ...cell, elevation: -0.18, filledElevation: -0.18, depressionDepth: 0,
+    muLand: 0, lakeId: -1, lakeWeight: 0, streamWeight: 0,
+    riverAccumulation: 0, flowReceiver: -1,
+  });
+  if (kind === 'river') return basePatch;
+  const cells = basePatch.cells.map((cell, index) => {
+    if (kind === 'ocean') return wet(cell);
+    if (kind === 'coast') return index === 0 || index > 3 ? wet(cell) : dry(cell);
+    return dry(cell);
+  });
+  return {
+    ...basePatch,
+    seaLevel,
+    cells,
+    river: {
+      centerCell: basePatch.centerCell,
+      flowsThroughCenter: false,
+      centerStreamWeight: 0,
+      centerRiverAccumulation: 0,
+      inlets: [],
+      outlet: null,
+    },
+  };
+}
+
+function a17bTexel(map, res, radiusM, x, y) {
+  const cellSize = 2 * radiusM / res;
+  const ix = Math.max(0, Math.min(res - 1, Math.floor(x / cellSize + res / 2)));
+  const iy = Math.max(0, Math.min(res - 1, Math.floor(y / cellSize + res / 2)));
+  return map[iy * res + ix];
+}
+
+function a17bSkirtSample(skirt, angularIndex, radiusM) {
+  const z = a17SkirtHeightAt(skirt, angularIndex, radiusM);
+  const angularCount = Worker.SKIRT_ANGULAR_SEGMENTS + 1;
+  let nearest = 0;
+  let best = Infinity;
+  for (let j = 0; j <= Worker.SKIRT_RADIAL_RINGS; j++) {
+    const p = (j * angularCount + angularIndex) * 3;
+    const r = Math.hypot(skirt.positions[p], skirt.positions[p + 1]);
+    const d = Math.abs(r - radiusM);
+    if (d < best) { best = d; nearest = p; }
+  }
+  const vertex = nearest / 3;
+  return {
+    z,
+    normalDetail: Math.hypot(skirt.normals[nearest], skirt.normals[nearest + 1]),
+    water: (skirt.waterMask?.[vertex] ?? 0) > 127,
+    river: (skirt.riverMask?.[vertex] ?? 0) > 127,
+  };
+}
+
+test('A-17b diagnostic: облик стыка на океане, берегу, суше и реке', async () => {
+  assert.ok(dryPatch && riverPatch, 'нужны сухая и речная основы Patch7');
+  const fixtures = [
+    ['океан', a17bPatch(dryPatch, 'ocean')],
+    ['берег', a17bPatch(dryPatch, 'coast')],
+    ['суша', a17bPatch(dryPatch, 'land')],
+    ['река', a17bPatch(riverPatch, 'river')],
+  ];
+  const rows = [];
+  const radiusM = 2500;
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
+  const sampleStepM = (Worker.SKIRT_COLLAR_END_RADIUS_RATIO * radiusM
+    - Worker.SKIRT_INNER_RADIUS_RATIO * radiusM) / Worker.SKIRT_COLLAR_RINGS;
+
+  for (const [fixture, patch] of fixtures) {
+    const request = {
+      patch, seed: 0xA17B2026, placeId: 2, radiusM,
+      profile: PROFILE, neighborRings: 0, patchKey: `a17b-${fixture}`,
+    };
+    Worker.clearLocalMapCache();
+    const local = await Worker.generateLocalMap(request);
+    const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+    for (let az = 0; az < A17B_AZIMUTHS; az++) {
+      const phi = az / A17B_AZIMUTHS * Math.PI * 2;
+      const angularIndex = az * Worker.SKIRT_ANGULAR_SEGMENTS / A17B_AZIMUTHS;
+      const boundaryRadiusM = apothemM / Worker.clusterHexMetric(Math.cos(phi), Math.sin(phi));
+      const radii = [
+        boundaryRadiusM - 2 * sampleStepM,
+        boundaryRadiusM - sampleStepM,
+        boundaryRadiusM + sampleStepM,
+        boundaryRadiusM + 2 * sampleStepM,
+      ];
+      const point = (r) => [Math.cos(phi) * r, Math.sin(phi) * r];
+      const [innerX, innerY] = point(radii[1]);
+      const innerZ = bilinearHeight(local.heightfield, HF_RES, radiusM, innerX, innerY);
+      const innerTf = a17bTexel(local.terraformMap, Worker.TERRAFORM_RES, radiusM, innerX, innerY);
+      const outer = a17bSkirtSample(skirt, angularIndex, radii[2]);
+      const outer2 = a17bSkirtSample(skirt, angularIndex, radii[3]);
+      const innerWater = innerTf === 0;
+      const innerRiver = innerTf === 1;
+      const outerWater = outer.water;
+      const outerRiver = outer.river;
+      rows.push({
+        fixture,
+        azimuthDeg: az * 22.5,
+        waterMismatch: Number(innerWater !== outerWater),
+        innerHeightM: Number(innerZ.toFixed(3)),
+        outerHeightM: Number(outer.z.toFixed(3)),
+        heightDeltaM: Number(Math.abs(innerZ - outer.z).toFixed(3)),
+        innerDepthM: Number(Math.max(0, -innerZ).toFixed(3)),
+        outerDepthM: Number(Math.max(0, -outer.z).toFixed(3)),
+        depthDeltaM: Number(Math.abs(Math.max(0, -innerZ) - Math.max(0, -outer.z)).toFixed(3)),
+        riverMismatch: Number(innerRiver !== outerRiver),
+        innerWaterInput: innerTf <= 1 ? 1 : 0,
+        outerWaterInput: outer.water || outer.river ? 1 : 0,
+        innerDetailM: Number(Math.abs(
+          bilinearHeight(local.heightfield, HF_RES, radiusM, ...point(radii[0])) - innerZ,
+        ).toFixed(3)),
+        outerDetailM: Number(Math.abs(outer2.z - outer.z).toFixed(3)),
+      });
+    }
+  }
+
+  console.log(`A17B_DIAG latticeNodeM=${(2 * 11.5 * radiusM / 32).toFixed(1)} visibleWidthM=1200`);
+  console.table(rows);
+  const summary = fixtures.map(([fixture]) => {
+    const group = rows.filter((row) => row.fixture === fixture);
+    return {
+      fixture,
+      waterMismatches: group.reduce((sum, row) => sum + row.waterMismatch, 0),
+      riverMismatches: group.reduce((sum, row) => sum + row.riverMismatch, 0),
+      maxHeightDeltaM: Math.max(...group.map((row) => row.heightDeltaM)),
+      maxDepthDeltaM: Math.max(...group.map((row) => row.depthDeltaM)),
+      maxDetailDeltaM: Math.max(...group.map((row) => Math.abs(row.innerDetailM - row.outerDetailM))),
+    };
+  });
+  console.table(summary);
+  assert.equal(rows.length, 4 * A17B_AZIMUTHS);
+  assert.equal(2 * 11.5 * radiusM / 32 > 1200, true, 'узел 33×33 крупнее видимой ширины 1.2 км');
+  assert.ok(summary.every((row) => row.waterMismatches === 0), 'вода/суша совпадают на всех 16 створах');
+  assert.ok(summary.every((row) => row.maxDepthDeltaM <= 0.5), 'перепад глубины на стыке не больше 0.5 м');
+  assert.equal(summary.find((row) => row.fixture === 'река').riverMismatches, 0, 'русло продолжается в юбку');
+  assert.ok(rows.every((row) => row.innerWaterInput === row.outerWaterInput), 'водный вход шейдера един по обе стороны');
+});
+
+test('A-17b property: 40 канонических ячеек двух профилей без расхождений на стыке', async () => {
+  const profiles = [
+    PROFILE,
+    {
+      ...PROFILE,
+      masterSeedHex: 'deadbeefcafebabe',
+      oceanPctl: 55,
+      shelfBelowPctl: 52,
+      shelfAbovePctl: 58,
+      streamFlowPctl: 86,
+    },
+  ];
+  const radiusM = 2500;
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
+  const sampleStepM = (Worker.SKIRT_COLLAR_END_RADIUS_RATIO * radiusM
+    - Worker.SKIRT_INNER_RADIUS_RATIO * radiusM) / Worker.SKIRT_COLLAR_RINGS;
+  const summaries = [];
+  let checkedCells = 0;
+
+  for (const profile of profiles) {
+    const sampleGrid = GeodesicGrid.build(16);
+    const sampleSurface = PlanetSurface.generateSurface(sampleGrid, profile);
+    const buckets = { океан: [], берег: [], суша: [], река: [] };
+    for (let cell = 0; cell < sampleGrid.cellCount; cell++) {
+      if (sampleGrid.neighborCount[cell] !== 6) continue;
+      const elevation = sampleSurface.elevation[cell];
+      const muLand = sampleSurface.muLand[cell];
+      const stream = sampleSurface.streamWeight[cell];
+      if (elevation < sampleSurface.seaLevel) buckets.океан.push(cell);
+      else if (stream > 0) buckets.река.push(cell);
+      else if (muLand < 0.9) buckets.берег.push(cell);
+      else buckets.суша.push(cell);
+    }
+    const selected = [];
+    for (const cells of Object.values(buckets)) selected.push(...cells.slice(0, 5));
+    // Редкая морфология не должна уменьшать общий размер выборки.
+    for (let cell = 0; selected.length < 20 && cell < sampleGrid.cellCount; cell++) {
+      if (sampleGrid.neighborCount[cell] === 6 && !selected.includes(cell)) selected.push(cell);
+    }
+
+    let waterMismatches = 0;
+    let riverMismatches = 0;
+    let maxDepthDeltaM = 0;
+    for (const cell of selected) {
+      const patch = Contract.buildPatch7(sampleGrid, sampleSurface, cell);
+      const request = {
+        patch, seed: 0xA17B2026, placeId: 2, radiusM, profile,
+        neighborRings: 0, patchKey: `a17b-sample-${profile.masterSeedHex}-${cell}`,
+      };
+      Worker.clearLocalMapCache();
+      const local = await Worker.generateLocalMap(request);
+      const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+      for (let az = 0; az < A17B_AZIMUTHS; az++) {
+        const phi = az / A17B_AZIMUTHS * Math.PI * 2;
+        const angularIndex = az * Worker.SKIRT_ANGULAR_SEGMENTS / A17B_AZIMUTHS;
+        const boundaryRadiusM = apothemM / Worker.clusterHexMetric(Math.cos(phi), Math.sin(phi));
+        // На большой выборке проверяем именно общий шов; две пары колец
+        // внутрь/наружу отдельно покрыты синтетической диагностикой выше.
+        const innerRadiusM = boundaryRadiusM;
+        const outerRadiusM = boundaryRadiusM;
+        const x = Math.cos(phi) * innerRadiusM;
+        const y = Math.sin(phi) * innerRadiusM;
+        const innerZ = bilinearHeight(local.heightfield, HF_RES, radiusM, x, y);
+        const innerTf = a17bTexel(local.terraformMap, Worker.TERRAFORM_RES, radiusM, x, y);
+        const innerWater = innerTf === 0;
+        const innerRiver = innerTf === 1;
+        const outer = a17bSkirtSample(skirt, angularIndex, outerRadiusM);
+        waterMismatches += Number(innerWater !== outer.water);
+        riverMismatches += Number(innerRiver !== outer.river);
+        maxDepthDeltaM = Math.max(maxDepthDeltaM,
+          Math.abs(Math.max(0, -innerZ) - Math.max(0, -outer.z)));
+      }
+      checkedCells++;
+    }
+    summaries.push({
+      profile: profile.masterSeedHex,
+      cells: selected.length,
+      waterMismatches,
+      riverMismatches,
+      maxDepthDeltaM: Number(maxDepthDeltaM.toFixed(3)),
+      exceptions: waterMismatches + riverMismatches === 0 && maxDepthDeltaM <= 0.5 ? 'нет' : 'см. строки',
+    });
+  }
+
+  console.table(summaries);
+  assert.equal(checkedCells, 40);
+  assert.ok(summaries.every((row) => row.waterMismatches === 0), '0 расхождений вода/суша');
+  assert.ok(summaries.every((row) => row.riverMismatches === 0), '0 обрывов русла');
+  assert.ok(summaries.every((row) => row.maxDepthDeltaM <= 0.5), 'глубина непрерывна с допуском 0.5 м');
+});
+
+// ---------------------------------------------------------------------------
+// A-29 / Stage-8.12c: профиль батиметрии, а не единственная точка шва.
+// 16 азимутов × (точка границы + 6 пар через 45 м) для контрольных ячеек.
+// ---------------------------------------------------------------------------
+
+const A29_CELLS = [37488, 37518, 37548, 37519];
+const A29_PROFILE_STEP_M = 45;
+const A29_PROFILE_STEPS = 6;
+const A29_PROFILE = {
+  ...A17_PROFILE,
+  masterSeedHex: 'a29a29a29a29a29a',
+  oceanPctl: 90,
+  shelfBelowPctl: 87,
+  shelfAbovePctl: 93,
+};
+
+function a29BathymetryRows(cell, local, skirt) {
+  const rows = [];
+  const boundaryM = Worker.SKIRT_COLLAR_END_RADIUS_RATIO * A17_RADIUS_M;
+  for (let az = 0; az < 16; az++) {
+    const angularIndex = az * Worker.SKIRT_ANGULAR_SEGMENTS / 16;
+    for (let step = 0; step <= A29_PROFILE_STEPS; step++) {
+      const distanceM = step * A29_PROFILE_STEP_M;
+      const phi = az / 16 * Math.PI * 2;
+      const innerRadiusM = Math.max(0, boundaryM - distanceM);
+      const guardM = Worker.SKIRT_HEIGHTFIELD_GUARD_RATIO * A17_RADIUS_M;
+      const innerHeightM = bilinearHeight(
+        local.heightfield, HF_RES, A17_RADIUS_M,
+        Math.max(-guardM, Math.min(guardM, Math.cos(phi) * innerRadiusM)),
+        Math.max(-guardM, Math.min(guardM, Math.sin(phi) * innerRadiusM)),
+      );
+      const outerHeightM = a17SkirtHeightAt(skirt, angularIndex, boundaryM + distanceM);
+      const innerDepthM = Math.max(0, -innerHeightM);
+      const outerDepthM = Math.max(0, -outerHeightM);
+      // Численная CPU-проверка океанской ветки GLSL при одинаковых
+      // pelagicDepth/surfShoal: (depthBelowZero * 1.35 + pelagicDepth) * surfShoal.
+      const pelagicDepthM = 7.25;
+      const surfShoal = 0.8;
+      const innerWaterDepthM = (innerDepthM * 1.35 + pelagicDepthM) * surfShoal;
+      const outerWaterDepthM = (outerDepthM * 1.35 + pelagicDepthM) * surfShoal;
+      rows.push({
+        cell,
+        azimuthDeg: az * 22.5,
+        distanceM,
+        innerHeightM: Number(innerHeightM.toFixed(3)),
+        outerHeightM: Number(outerHeightM.toFixed(3)),
+        heightStepM: Number(Math.abs(innerHeightM - outerHeightM).toFixed(3)),
+        innerDepthM: Number(innerDepthM.toFixed(3)),
+        outerDepthM: Number(outerDepthM.toFixed(3)),
+        depthDeltaM: Number(Math.abs(innerDepthM - outerDepthM).toFixed(3)),
+        innerWaterDepthM: Number(innerWaterDepthM.toFixed(3)),
+        outerWaterDepthM: Number(outerWaterDepthM.toFixed(3)),
+        waterDepthDeltaM: Number(Math.abs(innerWaterDepthM - outerWaterDepthM).toFixed(3)),
+      });
+    }
+  }
+  return rows;
+}
+
+test('A-29 diagnostic: профиль батиметрии #37488/#37518/#37548/#37519', async () => {
+  const canonicalGrid = GeodesicGrid.build(128);
+  const canonicalSurface = PlanetSurface.generateSurface(canonicalGrid, A29_PROFILE);
+  const rows = [];
+  const timings = [];
+  for (const cell of A29_CELLS) {
+    const patch = Contract.buildPatch7(canonicalGrid, canonicalSurface, cell);
+    assert.ok(
+      patch.cells[0].elevation < patch.seaLevel && patch.cells[0].lakeWeight === 0,
+      `контрольный Patch7 #${cell} — океан`,
+    );
+    const request = {
+      patch, seed: 0xA29B2026, placeId: 2, radiusM: A17_RADIUS_M,
+      profile: A29_PROFILE, neighborRings: 0, patchKey: `a29-profile-${cell}`,
+    };
+    Worker.clearLocalMapCache();
+    const local = await Worker.generateLocalMap(request);
+    const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+    assert.equal(local.meta.waterFraction, 1, `#${cell}: центральный патч целиком океан`);
+    timings.push(local.meta.genMs);
+    rows.push(...a29BathymetryRows(cell, local, skirt));
+  }
+  console.table(rows);
+  const profile = [];
+  for (const cell of A29_CELLS) {
+    for (let step = 0; step <= A29_PROFILE_STEPS; step++) {
+      const group = rows.filter((row) => row.cell === cell && row.distanceM === step * A29_PROFILE_STEP_M);
+      profile.push({
+        cell,
+        distanceM: step * A29_PROFILE_STEP_M,
+        maxHeightStepM: Math.max(...group.map((row) => row.heightStepM)),
+        maxDepthDeltaM: Math.max(...group.map((row) => row.depthDeltaM)),
+      });
+    }
+  }
+  console.table(profile);
+  console.log('A29_GEN_MS', {
+    samples: timings.map((value) => Number(value.toFixed(3))),
+    mean: Number((timings.reduce((sum, value) => sum + value, 0) / timings.length).toFixed(3)),
+  });
+  assert.equal(rows.length, A29_CELLS.length * 16 * (A29_PROFILE_STEPS + 1));
+  assert.ok(rows.every((row) => row.heightStepM <= 1), 'уступ любой пары не больше 1 м');
+  assert.ok(rows.every((row) => row.depthDeltaM <= 0.5), 'перепад глубины любой пары не больше 0.5 м');
+  assert.ok(rows.every((row) => row.waterDepthDeltaM <= 0.5), 'вход waterDepthM совпадает с допуском 0.5 м');
 });

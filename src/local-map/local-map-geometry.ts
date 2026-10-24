@@ -72,3 +72,19 @@ export function planetCurvatureDropM(planetRadiusM: number, rM: number): number 
   if (!(planetRadiusM > 1)) return 0;
   return planetRadiusM - Math.sqrt(Math.max(0, planetRadiusM * planetRadiusM - rM * rM));
 }
+
+/** Ландшафт назначения для подписи перехода на соседний гекс (A-17). */
+export function neighborTerrainKind(cell: PatchCell, seaLevel: number): string {
+  if (cell.elevation < seaLevel) return 'океан';
+  if (cell.lakeWeight > 0) return 'озеро';
+  // muLand — непрерывная береговая принадлежность. До 0.80 ячейка ещё несёт
+  // линию берега на масштабе перехода, даже если её центр уже выше seaLevel.
+  if (cell.muLand < 0.8) return 'берег';
+  // Нулевой порог streamWeight маркировал почти всю дренируемую сушу рекой.
+  // Оставляем верхнюю половину нормированного потока либо крупное устойчивое
+  // русло с площадью стока не меньше 20 000 км².
+  const meaningfulRiver = cell.streamWeight >= 0.5
+    || (cell.streamWeight >= 0.35 && cell.riverAccumulation >= 20_000);
+  if (meaningfulRiver) return 'река';
+  return 'суша';
+}

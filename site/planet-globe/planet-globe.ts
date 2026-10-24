@@ -37,7 +37,11 @@ import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
 // Stage-8.10b (A-12b): чистые геометрические хелперы — из нового модуля
 // без ядра. generateLocalMap / generateHorizonSkirt грузятся лениво через
 // динамический import() (см. loadLocalMapWorkerModule ниже).
-import { mapNeighborCellsToSlots, planetCurvatureDropM } from '../../src/local-map/local-map-geometry.ts';
+import {
+  mapNeighborCellsToSlots,
+  neighborTerrainKind,
+  planetCurvatureDropM,
+} from '../../src/local-map/local-map-geometry.ts';
 import { createTransitionLog as tlCreate } from './local-transition-log.ts';
 import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
 import type {
@@ -196,6 +200,7 @@ const els = {
   localMapCanvas: must<HTMLCanvasElement>('localMapCanvas'),
   exitLocalMap: must<HTMLButtonElement>('exitLocalMapBtn'),
   localMapTitle: must<HTMLElement>('localMapTitle'),
+  localMetric: must<HTMLElement>('localMapMetric'),
   localScale: must<HTMLSelectElement>('localScaleSel'),
   resetLocalCam: must<HTMLButtonElement>('resetLocalCamBtn'),
   localNeighborNav: must<HTMLElement>('localNeighborNav'),
@@ -340,6 +345,8 @@ let localMapWidthKm = 1.2;
 /** Stage-8.5: физический радиус центрального участка — стабильный, не зависит от селектора «Видимая ширина». */
 let localMapRadiusM = LOCAL_PATCH_BASE_RADIUS_M;
 let localMapHudLastAt = 0;
+/** A-32: ширина обзора текстом — для HUD. */
+let localViewWidth = '—';
 let localMapCanvasEventsInstalled = false;
 let localCameraYaw = LOCAL_REST_YAW;
 let localCameraPitch = 0.82;
@@ -660,10 +667,7 @@ function cameraPitchForWidthKm(widthKm: number): number {
  * центр кадра в саму долину, а не за её край.
  */
 function defaultLocalCameraTarget(yaw: number, widthKm = localMapWidthKm): LocalVec3 {
-  const hf = localMapData?.heightfield;
-  const res = Math.round(Math.sqrt(hf?.length || 0));
-  const rawCenterZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
-  const centerZ = Number.isFinite(rawCenterZ) ? rawCenterZ : 0;
+  const centerZ = localGroundDatumZ();
   const u = scaleStep01(widthKm);
   const forwardOffset = localMapRadiusM * 0.14 * (1 - 0.65 * u);
   return [
@@ -671,6 +675,18 @@ function defaultLocalCameraTarget(yaw: number, widthKm = localMapWidthKm): Local
     -Math.sin(yaw) * forwardOffset,
     centerZ + Math.max(14, localMapRadiusM * 0.025),
   ];
+}
+
+/**
+ * A-32 (шаг 3): опорная плоскость земли участка — отметка центра heightfield
+ * (м над уровнем моря). Метрики обзора считаются относительно неё: сферическое
+ * проседание далёкой юбки в кадр не попадает.
+ */
+function localGroundDatumZ(): number {
+  const hf = localMapData?.heightfield;
+  const res = Math.round(Math.sqrt(hf?.length || 0));
+  const z = Number(hf?.[(res >> 1) * res + (res >> 1)] ?? 0);
+  return Number.isFinite(z) ? z : 0;
 }
 
 /**
@@ -914,6 +930,37 @@ function localCameraEye(): LocalVec3 {
     localCameraTarget[1] + direction[1] * localCameraDistance,
     localCameraTarget[2] + direction[2] * localCameraDistance,
   ];
+}
+
+/* ==== A-32 (шаг 3): метрика кадра ==== */
+
+/**
+ * A-32 (шаг 3): живая метрика кадра в шапке локальной карты.
+ *
+ * Обзор по земле: оптическая ось пересекает опорную плоскость земли на
+ * расстоянии depthM от глаза, а сечение пирамиды кадра на этой глубине —
+ * прямоугольник 2·depthM·tan(fov/2); его ширина РОВНА расстоянию между
+ * точками, где крайние (левый/правый) лучи кадра бьют в землю.
+ */
+function updateLocalViewMetric(): void {
+  const rect = els.localMapCanvas.getBoundingClientRect();
+  const eye = localCameraEye();
+  const sinP = Math.sin(localCameraPitch);
+  const depthM = sinP > 1e-4 ? Math.max(0, eye[2] - localGroundDatumZ()) / sinP : 0;
+  const tanV = Math.tan(LOCAL_MAP_FOV / 2);
+  const widthM = 2 * depthM * tanV * (rect.width / Math.max(1, rect.height));
+  const heightM = 2 * depthM * tanV;
+  const radiusM = Math.hypot(eye[0], eye[1]);
+  const zone = radiusM < localMapRadiusM ? 'патч'
+    : (radiusM <= localMapRadiusM * LOCAL_HEX_STEP_RATIO ? 'воротник' : 'юбка');
+  const km = widthM >= 1000;
+  const div = km ? 1000 : 1;
+  const unit = km ? ' км' : ' м';
+  const wText = fmtNum(widthM / div, km ? 2 : 0);
+  localViewWidth = wText + unit;
+  const caption = `Обзор ${wText} × ${fmtNum(heightM / div, km ? 2 : 0)}${unit} · камера ${localCameraDistance >= 1000 ? fmtNum(localCameraDistance / 1000, 2) + ' км' : fmtInt(localCameraDistance) + ' м'}`
+    + ` · наклон ${fmtNum(localCameraPitch * 180 / Math.PI, 0)}° · ${fmtNum(widthM / Math.max(1, rect.width), 1)} м/пиксель · зона: ${zone}`;
+  if (els.localMetric.textContent !== caption) els.localMetric.textContent = caption;
 }
 
 function localViewProjection(): Float32Array {
@@ -1310,11 +1357,11 @@ function updateLocalMapHud(): void {
     const horizonDropM = planetCurvatureDropM(skirt.planetRadiusM, skirt.outerRadiusM);
     // Stage-8.4/8.5: число колец горизонта берётся из фактических данных юбки
     // (R_outer / d_hex), а не хардкодится — HUD честен и при 6, и при 10 кольцах.
-    // Stage-8.5: в статусе также показана реальная видимая ширина камеры
-    // (селектор «Видимая ширина») и Δz в метрах сферического проседания.
+    // Stage-8.5: в статусе — видимая ширина камеры и Δz в метрах сферического
+    // проседания. A-32 (шаг 3): ширина фактическая, из состояния камеры.
     const ringsLabel = Math.round(skirt.outerRadiusM / Math.max(1, skirt.hexSpacingM));
     els.localFogStatus.textContent =
-      `${ringsLabel} колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (обзор ${fmtNum(localMapWidthKm, 1)} км, Δz ${fmtNum(horizonDropM, 0)} м)`;
+      `${ringsLabel} колец · R ${fmtNum(skirt.outerRadiusM / 1000, 1)} км (обзор ${localViewWidth}, Δz ${fmtNum(horizonDropM, 0)} м)`;
   } else {
     els.localFogStatus.textContent = 'активен · R ' + fmtInt(localMapRadiusM) + ' м';
   }
@@ -1590,6 +1637,7 @@ function renderLocalMapFrame(): void {
   gl.clearColor(0.52, 0.62, 0.74, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   applyLocalCameraAnim(performance.now());
+  updateLocalViewMetric();
   const viewProj = localViewProjection();
   if (typeof renderer.renderFrame === 'function') {
     const skirt = localSkirtData;
@@ -1648,14 +1696,6 @@ function neighborCompassLabel(east: readonly number[], north: readonly number[],
   const deg = ((Math.atan2(u, v) * 180 / Math.PI) + 360) % 360;
   const dirs = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'] as const;
   return dirs[Math.round(deg / 45) % 8] as string;
-}
-
-function neighborTerrainKind(cell: WorkerPatchReadyResponse['patch']['cells'][number], seaLevel: number): string {
-  if (cell.elevation < seaLevel) return 'океан';
-  if (cell.lakeWeight > 0) return 'озеро';
-  if (cell.streamWeight > 0) return 'река';
-  if (cell.muLand < 0.5) return 'берег';
-  return 'суша';
 }
 
 function updateLocalNeighborButtons(patchReady: WorkerPatchReadyResponse | null): void {
@@ -3530,6 +3570,9 @@ function init(): void {
   }
 
   initEvents();
+  // A-32 (шаг 3): пресет «Видимая ширина» остаётся рабочим, но виден только
+  // при ?debug=local; в обычном режиме в шапке висит живая метрика обзора.
+  document.body.classList.toggle('local-scale-debug', LOCAL_DEBUG_QUERY);
   renderHistory();
   renderSelection(null);
   Promise.all([
