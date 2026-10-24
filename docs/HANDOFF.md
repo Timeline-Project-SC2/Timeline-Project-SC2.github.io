@@ -611,11 +611,14 @@ JS/CSS/worker файлу публикации имя с контент-хэше�
   только те, кому разрешён обход. Bypass: `OrganizationAdmin`, роли `4`/`5`, Integration `4187077`.
   Требуемых статус-чеков в ruleset нет — их и не было, поэтому «красный» чек сам по себе мерж
   не блокирует.
-- **`required_linear_history` снят 25.10.2026.** Пока правило стояло, merge-коммит был запрещён и
-  `gh pr merge <номер> --merge` возвращал `base branch policy prohibits the merge` — это была
-  именно линейная история, а не проверки. Теперь обычный мерж проходит (`gh pr merge <номер> --merge`);
-  `--squash`/`--rebase` остаются доступны, если нужна линейная история по желанию.
-  `--admin` (обход ruleset) нужен только когда правило `update` действительно мешает.
+- **Мерж по-прежнему только с `--admin`.** Проверка 25.10.2026 на PR #239 (все сборки зелёные,
+  `mergeStateStatus = BLOCKED`): `gh pr merge <номер> --merge` отвечает `base branch policy
+  prohibits the merge`, хотя `required_linear_history` в ruleset нет и требуемых статус-чеков тоже
+  нет. Блокирует правило **`update` (Restrict updates)** из `BotsOverwrite`: оно покрывает `~ALL`
+  ветки, то есть и `main`, а кнопка мержа обновляет целевую ветку. Рабочая команда —
+  `gh pr merge <номер> --merge --admin` (или `--squash --admin`, если нужна линейная история).
+  Чтобы мерж шёл без `--admin`: в `BotsOverwrite` либо исключить `refs/heads/main` из `update`,
+  либо добавить интеграцию Arena в bypass-список с режимом `Always`.
 - **Классическая branch protection репозитория выключена** (баннер «Repository branch protection is
   disabled»), вся политика — в rulesets. Детали защиты интеграции Arena недоступны: `GET
   /branches/main/protection*` и `POST /rulesets` отдают `403 Resource not accessible by integration`,
