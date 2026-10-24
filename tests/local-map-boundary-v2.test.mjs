@@ -117,6 +117,23 @@ test('m.14: 20 наземных центров × 6 граней × ≥ 20 об�
     ));
   }));
   assert.ok(detailOmittedM >= 1, `отрицательный контроль без detail: Δ=${detailOmittedM} м ≥1 м`);
+  // Не только аналитическая амплитуда: реальное кольцо продукта обязано
+  // отличаться от результата «поле + врез», если удалить весь detail-канал.
+  const patch = patchFor(sample.rows[0].cell);
+  Worker.clearLocalMapCache();
+  const local = await Worker.generateLocalMap(requestFor(patch, 'detail-negative', 1));
+  const arcs = await Worker.worldRiverSegmentsForPatch(patch, world.profile);
+  const omittedInProductM = Math.max(...local.ringCells.filter((cell) => cell.ring === 1).map((cell) => {
+    const field = Heightfield.sampleElevationForSeed(cell.center, stepM,
+      world.profile.masterSeedHex, patch.frame.radiusM / 1000, patch.seaLevel);
+    const withoutDetail = field - Worker.worldRiverDepthAt(
+      cell.center, arcs, radiusM, patch.frame.radiusM, field,
+    );
+    const center = Math.floor(cell.hfRes / 2) * cell.hfRes + Math.floor(cell.hfRes / 2);
+    return Math.abs(cell.heightfield[center] - withoutDetail);
+  }));
+  assert.ok(omittedInProductM >= 1,
+    `отрицательный контроль: product ring[1] без detail ошибся на ${omittedInProductM} м ≥1 м`);
 });
 
 test('m.14: без boundaryInflows повторяется ≥5 м и не выдаётся PASS', async () => {
