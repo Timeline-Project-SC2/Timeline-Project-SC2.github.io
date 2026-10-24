@@ -356,8 +356,8 @@ test('A-16: файл скачивается, имя содержит seed, яч�
   log.stop();
   assert.equal(downloads.length, 1, 'финал скачивает файл');
   const name = downloads[0].filename;
-  assert.match(name, /^tl-987654-42-\d{13}$/,
-    'имя: seed, ячейка, дата-время (Unix ms)');
+  assert.match(name, /^tl-987654-42-\d{4}-\d{2}-\d{2}-\d{6}\.json$/,
+    'имя: seed, ячейка, ISO-подобная дата-время (UTC) + .json');
   const parsed = JSON.parse(downloads[0].text);
   assert.ok(Array.isArray(parsed), 'файл — весь буфер (массив записей)');
   assert.equal(parsed.length, 1);
@@ -368,7 +368,7 @@ test('A-16: файл скачивается, имя содержит seed, яч�
   log.start(777);
   log.stop();
   assert.equal(downloads.length, 2);
-  assert.match(downloads[1].filename, /^tl-777-null-\d{13}$/);
+  assert.match(downloads[1].filename, /^tl-777-\?-\d{4}-\d{2}-\d{2}-\d{6}\.json$/);
 });
 
 test('A-16: кнопка и обработчик живут только при ?debug=local', () => {
@@ -382,8 +382,14 @@ test('A-16: кнопка и обработчик живут только при 
   const page = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
   // Обработчик кнопки и создание модуля — только в debug-режиме.
   assert.match(page, /if \(LOCAL_DEBUG_QUERY\) \{\s*tl = tlCreate\(\{ gpuDone:/);
-  assert.match(page, /els\.localMapDiag\.lastElementChild\?\.addEventListener\('click', tlClick\);/);
-  assert.match(page, /els\.localMapDiag\.hidden = false;/);
+  assert.match(page, /els\.localTransitionLogBtn\.addEventListener\('click', tlClick\);/);
+  // Панель открывается окном замера (startLocalCameraDiagWindow), wiring её не показывает.
+  const wiringAt = page.indexOf('if (LOCAL_DEBUG_QUERY) {');
+  const wiringBlock = page.slice(wiringAt, page.indexOf('\n  }', wiringAt));
+  assert.ok(!wiringBlock.includes('hidden = false'), 'wiring не меняет видимость панели');
+  const diagWindowAt = page.indexOf('function startLocalCameraDiagWindow');
+  const diagBody = page.slice(diagWindowAt, page.indexOf('\nfunction ', diagWindowAt + 10));
+  assert.match(diagBody, /els\.localMapDiag\.hidden = false;/, 'панель открывается окном замера');
   // Фазовые метки ставит страница в потоке перехода.
   assert.match(page, /tl\?\.mark\('t1', neighbor\.cell\)/);
   assert.match(page, /tl\?\.mark\('t2'\)/);

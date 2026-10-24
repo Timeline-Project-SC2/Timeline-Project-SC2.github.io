@@ -3,50 +3,131 @@
    (стартует с t0, гасится с финалом); разрыв кадра > 100 мс — alarming (отдельный
    флаг). Буфер 20 записей; финал (естественный t8 или ручной стоп) — одна запись:
    console.table + скачиваемый JSON (весь буфер). */
-export function createTransitionLog(o: {
+
+interface TransitionRecord {
+  seed: number;
+  cell: number | null;
+  t0: number;
+  t1: number | null;
+  t2: number | null;
+  t3: number | null;
+  t4: number | null;
+  t5: number | null;
+  t6: number | null;
+  t7: number | null;
+  t8: number | null;
+  maxFrameGapMs: number | null;
+  alarming: boolean;
+}
+
+interface TransitionLogOptions {
   gpuDone: () => boolean;
-  download?: (f: string, t: string) => void;
-}) {
-  const dl = o.download || ((f, t) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([t]));
-    a.download = f;
-    a.click();
+  download?: (filename: string, text: string) => void;
+}
+
+/** ISO-подобная метка для имени файла: 2026-10-23-123456 (UTC). */
+function stampForFilename(now: Date): string {
+  const iso = now.toISOString();
+  return `${iso.slice(0, 10)}-${iso.slice(11, 19).replace(/:/g, '')}`;
+}
+
+export function createTransitionLog(options: TransitionLogOptions) {
+  const download = options.download || ((filename, text) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   });
-  let a: any = null, b: any[] = [], r = 0, p = 0, g = 0, s = 0;
-  function fin() {
-    if (!a) return null;
-    const x = a; a = null;
-    r && cancelAnimationFrame(r);
-    x.maxFrameGapMs = g || null; x.alarming = g > 100;
-    b.push(x);
-    b.length > 20 && b.shift();
-    console.table(x);
-    dl(`tl-${x.seed}-${x.cell}-${Date.now()}`, JSON.stringify(b));
-    return x;
+  let record: TransitionRecord | null = null;
+  const buffer: TransitionRecord[] = [];
+  let rafId = 0;
+  let prevFrameAt = 0;
+  let maxGapMs = 0;
+  let calmFrames = 0;
+
+  function finish(): TransitionRecord | null {
+    if (!record) return null;
+    const finalRecord = record;
+    record = null;
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+    }
+    finalRecord.maxFrameGapMs = maxGapMs > 0 ? maxGapMs : null;
+    finalRecord.alarming = maxGapMs > 100;
+    buffer.push(finalRecord);
+    if (buffer.length > 20) {
+      buffer.shift();
+    }
+    console.table(finalRecord);
+    const now = new Date();
+    download(
+      `tl-${finalRecord.seed}-${finalRecord.cell ?? '?'}-${stampForFilename(now)}.json`,
+      JSON.stringify(buffer)
+    );
+    return finalRecord;
   }
-  function pr() {
-    r = requestAnimationFrame(pr);
-    const T = performance.now(), d = T - p; p = T;
-    if (d > g) g = d;
-    if (!a) return;
-    if (a.t6 == null && a.t5 != null && o.gpuDone()) a.t6 = T;
-    if (a.t7 == null && a.t6 != null && T > a.t6) a.t7 = T, s = 0;
-    if (a.t8 == null && a.t7 != null && (s = d <= 100 ? s + 1 : 0) >= 5) a.t8 = T, fin();
+
+  function probe(): void {
+    rafId = requestAnimationFrame(probe);
+    const frameAt = performance.now();
+    const gapMs = frameAt - prevFrameAt;
+    prevFrameAt = frameAt;
+    if (gapMs > maxGapMs) {
+      maxGapMs = gapMs;
+    }
+    if (!record) return;
+    if (record.t6 === null && record.t5 !== null && options.gpuDone()) {
+      record.t6 = frameAt;
+    }
+    if (record.t7 === null && record.t6 !== null && frameAt > record.t6) {
+      record.t7 = frameAt;
+      calmFrames = 0;
+    }
+    if (record.t8 === null && record.t7 !== null) {
+      calmFrames = gapMs <= 100 ? calmFrames + 1 : 0;
+      if (calmFrames >= 5) {
+        record.t8 = frameAt;
+        finish();
+      }
+    }
   }
+
   return {
-    start(seed: number) {
-      if (a) return;
-      p = performance.now();
-      a = { seed, cell: null, t0: p, t1: null, t2: null, t3: null, t4: null, t5: null, t6: null, t7: null, t8: null, maxFrameGapMs: null, alarming: false };
-      g = s = 0; r = requestAnimationFrame(pr);
+    start(seed: number): void {
+      if (record) return;
+      const startAt = performance.now();
+      prevFrameAt = startAt;
+      record = {
+        seed,
+        cell: null,
+        t0: startAt,
+        t1: null,
+        t2: null,
+        t3: null,
+        t4: null,
+        t5: null,
+        t6: null,
+        t7: null,
+        t8: null,
+        maxFrameGapMs: null,
+        alarming: false,
+      };
+      maxGapMs = 0;
+      calmFrames = 0;
+      rafId = requestAnimationFrame(probe);
     },
-    mark(ph: string, c?: number) {
-      if (a) {
-        a[ph] = performance.now();
-        c != null && !a.cell && (a.cell = c);
+    mark(phase: 't1' | 't2' | 't3' | 't4' | 't5', cell?: number): void {
+      if (!record) return;
+      record[phase] = performance.now();
+      if (cell !== undefined && record.cell === null) {
+        record.cell = cell;
       }
     },
-    stop: fin,
+    stop(): TransitionRecord | null {
+      return finish();
+    },
   };
 }

@@ -215,6 +215,7 @@ const els = {
   localInvariantStatus: must<HTMLElement>('localInvariantStatus'),
   localMapStatus: must<HTMLElement>('localMapStatus'),
   localMapDiag: must<HTMLElement>('localMapDiag'),
+  localTransitionLogBtn: must<HTMLButtonElement>('localTransitionLogBtn'),
   localDiagDeltaEye: must<HTMLElement>('localDiagDeltaEye'),
   localDiagDeltaYaw: must<HTMLElement>('localDiagDeltaYaw'),
   localDiagJump: must<HTMLElement>('localDiagJump'),
@@ -3073,9 +3074,7 @@ function initEvents(): void {
   // A-16 / Stage-8.10c: кнопка лог-замера видна и работает только при ?debug=local.
   if (LOCAL_DEBUG_QUERY) {
     tl = tlCreate({ gpuDone: () => !(stagedLocalPatch?.renderer ?? localMapRenderer)?.isUploading?.() });
-    // Кнопка «Старт логирования» — последний элемент панели #localMapDiag.
-    els.localMapDiag.lastElementChild?.addEventListener('click', tlClick);
-    els.localMapDiag.hidden = false;
+    els.localTransitionLogBtn.addEventListener('click', tlClick);
   }
   els.breadcrumbPlanet.addEventListener('click', () => {
     if (localMapActive) exitLocalMap();
