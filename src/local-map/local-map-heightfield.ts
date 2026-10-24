@@ -16,7 +16,24 @@ import type { LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
 import type { FieldSampler } from '../../site/shared/planet-geography.ts';
 import { VERTICAL_SCALE_M } from '../../site/shared/planet-geography-constants.ts';
 import { CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT, tangentFrameAt } from './local-map-geometry.ts';
-import { sampleElevation } from '../../site/shared/planet-elevation-field.ts';
+import { createElevationField } from '../../site/shared/planet-elevation-field.ts';
+
+/** W28c: одно поле по сиду/радиусу, единицы переводятся в метры РОВНО один раз. */
+export const DEFAULT_ELEVATION_SEED_HEX = '0123456789abcdef';
+const elevationByWorld = new Map<string, ReturnType<typeof createElevationField>>();
+
+export function sampleElevationForSeed(
+  dir: ArrayLike<number>, stepM: number,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX, radiusKm = 6371,
+): number {
+  const key = `${masterSeedHex.toLowerCase()}:${radiusKm}`;
+  let field = elevationByWorld.get(key);
+  if (!field) {
+    field = createElevationField({ masterSeedHex, radiusKm });
+    elevationByWorld.set(key, field);
+  }
+  return field.sampleElevation(dir, stepM) * METERS_PER_ELEVATION_UNIT;
+}
 
 // ---- Константы рельефа и терраформинга ----
 // ---- Константы контракта ----
@@ -301,6 +318,12 @@ function hexRingAxial(ring: number): Array<[number, number]> {
  * Исходный шаг Nyquist везде span/256, хотя шаг выходной сетки LOD больше.
  * Физическая ширина span = 2·R_patch совпадает с сеткой рендерера.
  */
+interface RingSharedLattice {
+  readonly values: Float64Array;
+  readonly steps: number;
+  readonly radiusM: number;
+}
+
 function buildRingCellHeightfield(
   patch: LocalMapPatch,
   offsetX: number,
@@ -311,6 +334,8 @@ function buildRingCellHeightfield(
   withDetail: boolean,
   worldRiverDepthAt?: (dir: Vec3) => number,
   targetCenter?: Vec3,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
+  outerLattice?: RingSharedLattice,
 ): { heightfield: Float32Array; waterMask: Uint8Array } {
   const heightfield = new Float32Array(res * res);
   const waterMask = new Uint8Array(res * res);
@@ -321,7 +346,10 @@ function buildRingCellHeightfield(
   // там являются билинейной выборкой ТОЙ ЖЕ тонкой 256² сетки центра C.
   // Просто вычислить поле в редкой вершине было недостаточно: растровая
   // интерполяция v3 между ней и 4 вершинами C расходилась на 4,2 м.
-  const targetPatch = targetCenter && !patch.cells.some((cell) => cell.lakeWeight > 0)
+  // Озеро в ИСХОДНОМ Patch7 не отключает точную сетку СОСЕДНЕГО гекса:
+  // иначе один и тот же берег/речной участок в соседних кадрах получает
+  // разные LOD только из-за несвязанного озера за границей кадра.
+  const targetPatch = targetCenter
     ? { ...patch, frame: tangentFrameAt(targetCenter, patch.frame.radiusM) }
     : null;
   const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -337,16 +365,51 @@ function buildRingCellHeightfield(
     if (cached !== undefined) return cached;
     const dir = localPointToDirection(targetPatch as LocalMapPatch,
       (ix - HEIGHTFIELD_RES / 2) * sourceStepM, (iy - HEIGHTFIELD_RES / 2) * sourceStepM);
-    const h = sampleLocalTerrainHeightM(dir, sourceStepM, patch.frame.radiusM, planetSeed, withDetail)
-      - (worldRiverDepthAt?.(dir) ?? 0);
+    const h = sampleLocalTerrainHeightM(dir, sourceStepM, patch.frame.radiusM, planetSeed,
+      withDetail, masterSeedHex) - (worldRiverDepthAt?.(dir) ?? 0);
     const result = Math.fround(h);
     fineValues.set(idx, result);
     return result;
   };
   // За пределами видимого гекса (shader discard) хватит 17² узлов;
   // 2..5 кольца тоже сохраняют компактную решётку (12+18+24+30 ячеек).
-  const steps = targetPatch ? 16 : Math.min(res, Math.max(4, Math.floor(res / 2)));
-  const lattice = sampleElevationLattice(patch, span / 2, sourceStepM, offsetX, offsetY, steps);
+  const steps = outerLattice?.steps
+    ?? (targetPatch ? 16 : Math.min(res, Math.max(4, Math.floor(res / 2))));
+  const lattice = outerLattice?.values ?? sampleElevationLattice(patch, span / 2,
+    sourceStepM, offsetX, offsetY, steps, masterSeedHex);
+  const outerCoord = (worldCoord: number): number => (
+    (worldCoord + (outerLattice as RingSharedLattice).radiusM) * steps
+    / (2 * (outerLattice as RingSharedLattice).radiusM)
+  );
+  // На ровном поле целая вершина LOD 1 требует ОДИН сэмпл, а не четыре
+  // fineAt. Но у высокочастотного v3 локально возможна кривизна >2 м:
+      // блоки 8×8 грубых вершин с расхождением поля и 17² решётки >1,5 м
+  // восстанавливаем точно из четырёх узлов ЦЕЛЕВОГО 256² растра. Сначала
+  // вычисляем грубые вершины всего блока, чтобы даже случайное совпадение
+  // одной вершины с бикубикой не спрятало соседний резкий переход.
+  const coarseFast = targetPatch ? new Float32Array(res * res) : null;
+  const roughBlock = targetPatch ? new Float32Array(Math.ceil(res / 8) ** 2) : null;
+  if (targetPatch && coarseFast && roughBlock) {
+    const blocks = Math.ceil(res / 8);
+    for (let y = 0; y < res; y++) {
+      const ly = (y - res / 2) * stepM;
+      for (let x = 0; x < res; x++) {
+        const lx = (x - res / 2) * stepM;
+        if (clusterHexMetric(lx, ly) > apothemM + stepM) continue;
+        const dir = localPointToDirection(targetPatch,
+          lx * eCe + ly * nCe, lx * eCn + ly * nCn);
+        const field = sampleElevationForSeed(dir, sourceStepM, masterSeedHex, patch.frame.radiusM / 1000);
+        const detail = sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed,
+          withDetail, sourceStepM);
+        const idx = y * res + x;
+        coarseFast[idx] = field + detail - (worldRiverDepthAt?.(dir) ?? 0);
+        const blockIndex = Math.floor(y / 8) * blocks + Math.floor(x / 8);
+        roughBlock[blockIndex] = Math.max(roughBlock[blockIndex] as number,
+          Math.abs(field - elevationFromLattice(lattice, steps,
+            x * steps / res, y * steps / res)));
+      }
+    }
+  }
   for (let y = 0; y < res; y++) {
     const ly = (y - res / 2) * stepM;
     const wy = offsetY + ly;
@@ -354,22 +417,38 @@ function buildRingCellHeightfield(
       const lx = (x - res / 2) * stepM;
       const wx = offsetX + lx;
       let h: number;
-      if (targetPatch && clusterHexMetric(lx, ly) <= apothemM + stepM) {
-        const cx = lx * eCe + ly * nCe;
-        const cy = lx * eCn + ly * nCn;
-        const gx = clampScalar(cx / sourceStepM + HEIGHTFIELD_RES / 2, 0, HEIGHTFIELD_RES - 1.0001);
-        const gy = clampScalar(cy / sourceStepM + HEIGHTFIELD_RES / 2, 0, HEIGHTFIELD_RES - 1.0001);
-        const ix = Math.floor(gx), iy = Math.floor(gy);
-        const tx = gx - ix, ty = gy - iy;
-        const h00 = fineAt(ix, iy), h10 = fineAt(ix + 1, iy);
-        const h01 = fineAt(ix, iy + 1), h11 = fineAt(ix + 1, iy + 1);
-        h = ((h00 * (1 - tx) + h10 * tx) * (1 - ty))
-          + ((h01 * (1 - tx) + h11 * tx) * ty);
+      if (targetPatch && coarseFast && roughBlock
+        && clusterHexMetric(lx, ly) <= apothemM + stepM) {
+        const blocks = Math.ceil(res / 8);
+        const rugged = (roughBlock[Math.floor(y / 8) * blocks + Math.floor(x / 8)] as number) > 1.5;
+        if (rugged) {
+          const cx = lx * eCe + ly * nCe;
+          const cy = lx * eCn + ly * nCn;
+          const gx = clampScalar(cx / sourceStepM + HEIGHTFIELD_RES / 2, 0, HEIGHTFIELD_RES - 1.0001);
+          const gy = clampScalar(cy / sourceStepM + HEIGHTFIELD_RES / 2, 0, HEIGHTFIELD_RES - 1.0001);
+          const ix = Math.floor(gx), iy = Math.floor(gy);
+          const tx = gx - ix, ty = gy - iy;
+          const h00 = fineAt(ix, iy), h10 = fineAt(ix + 1, iy);
+          const h01 = fineAt(ix, iy + 1), h11 = fineAt(ix + 1, iy + 1);
+          h = ((h00 * (1 - tx) + h10 * tx) * (1 - ty))
+            + ((h01 * (1 - tx) + h11 * tx) * ty);
+        } else {
+          h = coarseFast[y * res + x] as number;
+        }
       } else {
-        const dir = localPointToDirection(patch, wx, wy);
-        h = elevationFromLattice(lattice, steps, x * steps / res, y * steps / res)
-          + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail, sourceStepM)
-          - (worldRiverDepthAt?.(dir) ?? 0);
+        const gx = outerLattice ? clampScalar(outerCoord(wx), 0, steps - 0.0001) : x * steps / res;
+        const gy = outerLattice ? clampScalar(outerCoord(wy), 0, steps - 0.0001) : y * steps / res;
+        // Ring-hex shader отбрасывает всё за апофемой, но пограничному
+        // шагу нужна точная нормаль. На невидимом квадрате хватит билинейной
+        // выборки без fBm/рек; внутри + guard остаётся полная бикубика.
+        const visible = clusterHexMetric(lx, ly) <= apothemM + stepM;
+        h = visible ? elevationFromLattice(lattice, steps, gx, gy)
+          : bilinearElevationFromLattice(lattice, steps, gx, gy);
+        if (visible) {
+          const dir = localPointToDirection(patch, wx, wy);
+          h += sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed,
+            withDetail, sourceStepM) - (worldRiverDepthAt?.(dir) ?? 0);
+        }
       }
       const idx = y * res + x;
       heightfield[idx] = h;
@@ -393,6 +472,7 @@ export function buildNeighborRingCells(
   planetSeed: number,
   withDetail: boolean,
   worldRiverDepthAt?: (dir: Vec3) => number,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
 ): LocalMapRingCell[] {
   const normAngle = (a: number): number => (a + 2 * Math.PI) % (2 * Math.PI);
   const sorted: Array<{ cell: PatchCell; off: Tangent2D; angle: number }> = [];
@@ -405,6 +485,17 @@ export function buildNeighborRingCells(
   const n0 = sorted[0] as { off: Tangent2D };
   const n1 = sorted[1] as { off: Tangent2D };
   const dHex = Math.hypot(n0.off.u, n0.off.v);   // физическое расстояние до соседа кольца 1
+  // Кольца 2..5 перекрываются в одном касательном кадре. Одна общая 33²
+  // Float64-решётка вместо 84 локальных 17²/9²/5² решёток уменьшает число
+  // sampleElevation; дальние LOD допускают более редкое ПРЕДСТАВЛЕНИЕ,
+  // но полоса Nyquist каждого узла остаётся исходной (sourceStepM).
+  const sharedRadiusM = neighborRings * dHex + 1.25 * radiusPatchM;
+  const sharedSteps = 32;
+  const outerLattice: RingSharedLattice | undefined = neighborRings > 1
+    ? { values: sampleElevationLattice(patch, sharedRadiusM,
+      2 * radiusPatchM / HEIGHTFIELD_RES, 0, 0, sharedSteps, masterSeedHex),
+      steps: sharedSteps, radiusM: sharedRadiusM }
+    : undefined;
   // A-17: heightfield колец по-прежнему семплируется в физических координатах
   // планеты, но GPU-позиции используют тот же сжатый шаг, что юбка горизонта.
   // Раньше offsetM оставался физическим (~60 км), тогда как юбка ставила тот
@@ -436,7 +527,8 @@ export function buildNeighborRingCells(
       const spanM = 2 * radiusPatchM;
       const built = buildRingCellHeightfield(
         patch, entry.x, entry.y, hfRes, spanM, planetSeed, withDetail, worldRiverDepthAt,
-        ring === 1 ? center : undefined,
+        ring === 1 ? center : undefined, masterSeedHex,
+        ring > 1 ? outerLattice : undefined,
       );
       let minH = Infinity;
       let maxH = -Infinity;
@@ -583,6 +675,7 @@ export function sampleElevationLattice(
   offsetX = 0,
   offsetY = 0,
   steps = ELEVATION_LATTICE_STEPS,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
 ): Float64Array {
   const nodes = steps + 1;
   const grid = new Float64Array(nodes * nodes);
@@ -591,7 +684,7 @@ export function sampleElevationLattice(
     const wy = offsetY - radiusM + y * intervalM;
     for (let x = 0; x <= steps; x++) {
       const dir = localPointToDirection(patch, offsetX - radiusM + x * intervalM, wy);
-      grid[y * nodes + x] = sampleElevation(dir, sourceStepM);
+      grid[y * nodes + x] = sampleElevationForSeed(dir, sourceStepM, masterSeedHex, patch.frame.radiusM / 1000);
     }
   }
   return grid;
@@ -675,8 +768,10 @@ export function sampleLocalTerrainHeightM(
   planetRadiusM: number,
   seed: number,
   withDetail: boolean,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
 ): number {
-  return sampleElevation(dir, stepM) + sampleLocalTerrainDetailM(dir, planetRadiusM, seed, withDetail, stepM);
+  return sampleElevationForSeed(dir, stepM, masterSeedHex, planetRadiusM / 1000)
+    + sampleLocalTerrainDetailM(dir, planetRadiusM, seed, withDetail, stepM);
 }
 
 /**
@@ -692,6 +787,7 @@ export function buildBaseHeightfield(
   planetSeed: number,
   spawnMask: Uint8Array,
   withDetail: boolean,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
 ): BaseHeightfield {
   const hfRes = HEIGHTFIELD_RES;
   const stepM = (2 * radiusM) / hfRes;
@@ -703,7 +799,8 @@ export function buildBaseHeightfield(
   // окно формы проверяют один и тот же продукционный источник.
   const fineWindow = withDetail && radiusM <= 5_000;
   const steps = fineWindow ? ELEVATION_LATTICE_STEPS : 64;
-  const fieldLattice = sampleElevationLattice(patch, radiusM, stepM, 0, 0, steps);
+  const fieldLattice = sampleElevationLattice(patch, radiusM, stepM, 0, 0,
+    steps, masterSeedHex);
   const gridRatio = steps / hfRes;
   const visibleApothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusM;
   let waterPoints = 0;
@@ -734,7 +831,7 @@ export function buildBaseHeightfield(
         const visible = withDetail && !fineWindow
           && clusterHexMetric(wx, wy) <= visibleApothemM * 1.15 + 2 * stepM;
         const field = visible
-          ? sampleElevation(dir, stepM)
+          ? sampleElevationForSeed(dir, stepM, masterSeedHex, patch.frame.radiusM / 1000)
           : elevationFromLattice(fieldLattice, steps, x * gridRatio, y * gridRatio);
         heightM[idx] = field + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail, stepM);
       }

@@ -190,32 +190,111 @@ function heightfieldIndexFor(instance, radiusM) {
 // 1. Непрерывность рельефа и рек по И-3
 // ---------------------------------------------------------------------------
 
-test('И-3.2: высоты суши привязаны к filledElevation/seaLevel канонических ячеек', async () => {
-  assert.ok(dryPatch, 'нужен сухой пологий центр');
-  Worker.clearLocalMapCache();
-  const res = await Worker.generateLocalMap(requestFor(dryPatch, { patchKey: 'anchors' }));
+test('И-3.2: решётка Float64, деталь и врез, знак воды и озёрное зеркало для двух сидов', async () => {
+  const H = require('../src/local-map/local-map-heightfield.ts');
+  const sourceStepM = 2 * RADIUS_M / HF_RES;
+  const steps = 64; // продуктовый базовый слой при RADIUS_M > 5000
+  const intervalM = 2 * RADIUS_M / steps;
+  const planetSeed = (12345 ^ Math.imul(8, 0x85EBCA6B)) >>> 0;
+  // Независимое восстановление направления из origin/east/north, offset и
+  // интервала решётки: не вызываем localPointToDirection самого продукта.
+  const direction = (patch, x, y, step, offX = 0, offY = 0) => {
+    const u = offX - RADIUS_M + x * step, v = offY - RADIUS_M + y * step;
+    const { origin, east, north, radiusM } = patch.frame;
+    const chord = Math.sqrt(u * u + v * v);
+    if (chord === 0) return [...origin];
+    const s = Math.sin(chord / radiusM), c = Math.cos(chord / radiusM);
+    const raw = origin.map((o, k) => o * c + (east[k] * u + north[k] * v) / chord * s);
+    const norm = Math.sqrt(raw.reduce((sum, value) => sum + value * value, 0));
+    return raw.map((value) => value / norm);
+  };
 
-  const landMax = Worker.LAND_FBM_AMPLITUDE_M;
-  let landChecked = 0;
-  for (let y = 0; y < HF_RES; y += 16) {
-    for (let x = 0; x < HF_RES; x += 16) {
-      const cellSize = (2 * RADIUS_M) / HF_RES;
-      const wx = (x - HF_RES / 2) * cellSize;
-      const wy = (y - HF_RES / 2) * cellSize;
-      const cell = Contract.nearestPatchCell(dryPatch, Contract.localPointToDirection(dryPatch, wx, wy));
-      const height = res.heightfield[y * HF_RES + x];
-      if (Contract.isWaterCell(cell, dryPatch.seaLevel)) {
-        const mirror = (Contract.waterLevelOf(cell, dryPatch.seaLevel) - dryPatch.seaLevel) * M_PER_UNIT;
-        assert.ok(Math.abs(height - mirror) < 1e-3, `зеркало воды ${mirror} != ${height}`);
-      } else {
-        const anchor = (Contract.baseElevationOf(cell) - dryPatch.seaLevel) * M_PER_UNIT;
-        assert.ok(height >= anchor - 1e-3, `суша ниже канонической высоты: ${height} < ${anchor}`);
-        assert.ok(height <= anchor + landMax + 1e-3, `суша выше якоря + fBm: ${height} > ${anchor + landMax}`);
-        landChecked++;
+  for (const seed of ['a29a29a29a29a29a', '0123456789abcdef']) {
+    const profile = { ...PROFILE, masterSeedHex: seed };
+    const seededSurface = PlanetSurface.generateSurface(grid, profile);
+    const positive = (cell) => H.sampleElevationForSeed([
+      grid.centers[cell * 3], grid.centers[cell * 3 + 1], grid.centers[cell * 3 + 2],
+    ], sourceStepM, seed) > 100;
+    const negative = (cell) => H.sampleElevationForSeed([
+      grid.centers[cell * 3], grid.centers[cell * 3 + 1], grid.centers[cell * 3 + 2],
+    ], sourceStepM, seed) < -100;
+    const landId = Array.from({ length: grid.cellCount }, (_, i) => i).find((i) =>
+      isHex(i) && seededSurface.elevation[i] > seededSurface.seaLevel
+      && seededSurface.lakeWeight[i] === 0 && seededSurface.streamWeight[i] === 0 && positive(i));
+    const waterId = Array.from({ length: grid.cellCount }, (_, i) => i).find((i) =>
+      isHex(i) && seededSurface.elevation[i] < seededSurface.seaLevel
+      && seededSurface.lakeWeight[i] === 0 && negative(i));
+    const lakeId = Array.from({ length: grid.cellCount }, (_, i) => i).find((i) =>
+      isHex(i) && seededSurface.lakeWeight[i] > 0);
+    const riverId = Array.from({ length: grid.cellCount }, (_, i) => i).find((i) =>
+      isHex(i) && seededSurface.streamWeight[i] > 0
+      && seededSurface.lakeWeight[i] === 0 && seededSurface.flowReceiver[i] >= 0);
+    assert.ok(landId !== undefined && waterId !== undefined && lakeId !== undefined
+      && riverId !== undefined, `для сида ${seed} найдены суша, вода, озеро и река`);
+    const land = Contract.buildPatch7(grid, seededSurface, landId);
+    const water = Contract.buildPatch7(grid, seededSurface, waterId);
+    const lake = Contract.buildPatch7(grid, seededSurface, lakeId);
+    const river = Contract.buildPatch7(grid, seededSurface, riverId);
+    const lattice = H.sampleElevationLattice(land, RADIUS_M, sourceStepM, 0, 0, steps, seed);
+    assert.ok(lattice instanceof Float64Array, 'базовый слой без округления Float32');
+    const shifted = H.sampleElevationLattice(land, RADIUS_M, sourceStepM,
+      intervalM, 0, steps, seed);
+    let shiftDetected = false;
+    for (const [x, y] of [[3, 4], [19, 26], [32, 32], [49, 50], [62, 57]]) {
+      const dir = direction(land, x, y, intervalM);
+      const sampleElevation = H.sampleElevationForSeed(dir, sourceStepM, seed);
+      const idx = y * (steps + 1) + x;
+      assert.ok(Math.abs(lattice[idx] - sampleElevation) <= 1e-9,
+        `${seed}: решётка[${idx}] = sampleElevation(dir, sourceStepM) без сдвига/округления`);
+      if (Math.abs(shifted[idx] - sampleElevation) > 0.05) shiftDetected = true;
+    }
+    assert.ok(shiftDetected, 'негативный контроль: offsetX + один интервал не совпадает');
+
+    Worker.clearLocalMapCache();
+    const request = (patch, tag) => requestFor(patch, {
+      patchKey: `i32-${seed}-${tag}`, profile, neighborRings: 0,
+    });
+    const landMap = await Worker.generateLocalMap(request(land, 'land'));
+    const waterMap = await Worker.generateLocalMap(request(water, 'water'));
+    const lakeMap = await Worker.generateLocalMap(request(lake, 'lake'));
+    const riverMap = await Worker.generateLocalMap(request(river, 'river'));
+    assert.ok(landMap.heightfield[CENTER] > 0, `${seed}: суша положительна`);
+    assert.ok(waterMap.heightfield[CENTER] < 0, `${seed}: вода отрицательна`);
+    const mirror = (Contract.waterLevelOf(lake.cells[0], lake.seaLevel) - lake.seaLevel) * M_PER_UNIT;
+    assert.ok(Math.abs(lakeMap.heightfield[CENTER] - mirror) <= 1e-3,
+      `${seed}: зеркало озера имеет один явно заданный K=${M_PER_UNIT}`);
+    const perturbed = new Float32Array(lakeMap.heightfield);
+    perturbed[CENTER] += 0.01;
+    assert.ok(Math.abs(perturbed[CENTER] - mirror) > 1e-3,
+      'негативный контроль: возмущение озёрной вершины на 0,01 м замечено');
+
+    const riverBase = H.sampleElevationForSeed(river.frame.origin, sourceStepM, seed)
+      + H.sampleLocalTerrainDetailM(river.frame.origin, river.frame.radiusM,
+        planetSeed, true, sourceStepM);
+    assert.ok(riverMap.heightfield[CENTER] <= riverBase - 1,
+      'с врезом: итоговая высота речного центра не выше поля и детали');
+    let uncarved = 0, wrongStepDetected = false;
+    for (let y = 96; y <= 160; y += 8) {
+      for (let x = 96; x <= 160; x += 8) {
+        const dir = direction(land, x, y, sourceStepM);
+        const baseline = H.sampleElevationForSeed(dir, sourceStepM, seed)
+          + H.sampleLocalTerrainDetailM(dir, land.frame.radiusM, planetSeed, true, sourceStepM);
+        const hf = landMap.heightfield[y * HF_RES + x];
+        if (hf >= baseline - 0.01) {
+          assert.ok(Math.abs(hf - baseline) <= 0.01, 'без вреза hf = field + detail до 0,01 м');
+          uncarved++;
+        } else {
+          assert.ok(hf <= baseline, 'с врезом итог не выше field + detail');
+        }
+        if (Math.abs(hf - H.sampleElevationForSeed(dir, 5_000_000, seed)
+          - H.sampleLocalTerrainDetailM(dir, land.frame.radiusM, planetSeed, true, sourceStepM)) > 1) {
+          wrongStepDetected = true;
+        }
       }
     }
+    assert.ok(uncarved > 0, 'проверены точки без вреза');
+    assert.ok(wrongStepDetected, 'негативный контроль: sourceStepM=5 000 000 м обнаружен');
   }
-  assert.ok(landChecked > 0, 'в сухом патче есть проверенные точки суши');
 });
 
 test('И-3.2/A-29: океан несёт батиметрию, водный патч запрещает спавн', async () => {

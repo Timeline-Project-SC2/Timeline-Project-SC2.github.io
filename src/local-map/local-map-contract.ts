@@ -30,7 +30,8 @@ import type { PlanetGrid } from '../../site/shared/geodesic-grid.ts';
 import type { SurfaceResult } from '../../site/shared/planet-surface.ts';
 import { EARTH_CANONICAL_V, GEOGRAPHY_VERSION } from '../../site/shared/planet-geography-constants.ts';
 
-export const LOCAL_MAP_PATCH_VERSION = 'local-map-patch-v1';
+// W23d: Patch7 carries only hydrological arcs crossing its boundary (ring 2 → ring 1).
+export const LOCAL_MAP_PATCH_VERSION = 'local-map-patch-v2';
 
 /** Каноническая частота сетки Земли (И-1): адресация только на canonicalV. */
 export { EARTH_CANONICAL_V };
@@ -86,6 +87,16 @@ export interface RiverEdge {
   readonly streamWeight: number;
 }
 
+/** Глобальный приток со второго кольца внутрь Patch7. Никаких новых полей/стока не вычисляем. */
+export interface BoundaryRiverInflow {
+  readonly fromCell: number;
+  readonly toCell: number;
+  /** Единичное направление канонического центра внешнего источника. */
+  readonly fromCenter: Vec3;
+  readonly streamWeight: number;
+  readonly riverAccumulation: number;
+}
+
 export interface PatchRiver {
   readonly centerCell: number;
   /** streamWeight центра > 0 — через патч проходит русло. */
@@ -117,6 +128,8 @@ export interface LocalMapPatch {
   readonly seaLevel: number;
   readonly radiusKm: number;
   readonly river: PatchRiver;
+  /** Входящие дуги глобального surface из второго кольца в одну из семи ячеек. */
+  readonly boundaryInflows: readonly BoundaryRiverInflow[];
   readonly frame: TangentFrame;
 }
 
@@ -290,8 +303,47 @@ export function buildPatch7(grid: PlanetGrid, surface: SurfaceResult, centerCell
     seaLevel,
     radiusKm: surface.radiusKm,
     river,
+    boundaryInflows: [],
     frame: buildTangentFrame(center.center, radiusM),
   };
+}
+
+/**
+ * Только чтение существующего глобального surface/grid: для каждой ячейки
+ * Patch7 ищем соседей с flowReceiver[source] === cell, которые НЕ входят в
+ * эти семь ячеек. Это ровно второй пояс граничных притоков; никакой повторной
+ * генерации географии/гидрологии в local-map-worker нет.
+ */
+export function boundaryInflowsFromSurface(
+  grid: PlanetGrid, surface: SurfaceResult, patch: LocalMapPatch,
+): BoundaryRiverInflow[] {
+  const inside = new Set(patch.cells.map((cell) => cell.cell));
+  const inflows: BoundaryRiverInflow[] = [];
+  for (const target of patch.cells) {
+    for (let slot = 0; slot < (grid.neighborCount[target.cell] as number); slot++) {
+      const source = grid.neighbors[target.cell * 6 + slot] as number;
+      if (source < 0 || inside.has(source) || surface.flowReceiver[source] !== target.cell) continue;
+      inflows.push({
+        fromCell: source,
+        toCell: target.cell,
+        fromCenter: unitVector(
+          grid.centers[source * 3] as number,
+          grid.centers[source * 3 + 1] as number,
+          grid.centers[source * 3 + 2] as number,
+        ),
+        streamWeight: surface.streamWeight[source] as number,
+        riverAccumulation: surface.flowAccumulationKm2[source] as number,
+      });
+    }
+  }
+  return inflows.sort((a, b) => a.toCell - b.toCell || a.fromCell - b.fromCell);
+}
+
+/** Атомарно заполняется только владельцем глобального surface (производитель Patch7). */
+export function withBoundaryInflows(
+  grid: PlanetGrid, surface: SurfaceResult, patch: LocalMapPatch,
+): LocalMapPatch {
+  return { ...patch, boundaryInflows: boundaryInflowsFromSurface(grid, surface, patch) };
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +554,28 @@ export function verifyPatchInvariants(patch: LocalMapPatch): PatchInvariantRepor
       patch.river.outlet.neighborCell === center.flowReceiver) &&
     patch.river.flowsThroughCenter === (center.streamWeight > 0);
   checks['river-topology'] = riverOk;
+
+  // v2: дуги снаружи Patch7 имеют только канонические центры второго кольца;
+  // их получатели известны внутри патча. Пустой массив — допустимый контроль,
+  // но отсутствие массива, повторные/чужие связи и v1 не проходят контракт.
+  const boundary = patch.boundaryInflows;
+  const seenInflows = new Set<string>();
+  checks['boundary-inflows-v2'] = patch.version === LOCAL_MAP_PATCH_VERSION
+    && Array.isArray(boundary) && boundary.length <= 24 && boundary.every((inflow) => {
+      const key = `${inflow.fromCell}:${inflow.toCell}`;
+      if (seenInflows.has(key)) return false;
+      seenInflows.add(key);
+      const dir = inflow.fromCenter;
+      return Number.isInteger(inflow.fromCell) && inflow.fromCell >= 0
+        && !ring.has(inflow.fromCell) && inflow.fromCell !== patch.centerCell
+        && Number.isInteger(inflow.toCell)
+        && (ring.has(inflow.toCell) || inflow.toCell === patch.centerCell)
+        && Array.isArray(dir) && dir.length === 3
+        && dir.every((value) => Number.isFinite(value))
+        && Math.abs(Math.hypot(...dir) - 1) < 1e-6
+        && Number.isFinite(inflow.streamWeight) && inflow.streamWeight >= 0
+        && Number.isFinite(inflow.riverAccumulation) && inflow.riverAccumulation >= 0;
+    });
 
   // И-3.4: вода, озёра, русла и крутые склоны запрещают спавн 3D-зданий.
   checks['spawn-ban'] = patch.cells.every((cell) => {

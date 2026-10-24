@@ -55,7 +55,7 @@ import type { SurfaceProfile, SurfaceResult } from '../shared/planet-surface.ts'
 import PlanetGlobe from '../shared/planet-globe.ts';
 import type { GlobeGeometry } from '../shared/planet-globe.ts';
 import { buildGlobeGeometry, buildVertexColors } from '../shared/planet-globe-pack.ts';
-import { LOCAL_MAP_PATCH_VERSION, buildPatch7, verifyPatchInvariants, patchSpanMeters, buildBuildingSpawnMask } from '../../src/local-map/local-map-contract.ts';
+import { LOCAL_MAP_PATCH_VERSION, buildPatch7, withBoundaryInflows, verifyPatchInvariants, patchSpanMeters, buildBuildingSpawnMask } from '../../src/local-map/local-map-contract.ts';
 import type { LocalMapPatch, PatchInvariantReport } from '../../src/local-map/local-map-contract.ts';
 
 interface WorkerScopeLike {
@@ -122,7 +122,7 @@ export interface PrefetchMessage {
   focusCell?: number;
 }
 
-/** Этап 7: экспорт канонического среза 7 ячеек Patch7 (local-map-patch-v1)
+/** Этап 7/W23d: экспорт канонического среза 7 ячеек Patch7 (local-map-patch-v2)
  *  вокруг hexCenterCell строго на canonicalV (И-1, Инвариант И-3). */
 export interface ExtractPatchMessage {
   type: 'extract-patch';
@@ -542,7 +542,10 @@ function buildPatchCached(planet: CurrentPlanet, hexCenterCell: number): LocalMa
   if (planet.lastPatchCache && planet.lastPatchCache.hexCenterCell === hexCenterCell) {
     return planet.lastPatchCache.patch;
   }
-  const patch = buildPatch7(planet.grid, planet.surface, hexCenterCell);
+  // W23d: глобальная гидрология уже готова; добавляем только входящие дуги
+  // второго кольца перед передачей Patch7 v2 в локальный worker.
+  const patch = withBoundaryInflows(planet.grid, planet.surface,
+    buildPatch7(planet.grid, planet.surface, hexCenterCell));
   planet.lastPatchCache = { hexCenterCell: hexCenterCell, patch: patch };
   return patch;
 }
@@ -1168,7 +1171,7 @@ async function runPrefetch(message: PrefetchMessage): Promise<void> {
   });
 }
 
-/** Этап 7: экспорт канонического среза Patch7 (local-map-patch-v1) по И-1/И-3:
+/** Этап 7/W23d: экспорт канонического Patch7 (local-map-patch-v2) по И-1/И-3:
  *  сетка и поверхность строго canonicalV, пятиугольник резолвится в соседа,
  *  инварианты проверяются на месте, ключи §8.8 считаются детерминированно. */
 function runExtractPatch(message: ExtractPatchMessage): void {

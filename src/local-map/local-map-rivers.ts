@@ -11,8 +11,10 @@ import type { LocalMapPatch } from './local-map-contract.ts';
 /** Полуширина русла реки в долях радиуса участка. */
 export const RIVER_HALF_WIDTH_RATIO = 0.03;
 
-/** Глубина вреза русла в долях радиуса участка. */
+/** Исторический коэффициент оставлен для совместимости внешних импортов. */
 export const RIVER_DEPTH_RATIO = 0.0025;
+/** Физическая глубина, а не 0,45 % стратегического радиуса (~235 м). */
+export const RIVER_CHANNEL_DEPTH_M = 10;
 
 interface RiverSegment {
   readonly u0: number; readonly v0: number;
@@ -207,10 +209,8 @@ export function applyRiverCarve(
   const mouthWithoutStream = !patch.river.flowsThroughCenter
     && patch.river.inlets.length === 0
     && outletIsWater(patch);
-  // У нового устья глубина ограничена речным диапазоном; существующие русла
-  // сохраняют прежнюю масштабную формулу и побитовый контракт.
-  const scaledDepthM = Math.max(10, radiusM * RIVER_DEPTH_RATIO * 1.8);
-  const riverDepthM = mouthWithoutStream ? Math.min(10, scaledDepthM) : scaledDepthM;
+  // Физическая глубина не меняется с размером стратегического тайла.
+  const riverDepthM = RIVER_CHANNEL_DEPTH_M;
   const segments = riverSegments(patch, radiusM, riverHalfWidthM);
   const terraformMap = base.terraformMap;
   const heightfield = new Float32Array(hfRes * hfRes);

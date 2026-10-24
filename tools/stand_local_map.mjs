@@ -109,11 +109,13 @@ const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const Contract = require('../src/local-map/local-map-contract.ts');
+const patchWithInflows = (grid, surface, cell) => Contract.withBoundaryInflows(
+  grid, surface, Contract.buildPatch7(grid, surface, cell),
+);
 const Geometry = require('../src/local-map/local-map-geometry.ts');
 const { GLOBE_CELL_SCALE, GLOBE_RELIEF } = require('../site/shared/planet-globe.ts');
 const Worker = require('../src/local-map/local-map-worker.ts');
 const Heightfield = require('../src/local-map/local-map-heightfield.ts');
-const ElevationField = require('../site/shared/planet-elevation-field.ts');
 
 // Модуль русел после распила local-map-worker.ts (Stage-8.12d, шаг распила):
 // если файл есть, поле вреза считается ПРОИЗВОДСТВЕННЫМИ riverSegments /
@@ -316,7 +318,7 @@ function usage() {
     '  --json               та же таблица в JSON',
     '  --profile            мир измерения: a29 (по умолчанию) или a17',
     '  --radius-m           радиус участка, м (по умолчанию GLOBE_CELL_SCALE.strategicPatchRadiusM ≈ 52 136)',
-    '  --land-cells=N       хэш-выборка N наземных ячеек для m.8/m.10 (по умолчанию 20, 0 — отключить)',
+    '  --land-cells=N       хэш-выборка N наземных ячеек для m.8/m.10/m.13/m.14 (по умолчанию 20, 0 — отключить)',
     '  --river-cells=N      хэш-выборка N речных ячеек для m.1/m.2/m.3 (по умолчанию 20, 0 — отключить)',
     '  --hypso-reference    подставить ориентир гипсометрии (%) в detail m.11 (в вердикте не участвует)',
     '  --flat-fixture       негативный контроль на синтетическом плоском heightfield (h = const)',
@@ -1632,7 +1634,7 @@ function measureHexContinuity(localA, patchA, neighborMap, radiusM, options = {}
  * (решётка + ошибка к поформенной функции), деталь, зеркало озера, врез/
  * релаксацию. Тип воды/суши в обычной точке — только маска, Δвысоты=0.
  */
-function rasterComponents(entry, coords, radiusM, planetSeed) {
+function rasterComponents(entry, coords, radiusM, planetSeed, masterSeedHex) {
   const { patch, local } = entry;
   const res = local.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
   const stepM = 2 * radiusM / res;
@@ -1640,7 +1642,8 @@ function rasterComponents(entry, coords, radiusM, planetSeed) {
   const gy = Math.min(res - 1.0001, Math.max(0, coords.v / stepM + res / 2));
   const x = Math.floor(gx), y = Math.floor(gy);
   const tx = gx - x, ty = gy - y;
-  const fieldLattice = Heightfield.sampleElevationLattice(patch, radiusM, stepM);
+  const fieldLattice = Heightfield.sampleElevationLattice(patch, radiusM, stepM,
+    0, 0, Heightfield.ELEVATION_LATTICE_STEPS, masterSeedHex);
   const sums = { field: 0, directField: 0, detail: 0, lake: 0, carve: 0, final: 0 };
   const cells = new Map();
   for (let dy = 0; dy <= 1; dy++) {
@@ -1651,7 +1654,7 @@ function rasterComponents(entry, coords, radiusM, planetSeed) {
       const nearest = Contract.nearestPatchCell(patch, dir);
       const steps = Heightfield.ELEVATION_LATTICE_STEPS;
       const field = Heightfield.elevationFromLattice(fieldLattice, steps, ix * steps / res, iy * steps / res);
-      const directField = ElevationField.sampleElevation(dir, stepM);
+      const directField = Heightfield.sampleElevationForSeed(dir, stepM, masterSeedHex);
       const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, true, stepM);
       const lake = nearest.lakeWeight > 0
         ? (Contract.waterLevelOf(nearest, patch.seaLevel) - patch.seaLevel) * Worker.METERS_PER_ELEVATION_UNIT
@@ -1709,8 +1712,8 @@ export function diagnoseWorstHexSeam(cellCache, world, rows, radiusM, focusCell 
   const a = Geometry.directionToLocalPoint(entryA.patch, dir);
   const b = Geometry.directionToLocalPoint(entryB.patch, dir);
   const planetSeed = (world.seed ^ Math.imul((PLACE_ID + 1) >>> 0, 0x85EBCA6B)) >>> 0;
-  const A = rasterComponents(entryA, a, radiusM, planetSeed);
-  const B = rasterComponents(entryB, b, radiusM, planetSeed);
+  const A = rasterComponents(entryA, a, radiusM, planetSeed, world.profile.masterSeedHex);
+  const B = rasterComponents(entryB, b, radiusM, planetSeed, world.profile.masterSeedHex);
   const delta = (key) => A[key] - B[key];
   const rawStep = 2 * radiusM / Worker.HEIGHTFIELD_RES;
   return {
@@ -1729,8 +1732,11 @@ export function diagnoseWorstHexSeam(cellCache, world, rows, radiusM, focusCell 
       classification: 0, // вода/суша — маска; зеркала только в lake
       fieldVsDirectInterpolation: delta('field') - delta('directField'),
       directFieldRaster: delta('directField'),
-      directFieldAtDir: ElevationField.sampleElevation(Contract.localPointToDirection(entryA.patch, a.u, a.v), rawStep)
-        - ElevationField.sampleElevation(Contract.localPointToDirection(entryB.patch, b.u, b.v), rawStep),
+      directFieldAtDir: Heightfield.sampleElevationForSeed(
+        Contract.localPointToDirection(entryA.patch, a.u, a.v), rawStep, world.profile.masterSeedHex,
+      ) - Heightfield.sampleElevationForSeed(
+        Contract.localPointToDirection(entryB.patch, b.u, b.v), rawStep, world.profile.masterSeedHex,
+      ),
     },
     perSideM: {
       A: { field: A.field, detail: A.detail, carve: A.carve, lake: A.lake, final: A.final },
@@ -2114,7 +2120,7 @@ async function getOrBuildCellEntry(cellCache, grid, surface, world, cell, radius
   const cacheKey = `${cell}:${radiusM}`;
   if (cellCache.has(cacheKey)) return cellCache.get(cacheKey);
   if (grid.neighborCount[cell] !== 6) return null;
-  const patch = Contract.buildPatch7(grid, surface, cell);
+  const patch = patchWithInflows(grid, surface, cell);
   const request = {
     patch,
     seed: world.seed,
@@ -2350,7 +2356,7 @@ export function runFlatFixtureControl(options = {}) {
   const cell = options.cell ?? 137390;
   const grid = getCanonicalGrid();
   const surface = getWorldSurface('a29');
-  const basePatch = Contract.buildPatch7(grid, surface, cell);
+  const basePatch = patchWithInflows(grid, surface, cell);
   // В плоской фикстуре исключаем озёрную поправку, чтобы левая половина x < 0
   // честно попадала в океанское дно, а правая x >= 0 — в сушу.
   const patch = {
@@ -2407,7 +2413,7 @@ export function runFlatFixtureControl(options = {}) {
   for (let k = 1; k < patch.cells.length; k++) {
     const nbCell = patch.cells[k].cell;
     if (grid.neighborCount[nbCell] !== 6) continue;
-    const nbPatch = Contract.buildPatch7(grid, surface, nbCell);
+    const nbPatch = patchWithInflows(grid, surface, nbCell);
     neighborMap.set(nbCell, {
       patch: nbPatch,
       local: {
@@ -2553,12 +2559,14 @@ function sampleQuantile(sorted, p) {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
-/** Наземные окна m.8/m.10: та же 5-километровая выборка, но двадцать центров. */
-export async function measureLandSample(grid, surface, world, count = 20) {
+/** Наземные окна m.8/m.10 и стратегические швы m.13/m.14 на ОДНИХ и тех же 20 центрах. */
+export async function measureLandSample(
+  grid, surface, world, count = 20, radiusM = DEFAULT_RADIUS_M, cellCache = new Map(),
+) {
   const cells = selectLandCells(grid, surface, world.seed, count);
   const rows = [];
   for (const cell of cells) {
-    const patch = Contract.buildPatch7(grid, surface, cell);
+    const patch = patchWithInflows(grid, surface, cell);
     const local = await Worker.generateLocalMap({
       patch,
       seed: world.seed,
@@ -2570,6 +2578,26 @@ export async function measureLandSample(grid, surface, world, count = 20) {
     });
     const relief = measureLandRelief(local, RELIEF_WINDOW_RADIUS_M);
     const slope = measureMeanSlope(local, RELIEF_WINDOW_RADIUS_M);
+    // Те же шесть соседних видов кольца, что и в контрольной таблице:
+    // нельзя выдавать семь океанских m.14 за проверку двадцати наземных.
+    const centerEntry = await getOrBuildCellEntry(cellCache, grid, surface, world, cell, radiusM);
+    const neighbors = new Map(), coarseViews = [];
+    const centerDir = centerEntry.patch.frame.origin;
+    for (const neighbor of centerEntry.patch.cells.slice(1)) {
+      const entry = await getOrBuildCellEntry(cellCache, grid, surface, world, neighbor.cell, radiusM);
+      if (!entry) continue;
+      neighbors.set(neighbor.cell, entry);
+      const ring = entry.local.ringCells?.find((rc) => rc.ring === 1
+        && rc.hfRes === LOD_COARSE_RES
+        && Math.hypot(...rc.center.map((v, i) => v - centerDir[i])) < 1e-5);
+      if (ring) coarseViews.push({
+        sourceLabel: String(neighbor.cell), frameEast: entry.patch.frame.east,
+        frameNorth: entry.patch.frame.north, hfRes: ring.hfRes,
+        spanM: ring.spanM ?? 2 * radiusM, heightfield: ring.heightfield,
+      });
+    }
+    const seam = measureHexContinuity(centerEntry.local, centerEntry.patch, neighbors, radiusM);
+    const lod = measureLodConsistency(centerEntry.local, centerEntry.patch, coarseViews, radiusM);
     rows.push({
       cell,
       // Сравнение с порогом и квантиль используют ОДНО значение без раннего
@@ -2580,7 +2608,46 @@ export async function measureLandSample(grid, surface, world, count = 20) {
         && relief.value >= THRESHOLDS.landReliefMinPct && relief.value <= THRESHOLDS.landReliefMaxPct,
       m10: slope.value,
       m10Pass: slope.value >= THRESHOLDS.meanSlopeMinPct,
+      m13: seam.value,
+      m13Pass: seam.pass,
+      m14: lod.value,
+      m14Pass: lod.value !== null && lod.value <= THRESHOLDS.lodConsistencyMaxM,
+      m13WorstNeighbor: seam.worst?.cellB ?? null,
+      m14WorstNeighbor: lod.worst?.sourceLabel ?? null,
+      m14WorstPoint: lod.worst?.worstPoint ?? null,
+      // W23d: не прячем провал отдельной грани за медианой центра.
+      m14Faces: lod.views.map((face) => ({
+        sourceCell: Number(face.sourceLabel), points: face.points, maxDeltaM: face.maxDeltaM,
+      })),
     });
+  }
+  const worstLod = rows.filter((row) => row.m14WorstPoint)
+    .reduce((worst, row) => (!worst || row.m14 > worst.m14 ? row : worst), null);
+  let worstLodDecomposition = null;
+  if (worstLod) {
+    const entry = cellCache.get(`${worstLod.cell}:${radiusM}`);
+    const point = worstLod.m14WorstPoint;
+    const rawStepM = 2 * radiusM / Worker.HEIGHTFIELD_RES;
+    const planetSeed = (world.seed ^ Math.imul((PLACE_ID + 1) >>> 0, 0x85EBCA6B)) >>> 0;
+    const fine = rasterComponents(entry, { u: point.cx, v: point.cy }, radiusM,
+      planetSeed, world.profile.masterSeedHex);
+    const dir = Contract.localPointToDirection(entry.patch, point.cx, point.cy);
+    const directField = Heightfield.sampleElevationForSeed(dir, rawStepM, world.profile.masterSeedHex);
+    const directDetail = Heightfield.sampleLocalTerrainDetailM(
+      dir, entry.patch.frame.radiusM, planetSeed, true, rawStepM,
+    );
+    worstLodDecomposition = {
+      cell: worstLod.cell,
+      sourceCell: Number(worstLod.m14WorstNeighbor),
+      node: { x: point.x, y: point.y },
+      fine: { fieldM: fine.field, detailM: fine.detail, lakeM: fine.lake,
+        carveM: fine.carve, finalM: fine.final },
+      direct: { fieldM: directField, detailM: directDetail,
+        fieldVsRasterM: directField - fine.field, detailVsRasterM: directDetail - fine.detail },
+      coarse: { finalM: point.h64,
+        residualVsFineFieldDetailM: point.h64 - fine.field - fine.detail - fine.lake },
+      deltaM: point.h256 - point.h64,
+    };
   }
   const summarize = (key, passKey) => {
     const values = rows.map((row) => row[key]).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
@@ -2599,8 +2666,11 @@ export async function measureLandSample(grid, surface, world, count = 20) {
     selection: 'SHA-256(seed|cell), только 6-соседняя суша elev > seaLevel без озёр',
     windowWidthM: RELIEF_WINDOW_WIDTH_M,
     rows,
+    worstLodDecomposition,
     m8: summarize('m8', 'm8Pass'),
     m10: summarize('m10', 'm10Pass'),
+    m13: summarize('m13', 'm13Pass'),
+    m14: summarize('m14', 'm14Pass'),
   };
 }
 
@@ -2609,7 +2679,7 @@ export async function measureRiverSample(grid, surface, world, count = 20, radiu
   const cells = selectRiverCells(grid, surface, world.seed, count);
   const rows = [];
   for (const cell of cells) {
-    const patch = Contract.buildPatch7(grid, surface, cell);
+    const patch = patchWithInflows(grid, surface, cell);
     const request = {
       patch, seed: world.seed, placeId: PLACE_ID, radiusM, profile: world.profile,
       neighborRings: 0, patchKey: `stand-river-${world.seed}-${cell}-r${radiusM}`,
@@ -2661,7 +2731,9 @@ export async function runStand(options = {}) {
     rows.push(...await measureCell(grid, surface, world, cell, radiusM, cellCache, options));
   }
   const summary = summarizeRows(rows);
-  const landSample = await measureLandSample(grid, surface, world, options.landCells ?? 20);
+  const landSample = await measureLandSample(
+    grid, surface, world, options.landCells ?? 20, radiusM, cellCache,
+  );
   const riverSample = await measureRiverSample(grid, surface, world, options.riverCells ?? 20, radiusM);
   const globeVerticalExaggeration = measureGlobeVerticalExaggeration(surface, {
     scaleK: options.scaleK,
@@ -2759,16 +2831,29 @@ if (invokedDirectly) {
     if (report.globeVerticalExaggeration) {
       console.log(`Вертикальное преувеличение глобуса (без порога): ${report.globeVerticalExaggeration.detail}`);
     }
-    console.log(`Наземная выборка: ${report.landSample.selected}/${report.landSample.requested}, окно 5 км`);
+    console.log(`Наземная выборка: ${report.landSample.selected}/${report.landSample.requested}, окно 5 км (m.8/m.10) и R=${report.radiusM.toFixed(1)} м (m.13/m.14)`);
     for (const item of report.landSample.rows) {
       console.log(`  #${item.cell} m.8=${item.m8 === null ? 'N/A' : `${item.m8.toFixed(2)} %`} ${item.m8Pass ? 'PASS' : 'FAIL'}; `
-        + `m.10=${item.m10.toFixed(2)} % ${item.m10Pass ? 'PASS' : 'FAIL'}`);
+        + `m.10=${item.m10.toFixed(2)} % ${item.m10Pass ? 'PASS' : 'FAIL'}; `
+        + `m.13=${item.m13 === null ? 'N/A' : `${item.m13.toFixed(2)} м`} ${item.m13Pass ? 'PASS' : 'FAIL'}; `
+        + `m.14=${item.m14 === null ? 'N/A' : `${item.m14.toFixed(2)} м`} ${item.m14Pass ? 'PASS' : 'FAIL'}`);
     }
-    for (const [metric, data] of [['m.8', report.landSample.m8], ['m.10', report.landSample.m10]]) {
+    for (const [metric, data, unit] of [
+      ['m.8', report.landSample.m8, '%'], ['m.10', report.landSample.m10, '%'],
+      ['m.13', report.landSample.m13, 'м'], ['m.14', report.landSample.m14, 'м'],
+    ]) {
       if (data.median !== null) {
-        console.log(`  ${metric} сводка: median=${data.median.toFixed(2)} %, p10=${data.p10.toFixed(2)} %, `
-          + `p90=${data.p90.toFixed(2)} %, PASS ${data.passed}/${report.landSample.selected}`);
+        console.log(`  ${metric} сводка: median=${data.median.toFixed(2)} ${unit}, p10=${data.p10.toFixed(2)} ${unit}, `
+          + `p90=${data.p90.toFixed(2)} ${unit}, PASS ${data.passed}/${report.landSample.selected}`);
       }
+    }
+    if (report.landSample.worstLodDecomposition) {
+      const d = report.landSample.worstLodDecomposition;
+      console.log(`Худший наземный m.14 #${d.cell}↔#${d.sourceCell} (${d.node.x},${d.node.y}): `
+        + `256=${d.fine.finalM.toFixed(3)} м, 64=${d.coarse.finalM.toFixed(3)} м, `
+        + `Δ=${d.deltaM.toFixed(3)} м; планетная решётка=${d.fine.fieldM.toFixed(3)}, `
+        + `прямое поле=${d.direct.fieldM.toFixed(3)}, деталь=${d.fine.detailM.toFixed(3)}, `
+        + `врез в центре=${d.fine.carveM.toFixed(3)}, остаток кольца к тем же решётке/детали=${d.coarse.residualVsFineFieldDetailM.toFixed(3)} м`);
     }
     console.log(`Речная выборка: ${report.riverSample.selected}/${report.riverSample.requested}, R=${report.riverSample.radiusM.toFixed(1)} м`);
     for (const item of report.riverSample.rows) {

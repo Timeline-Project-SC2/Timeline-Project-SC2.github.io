@@ -51,7 +51,7 @@ import {
   sampleLocalTerrainHeightM, smooth01, clampScalar, buildBaseHeightfield,
 } from './local-map-heightfield.ts';
 import type { LocalMapRingCell } from './local-map-heightfield.ts';
-import { RIVER_HALF_WIDTH_RATIO, RIVER_DEPTH_RATIO, applyRiverCarve } from './local-map-rivers.ts';
+import { RIVER_HALF_WIDTH_RATIO, RIVER_CHANNEL_DEPTH_M, applyRiverCarve } from './local-map-rivers.ts';
 
 export {
   HEIGHTFIELD_RES, TERRAFORM_RES, METERS_PER_ELEVATION_UNIT, LAND_FBM_AMPLITUDE_M,
@@ -614,16 +614,18 @@ async function receiverCenters(v: number): Promise<Float32Array> {
   return result;
 }
 
-function traceRiverEdge(patch: LocalMapPatch, cell: PatchCell, receiver: PatchCell | undefined): boolean {
+function traceRiverEdge(patch: LocalMapPatch, cell: PatchCell): boolean {
   if (cell.flowReceiver < 0) return false;
   // Явное отключение русла в Patch7 (например, twin из И-3.3) не должно
   // восстанавливать сток из соседского streamWeight вопреки контракту.
   if (cell.cell !== patch.centerCell && cell.flowReceiver === patch.centerCell) {
     return patch.river.inlets.some((e) => e.neighborCell === cell.cell);
   }
-  if (cell.streamWeight > 0) return true;
-  if (receiver && isWaterCell(receiver, patch.seaLevel)) return true;
-  return cell.cell === patch.centerCell && (patch.river.inlets.length > 0 || patch.river.flowsThroughCenter);
+  // Одна и та же каноническая дуга flowReceiver обязана существовать,
+  // независимо от того, кто сейчас центр Patch7: собственная ячейка, сосед
+  // или вход через второй пояс. Иначе узел без streamWeight в своей карте
+  // превращается в русло у соседа, как #25635→#25605 в A-29.
+  return true;
 }
 
 // У v3 поверхность и 3D-сэмплер дают побитово одинаковый elevation[cell].
@@ -639,13 +641,14 @@ export async function worldRiverSegmentsForPatch(
   const cells = new Map(patch.cells.map((cell) => [cell.cell, cell]));
   const edges = patch.cells.filter((cell) => (
     (profile || cells.has(cell.flowReceiver))
-      && traceRiverEdge(patch, cell, cells.get(cell.flowReceiver))
+      && traceRiverEdge(patch, cell)
   ));
   const unknownMouths = profile ? patch.cells.filter((cell) => (
     cell.flowReceiver >= 0 && !cells.has(cell.flowReceiver) && cell.streamWeight <= 0
       && cell.riverAccumulation > 0 && !edges.includes(cell)
   )) : [];
-  if (edges.length === 0 && unknownMouths.length === 0) return [];
+  const boundaryInflows = patch.boundaryInflows ?? []; // пусто у синтетических v1-фикстур
+  if (edges.length === 0 && unknownMouths.length === 0 && boundaryInflows.length === 0) return [];
   const missing = unknownMouths.length > 0 || edges.some((cell) => !cells.has(cell.flowReceiver));
   const centers = missing ? await receiverCenters(patch.v) : null;
   const getDir = (id: number): Vec3 => {
@@ -685,13 +688,23 @@ export async function worldRiverSegmentsForPatch(
       }
     }
   }
-  return edges.map((cell) => {
+  const segments = edges.map((cell) => {
     const receiver = cells.get(cell.flowReceiver);
     const toWater = (receiver !== undefined && isWaterCell(receiver, patch.seaLevel))
       || sampledWater.has(cell.flowReceiver);
     return worldRiverSegment(cell.cell, cell.flowReceiver, cell.center, getDir(cell.flowReceiver),
       toWater, toWater && cell.streamWeight <= 0);
   });
+  // Входящие дуги уже переданы глобусом вместе с Patch7: никаких новых
+  // surface/grid/flowReceiver в локальном воркере не генерируем и не ищем.
+  for (const inflow of boundaryInflows) {
+    const receiver = cells.get(inflow.toCell);
+    if (!receiver) throw new Error(`Patch7 v2: неизвестный получатель граничного притока #${inflow.toCell}`);
+    const toWater = isWaterCell(receiver, patch.seaLevel);
+    segments.push(worldRiverSegment(inflow.fromCell, inflow.toCell, inflow.fromCenter,
+      receiver.center, toWater, toWater && inflow.streamWeight <= 0));
+  }
+  return segments;
 }
 
 /** Вырез долины из тех же мировых дуг на любой разрешённой сетке. */
@@ -699,7 +712,7 @@ export function worldRiverDepthAt(
   dir: Vec3, segments: readonly WorldRiverSegment[], radiusM: number, planetRadiusM: number,
 ): number {
   const halfWidthM = Math.max((4 * radiusM) / HEIGHTFIELD_RES, radiusM * RIVER_HALF_WIDTH_RATIO);
-  const depthM = Math.max(10, radiusM * RIVER_DEPTH_RATIO * 1.8);
+  const depthM = RIVER_CHANNEL_DEPTH_M;
   let deepest = 0;
   for (const segment of segments) {
     const valley = worldRiverCarveFactor(dir, [segment], planetRadiusM, halfWidthM * 2.4);
@@ -801,8 +814,11 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
   // Общий seed всего мира, НЕ идентификатор ячейки: одинаковое направление
   // планеты даёт одинаковую деталь во всех перекрывающихся участках.
   const planetSeed = (seed ^ Math.imul((placeId + 1) >>> 0, 0x85EBCA6B)) >>> 0;
+  const masterSeedHex = typeof request.profile?.masterSeedHex === 'string'
+    ? request.profile.masterSeedHex : undefined;
   const worldRiverSegments = await worldRiverSegmentsForPatch(patch, request.profile);
-  const base = buildBaseHeightfield(patch, radiusM, planetSeed, spawnMask, !!request.profile);
+  const base = buildBaseHeightfield(patch, radiusM, planetSeed, spawnMask,
+    !!request.profile, masterSeedHex);
   // У старого «устья без streamWeight» есть релаксация с НЕОГРАНИЧЕННОЙ
   // повторной постановкой вершин в очередь (rivers.ts). На общем метрическом
   // поле с крутыми склонами она способна расти без конца. При вызове только
@@ -856,6 +872,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
       worldRiverSegments.length > 0
         ? (dir) => worldRiverDepthAt(dir, worldRiverSegments, radiusM, patch.frame.radiusM)
         : undefined,
+      masterSeedHex,
     );
     ringCellCount = ringCells.length;
     ringGenMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - ringStartedAt;
@@ -1187,6 +1204,7 @@ export async function generateHorizonSkirt(
     }
     let h = sampleLocalTerrainHeightM(
       dir, fieldStepM, patch.frame.radiusM, planetSeed, !!request.profile,
+      typeof request.profile?.masterSeedHex === 'string' ? request.profile.masterSeedHex : undefined,
     );
     h -= worldRiverDepthAt(dir, worldRiverSegments, radiusPatchM, patch.frame.radiusM);
     return h;
