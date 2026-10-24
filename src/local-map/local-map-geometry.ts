@@ -104,6 +104,9 @@ export interface WorldRiverSegment {
     readonly planetRadiusM: number;
     readonly midCos: number;
     readonly endCos: number;
+    readonly wideDistanceM?: number;
+    readonly wideMidCos?: number;
+    readonly wideEndCos?: number;
   };
 }
 
@@ -131,6 +134,7 @@ export function worldRiverSegment(
 /** Подготовка углового отсева на всю жизнь набора дуг; не меняет геометрию. */
 export function prepareWorldRiverSegment(
   segment: WorldRiverSegment, planetRadiusM: number, maxDistanceM: number,
+  wideDistanceM = 0,
 ): WorldRiverSegment {
   const maxAngle = maxDistanceM / planetRadiusM;
   const prepared = { ...segment };
@@ -139,6 +143,11 @@ export function prepareWorldRiverSegment(
       maxDistanceM, planetRadiusM,
       midCos: Math.cos(segment.halfAngle + maxAngle),
       endCos: Math.cos(maxAngle),
+      ...(wideDistanceM > 0 ? {
+        wideDistanceM,
+        wideMidCos: Math.cos(segment.halfAngle + wideDistanceM / planetRadiusM),
+        wideEndCos: Math.cos(wideDistanceM / planetRadiusM),
+      } : {}),
     },
     enumerable: false,
   });
@@ -148,13 +157,18 @@ export function prepareWorldRiverSegment(
 /** Метров до одного геодезического ребра (Infinity за физическим пределом). */
 export function worldRiverDistanceM(
   dir: Vec3, segment: WorldRiverSegment, planetRadiusM: number, maxDistanceM: number,
+  along?: { fraction: number },
 ): number {
   const { from, to, middle, normal } = segment;
   const cached = segment.searchLimit;
   const matches = cached?.maxDistanceM === maxDistanceM && cached.planetRadiusM === planetRadiusM;
-  const maxAngle = matches ? 0 : maxDistanceM / planetRadiusM;
+  const matchesWide = !matches && cached?.wideDistanceM === maxDistanceM
+    && cached.planetRadiusM === planetRadiusM;
+  const maxAngle = matches || matchesWide ? 0 : maxDistanceM / planetRadiusM;
+  const midCos = matches ? cached!.midCos
+    : matchesWide ? cached!.wideMidCos! : Math.cos(segment.halfAngle + maxAngle);
   const midDot = dir[0] * middle[0] + dir[1] * middle[1] + dir[2] * middle[2];
-  if (midDot < (matches ? cached!.midCos : Math.cos(segment.halfAngle + maxAngle))) return Infinity;
+  if (midDot < midCos) return Infinity;
   const cross = dir[0] * normal[0] + dir[1] * normal[1] + dir[2] * normal[2];
   const fromSide = (from[1] * dir[2] - from[2] * dir[1]) * normal[0]
     + (from[2] * dir[0] - from[0] * dir[2]) * normal[1]
@@ -166,12 +180,20 @@ export function worldRiverDistanceM(
   if (fromSide < 0 || toSide < 0) {
     const end = fromSide < 0 ? from : to;
     const endDot = dir[0] * end[0] + dir[1] * end[1] + dir[2] * end[2];
-    if (endDot < (matches ? cached!.endCos : Math.cos(maxAngle))) return Infinity;
+    const endCos = matches ? cached!.endCos
+      : matchesWide ? cached!.wideEndCos! : Math.cos(maxAngle);
+    if (endDot < endCos) return Infinity;
     distanceM = Math.acos(Math.max(-1, Math.min(1, endDot))) * planetRadiusM;
   } else {
     distanceM = Math.asin(Math.min(1, Math.abs(cross))) * planetRadiusM;
   }
-  return distanceM < maxDistanceM ? distanceM : Infinity;
+  if (!(distanceM < maxDistanceM)) return Infinity;
+  if (along) {
+    const startDot = dir[0] * from[0] + dir[1] * from[1] + dir[2] * from[2];
+    along.fraction = Math.max(0, Math.min(1,
+      Math.atan2(fromSide, startDot) / (2 * segment.halfAngle)));
+  }
+  return distanceM;
 }
 
 /** Одинаковый физический factor в любом касательном кадре. */

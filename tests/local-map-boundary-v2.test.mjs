@@ -59,6 +59,28 @@ test('Patch7 v2: граничные притоки из surface, проверк�
   ] }).checks['boundary-inflows-v2'], false, 'отрицательный контроль: дуга изнутри патча отвергнута');
 });
 
+test('Patch7 v2: смена веса притока при том же ключе инвалидирует кэш поймы', async () => {
+  const patch = patchFor(14075);
+  const altered = { ...patch, boundaryInflows: patch.boundaryInflows.map((edge) =>
+    edge.fromCell === 14104 ? { ...edge, streamWeight: 0 } : edge) };
+  assert.ok(Contract.verifyPatchInvariants(altered).ok);
+  Worker.clearLocalMapCache();
+  const first = await Worker.generateLocalMap(requestFor(patch, 'stream-weight', 1));
+  const second = await Worker.generateLocalMap(requestFor(altered, 'stream-weight', 1));
+  const uncached = await Worker.generateLocalMap(requestFor(altered, 'fresh-stream-weight', 1));
+  const maxDifference = (a, b) => {
+    let max = 0;
+    for (let i = 0; i < a.length; i++) max = Math.max(max, Math.abs(a[i] - b[i]));
+    return max;
+  };
+  assert.ok(maxDifference(first.heightfield, second.heightfield) >= 1,
+    'порог streamWeight физически изменил долину, а кэш не замаскировал отличие');
+  assert.equal(maxDifference(second.heightfield, uncached.heightfield), 0,
+    'ответ с тем же patchKey, но новым весом, равен свежей генерации');
+  assert.equal(maxDifference(second.ringCells[0].heightfield,
+    uncached.ringCells[0].heightfield), 0, 'LOD-кольцо тоже не из старого кэша');
+});
+
 test('речные физические ширина/глубина не зависят от радиуса патча', async () => {
   const patch = patchFor(14074);
   const segments = await Worker.worldRiverSegmentsForPatch(patch, world.profile);
@@ -88,13 +110,33 @@ test('речные физические ширина/глубина не зав�
       `при ${distanceM} м маркер=стрежень: ${info.channelFactor} ≈ ${originalMask}`);
   }
   assert.ok(Worker.worldRiverDepthAt(patch.frame.origin, segments, radiusM, patch.frame.radiusM) >= 3);
+  Worker.clearLocalMapCache();
+  const baseRequest = requestFor(patch, 'radius-depth', 0);
+  const first = await Worker.generateLocalMap(baseRequest);
+  const doubled = await Worker.generateLocalMap({ ...baseRequest, radiusM: radiusM * 2 });
+  const center = Math.floor(Worker.HEIGHTFIELD_RES / 2) * Worker.HEIGHTFIELD_RES
+    + Math.floor(Worker.HEIGHTFIELD_RES / 2);
+  assert.equal(first.terraformMap[center], 1, 'проверяется именно сухопутное русло');
+  assert.equal(doubled.terraformMap[center], 1);
+  assert.ok(Math.abs(first.heightfield[center] - doubled.heightfield[center]) <= 0.1,
+    'с теми же мировыми дугами удвоение радиуса не углубляет и не поднимает речное дно');
   assert.ok(Rivers.RIVER_CHANNEL_HALF_WIDTH_M > 0);
   assert.equal(Rivers.RIVER_CHANNEL_DEPTH_M, 10);
+});
+
+test('m.2/m.3: десять речных створов держат глубину и непрерывность', async () => {
+  const sample = await Stand.measureRiverSample(grid, surface, world, 10, radiusM);
+  assert.equal(sample.selected, 10);
+  assert.ok(sample.summary.m2.median >= 3 && sample.summary.m2.median <= 12,
+    `m.2 медиана ${sample.summary.m2.median} м в 3…12 м`);
+  assert.equal(sample.summary.m3.passed, 10, 'm.3 все 10 створов PASS');
 });
 
 test('m.14: 20 наземных центров × 6 граней × ≥ 20 общих узлов, max ≤ 2 м', async () => {
   const sample = await Stand.measureLandSample(grid, surface, world, 20, radiusM);
   assert.equal(sample.selected, 20);
+  assert.ok(sample.m8.passed > 13, `m.8 доля ${sample.m8.passed}/20 выше 13/20`);
+  assert.ok(sample.m10.passed > 10, `m.10 доля ${sample.m10.passed}/20 выше 10/20`);
   let faces = 0;
   for (const row of sample.rows) {
     assert.equal(row.m14Faces.length, 6, `центр #${row.cell}: ровно шесть граней`);

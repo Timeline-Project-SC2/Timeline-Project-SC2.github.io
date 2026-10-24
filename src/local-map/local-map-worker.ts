@@ -49,7 +49,7 @@ import {
   PROFILE_DETAIL_AMPLITUDE_M, RING_LEVELS,
   HEX_APOTHEM_RATIO, CENTER_HEX_RADIUS_RATIO, SKIRT_HEX_SPACING_RATIO, hashFloat, hashFloat2,
   valueNoise2D, clusterHexMetric, buildNeighborRingCells,
-  sampleLocalTerrainHeightM, smooth01, clampScalar, buildBaseHeightfield,
+  sampleLocalTerrainHeightM, sampleLocalTerrainDetailM, smooth01, clampScalar, buildBaseHeightfield,
 } from './local-map-heightfield.ts';
 import type { LocalMapRingCell } from './local-map-heightfield.ts';
 import { RIVER_CHANNEL_DEPTH_M, RIVER_CHANNEL_HALF_WIDTH_M, applyRiverCarve } from './local-map-rivers.ts';
@@ -520,6 +520,7 @@ export function localMapCacheKey(request: LocalMapWorkerRequest): string {
 /** Отпечаток входных данных, влияющих на рельеф помимо ключа участка. */
 function localMapFingerprint(request: LocalMapWorkerRequest): string {
   const seedHex = request.profile ? String(request.profile['masterSeedHex'] ?? '') : 'none';
+  const radiusKm = request.profile ? String(request.profile['radiusKm'] ?? '') : 'none';
   const rule = request.spawnRule
     ? `${request.spawnRule.minLand}/${request.spawnRule.maxSlope}`
     : 'default';
@@ -529,8 +530,11 @@ function localMapFingerprint(request: LocalMapWorkerRequest): string {
   // Два v2-патча с одним centerCell, но разными притоками НЕ взаимозаменяемы:
   // в частности boundaryInflows=[] должен дать измеримое расхождение LOD.
   const boundary = request.patch.boundaryInflows ?? [];
-  const inflows = boundary.map((edge) => `${edge.fromCell}>${edge.toCell}`).join(',');
-  return `${seedHex}|${rule}|${rings}|${request.patch.version}|${inflows}`;
+  const inflows = boundary.map((edge) => `${edge.fromCell}>${edge.toCell}:${edge.streamWeight}`).join(',');
+  const flows = request.patch.cells.map((cell) =>
+    `${cell.cell}>${cell.flowReceiver}:${cell.streamWeight}`).join(',');
+  return `${seedHex}|${radiusKm}|${rule}|${rings}|${request.patch.version}`
+    + `|${request.patch.frame.radiusM}|${request.patch.seaLevel}|${flows}|${inflows}`;
 }
 
 function cloneInstanceBuffers(instanceBuffers: InstanceBuffers): InstanceBuffers {
@@ -710,7 +714,49 @@ export async function worldRiverSegmentsForPatch(
       receiver.center, toWater, toWater && inflow.streamWeight <= 0));
   }
   const valleyWidthM = RIVER_CHANNEL_HALF_WIDTH_M * 2.4;
-  return segments.map((segment) => prepareWorldRiverSegment(segment, patch.frame.radiusM, valleyWidthM));
+  return segments.map((segment) => prepareWorldRiverSegment(
+    segment, patch.frame.radiusM, valleyWidthM, RIVER_FLOODPLAIN_WIDTH_M,
+  ));
+}
+
+// Только настоящие streamWeight-русла сглаживают МАКРО-рельеф поймы.
+// Частотная detail (140 м) на 5-км окне сохраняется; слабые flowReceiver-дуги
+// остаются для вреза/стока, не размывая весь наземный LOD. Радиусы и шаг
+// опорных точек заданы физически, не долями radiusPatchM.
+const RIVER_FLOODPLAIN_WIDTH_M = 8000;
+const RIVER_FLOODPLAIN_BED_WIDTH_M = 5000;
+const RIVER_FLOODPLAIN_FLAT_M = 2500;
+const RIVER_ENDPOINT_DETAIL_STEP_M = 400;
+const RIVER_STREAM_MIN_WEIGHT = 0.1;
+
+interface RiverTerrainContext {
+  readonly seed: number;
+  readonly stepM: number;
+  readonly endpointDetails: ReadonlyMap<WorldRiverSegment, readonly [number, number]>;
+}
+
+function riverTerrainContext(
+  segments: readonly WorldRiverSegment[], patch: LocalMapPatch, planetSeed: number,
+  sourceStepM: number,
+): RiverTerrainContext | undefined {
+  const weights = new Map(patch.cells.map((c) => [c.cell, c.streamWeight]));
+  for (const inflow of patch.boundaryInflows ?? []) weights.set(inflow.fromCell, inflow.streamWeight);
+  const endpointDetails = new Map<WorldRiverSegment, readonly [number, number]>();
+  const samples = new Map<number, number>();
+  const at = (cell: number, dir: Vec3): number => {
+    let detail = samples.get(cell);
+    if (detail === undefined) {
+      detail = sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, false,
+        RIVER_ENDPOINT_DETAIL_STEP_M);
+      samples.set(cell, detail);
+    }
+    return detail;
+  };
+  for (const seg of segments) {
+    if (seg.toWater || (weights.get(seg.fromCell) ?? 0) < RIVER_STREAM_MIN_WEIGHT) continue;
+    endpointDetails.set(seg, [at(seg.fromCell, seg.from), at(seg.toCell, seg.to)]);
+  }
+  return endpointDetails.size ? { seed: planetSeed, stepM: sourceStepM, endpointDetails } : undefined;
 }
 
 /** Вырез долины из тех же мировых дуг на любой разрешённой сетке. */
@@ -719,18 +765,31 @@ export function worldRiverDepthAt(
   /** Если дана базовая высота, у водного устья ограничиваем поверхность нулевым зеркалом. */
   baseHeightM?: number,
   info?: { seaBlend: number; channelFactor?: number },
+  terrain?: RiverTerrainContext,
 ): number {
   const halfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const depthM = RIVER_CHANNEL_DEPTH_M;
   let deepest = 0;
   let seaBlend = 0;
   let channelFactor = 0;
+  let nearest: WorldRiverSegment | null = null;
+  let nearestDistance = RIVER_FLOODPLAIN_WIDTH_M;
+  let nearestFraction = 0;
+  const useFloodplain = !!terrain && baseHeightM !== undefined && baseHeightM > 0;
+  const along = { fraction: 0 };
   for (const segment of segments) {
-    // Один геодезический поиск вместо двух (долина + стрежень): одна и та
-    // же физическая дистанция определяет обе гладкие огибающие.
-    const distanceM = worldRiverDistanceM(dir, segment, planetRadiusM, halfWidthM * 2.4);
+    const eligible = useFloodplain && terrain.endpointDetails.has(segment);
+    const distanceM = worldRiverDistanceM(dir, segment, planetRadiusM,
+      eligible ? RIVER_FLOODPLAIN_WIDTH_M : halfWidthM * 2.4,
+      eligible ? along : undefined);
     if (!Number.isFinite(distanceM)) continue;
-    const valleyT = 1 - distanceM / (halfWidthM * 2.4);
+    if (eligible && distanceM < nearestDistance) {
+      nearest = segment;
+      nearestDistance = distanceM;
+      nearestFraction = along.fraction;
+    }
+    if (distanceM >= halfWidthM * 2.4 && !eligible) continue;
+    const valleyT = Math.max(0, 1 - distanceM / (halfWidthM * 2.4));
     const valley = valleyT * valleyT * (3 - 2 * valleyT);
     const channelT = Math.max(0, 1 - distanceM / halfWidthM);
     const channel = channelT * channelT * (3 - 2 * channelT);
@@ -752,13 +811,29 @@ export function worldRiverDepthAt(
         seaBlend = Math.max(seaBlend, (1 - mouthFade) * valley);
       }
     }
-    const carve = (segment.mouth ? Math.min(10, depthM) : depthM)
-      * (0.45 * valley + 0.55 * channel) * mouthFade;
+    const carve = eligible
+      ? depthM * smooth01(Math.max(0, 1 - distanceM / RIVER_FLOODPLAIN_BED_WIDTH_M))
+      : (segment.mouth ? Math.min(10, depthM) : depthM)
+        * (0.45 * valley + 0.55 * channel) * mouthFade;
     if (carve > deepest) deepest = carve;
   }
   if (info) {
     info.seaBlend = seaBlend;
     info.channelFactor = channelFactor;
+  }
+  if (nearest && terrain && baseHeightM !== undefined) {
+    const endpoints = terrain.endpointDetails.get(nearest);
+    if (endpoints) {
+      const originalDetail = sampleLocalTerrainDetailM(
+        dir, planetRadiusM, terrain.seed, false, terrain.stepM);
+      const axisDetail = endpoints[0] + (endpoints[1] - endpoints[0]) * nearestFraction;
+      const fade = nearestDistance <= RIVER_FLOODPLAIN_FLAT_M ? 1
+        : 1 - smooth01((nearestDistance - RIVER_FLOODPLAIN_FLAT_M)
+          / (RIVER_FLOODPLAIN_WIDTH_M - RIVER_FLOODPLAIN_FLAT_M));
+      const normalized = baseHeightM + fade * (axisDetail - originalDetail);
+      return baseHeightM - normalized + deepest
+        + Math.max(0, normalized - deepest) * seaBlend;
+    }
   }
   return baseHeightM !== undefined
     ? deepest + Math.max(0, baseHeightM - deepest) * seaBlend
@@ -773,6 +848,7 @@ function applyWorldRiverHeights(
   heightfield: Float32Array,
   spawnMask: Uint8Array,
   segments: readonly WorldRiverSegment[],
+  terrain?: RiverTerrainContext,
 ): void {
   if (segments.length === 0) return;
   const res = HEIGHTFIELD_RES;
@@ -781,10 +857,15 @@ function applyWorldRiverHeights(
   // Обычный путь (суша/океан вне долины) уже записан applyRiverCarve.
   // Проверяем только узкую мировую bbox дуг, построенную из ИСТИННЫХ 3D
   // концов flowReceiver: не считаем exp-карту для всех 65 536 вершин реки.
-  const margin = halfWidthM * 2.4 + stepM * 2;
   const boxes = segments.map((segment) => {
     const a = directionToLocalPoint(patch, segment.from);
     const b = directionToLocalPoint(patch, segment.to);
+    // Слабый flowReceiver не требует широкой поймы: его старый физический
+    // врез ограничен 3,84 км. Для настоящих streamWeight-дуг расширяем
+    // только ИХ bbox, иначе 8 км у каждого сухого стока тормозят холодный
+    // старт 256² при неизменном результате вне этих прямоугольников.
+    const margin = (terrain?.endpointDetails.has(segment)
+      ? RIVER_FLOODPLAIN_WIDTH_M : halfWidthM * 2.4) + stepM * 2;
     return {
       minX: Math.min(a.u, b.u) - margin,
       maxX: Math.max(a.u, b.u) + margin,
@@ -804,7 +885,8 @@ function applyWorldRiverHeights(
       const dir = localPointToDirection(patch, wx, wy);
       if (base.landMask[idx] === 0 && nearestPatchCell(patch, dir).lakeWeight > 0) continue;
       const rawHeight = base.heightM[idx] as number;
-      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM, rawHeight, riverInfo);
+      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM,
+        rawHeight, riverInfo, base.landMask[idx] === 1 ? terrain : undefined);
       heightfield[idx] = rawHeight - carve;
       // Та же физическая дистанция уже дала огибающую стрежня; не ищем
       // ближайшую дугу ВТОРОЙ раз для маски на каждом пикселе 256².
@@ -849,6 +931,9 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
   const masterSeedHex = typeof request.profile?.masterSeedHex === 'string'
     ? request.profile.masterSeedHex : undefined;
   const worldRiverSegments = await worldRiverSegmentsForPatch(patch, request.profile);
+  const riverTerrain = request.profile
+    ? riverTerrainContext(worldRiverSegments, patch, planetSeed, 2 * radiusM / hfRes)
+    : undefined;
   const base = buildBaseHeightfield(patch, radiusM, planetSeed, spawnMask,
     !!request.profile, masterSeedHex);
   // У старого «устья без streamWeight» есть релаксация с НЕОГРАНИЧЕННОЙ
@@ -863,7 +948,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
     ? { ...patch, river: { ...patch.river, flowsThroughCenter: true } }
     : patch;
   const heightfield = applyRiverCarve(carvePatch, radiusM, base, spawnMask);
-  applyWorldRiverHeights(patch, radiusM, base, heightfield, spawnMask, worldRiverSegments);
+  applyWorldRiverHeights(patch, radiusM, base, heightfield, spawnMask, worldRiverSegments, riverTerrain);
   const terraformMap = base.terraformMap;
   const waterPoints = base.waterPoints;
   let buildablePoints = 0;
@@ -903,7 +988,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
       patch, neighborRings, radiusM, planetSeed, true,
       worldRiverSegments.length > 0
         ? (dir, heightM, info) => worldRiverDepthAt(
-          dir, worldRiverSegments, radiusM, patch.frame.radiusM, heightM, info,
+          dir, worldRiverSegments, radiusM, patch.frame.radiusM, heightM, info, riverTerrain,
         )
         : undefined,
       masterSeedHex,
@@ -1208,6 +1293,10 @@ export async function generateHorizonSkirt(
   const riverMask = new Uint8Array(vertexCount);
   const riverHalfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const worldRiverSegments = await worldRiverSegmentsForPatch(patch, request.profile);
+  const riverTerrain = request.profile
+    ? riverTerrainContext(worldRiverSegments, patch, planetSeed,
+      2 * radiusPatchM / HEIGHTFIELD_RES)
+    : undefined;
 
   // Радиусы рядов: 36 плотных шагов воротника от R_inner до 1.15 · R_patch,
   // затем 48 шагов к горизонту по степени t^1.35.
@@ -1240,7 +1329,8 @@ export async function generateHorizonSkirt(
       typeof request.profile?.masterSeedHex === 'string' ? request.profile.masterSeedHex : undefined,
       patch.seaLevel,
     );
-    h -= worldRiverDepthAt(dir, worldRiverSegments, radiusPatchM, patch.frame.radiusM, h);
+    h -= worldRiverDepthAt(dir, worldRiverSegments, radiusPatchM, patch.frame.radiusM,
+      h, undefined, riverTerrain);
     return h;
   };
 
