@@ -165,6 +165,38 @@ test('стенд: в мире A-17 речные метрики реально и
     carveArea.some((row) => row.value > 0),
     'хотя бы на одной ячейке поле вреза ненулевое',
   );
+
+  // m.2 по ветвям (карточка 18c): порог в таблице, подпись ветви в detail и
+  // статус обязаны быть согласованы со значением в КАЖДОЙ измеренной строке —
+  // морская ветвь не имеет потолка, речная имеет диапазон 3…12 м.
+  const depths = a17.rows.filter((row) => row.metric === 'глубина воды в центре русла');
+  for (const row of depths) {
+    if (row.status === 'N/A') continue;
+    if (row.threshold === '≥ 3 м') {
+      assert.match(row.detail, /морская ветвь/, `ячейка ${row.cell}: морская ветвь подписана в detail`);
+      assert.equal(
+        row.status,
+        row.value >= stand.THRESHOLDS.riverDepthM ? 'PASS' : 'FAIL',
+        `ячейка ${row.cell}: у морской ветви нет потолка (значение ${row.value} м)`,
+      );
+    } else {
+      assert.equal(row.threshold, '3…12 м', `ячейка ${row.cell}: порог — одна из двух ветвей`);
+      assert.match(row.detail, /речная ветвь/, `ячейка ${row.cell}: речная ветвь подписана в detail`);
+      assert.equal(
+        row.status,
+        row.value >= stand.THRESHOLDS.riverDepthM && row.value <= stand.THRESHOLDS.riverDepthMaxM ? 'PASS' : 'FAIL',
+        `ячейка ${row.cell}: речная ветвь держит диапазон 3…12 м (значение ${row.value} м)`,
+      );
+    }
+  }
+  // Известный ответ карточки 18c: четыре океанские ячейки A-17 с входом
+  // русла измеряются морской ветвью (глубина моря, а не каньон вреза).
+  for (const cell of [37488, 37518, 137363, 137436]) {
+    const row = depths.find((entry) => entry.cell === cell);
+    assert.ok(row, `у ячейки ${cell} есть строка глубины`);
+    assert.equal(row.threshold, '≥ 3 м', `ячейка ${cell}: порог морской ветви`);
+    assert.match(row.detail, /морская ветвь/, `ячейка ${cell}: подпись «морская ветвь»`);
+  }
 });
 
 test('стенд: сводка таблицы согласована с её строками', () => {

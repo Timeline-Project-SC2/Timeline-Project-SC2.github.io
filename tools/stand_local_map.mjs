@@ -178,6 +178,8 @@ const THRESHOLDS = {
   // Метрика 2 — диапазон, а не только минимум (карточка 18b): без потолка
   // воркер вырыл 18,4 м, и именно из-за этой глубины кромка метрики 1 не
   // могла стать пологой. riverDepthM оставлен как имя минимума диапазона.
+  // Потолок действует только на речную ветвь (маркер 1, карточка 18c):
+  // у морской ветви (маркер 0) глубина — это глубина моря, потолка нет.
   riverDepthM: 3,
   riverDepthMaxM: 12,
   // Метрика 3: непрерывны должны быть все фактические створы (100 %).
@@ -582,11 +584,49 @@ function measureBankStep(local, crossSection, carveField) {
 }
 
 /**
- * Метрика 2 — глубина воды в центре русла (порог 3…12 м). Дно — высота
- * heightfield на оси русла; уровень воды — зеркало моря (0) для морской
- * ячейки, уровень суши (берег) для врезанного русла. Если в центре русла воды
- * нет вовсе (русло не врезано — маркер суши), глубина равна нулю: это и есть
- * измеряемый дефект «река пропала».
+ * Вердикт метрики 2 по семантике центральной вершины профиля (карточка 18c).
+ * Потолок 12 м существует, чтобы врезанная река не превращалась в каньон,
+ * поэтому диапазон 3…12 м применяется только к речной ветви (маркер 1 —
+ * врезанное русло суши; сюда же относится маркер суши ≥ 2 — воды в русле
+ * нет, глубина 0). У морской ветви (маркер 0, зеркало моря) «глубина русла» —
+ * это глубина моря, и потолка у неё нет: с ним океанские устья мира A-17
+ * (31,5…52,4 м) падали FAIL, а «исправить» их можно было бы только обмелив
+ * океан, то есть сломав батиметрию A-29. Там остаётся только ≥ 3 м.
+ * violation — выход за свою ветвь в метрах (0 при PASS), margin — запас до
+ * ближайшей границы своей ветви; по ним выбирается худшая ось патча.
+ */
+function riverDepthVerdict(value, marker) {
+  const min = THRESHOLDS.riverDepthM;
+  const max = THRESHOLDS.riverDepthMaxM;
+  if (marker === 0) {
+    return {
+      branch: 'sea',
+      branchLabel: 'морская ветвь (маркер 0, зеркало моря)',
+      thresholdText: '≥ 3 м',
+      pass: value >= min,
+      violation: value >= min ? 0 : min - value,
+      margin: value - min,
+    };
+  }
+  return {
+    branch: 'river',
+    branchLabel: marker === 1
+      ? 'речная ветвь (маркер 1, врезанное русло суши)'
+      : 'речная ветвь (в центре русла суша, маркер ≥ 2)',
+    thresholdText: '3…12 м',
+    pass: value >= min && value <= max,
+    violation: value < min ? min - value : value > max ? value - max : 0,
+    margin: Math.min(value - min, max - value),
+  };
+}
+
+/**
+ * Метрика 2 — глубина воды в центре русла. Дно — высота heightfield на оси
+ * русла; уровень воды — зеркало моря (0) для морской ячейки, уровень суши
+ * (берег) для врезанного русла. Порог зависит от ветви (см.
+ * riverDepthVerdict): речная — 3…12 м, морская — ≥ 3 м. Если в центре русла
+ * воды нет вовсе (русло не врезано — маркер суши), глубина равна нулю: это и
+ * есть измеряемый дефект «река пропала».
  */
 function measureRiverDepth(local, crossSection) {
   const heightfield = local.heightfield;
@@ -594,7 +634,12 @@ function measureRiverDepth(local, crossSection) {
   const bed = heightfield[crossSection.centerVertex];
   const marker = terraform[crossSection.centerVertex] ?? 0;
   if (marker >= 2) {
-    return { value: 0, detail: `в центре русла суша (${round(bed, 1)} м) — воды нет` };
+    return {
+      value: 0,
+      marker,
+      ...riverDepthVerdict(0, marker),
+      detail: `в центре русла суша (${round(bed, 1)} м) — воды нет`,
+    };
   }
   let surface;
   if (marker === 0) {
@@ -609,6 +654,8 @@ function measureRiverDepth(local, crossSection) {
   const depth = Math.max(0, surface - bed);
   return {
     value: depth,
+    marker,
+    ...riverDepthVerdict(depth, marker),
     detail: `дно ${round(bed, 1)} м, уровень ${round(surface, 1)} м`,
   };
 }
@@ -940,7 +987,7 @@ async function measureCell(grid, surface, world, cell, radiusM) {
   const axes = riverAxes(patch);
   if (axes.length === 0) {
     rows.push(metricRow(cell, zone, METRIC_TITLES.bankStep, null, '—', '≤ 2 м', 'N/A', 'в Patch7 нет русла'));
-    rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '3…12 м', 'N/A', 'в Patch7 нет русла'));
+    rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '3…12 м / ≥ 3 м', 'N/A', 'в Patch7 нет русла'));
   } else {
     const measuredAxes = axes.map((axis) => {
       const crossSection = riverCrossSection(patch, radiusM, axis, carveField.halfWidthM);
@@ -957,24 +1004,37 @@ async function measureCell(grid, surface, world, cell, radiusM) {
       const noCarveDetail = `carve = 0 на всём профиле: вершин в области вреза 0 из ${profileCount} `
         + `(сегментов русла: ${carveField.segments.length}) — врезанного русла нет`;
       rows.push(metricRow(cell, zone, METRIC_TITLES.bankStep, null, '—', '≤ 2 м', 'N/A', noCarveDetail));
-      rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '3…12 м', 'N/A', noCarveDetail));
+      rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '3…12 м / ≥ 3 м', 'N/A', noCarveDetail));
     } else {
       let worst = carvedAxes[0];
-      let shallowest = carvedAxes[0];
+      // Худшая ось по глубине — не «самая мелкая», а худшая в СВОЕЙ ветви:
+      // сначала любая красная ось (по наибольшему выходу за порог ветви),
+      // иначе ось с наименьшим запасом до границы своей ветви. Так морская
+      // глубина 31 м (PASS) не маскирует речной каньон 18 м (FAIL) и наоборот.
+      let worstDepth = carvedAxes[0];
       for (const entry of carvedAxes) {
         if (entry.bank.value > worst.bank.value) worst = entry;
-        if (entry.depth.value < shallowest.depth.value) shallowest = entry;
+        const candidate = entry.depth;
+        const current = worstDepth.depth;
+        const candidateWorse = candidate.pass !== current.pass
+          ? !candidate.pass
+          : !candidate.pass
+            ? candidate.violation > current.violation
+            : candidate.margin < current.margin;
+        if (candidateWorse) worstDepth = entry;
       }
       rows.push(metricRow(
         cell, zone, METRIC_TITLES.bankStep, round(worst.bank.value), `${round(worst.bank.value, 2)} м`, '≤ 2 м',
         worst.bank.value <= THRESHOLDS.bankStepM ? 'PASS' : 'FAIL',
         `худшая грань: ${worst.axis.kind} (слот ${worst.axis.slot}); ${worst.bank.detail}`,
       ));
-      const depth = shallowest.depth.value;
+      const depth = worstDepth.depth;
       rows.push(metricRow(
-        cell, zone, METRIC_TITLES.riverDepth, round(depth), `${round(depth, 2)} м`, '3…12 м',
-        depth >= THRESHOLDS.riverDepthM && depth <= THRESHOLDS.riverDepthMaxM ? 'PASS' : 'FAIL',
-        `${shallowest.axis.kind} (слот ${shallowest.axis.slot}), ${shallowest.depth.detail}`,
+        cell, zone, METRIC_TITLES.riverDepth, round(depth.value), `${round(depth.value, 2)} м`,
+        depth.thresholdText,
+        depth.pass ? 'PASS' : 'FAIL',
+        `${worstDepth.axis.kind} (слот ${worstDepth.axis.slot}), ${depth.branchLabel}: ${depth.detail}`
+          + (carvedAxes.length > 1 ? `; осей с врезом: ${carvedAxes.length}, статус — по худшей оси в её ветви` : ''),
       ));
     }
   }
