@@ -2132,6 +2132,8 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
     pendingNeighborFly = null;
     discardStagedLocalPatch();
   }
+  // A-16: t1 — Dive-in с планетарного уровня (код центральной ячейки Patch7).
+  tl?.mark('t1', centerCell.cell);
   const requestId = ++localMapEntrySeq;
   window.clearTimeout(localMapHideTimer);
   localMapWidthKm = scale;
@@ -3073,6 +3075,7 @@ function initEvents(): void {
   els.exitLocalMap.addEventListener('click', exitLocalMap);
   // A-16 / Stage-8.10c: кнопка лог-замера видна и работает только при ?debug=local.
   if (LOCAL_DEBUG_QUERY) {
+    els.localTransitionLogBtn.hidden = false;
     tl = tlCreate({ gpuDone: () => !(stagedLocalPatch?.renderer ?? localMapRenderer)?.isUploading?.() });
     els.localTransitionLogBtn.addEventListener('click', tlClick);
   }

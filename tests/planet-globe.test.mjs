@@ -299,6 +299,32 @@ test('A-16: все фазы t0..t8 заполняются на реальном 
   assert.ok(rec.t7 > rec.t6, 't7 (кадр) после t6 (GPU)');
 });
 
+test('A-16: t1 не перезаписывается (Dive-in после клика по гексу)', (t) => {
+  const { log, harness } = createLogHarness();
+  t.after(() => harness.restore());
+  log.start(555);
+  harness.advance(10);
+  log.mark('t1', 10);      // клик по гексу — t1 = 10
+  harness.advance(10);
+  log.mark('t1', 20);      // Dive-in — игнорируется
+  harness.advance(10);
+  log.mark('t2');
+  const rec = log.stop();
+  assert.equal(rec.t1, 10, 't1 остаётся первой меткой');
+  assert.equal(rec.cell, 10, 'ячейка первой t1');
+
+  // На反过来м порядке: Dive-in first, потом клик — t1 = Dive-in.
+  log.start(556);
+  harness.advance(5);
+  const diveAt = harness.now();
+  log.mark('t1', 30);      // Dive-in
+  harness.advance(5);
+  log.mark('t1', 40);      // клик по гексу — игнорируется
+  const rec2 = log.stop();
+  assert.equal(rec2.t1, diveAt, 't1 = метка Dive-in');
+  assert.equal(rec2.cell, 30, 'ячейка Dive-in');
+});
+
 test('A-16: max frame gap — отдельный пол, порог тревоги 100 мс', (t) => {
   const { log, harness } = createLogHarness();
   t.after(() => harness.restore());
@@ -373,25 +399,41 @@ test('A-16: файл скачивается, имя содержит seed, яч�
 
 test('A-16: кнопка и обработчик живут только при ?debug=local', () => {
   const html = readFileSync(new URL('../site/planet-globe/index.html', import.meta.url), 'utf8');
+  const inspectorAt = html.indexOf('id="patchInspector"');
+  assert.ok(inspectorAt >= 0, 'панель #patchInspector есть');
+  const inspectorBlock = html.slice(inspectorAt, html.indexOf('</section>', inspectorAt));
+  assert.match(inspectorBlock, /localTransitionLogBtn/, 'кнопка внутри панели #patchInspector');
+  assert.ok(
+    inspectorBlock.indexOf('localTransitionLogBtn') < inspectorBlock.indexOf('diveLocalMapBtn'),
+    'кнопка до Dive-in (лог-старт предшествует переходу)',
+  );
+  assert.match(
+    html,
+    /<button id="localTransitionLogBtn"[^>]*\shidden[^>]*>/,
+    'кнопка скрыта по умолчанию (вне ?debug=local её нет)',
+  );
   const diagAt = html.indexOf('id="localMapDiag"');
   assert.ok(diagAt >= 0, 'панель #localMapDiag есть');
   const diagBlock = html.slice(diagAt, html.indexOf('</div>', diagAt));
-  assert.match(diagBlock, /localTransitionLogBtn/, 'кнопка внутри панели #localMapDiag');
+  assert.ok(!diagBlock.includes('localTransitionLogBtn'), 'кнопки нет в #localMapDiag');
   assert.match(html, /id="localMapDiag" hidden/, 'панель скрыта по умолчанию');
 
   const page = readFileSync(new URL('../site/planet-globe/planet-globe.ts', import.meta.url), 'utf8');
   // Обработчик кнопки и создание модуля — только в debug-режиме.
-  assert.match(page, /if \(LOCAL_DEBUG_QUERY\) \{\s*tl = tlCreate\(\{ gpuDone:/);
+  assert.match(page, /if \(LOCAL_DEBUG_QUERY\) \{\s*els\.localTransitionLogBtn\.hidden = false;\s*tl = tlCreate\(\{ gpuDone:/);
   assert.match(page, /els\.localTransitionLogBtn\.addEventListener\('click', tlClick\);/);
-  // Панель открывается окном замера (startLocalCameraDiagWindow), wiring её не показывает.
+  // Кнопка показывается в debug-режиме; панель открывается окном замера
+  // (startLocalCameraDiagWindow), wiring её не показывает.
   const wiringAt = page.indexOf('if (LOCAL_DEBUG_QUERY) {');
   const wiringBlock = page.slice(wiringAt, page.indexOf('\n  }', wiringAt));
-  assert.ok(!wiringBlock.includes('hidden = false'), 'wiring не меняет видимость панели');
+  assert.match(wiringBlock, /els\.localTransitionLogBtn\.hidden = false;/, 'кнопка в debug-режиме видна');
+  assert.ok(!wiringBlock.includes('localMapDiag.hidden'), 'wiring не меняет видимость панели');
   const diagWindowAt = page.indexOf('function startLocalCameraDiagWindow');
   const diagBody = page.slice(diagWindowAt, page.indexOf('\nfunction ', diagWindowAt + 10));
   assert.match(diagBody, /els\.localMapDiag\.hidden = false;/, 'панель открывается окном замера');
-  // Фазовые метки ставит страница в потоке перехода.
+  // Фазовые метки ставит страница в потоке перехода: клик по гексу и Dive-in.
   assert.match(page, /tl\?\.mark\('t1', neighbor\.cell\)/);
+  assert.match(page, /tl\?\.mark\('t1', centerCell\.cell\)/, 't1 на пути Dive-in');
   assert.match(page, /tl\?\.mark\('t2'\)/);
   assert.match(page, /tl\?\.mark\('t3'\)/);
   assert.match(page, /tl\?\.mark\('t4'\)/);

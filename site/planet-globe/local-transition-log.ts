@@ -1,8 +1,9 @@
 /* A-16 / Stage-8.10c: ручной лог-замер перехода между гексами локальной карты.
    t0..t8 — performance.now(); t6..t8 и max frame gap — независимый rAF-пробник
    (стартует с t0, гасится с финалом); разрыв кадра > 100 мс — alarming (отдельный
-   флаг). Буфер 20 записей; финал (естественный t8 или ручной стоп) — одна запись:
-   console.table + скачиваемый JSON (весь буфер). */
+   флаг). t1 — первый событие перехода (Dive-in или клик по гексу), не
+   перезаписывается. Буфер 20 записей; финал (естественный t8 или ручной стоп) —
+   одна запись: console.table + скачиваемый JSON (весь буфер). */
 
 interface TransitionRecord {
   seed: number;
@@ -121,6 +122,7 @@ export function createTransitionLog(options: TransitionLogOptions) {
     },
     mark(phase: 't1' | 't2' | 't3' | 't4' | 't5', cell?: number): void {
       if (!record) return;
+      if (phase === 't1' && record.t1 !== null) return;
       record[phase] = performance.now();
       if (cell !== undefined && record.cell === null) {
         record.cell = cell;
