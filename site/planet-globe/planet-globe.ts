@@ -2495,6 +2495,12 @@ function syncBrowserUrl(options: SyncBrowserUrlOptions = {}): void {
     }
   }
 
+  // A-16 (A-26): debug=local из адреса нагрузки переводится в собираемый URL —
+  // F5 после открытия локальной карты не выключает режим. Только этот параметр.
+  if (LOCAL_DEBUG_QUERY) {
+    params.set('debug', 'local');
+  }
+
   const query = params.toString().replace(
     /(^|&)cell=([^&]*)/,
     (_match, prefix: string, val: string) => prefix + 'cell=' + val.replace(/%2F/gi, '/'),

@@ -200,21 +200,27 @@ const { createTransitionLog } = require('../site/planet-globe/local-transition-l
 /** Симуляция кадрового цикла: искусственные кадры, часы, скачивание. */
 function createLogHarness() {
   let clock = 0;
-  const queue = [];
+  let rafSeq = 0;
+  const queue = new Map();
   const downloads = [];
   const realPerformance = globalThis.performance;
   const realRaf = globalThis.requestAnimationFrame;
   const realCancel = globalThis.cancelAnimationFrame;
   globalThis.performance = { now: () => clock };
-  globalThis.requestAnimationFrame = (cb) => { queue.push(cb); return queue.length; };
-  globalThis.cancelAnimationFrame = () => {};
+  globalThis.requestAnimationFrame = (cb) => {
+    rafSeq++;
+    queue.set(rafSeq, cb);
+    return rafSeq;
+  };
+  globalThis.cancelAnimationFrame = (id) => { queue.delete(id); };
   const harness = {
     gpuDone: false,
     now: () => clock,
     advance(ms) { clock += ms; },
     tick(ms) {
       clock += ms;
-      const callbacks = queue.splice(0, queue.length);
+      const callbacks = [...queue.values()];
+      queue.clear();
       for (const cb of callbacks) cb();
     },
     downloads,
@@ -271,12 +277,18 @@ test('A-16: ручной стоп и естественный финал даю�
   }
   assert.equal(manual.cell, null, 'ячейка неизвестна — null');
   assert.equal(manual.alarming, false);
+  assert.equal(manual.aborted, true, 'Стоп без t1 — aborted');
+  assert.equal(manual.totalMs, null, 'totalMs без t1 — null');
+  assert.equal(manual.gpuMs, null, 'gpuMs без фаз — null');
   assert.equal(manual.seed, 12345, 'seed берётся при старте');
 
   // Естественный финал на реальном переходе.
   const natural = runRealTransition(log, harness);
   assert.deepEqual(Object.keys(natural).sort(), Object.keys(manual).sort(),
     'оба пути пишут одну и ту же структуру записи');
+  assert.equal(natural.aborted, false, 'переход был — aborted false');
+  assert.equal(natural.totalMs, 152, 'totalMs = t8 − t1 (162 − 10)');
+  assert.equal(natural.gpuMs, 32, 'gpuMs = t6 − t5 (82 − 50)');
   assert.equal(log.stop(), null, 'финал закрывает окно замера');
 });
 
@@ -394,7 +406,8 @@ test('A-16: файл скачивается, имя содержит seed, яч�
   log.start(777);
   log.stop();
   assert.equal(downloads.length, 2);
-  assert.match(downloads[1].filename, /^tl-777-\?-\d{4}-\d{2}-\d{2}-\d{6}\.json$/);
+  assert.match(downloads[1].filename, /^tl-777-null-\d{4}-\d{2}-\d{2}-\d{6}\.json$/,
+    'ячейка неизвестна — null (браузер не заменяет на _)');
 });
 
 test('A-16: кнопка и обработчик живут только при ?debug=local', () => {
@@ -424,7 +437,8 @@ test('A-16: кнопка и обработчик живут только при 
   assert.match(page, /els\.localTransitionLogBtn\.addEventListener\('click', tlClick\);/);
   // Кнопка показывается в debug-режиме; панель открывается окном замера
   // (startLocalCameraDiagWindow), wiring её не показывает.
-  const wiringAt = page.indexOf('if (LOCAL_DEBUG_QUERY) {');
+  const tlCreateAt = page.indexOf('tl = tlCreate');
+  const wiringAt = page.lastIndexOf('if (LOCAL_DEBUG_QUERY) {', tlCreateAt);
   const wiringBlock = page.slice(wiringAt, page.indexOf('\n  }', wiringAt));
   assert.match(wiringBlock, /els\.localTransitionLogBtn\.hidden = false;/, 'кнопка в debug-режиме видна');
   assert.ok(!wiringBlock.includes('localMapDiag.hidden'), 'wiring не меняет видимость панели');
@@ -438,6 +452,12 @@ test('A-16: кнопка и обработчик живут только при 
   assert.match(page, /tl\?\.mark\('t3'\)/);
   assert.match(page, /tl\?\.mark\('t4'\)/);
   assert.match(page, /tl\?\.mark\('t5'\)/);
+  // debug=local из адреса нагрузки переносится в собираемый URL.
+  assert.match(
+    page,
+    /if \(LOCAL_DEBUG_QUERY\) \{\s*params\.set\('debug', 'local'\);\s*\}/,
+    'debug=local переводится в URL',
+  );
   // Горячий путь кадра не касается лог-замера (ни пробника, ни меток).
   const frameAt = page.indexOf('function renderLocalMapFrame');
   const frameEnd = page.indexOf('\nfunction ', frameAt + 10);

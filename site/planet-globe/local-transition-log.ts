@@ -2,8 +2,10 @@
    t0..t8 — performance.now(); t6..t8 и max frame gap — независимый rAF-пробник
    (стартует с t0, гасится с финалом); разрыв кадра > 100 мс — alarming (отдельный
    флаг). t1 — первый событие перехода (Dive-in или клик по гексу), не
-   перезаписывается. Буфер 20 записей; финал (естественный t8 или ручной стоп) —
-   одна запись: console.table + скачиваемый JSON (весь буфер). */
+   перезаписывается. aborted — финал без t1 (Старт без перехода); totalMs —
+   (t8 или последняя метка) − t1; gpuMs = t6 − t5. Буфер 20 записей; финал
+   (естественный t8 или ручной стоп) — одна запись: console.table + скачиваемый
+   JSON (весь буфер). */
 
 interface TransitionRecord {
   seed: number;
@@ -19,6 +21,9 @@ interface TransitionRecord {
   t8: number | null;
   maxFrameGapMs: number | null;
   alarming: boolean;
+  aborted: boolean;
+  totalMs: number | null;
+  gpuMs: number | null;
 }
 
 interface TransitionLogOptions {
@@ -30,6 +35,16 @@ interface TransitionLogOptions {
 function stampForFilename(now: Date): string {
   const iso = now.toISOString();
   return `${iso.slice(0, 10)}-${iso.slice(11, 19).replace(/:/g, '')}`;
+}
+
+/** Последняя заполненная метка из t2..t8 (массив упорядочен по времени). */
+function lastFilledMark(record: TransitionRecord): number | null {
+  const marks: Array<number | null> = [record.t2, record.t3, record.t4, record.t5, record.t6, record.t7, record.t8];
+  for (let i = marks.length - 1; i >= 0; i--) {
+    const mark = marks[i];
+    if (mark !== null && mark !== undefined) return mark;
+  }
+  return null;
 }
 
 export function createTransitionLog(options: TransitionLogOptions) {
@@ -58,6 +73,13 @@ export function createTransitionLog(options: TransitionLogOptions) {
     }
     finalRecord.maxFrameGapMs = maxGapMs > 0 ? maxGapMs : null;
     finalRecord.alarming = maxGapMs > 100;
+    finalRecord.aborted = finalRecord.t1 === null;
+    finalRecord.totalMs = finalRecord.t1 !== null
+      ? (lastFilledMark(finalRecord) ?? finalRecord.t1) - finalRecord.t1
+      : null;
+    finalRecord.gpuMs = finalRecord.t5 !== null && finalRecord.t6 !== null
+      ? finalRecord.t6 - finalRecord.t5
+      : null;
     buffer.push(finalRecord);
     if (buffer.length > 20) {
       buffer.shift();
@@ -65,7 +87,7 @@ export function createTransitionLog(options: TransitionLogOptions) {
     console.table(finalRecord);
     const now = new Date();
     download(
-      `tl-${finalRecord.seed}-${finalRecord.cell ?? '?'}-${stampForFilename(now)}.json`,
+      `tl-${finalRecord.seed}-${finalRecord.cell ?? 'null'}-${stampForFilename(now)}.json`,
       JSON.stringify(buffer)
     );
     return finalRecord;
@@ -115,6 +137,9 @@ export function createTransitionLog(options: TransitionLogOptions) {
         t8: null,
         maxFrameGapMs: null,
         alarming: false,
+        aborted: false,
+        totalMs: null,
+        gpuMs: null,
       };
       maxGapMs = 0;
       calmFrames = 0;
