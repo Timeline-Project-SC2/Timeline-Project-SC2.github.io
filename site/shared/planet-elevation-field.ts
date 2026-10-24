@@ -18,6 +18,7 @@
 */
 
 import PlanetGeography from './planet-geography.ts';
+import { CONTRAST_LAND_GAIN, CONTRAST_LAND_PIVOT, CONTRAST_OCEAN_PIVOT, CONTRAST_OCEAN_SCALE } from './planet-geography-constants.ts';
 import PlanetNoise from './planet-noise.ts';
 
 const EARTH_RADIUS_KM = PlanetGeography.EARTH_RADIUS_KM;
@@ -182,12 +183,12 @@ export function sampleElevation(dir: ArrayLike<number>, stepM: number): number {
 
   const rawElev = WEIGHT_BASE * base + WEIGHT_PLATE * plateValue + WEIGHT_DETAIL * detailValue;
   let elevation = rawElev;
-  if (rawElev > 0.40) {
-    const d = rawElev - 0.40;
-    elevation = rawElev + 5.0 * d * d;
-  } else if (rawElev < 0.12) {
-    const d = 0.12 - rawElev;
-    elevation = rawElev - 0.65 * d;
+  if (rawElev > CONTRAST_LAND_PIVOT) {
+    const d = rawElev - CONTRAST_LAND_PIVOT;
+    elevation = rawElev + CONTRAST_LAND_GAIN * d * d;
+  } else if (rawElev < CONTRAST_OCEAN_PIVOT) {
+    const d = CONTRAST_OCEAN_PIVOT - rawElev;
+    elevation = rawElev - CONTRAST_OCEAN_SCALE * d;
   }
   elevation = clamp(elevation, -1, 1);
   return elevation * ELEVATION_SCALE_M;

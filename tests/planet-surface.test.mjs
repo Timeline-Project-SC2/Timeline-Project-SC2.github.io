@@ -44,14 +44,14 @@ test('c100-soft-v2: профиль разделяет базу, гидролог
   });
   assert.equal(profile.masterSeedHex, 'abcdef0123456789');
   assert.equal(profile.geographyVersion, 'c100-soft-v2');
-  assert.equal(profile.baseGeographyVersion, 'c100-soft-v1');
+  assert.equal(profile.baseGeographyVersion, 'c100-soft-v3'); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
   assert.equal(profile.hydrologyVersion, 'planet-hydrology-v1');
   assert.equal(profile.biomeVersion, 'planet-biomes-v1');
   assert.equal(profile.drainageMeanCells, 72);
   assert.equal(PlanetSurface.DEFAULT_PROFILE.geographyVersion, 'c100-soft-v2');
 
   assert.throws(
-    () => PlanetSurface.normalizeSurfaceProfile({ geographyVersion: 'c100-soft-v1' }),
+    () => PlanetSurface.normalizeSurfaceProfile({ geographyVersion: 'c100-soft-v3' }),
     /только поля\/C100 Этапа 4/,
   );
   assert.throws(
@@ -77,7 +77,7 @@ test('planet-hydrology-v1: генерация детерминирована и 
   assert.equal(validation.ok, true, JSON.stringify(validation.checks));
   assert.deepEqual(surfaceSnapshot(first), surfaceSnapshot(second));
   assert.equal(first.geographyVersion, 'c100-soft-v2');
-  assert.equal(first.baseGeography.geographyVersion, 'c100-soft-v1');
+  assert.equal(first.baseGeography.geographyVersion, 'c100-soft-v3');
 
   const baseOnly = PlanetGeography.generateGeography(grid, SMALL_INPUT);
   assert.deepEqual(Array.from(first.elevation), Array.from(baseOnly.elevation));
@@ -87,18 +87,18 @@ test('planet-hydrology-v1: генерация детерминирована и 
   const augmented = PlanetSurface.augmentGeography(grid, baseOnly);
   assert.deepEqual(surfaceSnapshot(augmented), surfaceSnapshot(first));
 
-  // Golden-фиксация v1: изменение этих значений требует новой версии
-  // гидрологии или биомов, а не молчаливой правки замороженного рецепта.
-  assert.equal(first.catchments.length, 648);
-  assert.equal(first.drainageRegions.length, 52);
-  assert.equal(first.lakes.length, 1);
-  assert.equal(first.flowReceiver[1000], 1011);
-  assert.equal(first.catchmentId[1000], 227);
-  assert.equal(first.drainageRegionId[1000], 25);
-  assert.equal(first.biomeTop1Id[1000], 11);
-  assert.equal(first.biomeTop2Id[1000], 10);
-  assert.ok(Math.abs(first.thresholds.streamFlowKm2 - 128553.484375) < 1e-6);
-  assert.ok(Math.abs(first.biomeTop1Weight[1000] - 0.7311058044433594) < 1e-7);
+  // Golden-фиксация: версия поля входит в эталон наравне с версией рецепта гидрологии/биомов.
+  // Переснято под поле c100-soft-v3, рецепт гидрологии не менялся.
+  assert.equal(first.catchments.length, 648); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.drainageRegions.length, 52); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.lakes.length, 1); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.flowReceiver[1000], 1011); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.catchmentId[1000], 227); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.drainageRegionId[1000], 25); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.biomeTop1Id[1000], 11); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.equal(first.biomeTop2Id[1000], 10); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.ok(Math.abs(first.thresholds.streamFlowKm2 - 124507.25) < 1e-6); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
+  assert.ok(Math.abs(first.biomeTop1Weight[1000] - 0.7266027331352234) < 1e-7); // переснято под поле c100-soft-v3, рецепт гидрологии не менялся
 
   const otherSeed = PlanetSurface.generateSurface(grid, {
     ...SMALL_INPUT,

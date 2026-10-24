@@ -67,7 +67,7 @@ test('FULL EQ: фикстура непустая, хранит метаданн�
   assert.deepEqual(fixture.versions, {
     grid: 'goldberg-gp-v1',
     noise: 'planet-noise-simplex3d-v1',
-    geography: 'c100-soft-v1',
+    geography: 'c100-soft-v3',
     surface: 'c100-soft-v2',
     hydrology: 'planet-hydrology-v1',
     biome: 'planet-biomes-v1',

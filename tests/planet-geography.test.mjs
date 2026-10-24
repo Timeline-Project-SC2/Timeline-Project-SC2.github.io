@@ -79,7 +79,7 @@ test('c100-soft-v1: профиль принимает snake_case колонки 
   assert.equal(profile.radiusKm, 3390);
   assert.equal(profile.presetId, 'marslike_dry');
   assert.equal(profile.noiseVersion, 'planet-noise-simplex3d-v1');
-  assert.equal(profile.geographyVersion, 'c100-soft-v1');
+  assert.equal(profile.geographyVersion, 'c100-soft-v3');
   assert.equal(profile.presetVersion, 'planet-presets-v1');
 
   assert.equal(PlanetGeography.DEFAULT_PROFILE.continentMeanCells, 400);

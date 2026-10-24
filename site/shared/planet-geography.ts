@@ -9,7 +9,7 @@ import { CONTRACT, getPresetRuntimeValues } from './planet-generation-contract.t
 import PlanetNoise, { buildSimplexTable } from './planet-noise.ts';
 import { getSharedPlanetCore, type PlanetCore } from '../../src/planet/planet-core-host.ts';
 import type { PlanetGrid } from './geodesic-grid.ts';
-import { EARTH_CANONICAL_V, GEOGRAPHY_VERSION } from './planet-geography-constants.ts';
+import { CONTRAST_LAND_GAIN, CONTRAST_LAND_PIVOT, CONTRAST_OCEAN_PIVOT, CONTRAST_OCEAN_SCALE, EARTH_CANONICAL_V, GEOGRAPHY_VERSION } from './planet-geography-constants.ts';
 
 export interface GeographyProfile {
   masterSeedHex: string;
@@ -434,9 +434,12 @@ function normalizeProfile(input?: GeographyProfileInput | null): GeographyProfil
   if (profile.noiseVersion !== NOISE_VERSION) {
     throw new Error('PlanetGeography: неподдерживаемая noiseVersion ' + profile.noiseVersion);
   }
-  if (profile.geographyVersion !== GEOGRAPHY_VERSION) {
+  // W28b: поддерживаем v1/v2 для совместимости (контракт хранит их), но нормализуем к v3 — рецепт поля теперь единый.
+  const SUPPORTED_GEOGRAPHY_VERSIONS = ['c100-soft-v1', 'c100-soft-v2', GEOGRAPHY_VERSION];
+  if (SUPPORTED_GEOGRAPHY_VERSIONS.indexOf(profile.geographyVersion) < 0) {
     throw new Error('PlanetGeography: неподдерживаемая geographyVersion ' + profile.geographyVersion);
   }
+  profile.geographyVersion = GEOGRAPHY_VERSION;
   if (profile.gridVersion !== GRID_VERSION) {
     throw new Error('PlanetGeography: неподдерживаемая gridVersion ' + profile.gridVersion);
   }
@@ -573,12 +576,12 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
     // Море: mean 2764→3743 м, max 8493→10997 м (elevMin≈−1.0), mean/max 0.325→0.340 (≈0.3366).
     const rawElev = 0.74 * base + 0.30 * plate + 0.10 * detail;
     let elevation = rawElev;
-    if (rawElev > 0.40) {
-      const d = rawElev - 0.40;
-      elevation = rawElev + 5.0 * d * d;
-    } else if (rawElev < 0.12) {
-      const d = 0.12 - rawElev;
-      elevation = rawElev - 0.65 * d;
+    if (rawElev > CONTRAST_LAND_PIVOT) {
+      const d = rawElev - CONTRAST_LAND_PIVOT;
+      elevation = rawElev + CONTRAST_LAND_GAIN * d * d;
+    } else if (rawElev < CONTRAST_OCEAN_PIVOT) {
+      const d = CONTRAST_OCEAN_PIVOT - rawElev;
+      elevation = rawElev - CONTRAST_OCEAN_SCALE * d;
     }
     elevation = clamp(elevation, -1, 1);
 

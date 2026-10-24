@@ -4,7 +4,7 @@
   "versions": {
     "grid": "goldberg-gp-v1",
     "noise": "planet-noise-simplex3d-v1",
-    "geography": "c100-soft-v1",
+    "geography": "c100-soft-v3",
     "surface": "c100-soft-v2",
     "hydrology": "planet-hydrology-v1",
     "biome": "planet-biomes-v1",
@@ -41,7 +41,7 @@
     "continentSoftWidthCells": 4,
     "biomeSoftWidthCells": 2,
     "transitionEntropyPctl": 90,
-    "baseGeographyVersion": "c100-soft-v1",
+    "baseGeographyVersion": "c100-soft-v3",
     "hydrologyVersion": "planet-hydrology-v1",
     "biomeVersion": "planet-biomes-v1"
   },
