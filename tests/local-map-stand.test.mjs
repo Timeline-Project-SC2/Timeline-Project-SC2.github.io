@@ -1,13 +1,14 @@
-/* Тест измерительного стенда локальной карты (Stage-8.12d, шаг 1).
+/* Тест измерительного стенда локальной карты (Stage-8.12d + Stage-8.14, шаг 1).
    ---------------------------------------------------------------------------
    Стенд — инструмент измерения, а не тест дефектов. Тест проверяет
-   ВЫЧИСЛИМОСТЬ метрик (числа конечные, в разумных пределах) и структуру
-   отчёта, а НЕ прохождение порогов: пока пороги красные, CI не должен
+   ВЫЧИСЛИМОСТЬ метрик (числа конечные, в разумных пределах), структуру
+   отчёта и негативный контроль на плоской синтетической фикстуре, а НЕ
+   прохождение порогов живой картой: пока пороги красные, CI не должен
    краснеть из-за текущего состояния карты.
 
    Когда починка закроет дефекты и пороги станут зелёными, тест останется
-   зелёным: он не завязан на значения метрик, а только на их конечность,
-   диапазон и согласованность отчёта с режимами CLI.
+   зелёным: он не завязан на текущие значения живой карты, а только на их
+   конечность, диапазон, негативный контроль и согласованность отчёта с CLI.
 
    Запуск: node --test tests/local-map-stand.test.mjs
 */
@@ -22,6 +23,9 @@ const TOOL_PATH = fileURLToPath(new URL('../tools/stand_local_map.mjs', import.m
 /** Публичный API стенда: тест меряет тем же кодом, что и CLI. */
 const stand = await import(TOOL_PATH);
 
+/** Число метрик стенда: 7 исходных (Stage-8.12d) + 7 новых (Stage-8.14, шаг 1). */
+const METRIC_COUNT = 14;
+
 /** Разумные пределы значений метрик (на порядки больше ожидаемых величин). */
 const VALUE_LIMITS = {
   'ступень кромки русла': 1000,
@@ -32,6 +36,13 @@ const VALUE_LIMITS = {
   'перепад вершин на суше': 1000,
   'перепад waterDepthM патч/юбка': 1000,
   'доля площади гекса под врезом': 100,
+  'размах суши / ширина кадра': 500,
+  'размах океанского дна': 500,
+  'средний уклон': 1000,
+  'гипсометрия p90−p10': 100,
+  'гладкость контура воды': 100,
+  'непрерывность A↔B': 20000,
+  'согласованность LOD': 20000,
 };
 
 const report = await stand.runStand({ world: 'a29', radiusM: 2500 });
@@ -53,18 +64,30 @@ test('стенд: конфигурация измерений зафиксиро
   assert.equal(stand.THRESHOLDS.carveAreaMaxPct, 12, 'доля площади гекса под врезом ≤ 12 %');
   assert.equal(stand.CARVE_AREA_GRID, 44, 'метрика 7: сетка 44×44');
   assert.equal(stand.CARVE_AREA_RADIUS_RATIO, 0.95, 'метрика 7: радиус 0,95·R');
+  // Stage-8.14 (шаг 1, Воркер 26): пороги метрик m.8…m.14 менять нельзя.
+  assert.equal(stand.THRESHOLDS.landReliefMinPct, 10, 'm.8 размах суши: минимум 10 %');
+  assert.equal(stand.THRESHOLDS.landReliefMaxPct, 25, 'm.8 размах суши: максимум 25 %');
+  assert.equal(stand.THRESHOLDS.oceanReliefMinPct, 5, 'm.9 размах океанского дна ≥ 5 %');
+  assert.equal(stand.THRESHOLDS.meanSlopeMinPct, 4, 'm.10 средний уклон ≥ 4 %');
+  assert.equal(stand.THRESHOLDS.hypsometryMinPct, 40, 'm.11 гипсометрия p90−p10 ≥ 40 % размаха');
+  assert.equal(stand.THRESHOLDS.waterContourSmoothMinPct, 40, 'm.12 гладкость контура воды ≥ 40 %');
+  assert.equal(stand.THRESHOLDS.hexContinuityMaxM, 1, 'm.13 непрерывность A↔B ≤ 1 м');
+  assert.equal(stand.THRESHOLDS.lodConsistencyMaxM, 2, 'm.14 согласованность LOD ≤ 2 м');
+  assert.equal(stand.HEX_EDGE_SAMPLES, 16, 'm.13: ровно 16 точек вдоль грани гекса');
+  assert.equal(stand.LOD_FINE_RES, 256, 'm.14: детальный LOD 256');
+  assert.equal(stand.LOD_COARSE_RES, 64, 'm.14: грубый LOD 64');
 });
 
-test('стенд: таблица покрывает все 7 контрольных ячеек и все 7 метрик', () => {
-  assert.equal(report.rows.length, stand.CONTROL_CELLS.length * 7);
+test('стенд: таблица покрывает все 7 контрольных ячеек и все 14 метрик', () => {
+  assert.equal(report.rows.length, stand.CONTROL_CELLS.length * METRIC_COUNT);
   const metrics = new Set();
   for (const cell of stand.CONTROL_CELLS) {
     const rows = report.rows.filter((row) => row.cell === cell);
-    assert.equal(rows.length, 7, `у ячейки ${cell} ровно 7 метрик`);
-    assert.equal(new Set(rows.map((row) => row.metric)).size, 7, `метрики ячейки ${cell} не повторяются`);
+    assert.equal(rows.length, METRIC_COUNT, `у ячейки ${cell} ровно ${METRIC_COUNT} метрик`);
+    assert.equal(new Set(rows.map((row) => row.metric)).size, METRIC_COUNT, `метрики ячейки ${cell} не повторяются`);
     for (const row of rows) metrics.add(row.metric);
   }
-  assert.equal(metrics.size, 7, 'в таблице семь разных метрик');
+  assert.equal(metrics.size, METRIC_COUNT, 'в таблице четырнадцать разных метрик');
   assert.deepEqual(
     [...metrics].sort(),
     Object.keys(VALUE_LIMITS).sort(),
@@ -217,6 +240,131 @@ test('стенд: гейт возвращает 1 при красной метр
   assert.equal(stand.gateExitCode({ fail: 0, pass: 0, na: 42 }), 0, 'один N/A — не FAIL');
 });
 
+test('стенд: метрики формы и сквозной непрерывности (m.8…m.14) вычислимы на живой карте', () => {
+  const newMetrics = [
+    stand.METRIC_TITLES.landRelief,
+    stand.METRIC_TITLES.oceanRelief,
+    stand.METRIC_TITLES.meanSlope,
+    stand.METRIC_TITLES.hypsometry,
+    stand.METRIC_TITLES.waterContour,
+    stand.METRIC_TITLES.hexContinuity,
+    stand.METRIC_TITLES.lodConsistency,
+  ];
+  for (const metric of newMetrics) {
+    const rows = report.rows.filter((row) => row.metric === metric);
+    assert.equal(rows.length, stand.CONTROL_CELLS.length, `у метрики «${metric}» по строке на каждую контрольную ячейку`);
+    const measured = rows.filter((row) => row.status !== 'N/A');
+    assert.ok(measured.length > 0, `метрика «${metric}» реально измеряется хотя бы на одной ячейке`);
+    for (const row of measured) {
+      assert.ok(Number.isFinite(row.value) && row.value >= 0, `${metric}: конечное неотрицательное число (${row.value})`);
+    }
+  }
+
+  for (const row of report.rows.filter((r) => r.metric === stand.METRIC_TITLES.hexContinuity)) {
+    assert.notEqual(row.status, 'N/A', `ячейка ${row.cell}: у каждого контрольного гекса есть 6 соседей A↔B`);
+    assert.match(row.valueText, /м$/, 'непрерывность A↔B выражена в метрах');
+    assert.match(row.detail, /16 точек грани/, 'в detail указано 16 точек грани');
+    assert.equal(
+      row.status,
+      row.value <= stand.THRESHOLDS.hexContinuityMaxM ? 'PASS' : 'FAIL',
+      'статус m.13 строго соответствует порогу ≤ 1 м',
+    );
+  }
+
+  for (const row of report.rows.filter((r) => r.metric === stand.METRIC_TITLES.lodConsistency)) {
+    assert.notEqual(row.status, 'N/A', `ячейка ${row.cell}: гекс представлен и на 256, и на 64`);
+    assert.match(row.valueText, /м$/, 'согласованность LOD выражена в метрах');
+    assert.match(row.detail, /LOD 256 против 64/, 'в detail указано сравнение 256 против 64');
+    assert.equal(
+      row.status,
+      row.value <= stand.THRESHOLDS.lodConsistencyMaxM ? 'PASS' : 'FAIL',
+      'статус m.14 строго соответствует порогу ≤ 2 м',
+    );
+  }
+});
+
+test('негативный контроль (правило 2): плоская фикстура с постоянной высотой', () => {
+  for (const constantHeightM of [0, 42.5, -31.5]) {
+    const flat = stand.runFlatFixtureControl({ constantHeightM, radiusM: 2500 });
+    assert.equal(flat.rows.length, 7, 'в негативном контроле ровно семь новых метрик m.8…m.14');
+    for (const row of flat.rows) {
+      assert.notEqual(row.status, 'N/A', `${row.metric}: на береговой плоской фикстуре не уходит в N/A`);
+      assert.equal(row.value, 0, `${row.metric}: на постоянной высоте h=${constantHeightM} м измерено 0`);
+    }
+
+    // Все пять метрик формы и гладкости контура (m.8…m.12) обязаны возвращать FAIL на плоскости.
+    for (const title of [
+      stand.METRIC_TITLES.landRelief,
+      stand.METRIC_TITLES.oceanRelief,
+      stand.METRIC_TITLES.meanSlope,
+      stand.METRIC_TITLES.hypsometry,
+      stand.METRIC_TITLES.waterContour,
+    ]) {
+      const row = flat.rows.find((entry) => entry.metric === title);
+      assert.equal(row?.status, 'FAIL', `${title} на плоской плите h=${constantHeightM} м обязана давать FAIL`);
+    }
+
+    // m.13 и m.14 — полунормы расхождения |h₁ − h₂| ≤ ε: при h_A ≡ h_B ≡ h_64 ≡ const
+    // честное расхождение тождественно равно 0 м (PASS); подгонять их под FAIL нельзя.
+    for (const title of [stand.METRIC_TITLES.hexContinuity, stand.METRIC_TITLES.lodConsistency]) {
+      const row = flat.rows.find((entry) => entry.metric === title);
+      assert.equal(row?.status, 'PASS', `${title}: на совпадающей константе |C − C| = 0 м (PASS)`);
+    }
+    assert.equal(stand.gateExitCode(flat.summary), 1, 'плоская фикстура валит гейт стенда');
+  }
+});
+
+test('синтетические пробы m.8…m.14: метрики чувствительны в обе стороны (не захардкожены в FAIL)', () => {
+  const res = 256;
+  const radiusM = 2500;
+  // Наклонный рельеф: суша x >= 128 поднимается на 750 м (15 % от 2R = 5000 м),
+  // океан x < 128 опускается на 350 м (7 % от 2R), плавная полоса маски воды.
+  const heightfield = new Float32Array(res * res);
+  const terraformMap = new Uint8Array(res * res);
+  const waterMask = new Float32Array(res * res);
+  for (let y = 0; y < res; y++) {
+    for (let x = 0; x < res; x++) {
+      const idx = y * res + x;
+      const u = x / (res - 1);
+      const v = y / (res - 1);
+      if (x < res / 2) {
+        terraformMap[idx] = 0;
+        heightfield[idx] = -350 * (1 - x / (res / 2 - 1)) - 10 * v;
+      } else {
+        terraformMap[idx] = 2;
+        heightfield[idx] = 740 * ((x - res / 2) / (res / 2 - 1)) + 10 * v;
+      }
+      // Плавная переходная полоса шириной 6 текселей вокруг x = 128 (все промежуточные 0 < mask < 1).
+      waterMask[idx] = Math.min(1, Math.max(0, 0.5 - (x - 127.5) / 6));
+    }
+  }
+  const local = { heightfield, terraformMap, waterMask, meta: { radiusM, hfRes: res, tfRes: res } };
+
+  const m8 = stand.measureLandRelief(local, radiusM);
+  assert.ok(m8.value >= 10 && m8.value <= 25, `m.8 в целевом коридоре 10…25 % (${m8.value})`);
+  const m9 = stand.measureOceanRelief(local, null, radiusM);
+  assert.ok(m9.value >= 5, `m.9 ≥ 5 % (${m9.value})`);
+  const m10 = stand.measureMeanSlope(local, radiusM);
+  assert.ok(m10.value >= 4, `m.10 ≥ 4 % (${m10.value})`);
+  const m11 = stand.measureHypsometry(local);
+  assert.ok(m11.value >= 40, `m.11 ≥ 40 % (${m11.value})`);
+  const m12 = stand.measureWaterContourSmoothness(local, null, radiusM);
+  assert.ok(m12.value >= 40, `m.12 ≥ 40 % на гладкой маске (${m12.value})`);
+
+  // Наоборот, m.13 и m.14 обязаны ловить ступеньки A↔B (> 1 м) и LOD (> 2 м).
+  const mismatchProbe = stand.runFlatFixtureControl({
+    constantHeightM: 10,
+    neighborHeightOffsetM: 2.5,
+    lodHeightOffsetM: 3.5,
+  });
+  const m13Row = mismatchProbe.rows.find((r) => r.metric === stand.METRIC_TITLES.hexContinuity);
+  const m14Row = mismatchProbe.rows.find((r) => r.metric === stand.METRIC_TITLES.lodConsistency);
+  assert.equal(m13Row?.status, 'FAIL', 'm.13 ловит ступеньку A↔B 2,5 м > 1 м');
+  assert.ok(Math.abs(m13Row.value - 2.5) < 1e-3, `m.13 измеряет 2,5 м (${m13Row.value})`);
+  assert.equal(m14Row?.status, 'FAIL', 'm.14 ловит ступеньку LOD 3,5 м > 2 м');
+  assert.ok(Math.abs(m14Row.value - 3.5) < 1e-3, `m.14 измеряет 3,5 м (${m14Row.value})`);
+});
+
 test('стенд: CLI печатает таблицу и без --gate всегда выходит с кодом 0', () => {
   const result = spawnSync('node', [TOOL_PATH], { encoding: 'utf8' });
   assert.equal(result.status, 0, `код возврата: ${result.status} ${result.stderr ?? ''}`);
@@ -233,7 +381,7 @@ test('стенд: --json отдаёт те же поля, что и таблиц
   const result = spawnSync('node', [TOOL_PATH, '--json'], { encoding: 'utf8' });
   assert.equal(result.status, 0, `код возврата: ${result.status} ${result.stderr ?? ''}`);
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.rows.length, stand.CONTROL_CELLS.length * 7);
+  assert.equal(parsed.rows.length, stand.CONTROL_CELLS.length * METRIC_COUNT);
   for (const row of parsed.rows) {
     for (const field of ['cell', 'zone', 'metric', 'value', 'valueText', 'threshold', 'status', 'detail']) {
       assert.ok(field in row, `в JSON-строке есть поле ${field}`);
@@ -241,6 +389,19 @@ test('стенд: --json отдаёт те же поля, что и таблиц
   }
   assert.equal(parsed.summary.fail + parsed.summary.pass + parsed.summary.na, parsed.rows.length);
   assert.deepEqual(parsed.controlCells, stand.CONTROL_CELLS);
+});
+
+test('стенд: --flat-fixture работает из CLI и с --gate возвращает 1', () => {
+  const plain = spawnSync('node', [TOOL_PATH, '--flat-fixture', '--json'], { encoding: 'utf8' });
+  assert.equal(plain.status, 0, `без --gate код 0: ${plain.stderr ?? ''}`);
+  const parsed = JSON.parse(plain.stdout);
+  assert.equal(parsed.mode, 'flat-fixture');
+  assert.equal(parsed.rows.length, 7);
+  assert.equal(parsed.summary.fail, 5);
+  assert.equal(parsed.summary.pass, 2);
+
+  const gated = spawnSync('node', [TOOL_PATH, '--flat-fixture', '--gate'], { encoding: 'utf8' });
+  assert.equal(gated.status, 1, 'плоская фикстура с --gate обязана возвращать exit code 1');
 });
 
 test('стенд: код возврата --gate согласован с числом красных строк', () => {
@@ -252,9 +413,16 @@ test('стенд: код возврата --gate согласован с чис�
 test('стенд: неизвестный профиль и неизвестный аргумент отвергаются', () => {
   assert.throws(() => stand.parseArgs(['--profile=unknown']), /Неизвестный профиль/);
   assert.throws(() => stand.parseArgs(['--nope']), /Неизвестный аргумент/);
-  const options = stand.parseArgs(['--gate', '--json', '--profile=a17', '--radius-m=1200']);
+  const options = stand.parseArgs(['--gate', '--json', '--flat-fixture', '--flat-height-m=12', '--profile=a17', '--radius-m=1200']);
   assert.deepEqual(
-    { gate: options.gate, json: options.json, world: options.world, radiusM: options.radiusM },
-    { gate: true, json: true, world: 'a17', radiusM: 1200 },
+    {
+      gate: options.gate,
+      json: options.json,
+      flatFixture: options.flatFixture,
+      flatHeightM: options.flatHeightM,
+      world: options.world,
+      radiusM: options.radiusM,
+    },
+    { gate: true, json: true, flatFixture: true, flatHeightM: 12, world: 'a17', radiusM: 1200 },
   );
 });
