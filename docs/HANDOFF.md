@@ -623,6 +623,16 @@ JS/CSS/worker файлу публикации имя с контент-хэше�
   disabled»), вся политика — в rulesets. Детали защиты интеграции Arena недоступны: `GET
   /branches/main/protection*` и `POST /rulesets` отдают `403 Resource not accessible by integration`,
   менять политику может только владелец в UI (`Settings → Rules`; `Settings → Branches` — создать заново).
+- **Как узнать, что именно блокирует мерж (по порядку).**
+  1. Открытый PR → правый нижний блок **«Merging is blocked»**: там дословная причина и ссылки
+     «Details» / «Show all checks». У слитого PR этого блока уже нет — нужен свежий PR.
+  2. `Settings → Branches` — классическая protection репозитория (живёт отдельно от rulesets).
+  3. `Settings → Rules` — проверять **оба** уровня: строка «Repository» и «Organization»; правила
+     организации интеграции недоступны (`GET /orgs/{org}/rulesets` → `403`), поэтому в UI их видно,
+     а в API — нет.
+  4. CLI: `gh pr view <номер> --json mergeable,mergeStateStatus` (`BLOCKED` = правило или чек не
+     пропускает, `CLEAN` = можно мержить) и
+     `gh api repos/{owner}/{repo}/branches/main/protection/required_status_checks` (нужен админ-токен).
 - **`Скрипты сайта` (job из `check.yml`) красный на всех PR** — 8 числовых планетарных тестов:
   `local-map-stage8` (гребни Stage-8.5), `local-map-texture-812d` (golden `S1`), `local-map-stand`
   (A-17 стык/берег), `planet-full-eq` (W26b `m.11`/`m.14`). На базовом `fa18ef4` в отдельном
