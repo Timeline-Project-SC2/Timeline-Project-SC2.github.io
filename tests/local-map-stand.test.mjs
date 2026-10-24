@@ -173,58 +173,43 @@ test('стенд: ступень кромки сообщает число вер
   }
 });
 
-test('стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке', async () => {
-  // Кросс-проверка измеримости (не порогов): в A-29 врезанного русла на
-  // контрольных ячейках может не быть, и тогда все речные строки — честные
-  // N/A. В A-17 топология Patch7 несёт входы русла, поэтому хотя бы один
-  // створ и хотя бы один профиль с carve > 0 обязаны измериться числом.
-  const a17 = await stand.runStand({ world: 'a17', radiusM: 2500 });
-  const continuity = a17.rows.filter((row) => row.metric === 'непрерывность русла через грань');
-  assert.ok(
-    continuity.some((row) => row.status !== 'N/A' && /^\d+\/\d+ створ/.test(row.valueText)),
-    'хотя бы один створ измерен в формате «N/M створа»',
-  );
-  const bank = a17.rows.filter((row) => row.metric === 'ступень кромки русла');
-  assert.ok(
-    bank.some((row) => row.status !== 'N/A' && /вершин в области вреза: [1-9]/.test(row.detail)),
-    'хотя бы один профиль пересекает область вреза',
-  );
-  const carveArea = a17.rows.filter((row) => row.metric === 'доля площади гекса под врезом');
-  assert.ok(
-    carveArea.some((row) => row.value > 0),
-    'хотя бы на одной ячейке поле вреза ненулевое',
-  );
-
-  // m.2 по ветвям (карточка 18c): порог в таблице, подпись ветви в detail и
-  // статус обязаны быть согласованы со значением в КАЖДОЙ измеренной строке —
-  // морская ветвь не имеет потолка, речная имеет диапазон 3…12 м.
-  const depths = a17.rows.filter((row) => row.metric === 'глубина воды в центре русла');
-  for (const row of depths) {
-    if (row.status === 'N/A') continue;
-    if (row.threshold === '≥ 3 м') {
-      assert.match(row.detail, /морская ветвь/, `ячейка ${row.cell}: морская ветвь подписана в detail`);
-      assert.equal(
-        row.status,
-        row.value >= stand.THRESHOLDS.riverDepthM ? 'PASS' : 'FAIL',
-        `ячейка ${row.cell}: у морской ветви нет потолка (значение ${row.value} м)`,
-      );
+test('W23c: A-17 выбирает 20 речных ячеек по seed|cell и измеряет m.1–m.3 без N/A', async () => {
+  // Контрольные семь ячеек после v3 не обязаны содержать реку. Вместо
+  // подбора знакомых индексов проверяем всю детерминированную выборку.
+  const a17 = await stand.runStand({ world: 'a17', radiusM: 2500, landCells: 0, riverCells: 20 });
+  const sample = a17.riverSample;
+  assert.equal(sample.requested, 20);
+  assert.equal(sample.selected, 20);
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a17.profile);
+  assert.deepEqual(stand.selectRiverCells(grid, surface, stand.WORLDS.a17.seed, 20),
+    sample.rows.map((row) => row.cell));
+  assert.equal(new Set(sample.rows.map((row) => row.cell)).size, 20);
+  for (const entry of sample.rows) {
+    assert.ok(surface.elevation[entry.cell] > surface.seaLevel && surface.streamWeight[entry.cell] > 0);
+    assert.equal(grid.neighborCount[entry.cell], 6);
+    assert.match(entry.m1.detail, /вершин в области вреза: [1-9]\d* из \d+/);
+    assert.ok(entry.m1.value !== null, `m.1: ячейка #${entry.cell} измерима`);
+    assert.ok(entry.m2.value !== null, `m.2: ячейка #${entry.cell} измерима`);
+    assert.match(entry.m3.valueText, /^\d+\/\d+ створ/);
+    assert.ok(entry.m3.value !== null, `m.3: ячейка #${entry.cell} измерима`);
+    const depth = entry.m2;
+    if (depth.threshold === '≥ 3 м') {
+      assert.match(depth.detail, /морская ветвь/);
+      assert.equal(depth.status, depth.value >= stand.THRESHOLDS.riverDepthM ? 'PASS' : 'FAIL');
     } else {
-      assert.equal(row.threshold, '3…12 м', `ячейка ${row.cell}: порог — одна из двух ветвей`);
-      assert.match(row.detail, /речная ветвь/, `ячейка ${row.cell}: речная ветвь подписана в detail`);
-      assert.equal(
-        row.status,
-        row.value >= stand.THRESHOLDS.riverDepthM && row.value <= stand.THRESHOLDS.riverDepthMaxM ? 'PASS' : 'FAIL',
-        `ячейка ${row.cell}: речная ветвь держит диапазон 3…12 м (значение ${row.value} м)`,
-      );
+      assert.equal(depth.threshold, '3…12 м');
+      assert.match(depth.detail, /речная ветвь/);
+      assert.equal(depth.status, depth.value >= stand.THRESHOLDS.riverDepthM
+        && depth.value <= stand.THRESHOLDS.riverDepthMaxM ? 'PASS' : 'FAIL');
     }
   }
-  // Известный ответ карточки 18c: четыре океанские ячейки A-17 с входом
-  // русла измеряются морской ветвью (глубина моря, а не каньон вреза).
-  for (const cell of [37488, 37518, 137363, 137436]) {
-    const row = depths.find((entry) => entry.cell === cell);
-    assert.ok(row, `у ячейки ${cell} есть строка глубины`);
-    assert.equal(row.threshold, '≥ 3 м', `ячейка ${cell}: порог морской ветви`);
-    assert.match(row.detail, /морская ветвь/, `ячейка ${cell}: подпись «морская ветвь»`);
+  for (const key of ['m1', 'm2', 'm3']) {
+    const data = sample.summary[key];
+    assert.equal(data.measured, 20);
+    assert.equal(data.passed + data.failed + data.na, 20);
+    assert.equal(data.na, 0);
+    assert.ok(Number.isFinite(data.median) && Number.isFinite(data.p10) && Number.isFinite(data.p90));
   }
 });
 
@@ -653,7 +638,7 @@ test('W26b п.2: m.14 (measureLodConsistency) сравнивает одинак�
   }
 });
 
-test('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference', () => {
+test('W23c: m.11 (measureHypsometry) по суше v3 — 27,49 % / 16 596 из 163 842, гейт 20…35 %', () => {
   const grid = GeodesicGrid.build(stand.CANONICAL_V);
   const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
   const direct = stand.measureHypsometry(surface);
@@ -661,22 +646,22 @@ test('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по �
   assert.equal(direct.landCells, 16_596, 'наземных ячеек elev > seaLevel: 16 596');
   assert.equal(Number(direct.p10.toFixed(4)), 0.2954, `p10 = 0,2954 (${direct.p10})`);
   assert.equal(Number(direct.p50.toFixed(4)), 0.3540, `p50 = 0,3540 (${direct.p50})`);
-  assert.equal(Number(direct.p90.toFixed(4)), 0.4685, `p90 = 0,4685 (${direct.p90})`);
-  assert.equal(Number(direct.maxH.toFixed(4)), 0.6600, `max = 0,6600 (${direct.maxH})`);
-  assert.equal(Number(direct.value.toFixed(2)), 45.93, `ожидаемое значение на v=128: 45,93 % (${direct.value})`);
-  assert.equal(direct.status, 'FAIL', '45,93 % вне полосы 20…35 % даёт FAIL');
-  assert.match(direct.detail, /p10 0,2954 \/ p50 0,3540 \/ p90 0,4685 \/ max 0,6600/);
+  assert.equal(Number(direct.p90.toFixed(4)), 0.4920, `p90 = 0,4920 (${direct.p90})`);
+  assert.equal(Number(direct.maxH.toFixed(4)), 0.9981, `max = 0,9981 (${direct.maxH})`);
+  assert.equal(Number(direct.value.toFixed(2)), 27.49, `ожидаемое значение на v=128: 27,49 % (${direct.value})`);
+  assert.equal(direct.status, 'PASS', '27,49 % внутри полосы 20…35 % даёт PASS');
+  assert.match(direct.detail, /p10 0,2954 \/ p50 0,3540 \/ p90 0,4920 \/ max 0,9981/);
   assert.match(direct.detail, /суша 16596 из 163842/);
   assert.match(direct.detail, /ориентир: Земля 19,4 %, наш домен 28,1 %, прежний порог 35 %/);
 
-  // Во всех 7 строках отчёта m.11 равен 45.93 % и имеет порог 20…35 %.
+  // Во всех 7 строках отчёта m.11 равен 27.49 % и сохраняет порог 20…35 %.
   const m11Rows = report.rows.filter((r) => r.metric === stand.METRIC_TITLES.hypsometry);
   assert.equal(m11Rows.length, stand.CONTROL_CELLS.length);
   for (const row of m11Rows) {
     assert.equal(row.threshold, '20…35 %');
-    assert.equal(row.value, 45.93);
-    assert.equal(row.valueText, '45.93 %');
-    assert.equal(row.status, 'FAIL');
+    assert.equal(row.value, 27.49);
+    assert.equal(row.valueText, '27.49 %');
+    assert.equal(row.status, 'PASS');
     assert.match(row.detail, /суша 16596 из 163842/);
   }
 
@@ -887,45 +872,116 @@ test('W23: m.8 = 3…8 % на суше, m.9 ≥ 1 % минимум в 30 из 40
   assert.ok(passed >= 30, `m.9: ${passed}/40 морских пятен ≥ 1 %; остаток ${failures.join(', ')}`);
 });
 
-// W23b: планетное поле сглажено на 65², но коротковолновый detail остаётся
-// поформенным. Это отдельный регрессионный контроль ДО/ПОСЛЕ интерполяции:
-// та же пара, тот же физический dir и один и тот же seed.
-test('W23b: 65² планетная решётка меняет m.13 не более чем на 0,05 м на #37488↔#37519', () => {
+// W23c: v3 требует как минимум 80 интервалов, продукт — 256. Сравниваем тот же
+// физический dir, seed, fBm и оба проблемных соседства; меняется только поле.
+test('W23c: 257² узлов продуктовой решётки меняют m.13 не более 0,05 м', () => {
   const grid = GeodesicGrid.build(stand.CANONICAL_V);
   const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
-  const patchA = Contract.buildPatch7(grid, surface, 37488);
-  const patchB = Contract.buildPatch7(grid, surface, 37519);
   const R = stand.DEFAULT_RADIUS_M;
   const res = Worker.HEIGHTFIELD_RES, stepM = 2 * R / res;
+  const steps = Heightfield.ELEVATION_LATTICE_STEPS;
   const seed = (stand.WORLDS.a29.seed ^ Math.imul(3, 0x85EBCA6B)) >>> 0;
-  let maxFieldDelta = 0;
-  const make = (patch) => {
-    const direct = new Float32Array(res * res);
-    const lattice = new Float32Array(res * res);
-    const field = Heightfield.sampleElevationLattice(patch, R, stepM);
-    for (let y = 0; y < res; y++) {
-      for (let x = 0; x < res; x++) {
-        const dir = Contract.localPointToDirection(patch, (x - res / 2) * stepM, (y - res / 2) * stepM);
-        const elevation = PlanetElevationField.sampleElevation(dir, stepM);
-        const interpolated = Heightfield.elevationFromLattice(field, 64, x / 4, y / 4);
-        if (patch === patchA) maxFieldDelta = Math.max(maxFieldDelta, Math.abs(elevation - interpolated));
-        const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, seed, true);
-        direct[y * res + x] = elevation + detail;
-        lattice[y * res + x] = interpolated + detail;
-      }
-    }
-    return { direct, lattice };
-  };
-  const a = make(patchA), b = make(patchB);
   const view = (patch, heightfield) => ({ patch, local: { heightfield, meta: { radiusM: R, hfRes: res } } });
-  const directSeam = stand.measureHexContinuity(view(patchA, a.direct).local, patchA,
-    new Map([[patchB.centerCell, view(patchB, b.direct)]]), R);
-  const latticeSeam = stand.measureHexContinuity(view(patchA, a.lattice).local, patchA,
-    new Map([[patchB.centerCell, view(patchB, b.lattice)]]), R);
-  console.log(`W23b: поле вершины vs решётка #37488 max=${maxFieldDelta.toFixed(4)} м; `
-    + `m.13 #37488↔#37519 ${directSeam.value.toFixed(4)} → ${latticeSeam.value.toFixed(4)} м`);
-  assert.ok(Math.abs(directSeam.value - latticeSeam.value) <= 0.05,
-    `добавка решётки в m.13 = ${Math.abs(directSeam.value - latticeSeam.value).toFixed(4)} м <= 0,05 м`);
+  for (const [cellA, cellB] of [[37488, 37519], [137390, 137365]]) {
+    const patchA = Contract.buildPatch7(grid, surface, cellA);
+    const patchB = Contract.buildPatch7(grid, surface, cellB);
+    let maxFieldDelta = 0;
+    const make = (patch) => {
+      const direct = new Float32Array(res * res);
+      const interpolatedHeight = new Float32Array(res * res);
+      const field = Heightfield.sampleElevationLattice(patch, R, stepM);
+      for (let y = 0; y < res; y++) {
+        for (let x = 0; x < res; x++) {
+          const dir = Contract.localPointToDirection(patch, (x - res / 2) * stepM, (y - res / 2) * stepM);
+          const elevation = PlanetElevationField.sampleElevation(dir, stepM);
+          const interpolated = Heightfield.elevationFromLattice(field, steps,
+            x * steps / res, y * steps / res);
+          if (patch === patchA) maxFieldDelta = Math.max(maxFieldDelta, Math.abs(elevation - interpolated));
+          const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, seed, true, stepM);
+          direct[y * res + x] = elevation + detail;
+          interpolatedHeight[y * res + x] = interpolated + detail;
+        }
+      }
+      return { direct, interpolatedHeight };
+    };
+    const a = make(patchA), b = make(patchB);
+    const continuity = (hA, hB) => stand.measureHexContinuity(view(patchA, hA).local, patchA,
+      new Map([[cellB, view(patchB, hB)]]), R).value;
+    const before = continuity(a.direct, b.direct);
+    const after = continuity(a.interpolatedHeight, b.interpolatedHeight);
+    console.log(`W23c: #${cellA}↔#${cellB} прямой ${before.toFixed(4)} → решётка ${after.toFixed(4)} м; `
+      + `макс ошибка поля в вершине=${maxFieldDelta.toFixed(4)} м (${(steps + 1) ** 2} узлов)`);
+    assert.ok(Math.abs(before - after) <= 0.05,
+      `#${cellA}↔#${cellB}: |Δm.13|=${Math.abs(before - after).toFixed(4)} ≤ 0,05 м`);
+  }
+});
+
+test('W23c: у #137390↔#137365 65² недостаточно (0,095 м), 81² хватает (0,008 м)', () => {
+  // Изолируем вклад решётки, не смешивая его с отдельным LOD-фильтром
+  // детали: ВСЕМ трём растрам даём одну и ту же полную мировую деталь.
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
+  const patches = [137390, 137365].map((cell) => Contract.buildPatch7(grid, surface, cell));
+  const R = stand.DEFAULT_RADIUS_M, res = Worker.HEIGHTFIELD_RES, stepM = 2 * R / res;
+  const seed = (stand.WORLDS.a29.seed ^ Math.imul(3, 0x85EBCA6B)) >>> 0;
+  const rasters = patches.map((patch) => {
+    const dirs = Array.from({ length: res * res }, (_, i) => Contract.localPointToDirection(patch,
+      ((i % res) - res / 2) * stepM, (Math.floor(i / res) - res / 2) * stepM));
+    const detail = dirs.map((dir) => Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, seed, true));
+    const make = (steps) => {
+      const lattice = steps ? Heightfield.sampleElevationLattice(patch, R, stepM, 0, 0, steps) : null;
+      return Float32Array.from(dirs, (dir, i) => (
+        (lattice ? Heightfield.elevationFromLattice(lattice, steps,
+          (i % res) * steps / res, Math.floor(i / res) * steps / res)
+          : PlanetElevationField.sampleElevation(dir, stepM)) + detail[i]
+      ));
+    };
+    return { direct: make(0), small: make(64), dense: make(80) };
+  });
+  const seam = (key) => stand.measureHexContinuity(
+    { heightfield: rasters[0][key], meta: { hfRes: res, radiusM: R } }, patches[0],
+    new Map([[137365, {
+      patch: patches[1], local: { heightfield: rasters[1][key], meta: { hfRes: res, radiusM: R } },
+    }]]), R,
+  ).value;
+  const exact = seam('direct');
+  const error65 = Math.abs(seam('small') - exact);
+  const error81 = Math.abs(seam('dense') - exact);
+  assert.ok(error65 > 0.05 && error81 <= 0.05,
+    `|Δm.13|: 65² ${error65.toFixed(4)} м > 0,05; 81² ${error81.toFixed(4)} м ≤ 0,05`);
+});
+
+test('W23c: все семь физических швов ≤1 м и все семь LOD 256↔64 ≤2 м', () => {
+  for (const [metric, limit] of [[stand.METRIC_TITLES.hexContinuity, 1],
+    [stand.METRIC_TITLES.lodConsistency, 2]]) {
+    const rows = report.rows.filter((row) => row.metric === metric);
+    assert.equal(rows.length, 7);
+    for (const row of rows) {
+      assert.ok(row.value <= limit, `${metric}: #${row.cell} ${row.value} м > ${limit} м`);
+      assert.equal(row.status, 'PASS');
+    }
+  }
+});
+
+test('W23c: дуга устья #137436→#137412 общая даже когда получатель вне Patch7', async () => {
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
+  const mouth = Contract.buildPatch7(grid, surface, 137436);
+  const sibling = Contract.buildPatch7(grid, surface, 137459);
+  assert.ok(!sibling.cells.some((cell) => cell.cell === 137412), 'получателя нет в соседском Patch7');
+  const ownArc = (await Worker.worldRiverSegmentsForPatch(mouth, stand.WORLDS.a29.profile))
+    .find((s) => s.fromCell === 137436 && s.toCell === 137412);
+  const neighborArc = (await Worker.worldRiverSegmentsForPatch(sibling, stand.WORLDS.a29.profile))
+    .find((s) => s.fromCell === 137436 && s.toCell === 137412);
+  assert.ok(ownArc && neighborArc, 'обе дуги опираются на фактический flowReceiver, не слот');
+  assert.equal(ownArc.toWater, true);
+  assert.equal(ownArc.mouth, true);
+  for (const dir of [mouth.frame.origin, ownArc.middle, sibling.frame.origin]) {
+    const a = Worker.worldRiverDepthAt(dir, [ownArc], stand.DEFAULT_RADIUS_M, mouth.frame.radiusM);
+    const b = Worker.worldRiverDepthAt(dir, [neighborArc], stand.DEFAULT_RADIUS_M, sibling.frame.radiusM);
+    assert.ok(Math.abs(a - b) < 1e-6, `глубина мировой точки совпала (${a} / ${b})`);
+    assert.ok(a <= 10, 'устье без streamWeight не вырезает прежний каньон 235 м');
+  }
 });
 
 test('W23b: численное разложение худшей грани m.13 восстанавливает именно измеренный шов', () => {
@@ -974,14 +1030,15 @@ test('W23b И-3.2: планетный слой в центре = sampleElevation
   const stepM = 2 * R / res;
   const dir = patch.frame.origin;
   const direct = PlanetElevationField.sampleElevation(dir, stepM);
+  const steps = Heightfield.ELEVATION_LATTICE_STEPS;
   const lattice = Heightfield.sampleElevationLattice(patch, R, stepM);
-  assert.equal(lattice.length, 65 * 65, 'планетное поле выбирается в 4225 узлах');
-  assert.ok(Math.abs(lattice[32 * 65 + 32] - direct) < 1e-6,
+  assert.equal(lattice.length, 257 * 257, 'после v3 планетное поле выбирается в 66049 узлах');
+  assert.ok(Math.abs(lattice[(steps / 2) * (steps + 1) + steps / 2] - direct) < 1e-6,
     'центральный узел планетного слоя совпадает с прямым сэмплом');
-  assert.ok(Math.abs(Heightfield.elevationFromLattice(lattice, 64, 32, 32) - direct) < 1e-6);
+  assert.ok(Math.abs(Heightfield.elevationFromLattice(lattice, steps, steps / 2, steps / 2) - direct) < 1e-6);
 
   const seed = (stand.WORLDS.a29.seed ^ Math.imul(3, 0x85EBCA6B)) >>> 0;
-  const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, seed, true);
+  const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, seed, true, stepM);
   const base = Heightfield.buildBaseHeightfield(patch, R, seed, new Uint8Array(res * res), true);
   assert.ok(Math.abs(base.heightM[center] - detail - direct) < 1e-6,
     'центральный планетный слой до детали/вреза равен sampleElevation');
@@ -1021,4 +1078,15 @@ test('W23b: --land-cells=20 выбирает фиксированные назе
     assert.equal(sample[metric].p90, q(0.9));
     assert.equal(sample[metric].passed, sample.rows.filter((r) => r[key]).length);
   }
+});
+
+test('W23c: --river-cells=N проверяет границы аргумента, ноль отключает выборку', () => {
+  assert.equal(stand.parseArgs(['--river-cells=0']).riverCells, 0);
+  assert.equal(stand.parseArgs(['--river-cells=20']).riverCells, 20);
+  for (const bad of ['-1', '2.5', '201', 'no']) {
+    assert.throws(() => stand.parseArgs([`--river-cells=${bad}`]), /--river-cells/);
+  }
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a17.profile);
+  assert.deepEqual(stand.selectRiverCells(grid, surface, stand.WORLDS.a17.seed, 0), []);
 });

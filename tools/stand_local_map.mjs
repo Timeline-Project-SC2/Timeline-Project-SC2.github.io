@@ -257,6 +257,7 @@ function parseArgs(argv) {
     world: 'a29',
     radiusM: DEFAULT_RADIUS_M,
     landCells: 20,
+    riverCells: 20,
     flatFixture: false,
     flatHeightM: 0,
     hypsoReferencePct: null,
@@ -283,6 +284,12 @@ function parseArgs(argv) {
         throw new Error('--land-cells должно быть целым числом от 0 до 200');
       }
       options.landCells = value;
+    } else if (arg.startsWith('--river-cells=')) {
+      const value = Number(arg.slice('--river-cells='.length));
+      if (!Number.isInteger(value) || value < 0 || value > 200) {
+        throw new Error('--river-cells должно быть целым числом от 0 до 200');
+      }
+      options.riverCells = value;
     } else if (arg.startsWith('--flat-height-m=')) {
       const value = Number(arg.slice('--flat-height-m='.length));
       if (!Number.isFinite(value)) throw new Error('--flat-height-m должно быть конечным числом');
@@ -302,7 +309,7 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Использование: node tools/stand_local_map.mjs [--gate] [--json] [--profile=a17|a29] [--radius-m=2500] [--land-cells=20] [--hypso-reference=28.1] [--flat-fixture]',
+    'Использование: node tools/stand_local_map.mjs [--gate] [--json] [--profile=a17|a29] [--radius-m=2500] [--land-cells=20] [--river-cells=20] [--hypso-reference=28.1] [--flat-fixture]',
     '',
     '  (без флагов)         печать таблицы метрик по 7 контрольным ячейкам, всегда exit 0',
     '  --gate               exit 1, если хотя бы одна метрика красная (гейт выключен по умолчанию)',
@@ -310,6 +317,7 @@ function usage() {
     '  --profile            мир измерения: a29 (по умолчанию) или a17',
     '  --radius-m           радиус участка, м (по умолчанию GLOBE_CELL_SCALE.strategicPatchRadiusM ≈ 52 136)',
     '  --land-cells=N       хэш-выборка N наземных ячеек для m.8/m.10 (по умолчанию 20, 0 — отключить)',
+    '  --river-cells=N      хэш-выборка N речных ячеек для m.1/m.2/m.3 (по умолчанию 20, 0 — отключить)',
     '  --hypso-reference    подставить ориентир гипсометрии (%) в detail m.11 (в вердикте не участвует)',
     '  --flat-fixture       негативный контроль на синтетическом плоском heightfield (h = const)',
   ].join('\n');
@@ -1227,8 +1235,9 @@ function extractElevationArray(source) {
  * Метрика 11 — гипсометрия p90−p10 (гейт: полоса 20…35 %):
  * считается ТОЛЬКО по суше (elev > surface.seaLevel) всей планеты (сетка v=128)
  * как (p90 − p10) / (max − min).
- * На v=128 для A-29 даёт 45,93 % (p10 0,2954 / p50 0,3540 / p90 0,4685 / max 0,6600,
- * суша 16 596 из 163 842). Земля даёт 19,4 % (пик 8 848 м), наш домен при K = 8 570
+ * На v=128 для A-29 после c100-soft-v3 даёт 27,49 % (p10 0,2954 / p50 0,3540 /
+ * p90 0,4920 / max 0,9981; суша 16 596 из 163 842). Земля даёт 19,4 %
+ * (пик 8 848 м), наш домен при K = 8 570
  * и пике 6 147 м — 28,1 %.
  * При нулевом размахе (идеально плоское поле) возвращает 0 % и статус FAIL (а не 100 %).
  */
@@ -1640,9 +1649,10 @@ function rasterComponents(entry, coords, radiusM, planetSeed) {
       const weight = (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty);
       const dir = Contract.localPointToDirection(patch, (ix - res / 2) * stepM, (iy - res / 2) * stepM);
       const nearest = Contract.nearestPatchCell(patch, dir);
-      const field = Heightfield.elevationFromLattice(fieldLattice, 64, ix * 64 / res, iy * 64 / res);
+      const steps = Heightfield.ELEVATION_LATTICE_STEPS;
+      const field = Heightfield.elevationFromLattice(fieldLattice, steps, ix * steps / res, iy * steps / res);
       const directField = ElevationField.sampleElevation(dir, stepM);
-      const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, true);
+      const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, true, stepM);
       const lake = nearest.lakeWeight > 0
         ? (Contract.waterLevelOf(nearest, patch.seaLevel) - patch.seaLevel) * Worker.METERS_PER_ELEVATION_UNIT
           - (field + detail)
@@ -1665,9 +1675,10 @@ function rasterComponents(entry, coords, radiusM, planetSeed) {
   return { ...sums, cells: [...cells.values()].sort((a, b) => a.cell - b.cell) };
 }
 
-/** Самая плохая грань A/B, до каких-либо исправлений речного вреза. */
-export function diagnoseWorstHexSeam(cellCache, world, rows, radiusM) {
-  const worstRow = rows.filter((row) => row.metric === METRIC_TITLES.hexContinuity && row.value !== null)
+/** Самая плохая грань A/B глобально или для одной из контрольных ячеек. */
+export function diagnoseWorstHexSeam(cellCache, world, rows, radiusM, focusCell = null) {
+  const worstRow = rows.filter((row) => row.metric === METRIC_TITLES.hexContinuity && row.value !== null
+      && (focusCell === null || row.cell === focusCell))
     .reduce((worst, row) => (!worst || row.value > worst.value ? row : worst), null);
   if (!worstRow) return null;
   const entryA = cellCache.get(`${worstRow.cell}:${radiusM}`);
@@ -1853,6 +1864,7 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
     const nNeC = dot3(view.frameNorth, patchC.frame.east);
     const nNnC = dot3(view.frameNorth, patchC.frame.north);
     let maxDeltaM = 0;
+    let worstPoint = null;
     let points = 0;
     for (let y = 0; y < resCoarse; y++) {
       for (let x = 0; x < resCoarse; x++) {
@@ -1866,7 +1878,10 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
           : bilinearHeight(view.heightfield, resCoarse, coarseRadiusM, lx, ly);
         const h256 = bilinearHeight(local256.heightfield, resFine, fineRadiusM, cx, cy);
         const deltaM = Math.abs(h256 - h64);
-        if (deltaM > maxDeltaM) maxDeltaM = deltaM;
+        if (deltaM > maxDeltaM) {
+          maxDeltaM = deltaM;
+          worstPoint = { x, y, lx, ly, cx, cy, h256, h64 };
+        }
         points++;
       }
     }
@@ -1878,6 +1893,7 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
       commonSpanM,
       points,
       maxDeltaM,
+      worstPoint,
     });
   }
 
@@ -2115,54 +2131,10 @@ async function getOrBuildCellEntry(cellCache, grid, surface, world, cell, radius
   return entry;
 }
 
-async function measureCell(grid, surface, world, cell, radiusM, cellCache = new Map(), options = {}) {
-  const centerEntry = await getOrBuildCellEntry(cellCache, grid, surface, world, cell, radiusM);
-  const { patch, request, local } = centerEntry;
-  const windowEntry = radiusM === RELIEF_WINDOW_RADIUS_M
-    ? centerEntry
-    : await getOrBuildCellEntry(cellCache, grid, surface, world, cell, RELIEF_WINDOW_RADIUS_M);
-  const localForForm = radiusM === RELIEF_WINDOW_RADIUS_M
-    ? local
-    : { ...local, windowLocal: windowEntry?.local };
-  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
-  const zone = zoneOf(patch);
+/** Общие измерения m.1–m.3: контрольные и выбранные речные ячейки. */
+function buildRiverMetricRows(local, skirt, patch, radiusM, carveField) {
+  const cell = patch.centerCell, zone = zoneOf(patch);
   const rows = [];
-
-  // Соседние гексы B (тем же generateLocalMap) для метрик 13 (A↔B) и 14 (LOD 64).
-  const neighborMap = new Map();
-  const coarseViews = [];
-  const centerDir = patch.cells[0].center;
-  for (let k = 1; k < patch.cells.length; k++) {
-    const nbCell = patch.cells[k].cell;
-    const nbEntry = await getOrBuildCellEntry(cellCache, grid, surface, world, nbCell, radiusM);
-    if (!nbEntry) continue;
-    neighborMap.set(nbCell, nbEntry);
-    if (nbEntry.local.ringCells) {
-      const ring64 = nbEntry.local.ringCells.find((rc) => (
-        rc.ring === 1
-        && rc.hfRes === LOD_COARSE_RES
-        && Math.hypot(
-          rc.center[0] - centerDir[0],
-          rc.center[1] - centerDir[1],
-          rc.center[2] - centerDir[2],
-        ) < 1e-5
-      ));
-      if (ring64) {
-        coarseViews.push({
-          sourceLabel: String(nbCell),
-          frameEast: nbEntry.patch.frame.east,
-          frameNorth: nbEntry.patch.frame.north,
-          hfRes: ring64.hfRes,
-          spanM: ring64.spanM ?? computePatchHexSpanM(nbEntry.patch),
-          heightfield: ring64.heightfield,
-        });
-      }
-    }
-  }
-
-  // --- Поле вреза воркера: общее для метрик 1, 2 (применимость), 3 и 7 ---
-  const carveField = buildRiverCarveField(patch, radiusM);
-
   // --- Метрики 1–2: русло по канонической топологии Patch7 ---
   // Применимость определяет поле вреза: если carve = 0 на всех профилях,
   // врезанного русла нет и обе метрики — N/A (а не ступень 0 м / глубина 0 м:
@@ -2233,6 +2205,59 @@ async function measureCell(grid, surface, world, cell, radiusM, cellCache = new 
       : (continuity.value / continuity.total >= THRESHOLDS.continuityFraction ? 'PASS' : 'FAIL'),
     continuity.detail,
   ));
+
+  return rows;
+}
+
+async function measureCell(grid, surface, world, cell, radiusM, cellCache = new Map(), options = {}) {
+  const centerEntry = await getOrBuildCellEntry(cellCache, grid, surface, world, cell, radiusM);
+  const { patch, request, local } = centerEntry;
+  const windowEntry = radiusM === RELIEF_WINDOW_RADIUS_M
+    ? centerEntry
+    : await getOrBuildCellEntry(cellCache, grid, surface, world, cell, RELIEF_WINDOW_RADIUS_M);
+  const localForForm = radiusM === RELIEF_WINDOW_RADIUS_M
+    ? local
+    : { ...local, windowLocal: windowEntry?.local };
+  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+  const zone = zoneOf(patch);
+  const rows = [];
+
+  // Соседние гексы B (тем же generateLocalMap) для метрик 13 (A↔B) и 14 (LOD 64).
+  const neighborMap = new Map();
+  const coarseViews = [];
+  const centerDir = patch.cells[0].center;
+  for (let k = 1; k < patch.cells.length; k++) {
+    const nbCell = patch.cells[k].cell;
+    const nbEntry = await getOrBuildCellEntry(cellCache, grid, surface, world, nbCell, radiusM);
+    if (!nbEntry) continue;
+    neighborMap.set(nbCell, nbEntry);
+    if (nbEntry.local.ringCells) {
+      const ring64 = nbEntry.local.ringCells.find((rc) => (
+        rc.ring === 1
+        && rc.hfRes === LOD_COARSE_RES
+        && Math.hypot(
+          rc.center[0] - centerDir[0],
+          rc.center[1] - centerDir[1],
+          rc.center[2] - centerDir[2],
+        ) < 1e-5
+      ));
+      if (ring64) {
+        coarseViews.push({
+          sourceLabel: String(nbCell),
+          frameEast: nbEntry.patch.frame.east,
+          frameNorth: nbEntry.patch.frame.north,
+          hfRes: ring64.hfRes,
+          spanM: ring64.spanM ?? computePatchHexSpanM(nbEntry.patch),
+          heightfield: ring64.heightfield,
+        });
+      }
+    }
+  }
+
+  // --- Поле вреза воркера: общее для метрик 1, 2 (применимость), 3 и 7 ---
+  const carveField = buildRiverCarveField(patch, radiusM);
+
+  rows.push(...buildRiverMetricRows(local, skirt, patch, radiusM, carveField));
 
   // --- Метрика 4: фактура рельефа ---
   const texture = measureTexture(local, skirt, radiusM);
@@ -2505,6 +2530,22 @@ export function selectLandCells(grid, surface, seed, count = 20) {
   return ranked.slice(0, count).map(({ cell }) => cell);
 }
 
+/** Без отбора «удачных рек»: тот же SHA-256(seed|cell) на всей речной суше v=128. */
+export function selectRiverCells(grid, surface, seed, count = 20) {
+  if (!Number.isInteger(count) || count < 0 || count > 200) {
+    throw new Error('riverCells должно быть целым числом 0…200');
+  }
+  const ranked = [];
+  for (let cell = 0; cell < grid.cellCount; cell++) {
+    if (grid.neighborCount[cell] !== 6 || surface.elevation[cell] <= surface.seaLevel
+      || surface.lakeWeight[cell] > 0 || surface.streamWeight[cell] <= 0) continue;
+    ranked.push({ cell, hash: createHash('sha256').update(`${seed}|${cell}`).digest('hex') });
+  }
+  if (count > ranked.length) throw new Error(`Речных ячеек недостаточно для ${count}: ${ranked.length}`);
+  ranked.sort((a, b) => a.hash.localeCompare(b.hash) || a.cell - b.cell);
+  return ranked.slice(0, count).map(({ cell }) => cell);
+}
+
 function sampleQuantile(sorted, p) {
   if (sorted.length === 0) return null;
   const pos = (sorted.length - 1) * p;
@@ -2563,9 +2604,49 @@ export async function measureLandSample(grid, surface, world, count = 20) {
   };
 }
 
+/** Речные окна: ровно тот же worker, юбка и измеритель m.1–m.3, что у таблицы. */
+export async function measureRiverSample(grid, surface, world, count = 20, radiusM = DEFAULT_RADIUS_M) {
+  const cells = selectRiverCells(grid, surface, world.seed, count);
+  const rows = [];
+  for (const cell of cells) {
+    const patch = Contract.buildPatch7(grid, surface, cell);
+    const request = {
+      patch, seed: world.seed, placeId: PLACE_ID, radiusM, profile: world.profile,
+      neighborRings: 0, patchKey: `stand-river-${world.seed}-${cell}-r${radiusM}`,
+    };
+    const local = await Worker.generateLocalMap(request);
+    const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+    const carveField = buildRiverCarveField(patch, radiusM);
+    const metrics = buildRiverMetricRows(local, skirt, patch, radiusM, carveField);
+    rows.push({ cell, m1: metrics[0], m2: metrics[1], m3: metrics[2] });
+  }
+  const summary = {};
+  for (const key of ['m1', 'm2', 'm3']) {
+    const values = rows.map((r) => r[key].value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+    summary[key] = {
+      median: sampleQuantile(values, 0.5),
+      p10: sampleQuantile(values, 0.1),
+      p90: sampleQuantile(values, 0.9),
+      measured: values.length,
+      passed: rows.filter((r) => r[key].status === 'PASS').length,
+      failed: rows.filter((r) => r[key].status === 'FAIL').length,
+      na: rows.filter((r) => r[key].status === 'N/A').length,
+    };
+  }
+  return {
+    seed: world.seed,
+    radiusM,
+    requested: count,
+    selected: rows.length,
+    selection: 'SHA-256(seed|cell), только 6-соседняя суша elev > seaLevel без озёр, streamWeight > 0',
+    rows,
+    summary,
+  };
+}
+
 /**
  * Полный прогон стенда: таблица метрик по всем контрольным ячейкам.
- * Опции: { world: 'a29' | 'a17', radiusM: число, landCells: 0…200 }.
+ * Опции: { world: 'a29' | 'a17', radiusM: число, landCells: 0…200, riverCells: 0…200 }.
  */
 export async function runStand(options = {}) {
   const worldName = options.world ?? 'a29';
@@ -2581,6 +2662,7 @@ export async function runStand(options = {}) {
   }
   const summary = summarizeRows(rows);
   const landSample = await measureLandSample(grid, surface, world, options.landCells ?? 20);
+  const riverSample = await measureRiverSample(grid, surface, world, options.riverCells ?? 20, radiusM);
   const globeVerticalExaggeration = measureGlobeVerticalExaggeration(surface, {
     scaleK: options.scaleK,
   });
@@ -2597,7 +2679,9 @@ export async function runStand(options = {}) {
     rows,
     summary,
     landSample,
+    riverSample,
     seamDiagnostic: diagnoseWorstHexSeam(cellCache, world, rows, radiusM),
+    seamDiagnosticsByCell: CONTROL_CELLS.map((cell) => diagnoseWorstHexSeam(cellCache, world, rows, radiusM, cell)),
     gate: options.gate === true,
     gatePassed: gateExitCode(summary) === 0,
   };
@@ -2685,6 +2769,19 @@ if (invokedDirectly) {
         console.log(`  ${metric} сводка: median=${data.median.toFixed(2)} %, p10=${data.p10.toFixed(2)} %, `
           + `p90=${data.p90.toFixed(2)} %, PASS ${data.passed}/${report.landSample.selected}`);
       }
+    }
+    console.log(`Речная выборка: ${report.riverSample.selected}/${report.riverSample.requested}, R=${report.riverSample.radiusM.toFixed(1)} м`);
+    for (const item of report.riverSample.rows) {
+      console.log(`  #${item.cell} ` + ['m1', 'm2', 'm3'].map((key) => (
+        `${key}=${item[key].valueText} ${item[key].status}`
+      )).join('; '));
+    }
+    for (const key of ['m1', 'm2', 'm3']) {
+      const data = report.riverSample.summary[key];
+      console.log(`  ${key} сводка: median=${data.median === null ? 'N/A' : data.median.toFixed(2)}, `
+        + `p10=${data.p10 === null ? 'N/A' : data.p10.toFixed(2)}, `
+        + `p90=${data.p90 === null ? 'N/A' : data.p90.toFixed(2)}, `
+        + `PASS ${data.passed}/${data.measured}, FAIL ${data.failed}, N/A ${data.na}`);
     }
     if (report.seamDiagnostic) {
       const d = report.seamDiagnostic;

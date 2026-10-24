@@ -4,7 +4,7 @@
    позволяет сравнить одно физическое направление в двух кадрах; апофема
    задана тем же геометрическим шагом, что и шесть соседних центров. */
 
-import type { LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
+import type { LocalMapPatch, PatchCell, TangentFrame, Vec3 } from './local-map-contract.ts';
 
 /** Апофема правильного гекса в долях R_patch: половина шага центров 1,15 R. */
 export const CENTER_HEX_APOTHEM_RATIO = 1.15 / 2;
@@ -80,6 +80,101 @@ export function directionToLocalPoint(patch: LocalMapPatch, dir: Vec3): { u: num
   const sin = Math.sin(theta);
   const scale = sin > 1e-10 ? theta * radiusM / sin : radiusM;
   return { u: dot(dir, east) * scale, v: dot(dir, north) * scale };
+}
+
+/**
+ * Каноническая дуга потока: номера from/to — ТОЛЬКО фактические flowReceiver,
+ * а координаты — 3D-центры глобальной сетки, не слоты/азимуты своего Patch7.
+ */
+export interface WorldRiverSegment {
+  readonly fromCell: number;
+  readonly toCell: number;
+  readonly from: Vec3;
+  readonly to: Vec3;
+  readonly middle: Vec3;
+  readonly normal: Vec3;
+  readonly halfAngle: number;
+  /** Получатель — океан/озеро; только у такого ребра есть береговой спад. */
+  readonly toWater: boolean;
+  /** Устье без streamWeight: глубина ограничена 10 м, не каньоном 0,0045·R. */
+  readonly mouth: boolean;
+}
+
+export function worldRiverSegment(
+  fromCell: number, toCell: number, from: Vec3, to: Vec3, toWater = false, mouth = false,
+): WorldRiverSegment {
+  const dot = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+  const nx = from[1] * to[2] - from[2] * to[1];
+  const ny = from[2] * to[0] - from[0] * to[2];
+  const nz = from[0] * to[1] - from[1] * to[0];
+  const crossLen = Math.hypot(nx, ny, nz);
+  if (crossLen < 1e-12) throw new Error(`Вырожденное русло ${fromCell}→${toCell}`);
+  const mid: Vec3 = [from[0] + to[0], from[1] + to[1], from[2] + to[2]];
+  const midLen = Math.hypot(...mid);
+  return {
+    fromCell, toCell, from, to,
+    middle: [mid[0] / midLen, mid[1] / midLen, mid[2] / midLen],
+    normal: [nx / crossLen, ny / crossLen, nz / crossLen],
+    halfAngle: Math.atan2(crossLen, dot) / 2,
+    toWater,
+    mouth,
+  };
+}
+
+/**
+ * Расстояние от мировой точки до геодезической дуги стока, включая концы.
+ * Одна и та же физическая точка даёт один factor из любого касательного кадра.
+ */
+export function worldRiverCarveFactor(
+  dir: Vec3,
+  segments: readonly WorldRiverSegment[],
+  planetRadiusM: number,
+  halfWidthM: number,
+): number {
+  if (!(halfWidthM > 0)) return 0;
+  let best = halfWidthM;
+  const maxAngle = halfWidthM / planetRadiusM;
+  const cosMax = Math.cos(maxAngle);
+  for (const segment of segments) {
+    const { from, to, middle, normal } = segment;
+    const midDot = dir[0] * middle[0] + dir[1] * middle[1] + dir[2] * middle[2];
+    if (midDot < Math.cos(segment.halfAngle + maxAngle)) continue;
+    const cross = dir[0] * normal[0] + dir[1] * normal[1] + dir[2] * normal[2];
+    const fromSide = (from[1] * dir[2] - from[2] * dir[1]) * normal[0]
+      + (from[2] * dir[0] - from[0] * dir[2]) * normal[1]
+      + (from[0] * dir[1] - from[1] * dir[0]) * normal[2];
+    const toSide = (dir[1] * to[2] - dir[2] * to[1]) * normal[0]
+      + (dir[2] * to[0] - dir[0] * to[2]) * normal[1]
+      + (dir[0] * to[1] - dir[1] * to[0]) * normal[2];
+    let distanceM: number;
+    if (fromSide < 0 || toSide < 0) {
+      const end = fromSide < 0 ? from : to;
+      const endDot = dir[0] * end[0] + dir[1] * end[1] + dir[2] * end[2];
+      if (endDot < cosMax) continue;
+      distanceM = Math.acos(Math.max(-1, Math.min(1, endDot))) * planetRadiusM;
+    } else {
+      distanceM = Math.asin(Math.min(1, Math.abs(cross))) * planetRadiusM;
+    }
+    if (distanceM < best) best = distanceM;
+  }
+  const t = 1 - best / halfWidthM;
+  return t > 0 ? t * t * (3 - 2 * t) : 0;
+}
+
+/** Кадр любого канонического центра: та же формула, что buildPatch7.frame. */
+export function tangentFrameAt(origin: Vec3, radiusM: number): TangentFrame {
+  const ref: Vec3 = Math.abs(origin[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  const cross = (a: Vec3, b: Vec3): Vec3 => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const unit = (v: Vec3): Vec3 => {
+    const len = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / len, v[1] / len, v[2] / len];
+  };
+  const east = unit(cross(ref, origin));
+  return { origin, east, north: unit(cross(origin, east)), radiusM };
 }
 
 /** Ландшафт назначения для подписи перехода на соседний гекс (A-17). */

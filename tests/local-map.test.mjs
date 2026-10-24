@@ -327,11 +327,14 @@ test('Stage-8.10b: контракт не тащит ядро на верхнем
 
   const constants = require('../site/shared/planet-geography-constants.ts');
   assert.equal(constants.EARTH_CANONICAL_V, 128);
-  assert.equal(constants.GEOGRAPHY_VERSION, 'c100-soft-v1');
+  assert.equal(constants.GEOGRAPHY_VERSION, 'c100-soft-v3');
+  const generationContract = require('../site/shared/planet-generation-contract.ts');
+  assert.ok(generationContract.CONTRACT.supported_versions.geography_version.includes(constants.GEOGRAPHY_VERSION),
+    'актуальная версия географии явно разрешена контрактом генерации');
 
   const PlanetGeography = require('../site/shared/planet-geography.ts').default;
   assert.equal(PlanetGeography.EARTH_CANONICAL_V, 128, 'объект по-прежнему отдаёт EARTH_CANONICAL_V');
-  assert.equal(PlanetGeography.GEOGRAPHY_VERSION, 'c100-soft-v1', 'объект по-прежнему отдаёт GEOGRAPHY_VERSION');
+  assert.equal(PlanetGeography.GEOGRAPHY_VERSION, 'c100-soft-v3', 'объект по-прежнему отдаёт GEOGRAPHY_VERSION');
 
   // Сэмплер через контракт даёт тот же результат (побитово — golden-тест в stage8).
   const sampler = await LocalMapContract.createPatchFieldSampler({ ...INPUT, geographyVersion: 'c100-soft-v1' });

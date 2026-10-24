@@ -19,6 +19,7 @@
 import {
   baseElevationOf,
   buildBuildingSpawnMask,
+  createPatchFieldSampler,
   isWaterCell,
   localPointToDirection,
   nearestPatchCell,
@@ -33,7 +34,12 @@ import type { GeographyProfileInput } from '../../site/shared/planet-geography.t
 // local-map-geometry.ts — главный поток импортирует их оттуда напрямую,
 // а не через этот модуль (который тащит ядро). Реэкспорт нужен для
 // обратной совместимости публичного API воркера и Node-тестов.
-import { CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT, mapNeighborCellsToSlots, planetCurvatureDropM } from './local-map-geometry.ts';
+import {
+  CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT, mapNeighborCellsToSlots,
+  planetCurvatureDropM, directionToLocalPoint, worldRiverSegment, worldRiverCarveFactor,
+} from './local-map-geometry.ts';
+import type { WorldRiverSegment } from './local-map-geometry.ts';
+import type { Vec3 } from './local-map-contract.ts';
 
 export { SKIRT_RING_COUNT, mapNeighborCellsToSlots, planetCurvatureDropM };
 
@@ -45,7 +51,7 @@ import {
   sampleLocalTerrainHeightM, smooth01, clampScalar, buildBaseHeightfield,
 } from './local-map-heightfield.ts';
 import type { LocalMapRingCell } from './local-map-heightfield.ts';
-import { RIVER_HALF_WIDTH_RATIO, RIVER_DEPTH_RATIO, riverSegments, riverCarveFactor, applyRiverCarve } from './local-map-rivers.ts';
+import { RIVER_HALF_WIDTH_RATIO, RIVER_DEPTH_RATIO, applyRiverCarve } from './local-map-rivers.ts';
 
 export {
   HEIGHTFIELD_RES, TERRAFORM_RES, METERS_PER_ELEVATION_UNIT, LAND_FBM_AMPLITUDE_M,
@@ -592,6 +598,179 @@ export function localMapCacheSize(): number {
   return LOCAL_MAP_CACHE.size;
 }
 
+// ---- Единая гидрология мировой точки для тонкого поля, колец и юбки ----
+// Patch7 хранит flowReceiver соседей, но не координаты их получателей вне
+// своих семи ячеек. Один раз на частоту строим КАНОНИЧЕСКИЕ центры графа;
+// не выдумываем направление из азимута слота. Повторные запросы используют
+// уже готовые центры, а не заново строят v=128 при каждом кадре.
+const riverGridCenters = new Map<number, Promise<Float32Array>>();
+
+async function receiverCenters(v: number): Promise<Float32Array> {
+  let result = riverGridCenters.get(v);
+  if (!result) {
+    result = import('../../site/shared/geodesic-grid.ts').then((module) => module.default.build(v).centers);
+    riverGridCenters.set(v, result);
+  }
+  return result;
+}
+
+function traceRiverEdge(patch: LocalMapPatch, cell: PatchCell, receiver: PatchCell | undefined): boolean {
+  if (cell.flowReceiver < 0) return false;
+  // Явное отключение русла в Patch7 (например, twin из И-3.3) не должно
+  // восстанавливать сток из соседского streamWeight вопреки контракту.
+  if (cell.cell !== patch.centerCell && cell.flowReceiver === patch.centerCell) {
+    return patch.river.inlets.some((e) => e.neighborCell === cell.cell);
+  }
+  if (cell.streamWeight > 0) return true;
+  if (receiver && isWaterCell(receiver, patch.seaLevel)) return true;
+  return cell.cell === patch.centerCell && (patch.river.inlets.length > 0 || patch.river.flowsThroughCenter);
+}
+
+// У v3 поверхность и 3D-сэмплер дают побитово одинаковый elevation[cell].
+// seaLevel известен из Patch7. Для устья БЕЗ streamWeight, чей получатель
+// вне Patch7, это позволяет установить океан по настоящему полю, а не по
+// догадке о направлении/азимуте или произвольному порогу накопления.
+const receiverSamplers = new WeakMap<GeographyProfileInput, ReturnType<typeof createPatchFieldSampler>>();
+
+/** Только фактические связи flowReceiver; отсутствующие центры — из канонической сетки. */
+export async function worldRiverSegmentsForPatch(
+  patch: LocalMapPatch, profile?: GeographyProfileInput,
+): Promise<WorldRiverSegment[]> {
+  const cells = new Map(patch.cells.map((cell) => [cell.cell, cell]));
+  const edges = patch.cells.filter((cell) => (
+    (profile || cells.has(cell.flowReceiver))
+      && traceRiverEdge(patch, cell, cells.get(cell.flowReceiver))
+  ));
+  const unknownMouths = profile ? patch.cells.filter((cell) => (
+    cell.flowReceiver >= 0 && !cells.has(cell.flowReceiver) && cell.streamWeight <= 0
+      && cell.riverAccumulation > 0 && !edges.includes(cell)
+  )) : [];
+  if (edges.length === 0 && unknownMouths.length === 0) return [];
+  const missing = unknownMouths.length > 0 || edges.some((cell) => !cells.has(cell.flowReceiver));
+  const centers = missing ? await receiverCenters(patch.v) : null;
+  const getDir = (id: number): Vec3 => {
+    const known = cells.get(id);
+    if (known) return known.center;
+    if (!centers || id < 0 || id * 3 + 2 >= centers.length) {
+      throw new Error(`Речной flowReceiver #${id} отсутствует в каноническом графе v=${patch.v}`);
+    }
+    const x = centers[id * 3] as number;
+    const y = centers[id * 3 + 1] as number;
+    const z = centers[id * 3 + 2] as number;
+    const norm = Math.hypot(x, y, z);
+    return [x / norm, y / norm, z / norm];
+  };
+  const sampledWater = new Set<number>();
+  const missingOutlets = profile
+    ? [...unknownMouths, ...edges.filter((cell) => !cells.has(cell.flowReceiver))]
+    : [];
+  if (missingOutlets.length > 0 && profile) {
+    let samplerPromise = receiverSamplers.get(profile);
+    if (!samplerPromise) {
+      samplerPromise = createPatchFieldSampler(profile);
+      receiverSamplers.set(profile, samplerPromise);
+    }
+    const sampler = await samplerPromise;
+    const waterByReceiver = new Map<number, boolean>();
+    for (const cell of missingOutlets) {
+      let isWater = waterByReceiver.get(cell.flowReceiver);
+      if (isWater === undefined) {
+        const receiver = getDir(cell.flowReceiver);
+        isWater = (sampler.sampleFields(receiver[0], receiver[1], receiver[2])[0] as number) < patch.seaLevel;
+        waterByReceiver.set(cell.flowReceiver, isWater);
+      }
+      if (isWater) {
+        sampledWater.add(cell.flowReceiver);
+        if (unknownMouths.includes(cell)) edges.push(cell);
+      }
+    }
+  }
+  return edges.map((cell) => {
+    const receiver = cells.get(cell.flowReceiver);
+    const toWater = (receiver !== undefined && isWaterCell(receiver, patch.seaLevel))
+      || sampledWater.has(cell.flowReceiver);
+    return worldRiverSegment(cell.cell, cell.flowReceiver, cell.center, getDir(cell.flowReceiver),
+      toWater, toWater && cell.streamWeight <= 0);
+  });
+}
+
+/** Вырез долины из тех же мировых дуг на любой разрешённой сетке. */
+export function worldRiverDepthAt(
+  dir: Vec3, segments: readonly WorldRiverSegment[], radiusM: number, planetRadiusM: number,
+): number {
+  const halfWidthM = Math.max((4 * radiusM) / HEIGHTFIELD_RES, radiusM * RIVER_HALF_WIDTH_RATIO);
+  const depthM = Math.max(10, radiusM * RIVER_DEPTH_RATIO * 1.8);
+  let deepest = 0;
+  for (const segment of segments) {
+    const valley = worldRiverCarveFactor(dir, [segment], planetRadiusM, halfWidthM * 2.4);
+    if (valley <= 0) continue;
+    const channel = worldRiverCarveFactor(dir, [segment], planetRadiusM, halfWidthM);
+    let mouthFade = 1;
+    if (segment.toWater) {
+      // 3D-полоса берега одна и та же в каждом Patch7. На середине ребра
+      // вода начинается без ступени; градиент нулевой и со стороны моря.
+      const signedM = planetRadiusM * (
+        dir[0] * (segment.from[0] - segment.to[0])
+        + dir[1] * (segment.from[1] - segment.to[1])
+        + dir[2] * (segment.from[2] - segment.to[2])
+      ) / (2 * Math.sin(segment.halfAngle));
+      mouthFade = smooth01(signedM / Math.min(20_000, segment.halfAngle * planetRadiusM * 0.8));
+    }
+    const carve = (segment.mouth ? Math.min(10, depthM) : depthM)
+      * (0.45 * valley + 0.55 * channel) * mouthFade;
+    if (carve > deepest) deepest = carve;
+  }
+  return deepest;
+}
+
+/** Сохраняет прежние water/terraform/spawn семантики, заменяя только высоту вреза. */
+function applyWorldRiverHeights(
+  patch: LocalMapPatch,
+  radiusM: number,
+  base: ReturnType<typeof buildBaseHeightfield>,
+  heightfield: Float32Array,
+  spawnMask: Uint8Array,
+  segments: readonly WorldRiverSegment[],
+): void {
+  if (segments.length === 0) return;
+  const res = HEIGHTFIELD_RES;
+  const stepM = 2 * radiusM / res;
+  const halfWidthM = Math.max(stepM * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
+  // Обычный путь (суша/океан вне долины) уже записан applyRiverCarve.
+  // Проверяем только узкую мировую bbox дуг, построенную из ИСТИННЫХ 3D
+  // концов flowReceiver: не считаем exp-карту для всех 65 536 вершин реки.
+  const margin = halfWidthM * 2.4 + stepM * 2;
+  const boxes = segments.map((segment) => {
+    const a = directionToLocalPoint(patch, segment.from);
+    const b = directionToLocalPoint(patch, segment.to);
+    return {
+      minX: Math.min(a.u, b.u) - margin,
+      maxX: Math.max(a.u, b.u) + margin,
+      minY: Math.min(a.v, b.v) - margin,
+      maxY: Math.max(a.v, b.v) + margin,
+    };
+  });
+  for (let y = 0; y < res; y++) {
+    const wy = (y - res / 2) * stepM;
+    for (let x = 0; x < res; x++) {
+      const idx = y * res + x;
+      const wx = (x - res / 2) * stepM;
+      if (!boxes.some((box) => wx >= box.minX && wx <= box.maxX && wy >= box.minY && wy <= box.maxY)) {
+        continue;
+      }
+      const dir = localPointToDirection(patch, wx, wy);
+      if (base.landMask[idx] === 0 && nearestPatchCell(patch, dir).lakeWeight > 0) continue;
+      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM);
+      heightfield[idx] = (base.heightM[idx] as number) - carve;
+      if (base.landMask[idx] === 1
+        && worldRiverCarveFactor(dir, segments, patch.frame.radiusM, halfWidthM) >= 0.45) {
+        base.terraformMap[idx] = 1;
+        spawnMask[idx] = 0;
+      }
+    }
+  }
+}
+
 // ---- Main Entry Point ----
 /**
  * Генерация остаётся асинхронной по контракту worker. W23 намеренно меняет
@@ -622,6 +801,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
   // Общий seed всего мира, НЕ идентификатор ячейки: одинаковое направление
   // планеты даёт одинаковую деталь во всех перекрывающихся участках.
   const planetSeed = (seed ^ Math.imul((placeId + 1) >>> 0, 0x85EBCA6B)) >>> 0;
+  const worldRiverSegments = await worldRiverSegmentsForPatch(patch, request.profile);
   const base = buildBaseHeightfield(patch, radiusM, planetSeed, spawnMask, !!request.profile);
   // У старого «устья без streamWeight» есть релаксация с НЕОГРАНИЧЕННОЙ
   // повторной постановкой вершин в очередь (rivers.ts). На общем метрическом
@@ -635,6 +815,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
     ? { ...patch, river: { ...patch.river, flowsThroughCenter: true } }
     : patch;
   const heightfield = applyRiverCarve(carvePatch, radiusM, base, spawnMask);
+  applyWorldRiverHeights(patch, radiusM, base, heightfield, spawnMask, worldRiverSegments);
   const terraformMap = base.terraformMap;
   const waterPoints = base.waterPoints;
   let buildablePoints = 0;
@@ -672,6 +853,9 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
     const ringStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     ringCells = buildNeighborRingCells(
       patch, neighborRings, radiusM, planetSeed, true,
+      worldRiverSegments.length > 0
+        ? (dir) => worldRiverDepthAt(dir, worldRiverSegments, radiusM, patch.frame.radiusM)
+        : undefined,
     );
     ringCellCount = ringCells.length;
     ringGenMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - ringStartedAt;
@@ -850,42 +1034,6 @@ function skirtSemanticWater(
   return mix(waterOf(center), mix(waterOf(c0), waterOf(c1), angularBlend), waterBlend);
 }
 
-/** Мягкое продолжение русла в соседних ячейках юбки горизонта. */
-function skirtRiverCarveFactor(
-  patch: LocalMapPatch,
-  neighborSlots: readonly PatchCell[],
-  x: number,
-  y: number,
-  r: number,
-  radiusPatchM: number,
-  riverHalfWidthM: number,
-): number {
-  const centerApothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusPatchM;
-  if (r <= centerApothemM || !(riverHalfWidthM > 0)) return 0;
-  let carve = 0;
-  for (let k = 0; k < neighborSlots.length; k++) {
-    const cell = neighborSlots[k] as PatchCell;
-    // Только каноническая связь через общую грань. streamWeight > 0 у любого
-    // соседа не означает, что его русло пересекает именно эту грань.
-    const linkedByRiver = patch.river.inlets.some((edge) => edge.neighborCell === cell.cell)
-      || patch.river.outlet?.neighborCell === cell.cell;
-    if (!linkedByRiver) continue;
-    const angle = (k * Math.PI) / 3;
-    const along = x * Math.cos(angle) + y * Math.sin(angle);
-    if (along < centerApothemM) continue;
-    const cross = -x * Math.sin(angle) + y * Math.cos(angle);
-    const distance = Math.abs(cross);
-    if (distance >= riverHalfWidthM) continue;
-    const t = 1 - distance / riverHalfWidthM;
-    // Ноль точно на грани подхватывает вырез innerHeightfield; к концу полосы
-    // смешивания каноническое продолжение уже имеет полную глубину. Отказ от
-    // slot-зависимого меандра гарантирует тот же створ после перецентровки.
-    const radial = smooth01((r - centerApothemM) / (0.30 * radiusPatchM));
-    carve = Math.max(carve, radial * t * t * (3 - 2 * t));
-  }
-  return carve;
-}
-
 /**
  * Диагностика прежней амплитуды горных гребней юбки, м — перепад высот Patch7
  * (канонические высоты центра и 6 угловых слотов `mapNeighborCellsToSlots`)
@@ -1009,7 +1157,7 @@ export async function generateHorizonSkirt(
   const riverMask = new Uint8Array(vertexCount);
   const riverHalfWidthM = Math.max((4 * radiusPatchM) / HEIGHTFIELD_RES,
     radiusPatchM * RIVER_HALF_WIDTH_RATIO);
-  const centerRiverSegments = riverSegments(patch, radiusPatchM, riverHalfWidthM);
+  const worldRiverSegments = await worldRiverSegmentsForPatch(patch, request.profile);
 
   // Радиусы рядов: 36 плотных шагов воротника от R_inner до 1.15 · R_patch,
   // затем 48 шагов к горизонту по степени t^1.35.
@@ -1031,7 +1179,7 @@ export async function generateHorizonSkirt(
   const fieldStepM = (2 * radiusPatchM) / HEIGHTFIELD_RES;
   // В воротнике и на всех кольцах юбка получает ТО ЖЕ непрерывное поле,
   // что центральная сетка и LOD, даже при автономном вызове без профиля.
-  const fieldHeightAt = (x: number, y: number, r: number): number => {
+  const fieldHeightAt = (x: number, y: number): number => {
     const dir = localPointToDirection(patch, x, y);
     const cell = nearestPatchCell(patch, dir);
     if (cell.lakeWeight > 0) {
@@ -1040,16 +1188,7 @@ export async function generateHorizonSkirt(
     let h = sampleLocalTerrainHeightM(
       dir, fieldStepM, patch.frame.radiusM, planetSeed, !!request.profile,
     );
-    if (!isWaterCell(cell, patch.seaLevel)) {
-      const riverDepthM = Math.max(10, radiusPatchM * RIVER_DEPTH_RATIO * 1.8);
-      const channel = skirtRiverCarveFactor(
-        patch, neighborSlots, x, y, r, radiusPatchM, riverHalfWidthM,
-      );
-      const valley = skirtRiverCarveFactor(
-        patch, neighborSlots, x, y, r, radiusPatchM, riverHalfWidthM * 2.4,
-      );
-      h -= riverDepthM * (0.45 * valley + 0.55 * channel);
-    }
+    h -= worldRiverDepthAt(dir, worldRiverSegments, radiusPatchM, patch.frame.radiusM);
     return h;
   };
 
@@ -1073,11 +1212,11 @@ export async function generateHorizonSkirt(
           z = innerZ;
         } else {
           const blend = smooth01((hexDist - blendStartM) / blendSpanM);
-          const planetaryZ = fieldHeightAt(x, y, r);
+          const planetaryZ = fieldHeightAt(x, y);
           z = innerZ + (planetaryZ - innerZ) * blend;
         }
       } else {
-        z = fieldHeightAt(x, y, r);
+        z = fieldHeightAt(x, y);
       }
 
       const vertex = j * angularCount + i;
@@ -1091,11 +1230,9 @@ export async function generateHorizonSkirt(
       // обе стороны грани, не завися от грубой макро-решётки 33×33.
       const semanticWater = skirtSemanticWater(patch, neighborSlots, radiusPatchM, x, y, r);
       if (semanticWater >= 0.5) waterMask[vertex] = 255;
-      const centerRiver = riverCarveFactor(x, y, centerRiverSegments, riverHalfWidthM);
-      const skirtRiver = skirtRiverCarveFactor(
-        patch, neighborSlots, x, y, r, radiusPatchM, riverHalfWidthM,
-      );
-      if (semanticWater < 0.5 && Math.max(centerRiver, skirtRiver) >= 0.45) riverMask[vertex] = 255;
+      const dir = localPointToDirection(patch, x, y);
+      const river = worldRiverCarveFactor(dir, worldRiverSegments, patch.frame.radiusM, riverHalfWidthM);
+      if (semanticWater < 0.5 && river >= 0.45) riverMask[vertex] = 255;
     }
   }
 

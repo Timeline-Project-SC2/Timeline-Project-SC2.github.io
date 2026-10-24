@@ -1,8 +1,9 @@
-/* LocalMap heightfield — рельеф локальной карты (Stage-8.14, W23b).
-   Длинноволновое sampleElevation выбирается в узлах 65² и интерполируется;
-   коротковолновая деталь fBm/detail считается в каждой вершине по общему
-   направлению планеты. Patch7 задаёт только воду/озёра/реки, а не якорь
-   морского дна. Врез русла — local-map-rivers.ts, оркестрация — worker.ts. */
+/* LocalMap heightfield — рельеф локальной карты (Stage-8.14, W23c).
+   В видимом профильном гексе и малом окне sampleElevation берётся напрямую
+   в вершинах тонкой сетки; вне видимой области и для запросов без профиля —
+   из компактной решётки. Деталь fBm считается по общему мировому направлению.
+   Patch7 задаёт воду/озёра, но не якорь морского дна; мировой речной врез
+   центра/колец/юбки согласован в worker.ts. */
 
 import {
   isWaterCell,
@@ -13,7 +14,7 @@ import {
 } from './local-map-contract.ts';
 import type { LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
 import type { FieldSampler } from '../../site/shared/planet-geography.ts';
-import { CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT } from './local-map-geometry.ts';
+import { CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT, tangentFrameAt } from './local-map-geometry.ts';
 import { sampleElevation } from '../../site/shared/planet-elevation-field.ts';
 
 // ---- Константы рельефа и терраформинга ----
@@ -25,14 +26,14 @@ export const TERRAFORM_RES = 256;
 /** Вертикальная шкала канонических высот (медиана суши Земли ≈ 600 м). */
 export const METERS_PER_ELEVATION_UNIT = 8570;
 
-/** Амплитуда локального fBm-рельефа суши и морского дна, м. */
-export const LAND_FBM_AMPLITUDE_M = 240;
+/** Амплитуда локального fBm-рельефа суши и морского дна, м (W23c: склон 5 км). */
+export const LAND_FBM_AMPLITUDE_M = 280;
 
 /** Амплитуда дополнительной детали суши и морского дна, м. */
-export const PROFILE_DETAIL_AMPLITUDE_M = 120;
+export const PROFILE_DETAIL_AMPLITUDE_M = 140;
 
-/** 64 интервала/65 узлов для медленного длинноволнового поля планеты. */
-export const ELEVATION_LATTICE_STEPS = 64;
+/** 256 интервалов/257 узлов продукта: даже 129² дают 5,3 м ошибки m.14 на v3. */
+export const ELEVATION_LATTICE_STEPS = 256;
 /** Исторический размер диагностической решётки detail, не источник короткой детали. */
 export const DETAIL_LATTICE_STEPS = 64;
 
@@ -294,8 +295,9 @@ function hexRingAxial(ring: number): Array<[number, number]> {
 
 /**
  * Кольца используют то же поле и аналитическую локальную деталь. Длинную
- * волну берём из разрежённой решётки с тем же шагом Nyquist span/res: один
- * sampleElevation на каждый узел, а не на каждый пиксель 64² соседей.
+ * волну вне видимого гекса берём из разрежённой решётки; внутри ближайших
+ * гексов LOD1 повторяем билинейную выборку их тонкого продуктового растра.
+ * Исходный шаг Nyquist везде span/256, хотя шаг выходной сетки LOD больше.
  * Физическая ширина span = 2·R_patch совпадает с сеткой рендерера.
  */
 function buildRingCellHeightfield(
@@ -306,22 +308,68 @@ function buildRingCellHeightfield(
   span: number,
   planetSeed: number,
   withDetail: boolean,
+  worldRiverDepthAt?: (dir: Vec3) => number,
+  targetCenter?: Vec3,
 ): { heightfield: Float32Array; waterMask: Uint8Array } {
   const heightfield = new Float32Array(res * res);
   const waterMask = new Uint8Array(res * res);
   const stepM = span / res;
-  // На дальних кольцах ресемплинг 4² уже не нужен; ближнее кольцо 64²
-  // обходится 17² обращениями к полю на ячейку (6 соседей).
-  const steps = Math.min(res, Math.max(4, Math.floor(res / 4)));
-  const lattice = sampleElevationLattice(patch, span / 2, stepM, offsetX, offsetY, steps);
-  const gridRatio = steps / res;
+  // Один Nyquist от тонкой сетки для центрального поля и ВСЕХ уровней колец.
+  const sourceStepM = span / HEIGHTFIELD_RES;
+  // Кольцо 1 перед переключением камеры видимо внутри гекса C. Вершины 64²
+  // там являются билинейной выборкой ТОЙ ЖЕ тонкой 256² сетки центра C.
+  // Просто вычислить поле в редкой вершине было недостаточно: растровая
+  // интерполяция v3 между ней и 4 вершинами C расходилась на 4,2 м.
+  const targetPatch = targetCenter && !patch.cells.some((cell) => cell.lakeWeight > 0)
+    ? { ...patch, frame: tangentFrameAt(targetCenter, patch.frame.radiusM) }
+    : null;
+  const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const eCe = targetPatch ? dot(patch.frame.east, targetPatch.frame.east) : 0;
+  const eCn = targetPatch ? dot(patch.frame.east, targetPatch.frame.north) : 0;
+  const nCe = targetPatch ? dot(patch.frame.north, targetPatch.frame.east) : 0;
+  const nCn = targetPatch ? dot(patch.frame.north, targetPatch.frame.north) : 0;
+  const apothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * span / 2;
+  const fineValues = new Map<number, number>();
+  const fineAt = (ix: number, iy: number): number => {
+    const idx = iy * HEIGHTFIELD_RES + ix;
+    const cached = fineValues.get(idx);
+    if (cached !== undefined) return cached;
+    const dir = localPointToDirection(targetPatch as LocalMapPatch,
+      (ix - HEIGHTFIELD_RES / 2) * sourceStepM, (iy - HEIGHTFIELD_RES / 2) * sourceStepM);
+    const h = sampleLocalTerrainHeightM(dir, sourceStepM, patch.frame.radiusM, planetSeed, withDetail)
+      - (worldRiverDepthAt?.(dir) ?? 0);
+    const result = Math.fround(h);
+    fineValues.set(idx, result);
+    return result;
+  };
+  // За пределами видимого гекса (shader discard) хватит 17² узлов;
+  // 2..5 кольца тоже сохраняют компактную решётку (12+18+24+30 ячеек).
+  const steps = targetPatch ? 16 : Math.min(res, Math.max(4, Math.floor(res / 2)));
+  const lattice = sampleElevationLattice(patch, span / 2, sourceStepM, offsetX, offsetY, steps);
   for (let y = 0; y < res; y++) {
-    const wy = offsetY + (y - res / 2) * stepM;
+    const ly = (y - res / 2) * stepM;
+    const wy = offsetY + ly;
     for (let x = 0; x < res; x++) {
-      const wx = offsetX + (x - res / 2) * stepM;
-      const dir = localPointToDirection(patch, wx, wy);
-      const h = elevationFromLattice(lattice, steps, x * gridRatio, y * gridRatio)
-        + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail);
+      const lx = (x - res / 2) * stepM;
+      const wx = offsetX + lx;
+      let h: number;
+      if (targetPatch && clusterHexMetric(lx, ly) <= apothemM + stepM) {
+        const cx = lx * eCe + ly * nCe;
+        const cy = lx * eCn + ly * nCn;
+        const gx = clampScalar(cx / sourceStepM + HEIGHTFIELD_RES / 2, 0, HEIGHTFIELD_RES - 1.0001);
+        const gy = clampScalar(cy / sourceStepM + HEIGHTFIELD_RES / 2, 0, HEIGHTFIELD_RES - 1.0001);
+        const ix = Math.floor(gx), iy = Math.floor(gy);
+        const tx = gx - ix, ty = gy - iy;
+        const h00 = fineAt(ix, iy), h10 = fineAt(ix + 1, iy);
+        const h01 = fineAt(ix, iy + 1), h11 = fineAt(ix + 1, iy + 1);
+        h = ((h00 * (1 - tx) + h10 * tx) * (1 - ty))
+          + ((h01 * (1 - tx) + h11 * tx) * ty);
+      } else {
+        const dir = localPointToDirection(patch, wx, wy);
+        h = elevationFromLattice(lattice, steps, x * steps / res, y * steps / res)
+          + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail, sourceStepM)
+          - (worldRiverDepthAt?.(dir) ?? 0);
+      }
       const idx = y * res + x;
       heightfield[idx] = h;
       waterMask[idx] = h < 0 ? 1 : 0;
@@ -343,6 +391,7 @@ export function buildNeighborRingCells(
   radiusPatchM: number,
   planetSeed: number,
   withDetail: boolean,
+  worldRiverDepthAt?: (dir: Vec3) => number,
 ): LocalMapRingCell[] {
   const normAngle = (a: number): number => (a + 2 * Math.PI) % (2 * Math.PI);
   const sorted: Array<{ cell: PatchCell; off: Tangent2D; angle: number }> = [];
@@ -385,7 +434,8 @@ export function buildNeighborRingCells(
       const center = entry.center ?? localPointToDirection(patch, entry.x, entry.y);
       const spanM = 2 * radiusPatchM;
       const built = buildRingCellHeightfield(
-        patch, entry.x, entry.y, hfRes, spanM, planetSeed, withDetail,
+        patch, entry.x, entry.y, hfRes, spanM, planetSeed, withDetail, worldRiverDepthAt,
+        ring === 1 ? center : undefined,
       );
       let minH = Infinity;
       let maxH = -Infinity;
@@ -415,9 +465,9 @@ export function buildNeighborRingCells(
 }
 
 /**
- * Старая диагностическая решётка 65² (в т. ч. для tools/analysis/ocean_side).
- * W23 не использует её для генерации: каждая вершина выбирает sampleElevation
- * по собственному направлению и шагу 2·R/hfRes. Старый выигрыш G4 утрачен.
+ * Диагностическая решётка деталей PlanetGeography для
+ * tools/analysis/ocean_side: не используется в продуктовом поле W23c.
+ * Рабочая решётка sampleElevationLattice и прямые вершины описаны ниже.
  */
 export interface LocalFieldLattice {
   readonly elevation: Float32Array;
@@ -500,10 +550,10 @@ export function sampleLandGrainT(
 ): number {
   // Амплитуда ×3 не должна утроить скачок между соседями: старая ветвь
   // запасного горизонта уменьшает частоту зерна, сохраняя его диапазон.
-  const fbmT = fBm(ux * 0.40, uy * 0.40, seed, 4, 2.0, 0.45);
+  const fbmT = fBm(ux * 0.38, uy * 0.38, seed, 4, 2.0, 0.45);
   if (detailSigned === null) return fbmT;
   const detail01 = detailSigned * 0.5 + 0.5;
-  const ridgeT = ridgedFbm(ux * 0.22, uy * 0.22, seed ^ 0x2F5A11, 3);
+  const ridgeT = ridgedFbm(ux * 0.21, uy * 0.21, seed ^ 0x2F5A11, 3);
   return clampScalar(0.52 * fbmT + 0.30 * detail01 + 0.18 * ridgeT, 0, 1);
 }
 
@@ -522,7 +572,8 @@ export function sampleLandGrainT(
  * Узловое поле на квадрате [offsetX ± radiusM, offsetY ± radiusM].
  * Шаг Nyquist — шаг ИСХОДНОГО heightfield, а не редкой решётки: иначе на
  * разных LOD изменится состав октав и появится шов даже у одного `dir`.
- * В продукте steps=64 даёт ровно 65² выборок sampleElevation на участок.
+ * Решётка 65² остаётся вне видимого гекса и в запросах без профиля;
+ * профильный гекс и окно 5 км сэмплируют вершины напрямую.
  */
 export function sampleElevationLattice(
   patch: LocalMapPatch,
@@ -545,8 +596,8 @@ export function sampleElevationLattice(
   return grid;
 }
 
-/** Билинейная выборка внутреннего интервала узлов (0 ≤ gx, gy < steps). */
-export function elevationFromLattice(lattice: Float64Array, steps: number, gx: number, gy: number): number {
+/** Старая билинейная выборка оставлена как контроль ошибки (0 ≤ gx, gy < steps). */
+export function bilinearElevationFromLattice(lattice: Float64Array, steps: number, gx: number, gy: number): number {
   const x = Math.floor(gx), y = Math.floor(gy);
   const tx = gx - x, ty = gy - y;
   const i = y * (steps + 1) + x;
@@ -556,25 +607,64 @@ export function elevationFromLattice(lattice: Float64Array, steps: number, gx: n
   return top * (1 - ty) + bottom * ty;
 }
 
-/** Малая деталь — только по мировому `dir`, на КАЖДОЙ вершине без интерполяции. */
+/** Catmull–Rom: воспроизводит кривизну длинной волны между узлами поля. */
+function cubicElevation(a: number, b: number, c: number, d: number, t: number): number {
+  return b + 0.5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+}
+
+/** Бикубический ресемплинг из тех же узлов: не делает новых sampleElevation. */
+export function elevationFromLattice(lattice: Float64Array, steps: number, gx: number, gy: number): number {
+  // Тонкий 256² растр совпадает с узлами: не запускаем 16-точечную
+  // интерполяцию для значений, уже выбранных непосредственно из поля.
+  if (Number.isInteger(gx) && Number.isInteger(gy)) return lattice[gy * (steps + 1) + gx] as number;
+  const x = Math.floor(gx), y = Math.floor(gy);
+  const tx = gx - x, ty = gy - y;
+  const nodes = steps + 1;
+  const x0 = Math.max(0, x - 1), x2 = Math.min(steps, x + 1), x3 = Math.min(steps, x + 2);
+  const y0 = Math.max(0, y - 1), y2 = Math.min(steps, y + 1), y3 = Math.min(steps, y + 2);
+  const row = (j: number): number => {
+    const i = j * nodes;
+    return cubicElevation(lattice[i + x0] as number, lattice[i + x] as number,
+      lattice[i + x2] as number, lattice[i + x3] as number, tx);
+  };
+  return cubicElevation(row(y0), row(y), row(y2), row(y3), ty);
+}
+
+/**
+ * Малая деталь — только по мировому `dir`, на КАЖДОЙ вершине. Узкий сигнал
+ * размаха 1,3/2,9 км нельзя показывать на продуктовом шаге 407 м без
+ * растрового шва: интерполяция двух повернутых сеток даёт до 3,40 м даже
+ * при тождественном аналитическом шуме. На окне 5 км шаг равен 19,5 м, там
+ * все октавы видимы. У ВСЕХ колец продукта передаётся тонкий шаг 2R/256,
+ * не их собственный шаг, поэтому соседние LOD выбирают одну полосу детали.
+ */
 export function sampleLocalTerrainDetailM(
   dir: Vec3,
   planetRadiusM: number,
   seed: number,
   withDetail: boolean,
+  sourceStepM = 0,
 ): number {
-  // Две линейно независимые оси в 3D дают непрерывный общий адрес шума по
-  // всей сфере (нет меридианного шва долгот/полюсного скачка). Период первой
-  // октавы фиксирован в МЕТРАХ, не в долях R_patch или в шагах LOD.
+  // Две независимые оси в 3D дают общий непрерывный адрес на сфере.
+  // Амплитуды октав нормируются по исходным 1 + 0,5 + 0,25, а не по числу
+  // видимых октав: приближение/удаление не меняет средний уровень рельефа.
   const scale = planetRadiusM / 5200;
   const ux = scale * (dir[0] * 0.80 - dir[1] * 0.60);
   const uy = scale * (dir[1] * 0.60 + dir[2] * 0.80);
-  const macro = fBm(ux, uy, seed, 3);
-  const detail = withDetail
-    ? valueNoise2D(ux * 1.8 + 13.7, uy * 1.8 - 7.9, seed ^ 0x2F5A11)
-    : 0.5;
-  return (macro * 2 - 1) * LAND_FBM_AMPLITUDE_M
-    + (detail * 2 - 1) * (withDetail ? PROFILE_DETAIL_AMPLITUDE_M : 0);
+  // 2-я октава (2,6 км) даёт на сетке 407 м системный растровый шов;
+  // период <8 шагов мягко приглушается. Третья (1,3 км) ещё мельче.
+  const octave2 = sourceStepM > 0 ? smooth01((2600 / sourceStepM - 8) / 6) : 1;
+  const octave3 = sourceStepM > 0 ? smooth01((1300 / sourceStepM - 3.2) / 6) : 1;
+  const profile = sourceStepM > 0 ? smooth01((5200 / 1.8 / sourceStepM - 6.5) / 5) : 1;
+  const n0 = valueNoise2D(ux, uy, seed) * 2 - 1;
+  const n1 = octave2 > 0 ? valueNoise2D(ux * 2, uy * 2, seed + 7919) * 2 - 1 : 0;
+  const n2 = octave3 > 0 ? valueNoise2D(ux * 4, uy * 4, seed + 2 * 7919) * 2 - 1 : 0;
+  const signedMacro = (n0 + n1 * 0.5 * octave2 + n2 * 0.25 * octave3) / 1.75;
+  const signedDetail = withDetail && profile > 0
+    ? valueNoise2D(ux * 1.8 + 13.7, uy * 1.8 - 7.9, seed ^ 0x2F5A11) * 2 - 1
+    : 0;
+  return signedMacro * LAND_FBM_AMPLITUDE_M
+    + signedDetail * (withDetail ? PROFILE_DETAIL_AMPLITUDE_M * profile : 0);
 }
 
 /** Прямая поформенная выборка без решётки — эталон точности для диагностики. */
@@ -585,13 +675,14 @@ export function sampleLocalTerrainHeightM(
   seed: number,
   withDetail: boolean,
 ): number {
-  return sampleElevation(dir, stepM) + sampleLocalTerrainDetailM(dir, planetRadiusM, seed, withDetail);
+  return sampleElevation(dir, stepM) + sampleLocalTerrainDetailM(dir, planetRadiusM, seed, withDetail, stepM);
 }
 
 /**
- * Поле вершин без вреза рек. На 65² узлах sampleElevation выбирается
- * по направлению exp-карты (полоса 2·R/hfRes), в каждую вершину приходит
- * билинейная планетная высота + свежая локальная деталь по её `dir`.
+ * Базовое поле: видимый профильный гекс получает прямое sampleElevation v3
+ * в каждой вершине, с одинаковой полосой 2R/256 для всех LOD. Вне гекса
+ * и для непрофильного benchmark — 65² кубическая решётка.
+ * На окне 5 км всё поле остаётся прямым: m.8/m.10 считают ВСЁ окно.
  * Patch7 меняет лишь маски и зеркало озера, не высоту моря/суши.
  */
 export function buildBaseHeightfield(
@@ -606,8 +697,14 @@ export function buildBaseHeightfield(
   const heightM = new Float64Array(hfRes * hfRes);
   const landMask = new Uint8Array(hfRes * hfRes);
   const terraformMap = generateTerraformMap();
-  const fieldLattice = sampleElevationLattice(patch, radiusM, stepM);
-  const gridRatio = ELEVATION_LATTICE_STEPS / hfRes;
+  // Без 3D-профиля (в т. ч. у старого G4 bench) кольца не создаются:
+  // прямое плотное поле нужно только профильной карте, где m.13/m.14 и
+  // окно формы проверяют один и тот же продукционный источник.
+  const fineWindow = withDetail && radiusM <= 5_000;
+  const steps = fineWindow ? ELEVATION_LATTICE_STEPS : 64;
+  const fieldLattice = sampleElevationLattice(patch, radiusM, stepM, 0, 0, steps);
+  const gridRatio = steps / hfRes;
+  const visibleApothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusM;
   let waterPoints = 0;
 
   for (let y = 0; y < hfRes; y++) {
@@ -631,9 +728,14 @@ export function buildBaseHeightfield(
       if (cell.lakeWeight > 0) {
         heightM[idx] = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
       } else {
-        heightM[idx] = elevationFromLattice(fieldLattice, ELEVATION_LATTICE_STEPS,
-          x * gridRatio, y * gridRatio)
-          + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail);
+        // Реальная биссектриса ячеек Голдберга (m.13) в концах ребра
+        // выступает до 1,121 номинальной апофемы своего кадра.
+        const visible = withDetail && !fineWindow
+          && clusterHexMetric(wx, wy) <= visibleApothemM * 1.15 + 2 * stepM;
+        const field = visible
+          ? sampleElevation(dir, stepM)
+          : elevationFromLattice(fieldLattice, steps, x * gridRatio, y * gridRatio);
+        heightM[idx] = field + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail, stepM);
       }
     }
   }
