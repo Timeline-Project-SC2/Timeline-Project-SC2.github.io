@@ -14,6 +14,7 @@ import {
 } from './local-map-contract.ts';
 import type { LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
 import type { FieldSampler } from '../../site/shared/planet-geography.ts';
+import { VERTICAL_SCALE_M } from '../../site/shared/planet-geography-constants.ts';
 import { CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT, tangentFrameAt } from './local-map-geometry.ts';
 import { sampleElevation } from '../../site/shared/planet-elevation-field.ts';
 
@@ -23,8 +24,8 @@ export const HEIGHTFIELD_RES = 256;
 
 export const TERRAFORM_RES = 256;
 
-/** Вертикальная шкала канонических высот (медиана суши Земли ≈ 600 м). */
-export const METERS_PER_ELEVATION_UNIT = 8570;
+/** Единая физическая шкала W28c глобуса и локальной карты, K=8570 м/ед. */
+export const METERS_PER_ELEVATION_UNIT = VERTICAL_SCALE_M;
 
 /** Амплитуда локального fBm-рельефа суши и морского дна, м (W23c: склон 5 км). */
 export const LAND_FBM_AMPLITUDE_M = 280;
