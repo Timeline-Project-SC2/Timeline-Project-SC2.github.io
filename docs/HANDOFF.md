@@ -605,10 +605,30 @@ JS/CSS/worker файлу публикации имя с контент-хэше�
   `workflow_dispatch` (403). Деплой происходит только пушем в `main`, то есть мержем PR.
 - **В Git — только исходники.** `assets/tiles/`, `assets/tiles.json`, `assets/map-preview.webp`
   и собранные `*.webp` в `.gitignore`; не коммитить их.
-- **На `main` действует ruleset «ArenaOverwrite»** (с 17.10): обновлять ветку могут только те,
-  кому разрешён обход (админ, интеграция Arena), и история должна быть линейной — merge-коммит
-  запрещён. `mergeStateStatus` у PR из-за этого `BLOCKED`; мерж — `gh pr merge <номер> --squash --admin`
-  (или `--rebase --admin`, если коммиты ветки нужно сохранить по отдельности).
+- **На `main` действует ruleset `BotsOverwrite`** (`id 25283890`, прежнее имя «ArenaOverwrite»,
+  с 17.10; проверено 25.10.2026 через `GET /repos/…/rules/branches/main`). В нём четыре правила —
+  `deletion`, `non_fast_forward`, `creation`, `update` (Restrict updates): обновлять ветку могут
+  только те, кому разрешён обход. Bypass: `OrganizationAdmin`, роли `4`/`5`, Integration `4187077`.
+  Требуемых статус-чеков в ruleset нет — их и не было, поэтому «красный» чек сам по себе мерж
+  не блокирует.
+- **Мерж по-прежнему только с `--admin`.** Проверка 25.10.2026 на PR #239 (все сборки зелёные,
+  `mergeStateStatus = BLOCKED`): `gh pr merge <номер> --merge` отвечает `base branch policy
+  prohibits the merge`, хотя `required_linear_history` в ruleset нет и требуемых статус-чеков тоже
+  нет. Блокирует правило **`update` (Restrict updates)** из `BotsOverwrite`: оно покрывает `~ALL`
+  ветки, то есть и `main`, а кнопка мержа обновляет целевую ветку. Рабочая команда —
+  `gh pr merge <номер> --merge --admin` (или `--squash --admin`, если нужна линейная история).
+  Чтобы мерж шёл без `--admin`: в `BotsOverwrite` либо исключить `refs/heads/main` из `update`,
+  либо добавить интеграцию Arena в bypass-список с режимом `Always`.
+- **Классическая branch protection репозитория выключена** (баннер «Repository branch protection is
+  disabled»), вся политика — в rulesets. Детали защиты интеграции Arena недоступны: `GET
+  /branches/main/protection*` и `POST /rulesets` отдают `403 Resource not accessible by integration`,
+  менять политику может только владелец в UI (`Settings → Rules`; `Settings → Branches` — создать заново).
+- **`Скрипты сайта` (job из `check.yml`) красный на всех PR** — 8 числовых планетарных тестов:
+  `local-map-stage8` (гребни Stage-8.5), `local-map-texture-812d` (golden `S1`), `local-map-stand`
+  (A-17 стык/берег), `planet-full-eq` (W26b `m.11`/`m.14`). На базовом `fa18ef4` в отдельном
+  worktree — те же 172/180, то есть расхождение не от правок конкретного PR. `typecheck`, `lint`,
+  `check:planet-core`, `node --check` и `tests/travel-planner.test.js` локально проходят.
+  Поэтому чек **нельзя** добавлять в обязательные, пока тесты не починены.
 - **Переезд `ubuntu-latest` на Ubuntu 26.04** — с 19.10 по 19.11.2026 (actions/runner-images#14748).
   Деплой к нему готов: Python 3.12 ставит `actions/setup-python` (в образе 26.04 он есть в кэше,
   системный там — 3.14), Pillow зафиксирован в `tools/requirements.txt` (`pillow>=13,<14`, колёса
