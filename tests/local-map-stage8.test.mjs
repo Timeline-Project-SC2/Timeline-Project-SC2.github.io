@@ -2357,6 +2357,8 @@ test('Stage-8.7: без профиля ringCells отсутствуют (нет 
    эквивалентность generateLocalMap / generateHorizonSkirt — через
    golden-хэш фиксированного профиля и ячейки (проверено против
    сборки до правки A-12b, machine-noise исключена: genMs/ringGenMs).
+   Хэш пересчитан в волне 8.12d из-за единого зерна рельефа (A-31)
+   и батиметрии русла (A-30).
    --------------------------------------------------------------- */
 
 /** Детерминированный SHA-256 по всем буферам ответа и юбке (без timing). */
@@ -2413,7 +2415,7 @@ test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово с
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    '498cee557b5a4be407d66664e3a25c55b7753919ba7133ad22eec7f02989f8d1',
+    '51971e118707f641dba7f199ed2058964a1b44fb09c15a8b6461ba9dc3a438d1',
     'генерация локальной карты побайтово фиксирует согласованный стык A-17',
   );
 });
@@ -2434,7 +2436,7 @@ test('Stage-8.10b: ленивый чанк выставляет API глобус
   const skirt = await loaded.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    '498cee557b5a4be407d66664e3a25c55b7753919ba7133ad22eec7f02989f8d1',
+    '51971e118707f641dba7f199ed2058964a1b44fb09c15a8b6461ba9dc3a438d1',
     'генерация через ленивый чанк побайтово совпадает с golden-хэшем A-17',
   );
 });
