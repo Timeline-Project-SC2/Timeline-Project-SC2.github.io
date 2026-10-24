@@ -37,7 +37,11 @@ import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
 // Stage-8.10b (A-12b): чистые геометрические хелперы — из нового модуля
 // без ядра. generateLocalMap / generateHorizonSkirt грузятся лениво через
 // динамический import() (см. loadLocalMapWorkerModule ниже).
-import { mapNeighborCellsToSlots, planetCurvatureDropM } from '../../src/local-map/local-map-geometry.ts';
+import {
+  mapNeighborCellsToSlots,
+  neighborTerrainKind,
+  planetCurvatureDropM,
+} from '../../src/local-map/local-map-geometry.ts';
 import { createTransitionLog as tlCreate } from './local-transition-log.ts';
 import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
 import type {
@@ -1648,14 +1652,6 @@ function neighborCompassLabel(east: readonly number[], north: readonly number[],
   const deg = ((Math.atan2(u, v) * 180 / Math.PI) + 360) % 360;
   const dirs = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'] as const;
   return dirs[Math.round(deg / 45) % 8] as string;
-}
-
-function neighborTerrainKind(cell: WorkerPatchReadyResponse['patch']['cells'][number], seaLevel: number): string {
-  if (cell.elevation < seaLevel) return 'океан';
-  if (cell.lakeWeight > 0) return 'озеро';
-  if (cell.streamWeight > 0) return 'река';
-  if (cell.muLand < 0.5) return 'берег';
-  return 'суша';
 }
 
 function updateLocalNeighborButtons(patchReady: WorkerPatchReadyResponse | null): void {
