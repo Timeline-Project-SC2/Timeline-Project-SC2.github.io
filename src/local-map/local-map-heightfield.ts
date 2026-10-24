@@ -14,6 +14,7 @@ import {
 } from './local-map-contract.ts';
 import type { LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
 import type { FieldSampler } from '../../site/shared/planet-geography.ts';
+import { VERTICAL_SCALE_M } from '../../site/shared/planet-geography-constants.ts';
 import { SKIRT_RING_COUNT, mapNeighborCellsToSlots } from './local-map-geometry.ts';
 
 // ---- Константы рельефа и терраформинга ----
@@ -22,8 +23,8 @@ export const HEIGHTFIELD_RES = 256;
 
 export const TERRAFORM_RES = 256;
 
-/** Метры рельефа на единицу канонической высоты c100-soft-v2 (И-3.2). */
-export const METERS_PER_ELEVATION_UNIT = 900;
+/** Метры рельефа на единицу канонической высоты (W28c: унифицировано с полем, K=8570, было 900, разнобой 40_000/8570/900 устранён). */
+export const METERS_PER_ELEVATION_UNIT = VERTICAL_SCALE_M;
 
 /** Амплитуда локального fBm-рельефа на суше, м. */
 export const LAND_FBM_AMPLITUDE_M = 80;

@@ -21,3 +21,10 @@ export const CONTRAST_LAND_PIVOT = 0.40;
 export const CONTRAST_LAND_GAIN = 5.0;
 export const CONTRAST_OCEAN_PIVOT = 0.12;
 export const CONTRAST_OCEAN_SCALE = 0.65;
+
+// W28c: единая вертикальная шкала — поле хранит единицы высоты (-1..1),
+// метры появляются только на границе отображения. K=8570 из решения владельца
+// (globe GLOBE_CELL_SCALE/RELIEF и профиль высот local-map до унификации).
+// ELEVATION_SCALE_M=40_000 остаётся как deprecated-шим для старых импортов.
+export const VERTICAL_SCALE_M = 8570;
+export const ELEVATION_SCALE_M_DEPRECATED = 40_000;
