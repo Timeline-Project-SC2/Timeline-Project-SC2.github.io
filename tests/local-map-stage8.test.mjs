@@ -218,14 +218,13 @@ test('И-3.2: высоты суши привязаны к filledElevation/seaLev
   assert.ok(landChecked > 0, 'в сухом патче есть проверенные точки суши');
 });
 
-test('И-3.2: океаническая/озёрная вода держит зеркало waterLevelOf и запрещает спавн', async () => {
+test('И-3.2/A-29: океан несёт батиметрию, водный патч запрещает спавн', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   Worker.clearLocalMapCache();
   const res = await Worker.generateLocalMap(requestFor(waterPatch, { patchKey: 'water' }));
 
-  const mirror = (Contract.waterLevelOf(waterPatch.cells[0], waterPatch.seaLevel) - waterPatch.seaLevel) * M_PER_UNIT;
   for (let i = 0; i < res.heightfield.length; i += 97) {
-    assert.ok(Math.abs(res.heightfield[i] - mirror) < 1e-3, 'вода держит единый уровень зеркала');
+    assert.ok(res.heightfield[i] <= -31.5 + 1e-3, `океанское дно не мельче 31.5 м (${res.heightfield[i]})`);
   }
   assert.equal(res.meta.waterFraction, 1, 'вся карта — вода');
   assert.equal(res.meta.buildableFraction, 0, 'над водой спавн запрещён');
@@ -2020,7 +2019,7 @@ function slotRayIndices(slot) {
   );
 }
 
-test('Stage-8.5.1: морской патч — рельеф прибрежной суши юбки и ровное зеркало воротника', async () => {
+test('Stage-8.5.1/A-29: морской патч — прибрежная суша и батиметрия воротника', async () => {
   assert.ok(waterPatch, 'нужен полностью водный патч');
   const coastalSeaPatch = buildCoastalSeaPatch(waterPatch);
   assert.equal(Contract.verifyPatchInvariants(coastalSeaPatch).ok, true, 'прибрежная фикстура валидна по И-3');
@@ -2031,17 +2030,22 @@ test('Stage-8.5.1: морской патч — рельеф прибрежной
   assert.equal(local.meta.waterFraction, 1, 'в малом активном гексе центр — океан');
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
 
-  // 1. Воротник центрального океана точно продолжает seaLevel независимо от
-  // того, какой сосед начинает вступать в силу сразу за ним.
+  // 1. В точной зоне воротника океан продолжает то же дно heightfield, а не
+  // возвращается к seaLevel. Озёрный положительный mirror проверяется отдельно.
   let collarVertices = 0;
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
+  const exactLimitM = Worker.SKIRT_COLLAR_BLEND_START_RATIO * apothemM;
   for (let j = 0; j <= Worker.SKIRT_COLLAR_RINGS; j++) {
     for (let i = 0; i < Worker.SKIRT_ANGULAR_SEGMENTS; i++) {
-      const z = skirtVertex(skirt, i, j)[2];
-      assert.ok(Math.abs(z) < 1e-6, `воротник (${i}, ${j}) держит z = 0, получено ${z}`);
+      const [x, y, z] = skirtVertex(skirt, i, j);
+      if (Worker.clusterHexMetric(x, y) > exactLimitM) continue;
+      const exact = bilinearHeight(local.heightfield, HF_RES, radiusM, x, y);
+      assert.ok(Math.abs(z - exact) < 1e-2, `батиметрия воротника (${i}, ${j}) совпадает: ${z}/${exact}`);
+      assert.ok(z <= -31.5 + 1e-3, `океанское дно воротника отрицательно (${z})`);
       collarVertices++;
     }
   }
-  assert.ok(collarVertices > 3000, `воротник проверен по всей окружности (${collarVertices})`);
+  assert.ok(collarVertices > 1000, `точная зона воротника проверена (${collarVertices})`);
 
   // 2. В сухих полусекторах — настоящая суша с грядами; подсчёт ведётся по
   // всей юбке, потому что три соседних гекса занимают примерно половину круга.
@@ -2409,7 +2413,7 @@ test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово с
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    '36f8a81d5e3c11356d281a874e6684e18f91e619dabad6989bcb9b91f836cbe1',
+    '498cee557b5a4be407d66664e3a25c55b7753919ba7133ad22eec7f02989f8d1',
     'генерация локальной карты побайтово фиксирует согласованный стык A-17',
   );
 });
@@ -2430,7 +2434,7 @@ test('Stage-8.10b: ленивый чанк выставляет API глобус
   const skirt = await loaded.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    '36f8a81d5e3c11356d281a874e6684e18f91e619dabad6989bcb9b91f836cbe1',
+    '498cee557b5a4be407d66664e3a25c55b7753919ba7133ad22eec7f02989f8d1',
     'генерация через ленивый чанк побайтово совпадает с golden-хэшем A-17',
   );
 });
@@ -2921,12 +2925,23 @@ function a29BathymetryRows(cell, local, skirt) {
     const angularIndex = az * Worker.SKIRT_ANGULAR_SEGMENTS / 16;
     for (let step = 0; step <= A29_PROFILE_STEPS; step++) {
       const distanceM = step * A29_PROFILE_STEP_M;
-      // До A-29 весь центральный океан — waterMirrorM == 0 независимо от
-      // координаты. Снаружи берём фактический профиль юбки после 1.15 R_patch.
-      const innerHeightM = local.meta.waterFraction === 1 ? 0 : Number.NaN;
+      const phi = az / 16 * Math.PI * 2;
+      const innerRadiusM = Math.max(0, boundaryM - distanceM);
+      const guardM = Worker.SKIRT_HEIGHTFIELD_GUARD_RATIO * A17_RADIUS_M;
+      const innerHeightM = bilinearHeight(
+        local.heightfield, HF_RES, A17_RADIUS_M,
+        Math.max(-guardM, Math.min(guardM, Math.cos(phi) * innerRadiusM)),
+        Math.max(-guardM, Math.min(guardM, Math.sin(phi) * innerRadiusM)),
+      );
       const outerHeightM = a17SkirtHeightAt(skirt, angularIndex, boundaryM + distanceM);
       const innerDepthM = Math.max(0, -innerHeightM);
       const outerDepthM = Math.max(0, -outerHeightM);
+      // Численная CPU-проверка океанской ветки GLSL при одинаковых
+      // pelagicDepth/surfShoal: (depthBelowZero * 1.35 + pelagicDepth) * surfShoal.
+      const pelagicDepthM = 7.25;
+      const surfShoal = 0.8;
+      const innerWaterDepthM = (innerDepthM * 1.35 + pelagicDepthM) * surfShoal;
+      const outerWaterDepthM = (outerDepthM * 1.35 + pelagicDepthM) * surfShoal;
       rows.push({
         cell,
         azimuthDeg: az * 22.5,
@@ -2937,6 +2952,9 @@ function a29BathymetryRows(cell, local, skirt) {
         innerDepthM: Number(innerDepthM.toFixed(3)),
         outerDepthM: Number(outerDepthM.toFixed(3)),
         depthDeltaM: Number(Math.abs(innerDepthM - outerDepthM).toFixed(3)),
+        innerWaterDepthM: Number(innerWaterDepthM.toFixed(3)),
+        outerWaterDepthM: Number(outerWaterDepthM.toFixed(3)),
+        waterDepthDeltaM: Number(Math.abs(innerWaterDepthM - outerWaterDepthM).toFixed(3)),
       });
     }
   }
@@ -2984,6 +3002,7 @@ test('A-29 diagnostic: профиль батиметрии #37488/#37518/#37548/
     mean: Number((timings.reduce((sum, value) => sum + value, 0) / timings.length).toFixed(3)),
   });
   assert.equal(rows.length, A29_CELLS.length * 16 * (A29_PROFILE_STEPS + 1));
-  assert.ok(rows.every((row) => row.distanceM !== 0 || row.heightStepM < 0.01), 'точка шва маскировала дефект');
-  assert.ok(rows.some((row) => row.heightStepM >= 31.5), 'профиль воспроизводит уступ не меньше 31.5 м');
+  assert.ok(rows.every((row) => row.heightStepM <= 1), 'уступ любой пары не больше 1 м');
+  assert.ok(rows.every((row) => row.depthDeltaM <= 0.5), 'перепад глубины любой пары не больше 0.5 м');
+  assert.ok(rows.every((row) => row.waterDepthDeltaM <= 0.5), 'вход waterDepthM совпадает с допуском 0.5 м');
 });

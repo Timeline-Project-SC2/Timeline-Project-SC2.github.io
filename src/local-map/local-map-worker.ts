@@ -929,22 +929,30 @@ function riverCarveFactor(wx: number, wy: number, segments: readonly RiverSegmen
  * билинейной интерполяцией: 4 225 опросов вместо 65 536 держат гейт G4
  * (генерация <= 150 мс) при сохранении непрерывности поля (И-3.1).
  */
+interface LocalFieldLattice {
+  readonly elevation: Float32Array;
+  readonly detail: Float32Array;
+}
+
 function sampleDetailLattice(
   patch: LocalMapPatch, sampler: FieldSampler, radiusM: number,
-): Float32Array {
+): LocalFieldLattice {
   const nodes = DETAIL_LATTICE_STEPS + 1;
-  const lattice = new Float32Array(nodes * nodes);
+  const elevation = new Float32Array(nodes * nodes);
+  const detailLattice = new Float32Array(nodes * nodes);
   const scratch = new Float32Array(8);
   for (let j = 0; j < nodes; j++) {
     const v = ((j / DETAIL_LATTICE_STEPS) - 0.5) * 2 * radiusM;
     for (let i = 0; i < nodes; i++) {
       const u = ((i / DETAIL_LATTICE_STEPS) - 0.5) * 2 * radiusM;
       const fields = samplePatchFields(patch, sampler, u, v, scratch);
+      const index = j * nodes + i;
       const detail = fields[5] as number;
-      lattice[j * nodes + i] = detail < -1 ? -1 : detail > 1 ? 1 : detail;
+      elevation[index] = fields[0] as number;
+      detailLattice[index] = detail < -1 ? -1 : detail > 1 ? 1 : detail;
     }
   }
-  return lattice;
+  return { elevation, detail: detailLattice };
 }
 
 function sampleDetailAt(lattice: Float32Array, tx: number, ty: number): number {
@@ -1394,6 +1402,8 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
   // профилем (И-3.1) к нему добавляется амплитуда канала `detail`.
   const landBudgetM = LAND_FBM_AMPLITUDE_M + (detailLattice ? PROFILE_DETAIL_AMPLITUDE_M : 0);
   const smoothContext = buildSmoothPatchContext(patch, radiusM, landBudgetM);
+  const localCenterCell = patch.cells[0] as PatchCell;
+  const centerApothemM = CENTER_HEX_RADIUS_RATIO * HEX_APOTHEM_RATIO * radiusM;
   const heightfield = new Float32Array(hfRes * hfRes);
   // Stage-8.5: `terraform_map` заполняется в том же проходе, что и рельеф.
   // Байт 0 ставится ТОЛЬКО на воду/озеро канонической ячейки Patch7, а любая
@@ -1420,9 +1430,30 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
 
       let height: number;
       if (isWaterCell(cell, patch.seaLevel)) {
-        // И-3.2: вода/переполняющееся озеро держит зеркало waterLevelOf.
         waterPoints++;
-        height = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+        if (cell.lakeWeight > 0) {
+          // И-3.2: континентальное озеро остаётся на положительном зеркале.
+          height = (waterLevelOf(cell, patch.seaLevel) - patch.seaLevel) * METERS_PER_ELEVATION_UNIT;
+        } else {
+          // A-29: океан несёт батиметрию того же канала elevation, который
+          // строит юбку. Решётка добавляется к уже существующим 4 225 вызовам
+          // sampler без новых sampleFields; минимум 0.035 единицы совпадает с
+          // signedCanon. У грани микрополе плавно приходит к канонической
+          // высоте ячейки — тому же якорю, с которого продолжает юбка.
+          const rawElevation = detailLattice
+            ? sampleDetailAt(detailLattice.elevation, x / hfRes, y / hfRes)
+            : cell.elevation;
+          const rawBathymetryM = (
+            Math.min(rawElevation, patch.seaLevel - 0.035) - patch.seaLevel
+          ) * METERS_PER_ELEVATION_UNIT;
+          const canonicalBathymetryM = (
+            Math.min(localCenterCell.elevation, patch.seaLevel - 0.035) - patch.seaLevel
+          ) * METERS_PER_ELEVATION_UNIT;
+          const edgeBlend = smooth01(
+            (clusterHexMetric(wx, wy) - centerApothemM * 0.72) / (centerApothemM * 0.18),
+          );
+          height = rawBathymetryM + (canonicalBathymetryM - rawBathymetryM) * edgeBlend;
+        }
         // Stage-8.5: явный водный маркер — байт 0 в `terraform_map`.
         terraformMap[idx] = 0;
       } else {
@@ -1449,7 +1480,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
         const reliefT = detailLattice
           ? clampScalar(
             0.52 * fbmT
-              + 0.30 * (sampleDetailAt(detailLattice, x / hfRes, y / hfRes) * 0.5 + 0.5)
+              + 0.30 * (sampleDetailAt(detailLattice.detail, x / hfRes, y / hfRes) * 0.5 + 0.5)
               + 0.18 * ridgedFbm(wx * noiseScale * 1.7, wy * noiseScale * 1.7, cellSeed ^ 0x2F5A11, 4),
             0, 1,
           )
@@ -1945,10 +1976,6 @@ function skirtPlanetaryHeight(
 ): number {
   const collarEndM = SKIRT_COLLAR_END_RADIUS_RATIO * radiusPatchM;
   const center = patch.cells[0] as PatchCell;
-  const centerIsOcean = center.elevation < patch.seaLevel && center.lakeWeight === 0;
-  // Центральный океан точно сшивается с ровным heightfield до края воротника.
-  // За ним начинает проявляться знаковая батиметрия соседних секторов.
-  if (centerIsOcean && r <= collarEndM) return 0;
 
   // Stage-8.6: cellSeed нужен лишь в воротнике для бесшовной стыковки с
   // активным гексом. За воротником fBm/ridged и тектоническая маска получают
@@ -2021,7 +2048,19 @@ function skirtPlanetaryHeight(
   // Положительный сухопутный шум никогда не поднимает океанское дно: при
   // water -> 1 или baseElevM < -18 его вес плавно уходит к нулю.
   const landNoiseM = (fbmM + detailM + mountainM) * landWeight;
-  const nearWaterHeightM = waterMirrorM > 0 ? waterMirrorM : Math.min(baseElevM, 0);
+  const defaultWaterHeightM = waterMirrorM > 0 ? waterMirrorM : Math.min(baseElevM, 0);
+  const centerIsOcean = center.elevation < patch.seaLevel && center.lakeWeight === 0;
+  const centerOceanDepthM = (
+    Math.min(center.elevation, patch.seaLevel - 0.035) - patch.seaLevel
+  ) * METERS_PER_ELEVATION_UNIT;
+  // A-29: тот же канонический профиль проходит через воротник и ещё 0.12 R
+  // снаружи. Затем глубина плавно возвращается к соседним ячейкам Patch7.
+  const oceanProfileBlend = smooth01(
+    (r - (collarEndM + 0.12 * radiusPatchM)) / (0.8 * radiusPatchM),
+  );
+  const nearWaterHeightM = centerIsOcean
+    ? centerOceanDepthM + (defaultWaterHeightM - centerOceanDepthM) * oceanProfileBlend
+    : defaultWaterHeightM;
   const landHeight = baseElevM + landNoiseM;
   const nearHeight = nearWaterHeightM * water + landHeight * (1 - water);
 
@@ -2038,7 +2077,14 @@ function skirtPlanetaryHeight(
         : Math.min(baseElevM, 0));
     const latticeLandHeight = calibratedM + landNoiseM;
     const latticeHeight = waterHeight * water + latticeLandHeight * (1 - water);
-    const latticeBlend = smooth01((r - collarEndM) / (3.4 * radiusPatchM));
+    // A-29: первые 0.12 R после воротника сохраняют тот же канонический
+    // профиль глубины, что край центрального патча. Макро-батиметрия начинает
+    // проявляться после контрольных шести шагов (~270 м при R=2500), без
+    // кольцевого уступа; дальняя точка полного blend остаётся прежней.
+    const bathymetryBlendStartM = collarEndM + 0.12 * radiusPatchM;
+    const latticeBlend = smooth01(
+      (r - bathymetryBlendStartM) / (3.28 * radiusPatchM),
+    );
     height = nearHeight * (1 - latticeBlend) + latticeHeight * latticeBlend;
   }
 
