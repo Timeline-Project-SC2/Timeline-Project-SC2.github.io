@@ -16,21 +16,43 @@
  * дефекты), CI ломать нельзя. Включать гейт можно только после того, как
  * волна починки закроет красные метрики.
  *
- * ЧТО ИЗМЕРЯЕТСЯ (метрики и пороги заданы владельцем, менять нельзя):
+ * ЧТО ИЗМЕРЯЕТСЯ (метрики и пороги заданы владельцем; определения 1, 3 и
+ * порог 2 переопределены карточкой воркера 18b, метрика 7 добавлена ей же):
  *   1. ступень кромки русла      — поперечный профиль русла, max |Δh| между
- *                                   соседними вершинами heightfield   ≤ 2 м
- *   2. глубина воды в центре русла — глубина воды на оси русла          ≥ 3 м
+ *                                   соседними вершинами heightfield, только
+ *                                   по вершинам области вреза (carve > 0) ≤ 2 м
+ *   2. глубина воды в центре русла — глубина воды на оси русла          3…12 м
  *   3. непрерывность русла через грань гекса — вода в пределах одного
- *                                   текселя по обе стороны грани    16/16 азимутов
+ *                                   текселя по обе стороны грани в фактических
+ *                                   створах Patch7 (входы + выход к воде)
+ *                                   100 % створов
  *   4. фактура рельефа            — RMS высоты в трёх кольцах (патч,
  *                                   воротник, юбка); отношение любой пары
  *                                   в пределах                              0,7…1,3
  *   5. перепад между соседними вершинами на суше — max |Δh| на суше     ≤ 6 м
  *   6. перепад waterDepthM патч/юбка на одинаковой глубине               ≤ 0,5 м
+ *   7. доля площади гекса под врезом — доля точек сетки 44×44 (±0,95·R),
+ *                                   где riverCarveFactor > 0            ≤ 12 %
+ *
+ * Почему 1 и 3 переопределены (карточка 18b): прежняя 1 мерила профиль
+ * шириной 391 м при долине ±150 м — кромку вместе с природным зерном суши,
+ * где соседняя метрика 5 разрешает 6 м, и порог 2 м был недостижим by
+ * design. Прежняя 3 требовала воду в 16 точках по периметру гекса, а у реки
+ * один исток и один сток: честная реализация даёт 1…2 из 16, и порог 16/16
+ * выполним только 16 лучами из центра («паутиной»). Метрика 7 ловит именно
+ * паутину: река с долиной даёт единицы процентов, 16 лучей — 22,5 % при
+ * halfWidth 0,03 и 32,4 % при 0,045 (проверено на ветке с паутиной).
  *
  * ЧТО ИСПОЛЬЗУЕТСЯ ИЗ ПРОДАКШН-КОДА:
  *   - src/local-map/local-map-contract.ts: buildPatch7 (канонический срез
  *     7 ячеек), isWaterCell, nearestPatchCell, localPointToDirection;
+ *   - src/local-map/local-map-rivers.ts (если модуль уже выделен распилом):
+ *     riverSegments и riverCarveFactor — теми же segments/halfWidth, что
+ *     считает воркер, стенд строит поле вреза для метрик 1 и 7. Если файла
+ *     ещё нет (база до распила), используются дословные копии приватных
+ *     riverSegments/riverCarveFactor/cellTangentMeters из
+ *     local-map-worker.ts — по той же причине и с той же поме́ткой, что и
+ *     копии ниже; числа распила при этом побайтово те же;
  *   - src/local-map/local-map-worker.ts: generateLocalMap (heightfield,
  *     terraform_map), generateHorizonSkirt (юбка, маски воды/русла),
  *     clusterHexMetric, HEX_APOTHEM_RATIO, CENTER_HEX_RADIUS_RATIO,
@@ -64,12 +86,27 @@
  */
 
 import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const Contract = require('../src/local-map/local-map-contract.ts');
 const Worker = require('../src/local-map/local-map-worker.ts');
+
+// Модуль русел после распила local-map-worker.ts (Stage-8.12d, шаг распила):
+// если файл есть, поле вреза считается ПРОИЗВОДСТВЕННЫМИ riverSegments /
+// riverCarveFactor — именно так стенд видит и 16 вспомогательных лучей
+// «паутины», если воркер их добавил в свои сегменты. Если файла нет (база
+// стенда старше распила), ниже работают дословные копии тех же приватных
+// функций воркера. Молча подменять производственный модуль копиями при его
+// наличии нельзя: при битом экспорте стенд падает, а не меряет копию.
+const RIVERS_PATH = fileURLToPath(new URL('../src/local-map/local-map-rivers.ts', import.meta.url));
+const Rivers = existsSync(RIVERS_PATH) ? require('../src/local-map/local-map-rivers.ts') : null;
+if (Rivers && (typeof Rivers.riverSegments !== 'function' || typeof Rivers.riverCarveFactor !== 'function')) {
+  throw new Error('stand_local_map: src/local-map/local-map-rivers.ts есть, но не экспортирует riverSegments/riverCarveFactor');
+}
 
 // ---------------------------------------------------------------------------
 // Фикстуры — копии из tests/local-map-stage8.test.mjs (значения не менять).
@@ -122,8 +159,11 @@ const WORLDS = {
 const PLACE_ID = 2;
 const DEFAULT_RADIUS_M = 2500;
 const CANONICAL_V = 128;
-/** Азимутов контрольной грани центрального гекса (как в диагностике A-17b). */
+/** Азимутов профиля батиметрии A-29 (метрика 6; метрика 3 азимутами больше не мерит). */
 const AZIMUTHS = 16;
+/** Метрика 7: сетка точек поля вреза — 44×44 центра ячеек квадрата ±0,95·R. */
+const CARVE_AREA_GRID = 44;
+const CARVE_AREA_RADIUS_RATIO = 0.95;
 /** Шаг профиля батиметрии A-29, м. */
 const BATHY_STEP_M = 45;
 /** Число шагов профиля батиметрии A-29 (точки границы + 6 пар через 45 м). */
@@ -135,12 +175,19 @@ const BATHY_STEPS = 6;
 
 const THRESHOLDS = {
   bankStepM: 2,
+  // Метрика 2 — диапазон, а не только минимум (карточка 18b): без потолка
+  // воркер вырыл 18,4 м, и именно из-за этой глубины кромка метрики 1 не
+  // могла стать пологой. riverDepthM оставлен как имя минимума диапазона.
   riverDepthM: 3,
-  continuityAzimuths: AZIMUTHS,
+  riverDepthMaxM: 12,
+  // Метрика 3: непрерывны должны быть все фактические створы (100 %).
+  continuityFraction: 1,
   textureRatioMin: 0.7,
   textureRatioMax: 1.3,
   landStepM: 6,
   waterDepthDeltaM: 0.5,
+  // Метрика 7: потолок доли площади под врезом, %.
+  carveAreaMaxPct: 12,
 };
 
 /** CPU-реплика оптической глубины waterDepthM (ветка openSea шейдера, A-29). */
@@ -273,6 +320,118 @@ function round(value, digits = 3) {
 }
 
 // ---------------------------------------------------------------------------
+// Поле вреза русла: производственные riverSegments/riverCarveFactor
+// (src/local-map/local-map-rivers.ts), а до распила — дословные копии
+// приватных функций local-map-worker.ts (помечены fallback*).
+// ---------------------------------------------------------------------------
+
+/** КОПИЯ (fallback до распила): обратная exp-карта cellTangentMeters воркера. */
+function fallbackCellTangentMeters(patch, cell) {
+  const { origin, east, north, radiusM } = patch.frame;
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cosTheta = Math.min(1, Math.max(-1, dot(cell.center, origin)));
+  const theta = Math.acos(cosTheta);
+  const sinTheta = Math.sin(theta);
+  const scale = sinTheta > 1e-9 ? (theta * radiusM) / sinTheta : radiusM;
+  return { u: dot(cell.center, east) * scale, v: dot(cell.center, north) * scale };
+}
+
+/** КОПИЯ (fallback до распила): riverSegments воркера (И-3.3). */
+function fallbackRiverSegments(patch, radiusM, halfWidthM) {
+  const raw = [];
+  if (patch.river.flowsThroughCenter || patch.river.inlets.length > 0) {
+    for (const edge of patch.river.inlets) {
+      const cell = patch.cells[edge.slot + 1];
+      if (!cell) continue;
+      const inlet = fallbackCellTangentMeters(patch, cell);
+      raw.push({ u0: inlet.u, v0: inlet.v, u1: 0, v1: 0 });
+    }
+    if (patch.river.outlet) {
+      const cell = patch.cells[patch.river.outlet.slot + 1];
+      if (cell) {
+        const outlet = fallbackCellTangentMeters(patch, cell);
+        raw.push({ u0: 0, v0: 0, u1: outlet.u, v1: outlet.v });
+      }
+    }
+    if (raw.length === 0 && patch.river.flowsThroughCenter) {
+      raw.push({ u0: -2 * radiusM, v0: 0, u1: 2 * radiusM, v1: 0 });
+    }
+  }
+  return raw.map((seg) => ({
+    ...seg,
+    minU: Math.min(seg.u0, seg.u1) - halfWidthM,
+    minV: Math.min(seg.v0, seg.v1) - halfWidthM,
+    maxU: Math.max(seg.u0, seg.u1) + halfWidthM,
+    maxV: Math.max(seg.v0, seg.v1) + halfWidthM,
+  }));
+}
+
+/** КОПИЯ (fallback до распила): distanceToSegment воркера. */
+function fallbackDistanceToSegment(wx, wy, seg) {
+  const dx = seg.u1 - seg.u0;
+  const dy = seg.v1 - seg.v0;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((wx - seg.u0) * dx + (wy - seg.v0) * dy) / len2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const px = seg.u0 + dx * t;
+  const py = seg.v0 + dy * t;
+  return Math.hypot(wx - px, wy - py);
+}
+
+/** КОПИЯ (fallback до распила): riverCarveFactor воркера. */
+function fallbackRiverCarveFactor(wx, wy, segments, halfWidthM) {
+  if (segments.length === 0 || !(halfWidthM > 0)) return 0;
+  let best = Infinity;
+  for (const seg of segments) {
+    if (wx < seg.minU || wx > seg.maxU || wy < seg.minV || wy > seg.maxV) continue;
+    const d = fallbackDistanceToSegment(wx, wy, seg);
+    if (d < best) best = d;
+  }
+  if (best === Infinity) return 0;
+  if (best >= halfWidthM) return 0;
+  const t = 1 - best / halfWidthM;
+  return t * t * (3 - 2 * t);
+}
+
+const riverSegmentsImpl = Rivers ? Rivers.riverSegments : fallbackRiverSegments;
+const riverCarveFactorImpl = Rivers ? Rivers.riverCarveFactor : fallbackRiverCarveFactor;
+/** Откуда взяты segments/carve: 'local-map-rivers.ts' или копия до распила. */
+const RIVER_CARVE_SOURCE = Rivers ? 'local-map-rivers.ts' : 'копия приватных функций local-map-worker.ts (модуля rivers ещё нет)';
+
+/**
+ * Поле вреза патча теми же segments/halfWidth, что считает воркер при
+ * генерации heightfield: halfWidthM = max(2·cellSize, radiusM ·
+ * RIVER_HALF_WIDTH_RATIO) и segments = riverSegments(patch, radiusM,
+ * halfWidthM). Экспортируемая константа полуширины берётся из модуля русел,
+ * если он есть, иначе из воркера (значение одно и то же — 0,03).
+ */
+function buildRiverCarveField(patch, radiusM) {
+  const res = Worker.HEIGHTFIELD_RES;
+  const cellSize = (2 * radiusM) / res;
+  const halfWidthRatio = (Rivers && Number.isFinite(Rivers.RIVER_HALF_WIDTH_RATIO))
+    ? Rivers.RIVER_HALF_WIDTH_RATIO
+    : Worker.RIVER_HALF_WIDTH_RATIO;
+  const halfWidthM = Math.max(2 * cellSize, radiusM * halfWidthRatio);
+  const segments = riverSegmentsImpl(patch, radiusM, halfWidthM);
+  return {
+    segments,
+    halfWidthM,
+    halfWidthRatio,
+    cellSize,
+    res,
+    carveAt: (wx, wy) => riverCarveFactorImpl(wx, wy, segments, halfWidthM),
+  };
+}
+
+/** Касательные координаты вершины heightfield по её индексу, м. */
+function vertexCoordsM(index, res, cellSize) {
+  return {
+    x: ((index % res) - res / 2) * cellSize,
+    y: (Math.floor(index / res) - res / 2) * cellSize,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Геометрия русла: каноническая топология Patch7 (inlets/outlet)
 // ---------------------------------------------------------------------------
 
@@ -292,8 +451,29 @@ function riverAxes(patch) {
   return edges.map((edge) => {
     const cell = patch.cells[edge.slot + 1];
     const azimuth = Math.atan2(dot(cell.center, north), dot(cell.center, east));
-    return { ...edge, azimuth };
+    return { ...edge, azimuth, neighborIsWater: Contract.isWaterCell(cell, patch.seaLevel) };
   });
+}
+
+/**
+ * Фактические створы метрики 3 (карточка 18b): каждая грань входа русла
+ * (patch.river.inlets) плюс грань выхода (patch.river.outlet) ТОЛЬКО если
+ * сосед за ней — вода (isWaterCell): выход на сушу — это сток в следующий
+ * гекс суши, а не устье, и створом не считается.
+ */
+function riverGateAxes(patch) {
+  return riverAxes(patch).filter(
+    (axis) => axis.kind === 'вход' || axis.neighborIsWater,
+  );
+}
+
+/** Русское склонение слова «створ» для формата значения метрики 3. */
+function gateWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'створ';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'створа';
+  return 'створов';
 }
 
 /** Радиус контура центрального гекса по азимуту (продакшн-метрика кластера). */
@@ -307,10 +487,9 @@ function hexBoundaryRadiusM(radiusM, azimuth) {
  * русла, проходящий через середину оси внутри гекса. Ширина профиля — 2,5
  * полуширины русла (производственная константа RIVER_HALF_WIDTH_RATIO).
  */
-function riverCrossSection(patch, radiusM, axis) {
+function riverCrossSection(patch, radiusM, axis, halfWidthM) {
   const res = Worker.HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / res;
-  const halfWidthM = Math.max(2 * cellSize, radiusM * Worker.RIVER_HALF_WIDTH_RATIO);
   const boundaryM = hexBoundaryRadiusM(radiusM, axis.azimuth);
   const midRadiusM = boundaryM * 0.5;
   const midX = Math.cos(axis.azimuth) * midRadiusM;
@@ -320,12 +499,18 @@ function riverCrossSection(patch, radiusM, axis) {
   const perpY = Math.cos(axis.azimuth);
   const alongX = Math.abs(perpX) >= Math.abs(perpY);
   const steps = Math.max(1, Math.round((2.5 * halfWidthM) / cellSize));
+  // primary — индекс вдоль профиля (x при alongX, иначе y), secondary —
+  // фиксированный поперечный индекс. До карточки 18b пара была переставлена:
+  // профиль проходил через отражённую точку (midY, midX), а не через
+  // середину русла, поэтому поле вреза на нём было тождественно нулём даже
+  // при существующих сегментах и метрика 1 мерила зерно суши в стороне от
+  // реки. Профиль обязан проходить через (midX, midY) — как и сказано выше.
   const centerIndex = alongX
-    ? Math.round(midY / cellSize + res / 2)
-    : Math.round(midX / cellSize + res / 2);
-  const centerIndexOther = alongX
     ? Math.round(midX / cellSize + res / 2)
     : Math.round(midY / cellSize + res / 2);
+  const centerIndexOther = alongX
+    ? Math.round(midY / cellSize + res / 2)
+    : Math.round(midX / cellSize + res / 2);
   const indices = [];
   for (let k = -steps; k <= steps; k++) {
     const primary = centerIndex + k;
@@ -342,13 +527,35 @@ function riverCrossSection(patch, radiusM, axis) {
 
 /**
  * Метрика 1 — ступень кромки русла: максимальный |Δh| между соседними
- * вершинами heightfield поперёк оси русла (порог ≤ 2 м).
+ * вершинами heightfield поперёк оси русла (порог ≤ 2 м), только в области
+ * вреза (карточка 18b). В максимум включаются только ступени, у которых
+ * хотя бы одна из двух вершин лежит в области вреза (carve > 0): так сама
+ * кромка — переход от carve = 0 к carve > 0 — измеряется, а природное зерно
+ * суши вне области вреза (его меряет метрика 5 с порогом 6 м) — нет.
+ * Если carve = 0 на всём профиле, метрика неприменима (value = null), а не 0:
+ * нулевая ступень несуществующей кромки — ложный PASS.
  */
-function measureBankStep(local, crossSection) {
+function measureBankStep(local, crossSection, carveField) {
   const heightfield = local.heightfield;
+  const carve = crossSection.indices.map((index) => {
+    const { x, y } = vertexCoordsM(index, carveField.res, carveField.cellSize);
+    return carveField.carveAt(x, y);
+  });
+  const inAreaCount = carve.filter((value) => value > 0).length;
+  if (inAreaCount === 0) {
+    return {
+      value: null,
+      inAreaCount,
+      profileCount: crossSection.indices.length,
+      detail: 'carve = 0 на всём профиле — вершин в области вреза нет, кромку мерить негде',
+    };
+  }
   let maxStep = 0;
   let at = null;
+  let considered = 0;
   for (let k = 1; k < crossSection.indices.length; k++) {
+    if (carve[k - 1] <= 0 && carve[k] <= 0) continue;
+    considered++;
     const a = crossSection.indices[k - 1];
     const b = crossSection.indices[k];
     const delta = Math.abs(heightfield[a] - heightfield[b]);
@@ -357,11 +564,25 @@ function measureBankStep(local, crossSection) {
       at = k;
     }
   }
-  return { value: maxStep, detail: at === null ? 'профиль пуст' : `максимум на шаге ${at} профиля` };
+  if (considered === 0) {
+    return {
+      value: null,
+      inAreaCount,
+      profileCount: crossSection.indices.length,
+      detail: 'в области вреза нет соседних пар вершин профиля',
+    };
+  }
+  return {
+    value: maxStep,
+    inAreaCount,
+    profileCount: crossSection.indices.length,
+    detail: `вершин в области вреза: ${inAreaCount} из ${crossSection.indices.length} профиля; `
+      + (at === null ? 'все ступени в области вреза нулевые' : `максимум на шаге ${at} профиля`),
+  };
 }
 
 /**
- * Метрика 2 — глубина воды в центре русла (порог ≥ 3 м). Дно — высота
+ * Метрика 2 — глубина воды в центре русла (порог 3…12 м). Дно — высота
  * heightfield на оси русла; уровень воды — зеркало моря (0) для морской
  * ячейки, уровень суши (берег) для врезанного русла. Если в центре русла воды
  * нет вовсе (русло не врезано — маркер суши), глубина равна нулю: это и есть
@@ -393,24 +614,59 @@ function measureRiverDepth(local, crossSection) {
 }
 
 /**
- * Метрика 3 — непрерывность русла через грань гекса: вода должна быть в
- * пределах одного текселя по обе стороны грани центрального гекса
- * (порог 16/16 азимутов).
+ * Метрика 3 — непрерывность русла через грань гекса в ФАКТИЧЕСКИХ створах
+ * (карточка 18b): вода должна быть в пределах одного текселя по обе стороны
+ * грани именно там, где русло её пересекает по канонической топологии
+ * Patch7, — на гранях входов (inlets) и на грани выхода к воде (outlet с
+ * соседом-водой). Знаменатель — число таких створов, а не 16 азимутов по
+ * периметру: у реки один исток и один сток, честная реализация даёт 1…2
+ * створа. Порог — 100 % створов.
  *
  * Вода считается присутствующей, если СЕМАНТИКА (маркер terraform_map на
  * стороне патча, маска воды/русла на стороне юбки) говорит «вода» И геометрия
  * не противоречит: морская вода должна лежать ниже зеркала моря (z = 0),
  * русло — выше него (его поверхность лежит на уровне суши). Один только
  * маркер без воды — это как раз дефект «ложная вода на суше».
+ *
+ * Применимость: если створов по топологии нет — N/A. Особый случай — грань
+ * единственного выхода к воде без притоков и без потока через центр:
+ * flowReceiver есть у КАЖДОЙ ячейки суши (это направление стока, а не река),
+ * поэтому створ образуется, только если воркер при этом реально врезает
+ * русло (segments непусты). Если топология утверждает реку (есть входы или
+ * поток через центр), створы считаются независимо от воркера — иначе
+ * отсутствующую реку метрика прятала бы в N/A вместо FAIL.
  */
-function measureFaceContinuity(local, skirt, patch, radiusM) {
+function measureFaceContinuity(local, skirt, patch, radiusM, carveField) {
   const res = Worker.HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / res;
+  const gates = riverGateAxes(patch);
+  const topologyAssertsRiver = patch.river.inlets.length > 0 || patch.river.flowsThroughCenter;
+  const workerCarvesRiver = carveField.segments.length > 0;
+  if (gates.length === 0) {
+    const outlet = patch.river.outlet;
+    return {
+      value: null,
+      total: 0,
+      detail: outlet
+        ? `створов нет: входов нет, выход (слот ${outlet.slot}) ведёт на сушу — устья к воде нет`
+        : 'створов нет: в Patch7 нет ни входов русла, ни выхода к воде',
+    };
+  }
+  if (!topologyAssertsRiver && !workerCarvesRiver) {
+    return {
+      value: null,
+      total: gates.length,
+      detail: `створов нет: есть только выход стока к воде (${gates.map((gate) => `слот ${gate.slot}`).join(', ')}) `
+        + 'без притоков и без потока через центр, а сегментов вреза воркер не строит — русла нет',
+    };
+  }
   let continuous = 0;
-  const broken = [];
-  for (let az = 0; az < AZIMUTHS; az++) {
-    const azimuth = (az / AZIMUTHS) * Math.PI * 2;
-    const angularIndex = (az * Worker.SKIRT_ANGULAR_SEGMENTS) / AZIMUTHS;
+  const perGate = [];
+  for (const gate of gates) {
+    const azimuth = gate.azimuth;
+    const normalized = ((azimuth % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const angularIndex = Math.round((normalized / (Math.PI * 2)) * Worker.SKIRT_ANGULAR_SEGMENTS)
+      % Worker.SKIRT_ANGULAR_SEGMENTS;
     const boundaryM = hexBoundaryRadiusM(radiusM, azimuth);
     const innerRadiusM = boundaryM - cellSize;
     const innerX = Math.cos(azimuth) * innerRadiusM;
@@ -426,15 +682,46 @@ function measureFaceContinuity(local, skirt, patch, radiusM) {
       ? true
       : skirt.waterMask[vertex] > 127 && outerZ <= WATER_LEVEL_TOL_M;
     if (innerWater && outerWater) continuous++;
-    else broken.push(`${az * (360 / AZIMUTHS)}°`);
+    perGate.push(
+      `${gate.kind} слот ${gate.slot}: внутри ${innerWater ? 'вода есть' : 'воды нет'}, снаружи ${outerWater ? 'вода есть' : 'воды нет'}`,
+    );
   }
-  const riverSlots = riverAxes(patch).map((axis) => `${axis.kind} слот ${axis.slot}`).join(', ');
   return {
     value: continuous,
-    detail: (broken.length === 0
-      ? 'вода есть по обе стороны грани на всех азимутах'
-      : `разрыв на азимутах: ${broken.join(', ')}`)
-      + (riverSlots ? `; каноническое русло: ${riverSlots}` : '; канонического русла нет'),
+    total: gates.length,
+    detail: perGate.join('; '),
+  };
+}
+
+/**
+ * Метрика 7 — доля площади гекса под врезом (карточка 18b, порог ≤ 12 %):
+ * сетка 44×44 центров ячеек квадрата ±0,95·R (R = радиус участка), точка
+ * засчитывается, если riverCarveFactor > 0 в ней при тех же
+ * segments/halfWidth, что у воркера. Смысл — ловить «паутину»: честная река
+ * с долиной занимает единицы процентов, а 16 лучей из центра дали 22,5 %
+ * при halfWidth 0,03 и 32,4 % при 0,045. Метрика применима всегда: нет
+ * сегментов — честные 0 %, а не N/A.
+ */
+function measureCarveArea(carveField, radiusM) {
+  const grid = CARVE_AREA_GRID;
+  const extentM = CARVE_AREA_RADIUS_RATIO * radiusM;
+  const stepM = (2 * extentM) / grid;
+  let hits = 0;
+  for (let iy = 0; iy < grid; iy++) {
+    const y = -extentM + (iy + 0.5) * stepM;
+    for (let ix = 0; ix < grid; ix++) {
+      const x = -extentM + (ix + 0.5) * stepM;
+      if (carveField.carveAt(x, y) > 0) hits++;
+    }
+  }
+  const total = grid * grid;
+  return {
+    value: (hits / total) * 100,
+    hits,
+    total,
+    detail: `точек с carve > 0: ${hits} из ${total} (сетка ${grid}×${grid}, ±${CARVE_AREA_RADIUS_RATIO}·R); `
+      + `сегментов русла: ${carveField.segments.length}, halfWidth = ${round(carveField.halfWidthM, 1)} м `
+      + `(${carveField.halfWidthRatio}·R), поле вреза: ${RIVER_CARVE_SOURCE}`,
   };
 }
 
@@ -608,6 +895,7 @@ const METRIC_TITLES = {
   texture: 'фактура рельефа (RMS колец)',
   landStep: 'перепад вершин на суше',
   waterDepth: 'перепад waterDepthM патч/юбка',
+  carveArea: 'доля площади гекса под врезом',
 };
 
 function metricRow(cell, zone, metric, value, valueText, threshold, status, detail) {
@@ -642,47 +930,64 @@ async function measureCell(grid, surface, world, cell, radiusM) {
   const zone = zoneOf(patch);
   const rows = [];
 
-  // --- Метрики 1–3: русло по канонической топологии Patch7 ---
+  // --- Поле вреза воркера: общее для метрик 1, 2 (применимость), 3 и 7 ---
+  const carveField = buildRiverCarveField(patch, radiusM);
+
+  // --- Метрики 1–2: русло по канонической топологии Patch7 ---
+  // Применимость определяет поле вреза: если carve = 0 на всех профилях,
+  // врезанного русла нет и обе метрики — N/A (а не ступень 0 м / глубина 0 м:
+  // несуществующую реку нельзя ни «пропустить», ни «завалить»).
   const axes = riverAxes(patch);
   if (axes.length === 0) {
     rows.push(metricRow(cell, zone, METRIC_TITLES.bankStep, null, '—', '≤ 2 м', 'N/A', 'в Patch7 нет русла'));
-    rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '≥ 3 м', 'N/A', 'в Patch7 нет русла'));
+    rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '3…12 м', 'N/A', 'в Patch7 нет русла'));
   } else {
-    let worstStep = 0;
-    let worstDetail = '';
-    let depth = null;
-    let depthDetail = '';
-    for (const axis of axes) {
-      const crossSection = riverCrossSection(patch, radiusM, axis);
-      const bank = measureBankStep(local, crossSection);
-      if (bank.value > worstStep) {
-        worstStep = bank.value;
-        worstDetail = `${axis.kind} (слот ${axis.slot})`;
+    const measuredAxes = axes.map((axis) => {
+      const crossSection = riverCrossSection(patch, radiusM, axis, carveField.halfWidthM);
+      return {
+        axis,
+        crossSection,
+        bank: measureBankStep(local, crossSection, carveField),
+        depth: measureRiverDepth(local, crossSection),
+      };
+    });
+    const carvedAxes = measuredAxes.filter((entry) => entry.bank.value !== null);
+    if (carvedAxes.length === 0) {
+      const profileCount = measuredAxes.reduce((sum, entry) => sum + entry.bank.profileCount, 0);
+      const noCarveDetail = `carve = 0 на всём профиле: вершин в области вреза 0 из ${profileCount} `
+        + `(сегментов русла: ${carveField.segments.length}) — врезанного русла нет`;
+      rows.push(metricRow(cell, zone, METRIC_TITLES.bankStep, null, '—', '≤ 2 м', 'N/A', noCarveDetail));
+      rows.push(metricRow(cell, zone, METRIC_TITLES.riverDepth, null, '—', '3…12 м', 'N/A', noCarveDetail));
+    } else {
+      let worst = carvedAxes[0];
+      let shallowest = carvedAxes[0];
+      for (const entry of carvedAxes) {
+        if (entry.bank.value > worst.bank.value) worst = entry;
+        if (entry.depth.value < shallowest.depth.value) shallowest = entry;
       }
-      const measured = measureRiverDepth(local, crossSection);
-      if (depth === null || measured.value < depth) {
-        depth = measured.value;
-        depthDetail = `${axis.kind} (слот ${axis.slot}), ${measured.detail}`;
-      }
+      rows.push(metricRow(
+        cell, zone, METRIC_TITLES.bankStep, round(worst.bank.value), `${round(worst.bank.value, 2)} м`, '≤ 2 м',
+        worst.bank.value <= THRESHOLDS.bankStepM ? 'PASS' : 'FAIL',
+        `худшая грань: ${worst.axis.kind} (слот ${worst.axis.slot}); ${worst.bank.detail}`,
+      ));
+      const depth = shallowest.depth.value;
+      rows.push(metricRow(
+        cell, zone, METRIC_TITLES.riverDepth, round(depth), `${round(depth, 2)} м`, '3…12 м',
+        depth >= THRESHOLDS.riverDepthM && depth <= THRESHOLDS.riverDepthMaxM ? 'PASS' : 'FAIL',
+        `${shallowest.axis.kind} (слот ${shallowest.axis.slot}), ${shallowest.depth.detail}`,
+      ));
     }
-    rows.push(metricRow(
-      cell, zone, METRIC_TITLES.bankStep, round(worstStep), `${round(worstStep, 2)} м`, '≤ 2 м',
-      worstStep <= THRESHOLDS.bankStepM ? 'PASS' : 'FAIL',
-      `худшая грань: ${worstDetail}`,
-    ));
-    rows.push(metricRow(
-      cell, zone, METRIC_TITLES.riverDepth, round(depth), `${round(depth, 2)} м`, '≥ 3 м',
-      depth >= THRESHOLDS.riverDepthM ? 'PASS' : 'FAIL',
-      depthDetail,
-    ));
   }
 
-  // --- Метрика 3: непрерывность воды через грань гекса ---
-  const continuity = measureFaceContinuity(local, skirt, patch, radiusM);
+  // --- Метрика 3: непрерывность воды в фактических створах ---
+  const continuity = measureFaceContinuity(local, skirt, patch, radiusM, carveField);
   rows.push(metricRow(
-    cell, zone, METRIC_TITLES.continuity, continuity.value, `${continuity.value}/${AZIMUTHS}`,
-    `${AZIMUTHS}/${AZIMUTHS} азимутов`,
-    continuity.value >= THRESHOLDS.continuityAzimuths ? 'PASS' : 'FAIL',
+    cell, zone, METRIC_TITLES.continuity,
+    continuity.value, continuity.value === null ? '—' : `${continuity.value}/${continuity.total} ${gateWord(continuity.total)}`,
+    '100 % створов',
+    continuity.value === null
+      ? 'N/A'
+      : (continuity.value / continuity.total >= THRESHOLDS.continuityFraction ? 'PASS' : 'FAIL'),
     continuity.detail,
   ));
 
@@ -711,6 +1016,15 @@ async function measureCell(grid, surface, world, cell, radiusM) {
     '≤ 0,5 м',
     !waterDepth.hasWater ? 'N/A' : (waterDepth.value <= THRESHOLDS.waterDepthDeltaM ? 'PASS' : 'FAIL'),
     waterDepth.hasWater ? waterDepth.detail : 'на стыке нет воды',
+  ));
+
+  // --- Метрика 7: доля площади гекса под врезом ---
+  const carveArea = measureCarveArea(carveField, radiusM);
+  rows.push(metricRow(
+    cell, zone, METRIC_TITLES.carveArea, round(carveArea.value, 2), `${carveArea.value.toFixed(1)} %`,
+    '≤ 12 %',
+    carveArea.value <= THRESHOLDS.carveAreaMaxPct ? 'PASS' : 'FAIL',
+    carveArea.detail,
   ));
 
   return rows;
@@ -790,6 +1104,7 @@ export async function runStand(options = {}) {
     radiusM,
     canonicalV: CANONICAL_V,
     controlCells: [...CONTROL_CELLS],
+    riverCarveSource: RIVER_CARVE_SOURCE,
     thresholds: { ...THRESHOLDS },
     rows,
     summary,
@@ -805,6 +1120,9 @@ export {
   METRIC_TITLES,
   DEFAULT_RADIUS_M,
   CANONICAL_V,
+  CARVE_AREA_GRID,
+  CARVE_AREA_RADIUS_RATIO,
+  RIVER_CARVE_SOURCE,
   formatTable,
   parseArgs,
   usage,

@@ -26,10 +26,12 @@ const stand = await import(TOOL_PATH);
 const VALUE_LIMITS = {
   'ступень кромки русла': 1000,
   'глубина воды в центре русла': 20000,
-  'непрерывность русла через грань': 16,
+  // Створов не больше, чем граней у гекса.
+  'непрерывность русла через грань': 6,
   'фактура рельефа (RMS колец)': 100,
   'перепад вершин на суше': 1000,
   'перепад waterDepthM патч/юбка': 1000,
+  'доля площади гекса под врезом': 100,
 };
 
 const report = await stand.runStand({ world: 'a29', radiusM: 2500 });
@@ -40,25 +42,29 @@ test('стенд: конфигурация измерений зафиксиро
     [37488, 37518, 37548, 37519, 137363, 137390, 137436],
     'список контрольных ячеек не меняется',
   );
-  assert.equal(stand.THRESHOLDS.bankStepM, 2, 'ступень кромки русла ≤ 2 м');
-  assert.equal(stand.THRESHOLDS.riverDepthM, 3, 'глубина воды в центре русла ≥ 3 м');
-  assert.equal(stand.THRESHOLDS.continuityAzimuths, 16, 'непрерывность 16/16 азимутов');
+  assert.equal(stand.THRESHOLDS.bankStepM, 2, 'ступень кромки русла ≤ 2 м (только область вреза)');
+  assert.equal(stand.THRESHOLDS.riverDepthM, 3, 'глубина воды в центре русла: минимум диапазона 3 м');
+  assert.equal(stand.THRESHOLDS.riverDepthMaxM, 12, 'глубина воды в центре русла: потолок диапазона 12 м');
+  assert.equal(stand.THRESHOLDS.continuityFraction, 1, 'непрерывность: 100 % фактических створов');
   assert.equal(stand.THRESHOLDS.textureRatioMin, 0.7, 'коридор фактуры: 0,7…');
   assert.equal(stand.THRESHOLDS.textureRatioMax, 1.3, 'коридор фактуры: …1,3');
   assert.equal(stand.THRESHOLDS.landStepM, 6, 'перепад вершин на суше ≤ 6 м');
   assert.equal(stand.THRESHOLDS.waterDepthDeltaM, 0.5, 'перепад waterDepthM ≤ 0,5 м');
+  assert.equal(stand.THRESHOLDS.carveAreaMaxPct, 12, 'доля площади гекса под врезом ≤ 12 %');
+  assert.equal(stand.CARVE_AREA_GRID, 44, 'метрика 7: сетка 44×44');
+  assert.equal(stand.CARVE_AREA_RADIUS_RATIO, 0.95, 'метрика 7: радиус 0,95·R');
 });
 
-test('стенд: таблица покрывает все 7 контрольных ячеек и все 6 метрик', () => {
-  assert.equal(report.rows.length, stand.CONTROL_CELLS.length * 6);
+test('стенд: таблица покрывает все 7 контрольных ячеек и все 7 метрик', () => {
+  assert.equal(report.rows.length, stand.CONTROL_CELLS.length * 7);
   const metrics = new Set();
   for (const cell of stand.CONTROL_CELLS) {
     const rows = report.rows.filter((row) => row.cell === cell);
-    assert.equal(rows.length, 6, `у ячейки ${cell} ровно 6 метрик`);
-    assert.equal(new Set(rows.map((row) => row.metric)).size, 6, `метрики ячейки ${cell} не повторяются`);
+    assert.equal(rows.length, 7, `у ячейки ${cell} ровно 7 метрик`);
+    assert.equal(new Set(rows.map((row) => row.metric)).size, 7, `метрики ячейки ${cell} не повторяются`);
     for (const row of rows) metrics.add(row.metric);
   }
-  assert.equal(metrics.size, 6, 'в таблице шесть разных метрик');
+  assert.equal(metrics.size, 7, 'в таблице семь разных метрик');
   assert.deepEqual(
     [...metrics].sort(),
     Object.keys(VALUE_LIMITS).sort(),
@@ -93,13 +99,72 @@ test('стенд: значения метрик конечны и лежат в 
   }
 });
 
-test('стенд: непрерывность через грань измеряется целым числом азимутов', () => {
+test('стенд: непрерывность через грань измеряется целым числом фактических створов', () => {
   const rows = report.rows.filter((row) => row.metric === 'непрерывность русла через грань');
   assert.equal(rows.length, stand.CONTROL_CELLS.length);
   for (const row of rows) {
-    assert.ok(Number.isInteger(row.value), 'число азимутов — целое');
-    assert.ok(row.value >= 0 && row.value <= stand.THRESHOLDS.continuityAzimuths);
+    if (row.status === 'N/A') {
+      assert.equal(row.value, null, 'нет створов — нет значения, а не 0/0');
+      continue;
+    }
+    assert.ok(Number.isInteger(row.value), 'число непрерывных створов — целое');
+    const match = /^(\d+)\/(\d+) створ/.exec(row.valueText);
+    assert.ok(match, `значение имеет формат «2/2 створа» (получено: ${row.valueText})`);
+    assert.equal(Number(match[1]), row.value, 'числитель равен числу непрерывных створов');
+    const total = Number(match[2]);
+    assert.ok(total >= 1 && total <= 6, 'знаменатель — число створов, не больше граней гекса');
+    assert.ok(row.value <= total, 'непрерывных створов не больше всех створов');
   }
+});
+
+test('стенд: доля площади под врезом измерима на каждой ячейке и выражена в процентах', () => {
+  const rows = report.rows.filter((row) => row.metric === 'доля площади гекса под врезом');
+  assert.equal(rows.length, stand.CONTROL_CELLS.length);
+  for (const row of rows) {
+    assert.notEqual(row.status, 'N/A', 'метрика 7 применима всегда: нет вреза — честные 0 %');
+    assert.ok(row.value >= 0 && row.value <= 100, `доля в пределах 0…100 % (${row.value})`);
+    assert.match(row.valueText, /%/, 'значение выражено в процентах');
+    assert.match(row.detail, /точек с carve > 0: \d+ из 1936/, 'в detail — счётчик точек сетки 44×44');
+  }
+});
+
+test('стенд: ступень кромки сообщает число вершин в области вреза', () => {
+  const rows = report.rows.filter((row) => row.metric === 'ступень кромки русла');
+  assert.equal(rows.length, stand.CONTROL_CELLS.length);
+  for (const row of rows) {
+    if (row.status === 'N/A') {
+      assert.match(
+        row.detail,
+        /нет русла|carve = 0/,
+        'N/A объясняется отсутствием русла или нулевым врезом, а не молча',
+      );
+    } else {
+      assert.match(row.detail, /вершин в области вреза: [1-9]\d* из \d+/, 'в detail — число вершин области вреза');
+    }
+  }
+});
+
+test('стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке', async () => {
+  // Кросс-проверка измеримости (не порогов): в A-29 врезанного русла на
+  // контрольных ячейках может не быть, и тогда все речные строки — честные
+  // N/A. В A-17 топология Patch7 несёт входы русла, поэтому хотя бы один
+  // створ и хотя бы один профиль с carve > 0 обязаны измериться числом.
+  const a17 = await stand.runStand({ world: 'a17', radiusM: 2500 });
+  const continuity = a17.rows.filter((row) => row.metric === 'непрерывность русла через грань');
+  assert.ok(
+    continuity.some((row) => row.status !== 'N/A' && /^\d+\/\d+ створ/.test(row.valueText)),
+    'хотя бы один створ измерен в формате «N/M створа»',
+  );
+  const bank = a17.rows.filter((row) => row.metric === 'ступень кромки русла');
+  assert.ok(
+    bank.some((row) => row.status !== 'N/A' && /вершин в области вреза: [1-9]/.test(row.detail)),
+    'хотя бы один профиль пересекает область вреза',
+  );
+  const carveArea = a17.rows.filter((row) => row.metric === 'доля площади гекса под врезом');
+  assert.ok(
+    carveArea.some((row) => row.value > 0),
+    'хотя бы на одной ячейке поле вреза ненулевое',
+  );
 });
 
 test('стенд: сводка таблицы согласована с её строками', () => {
@@ -136,7 +201,7 @@ test('стенд: --json отдаёт те же поля, что и таблиц
   const result = spawnSync('node', [TOOL_PATH, '--json'], { encoding: 'utf8' });
   assert.equal(result.status, 0, `код возврата: ${result.status} ${result.stderr ?? ''}`);
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.rows.length, stand.CONTROL_CELLS.length * 6);
+  assert.equal(parsed.rows.length, stand.CONTROL_CELLS.length * 7);
   for (const row of parsed.rows) {
     for (const field of ['cell', 'zone', 'metric', 'value', 'valueText', 'threshold', 'status', 'detail']) {
       assert.ok(field in row, `в JSON-строке есть поле ${field}`);
