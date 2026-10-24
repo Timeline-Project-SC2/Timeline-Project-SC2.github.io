@@ -34,17 +34,17 @@ import type {
   WorkerResponse,
 } from './planet-globe-worker.ts';
 import { buildMeshLibrary } from '../../src/local-map/local-map-mesh.ts';
-import {
-  generateHorizonSkirt,
-  generateLocalMap,
-  mapNeighborCellsToSlots,
-  planetCurvatureDropM,
-} from '../../src/local-map/local-map-worker.ts';
+// Stage-8.10b (A-12b): чистые геометрические хелперы — из нового модуля
+// без ядра. generateLocalMap / generateHorizonSkirt грузятся лениво через
+// динамический import() (см. loadLocalMapWorkerModule ниже).
+import { mapNeighborCellsToSlots, planetCurvatureDropM } from '../../src/local-map/local-map-geometry.ts';
+import { createTransitionLog as tlCreate } from './local-transition-log.ts';
 import { StructureRenderer } from '../../src/local-map/local-map-renderer.ts';
 import type {
   HorizonSkirtData,
   LocalMapWorkerResponse,
 } from '../../src/local-map/local-map-worker.ts';
+import type { LocalMapWorkerLazyModule } from './local-map-worker-lazy.js';
 import {
   STRUCTURE_FRAGMENT_SHADER,
   STRUCTURE_VERTEX_SHADER,
@@ -215,6 +215,7 @@ const els = {
   localInvariantStatus: must<HTMLElement>('localInvariantStatus'),
   localMapStatus: must<HTMLElement>('localMapStatus'),
   localMapDiag: must<HTMLElement>('localMapDiag'),
+  localTransitionLogBtn: must<HTMLButtonElement>('localTransitionLogBtn'),
   localDiagDeltaEye: must<HTMLElement>('localDiagDeltaEye'),
   localDiagDeltaYaw: must<HTMLElement>('localDiagDeltaYaw'),
   localDiagJump: must<HTMLElement>('localDiagJump'),
@@ -305,6 +306,30 @@ let localMapActive = false;
 let localMapFrameId = 0;
 let localMapEntrySeq = 0;
 let localMapHideTimer = 0;
+/**
+ * Stage-8.10b (A-12b): промис модуля генерации локальной карты кэширует
+ * загрузку чанка. Первый Dive-in динамически импортирует
+ * local-map-worker-lazy.js (чанк с полным Wasm-ядром planet-core),
+ * повторный Dive-in чанк НЕ перезагружает — import() вызывается ровно
+ * один раз на странице. Ошибка загрузки не ломает глобус: она
+ * сообщается через setLocalMapStatus, и рендерер планеты продолжает
+ * работу.
+ */
+let localMapWorkerModulePromise: Promise<LocalMapWorkerLazyModule> | null = null;
+
+/** Загрузывает (и кэширует) модуль генерации локальной карты. */
+function loadLocalMapWorkerModule(): Promise<LocalMapWorkerLazyModule> {
+  localMapWorkerModulePromise ??= import('./local-map-worker-lazy.js').then((_module) => {
+    const loaded = (globalThis as typeof globalThis & {
+      LocalMapWorkerLazyModule?: LocalMapWorkerLazyModule;
+    }).LocalMapWorkerLazyModule;
+    if (!loaded) {
+      throw new Error('Чанк локальной карты не выставил API глобуса LocalMapWorkerLazyModule');
+    }
+    return loaded;
+  });
+  return localMapWorkerModulePromise;
+}
 /** Stage-8.2: таймер отложенного проявления сцены (фаза 2 двухфазного спуска). */
 let localRevealTimer = 0;
 let localMapData: LocalMapWorkerResponse | null = null;
@@ -948,6 +973,8 @@ function requestLocalNeighbor(neighbor: LocalPatchCell, azimuth: number): void {
   pendingNeighborFly = { cell: neighbor.cell, azimuth };
   localPatchLoading = true;
   startLocalCameraDiagWindow();
+  // A-16: t1 — клик по гексу (унифицированный вход перехода).
+  tl?.mark('t1', neighbor.cell);
   setLocalMapStatus('Перехожу на соседний гекс #' + String(neighbor.cell) + '…', 'info');
   requestCellPick(neighbor.cell);
 }
@@ -1394,6 +1421,14 @@ function updateLocalCameraDiag(now: number): void {
     renderLocalCameraDiag();
   }
   if (now > diag.until) closeLocalCameraDiagWindow();
+}
+
+/* --------------------------------------------- A-16: лог-замер перехода (Stage-8.10c) */
+// Замер существует ТОЛЬКО в режиме ?debug=local (wiring в initEvents). Вне этого
+// режима tl === null и все tl?.mark() — no-op; горячий путь кадра не растёт.
+let tl: ReturnType<typeof tlCreate> | null = null;
+function tlClick(): void {
+  tl?.stop() || tl?.start(parseSeedUint32(els.seed.value));
 }
 
 /* --------------------------------------------- Квик-навигация по граням (Stage-8.7) */
@@ -1885,17 +1920,37 @@ function processStagedLocalPatch(): void {
   commitLocalPatchSwap(staged);
 }
 
-function renderLocalMapFromPatch(
+async function renderLocalMapFromPatch(
   patchReady: WorkerPatchReadyResponse,
   scale: number,
   shouldFlyToPatch: boolean,
   requestId: number,
-): void {
+): Promise<void> {
   const centerCell = patchReady.patch.cells[0];
   if (!centerCell || requestId !== localMapEntrySeq) return;
+  // A-16: t2 — Patch7 готов (WorkerPatchReadyResponse прибыл).
+  tl?.mark('t2');
   // Stage-8.2, фаза 1: стремительное сближение поверхности планеты с выбранным
   // гексом за 420 мс (параллельно идёт CPU-генерация локального участка).
   if (shouldFlyToPatch && globe) globe.flyToDirection(centerCell.center, 1.16, 420);
+
+  // Stage-8.10b (A-12b): генерация локальной карты грузится отдельным чанком
+  // при первом Dive-in. Ошибка загрузки сообщается в статус, глобус
+  // продолжает работать — без вечного «Загрузка…».
+  let localMapWorker: LocalMapWorkerLazyModule;
+  try {
+    localMapWorker = await loadLocalMapWorkerModule();
+  } catch (error) {
+    setLocalMapStatus(
+      'Не удалось загрузить модуль локальной карты: '
+      + ((error as Error).message || String(error)),
+      'error',
+    );
+    return;
+  }
+  if (requestId !== localMapEntrySeq) return;
+  // A-16: t3 — import() ленивого чанка генерации завершён.
+  tl?.mark('t3');
 
   const startedAt = performance.now();
   let localData: LocalMapWorkerResponse;
@@ -1914,22 +1969,27 @@ function renderLocalMapFromPatch(
     ...(currentProfile ? { profile: currentProfile } : {}),
   };
   try {
-    localData = generateLocalMap(mapRequest);
+    localData = await localMapWorker.generateLocalMap(mapRequest);
   } catch (error) {
     setLocalMapStatus('Ошибка генерации локальной карты: ' + ((error as Error).message || String(error)), 'error');
     return;
   }
   if (requestId !== localMapEntrySeq) return;
+  // A-16: t4 — generateLocalMap завершён.
+  tl?.mark('t4');
 
   // Stage-8: планетарная юбка 6 колец с бесшовным воротником по heightfield.
   let skirtData: HorizonSkirtData | null = null;
   try {
-    skirtData = generateHorizonSkirt(mapRequest, localData.heightfield);
+    skirtData = await localMapWorker.generateHorizonSkirt(mapRequest, localData.heightfield);
   } catch (error) {
     console.warn('generateHorizonSkirt не сработал, рисую плоскую карту:', error);
     skirtData = null;
   }
   if (requestId !== localMapEntrySeq) return;
+  // A-16: t5 — horizon skirt завершён. t6 (GPU-работа) определяет rAF-пробник
+  // по условию завершения заливки, t7/t8 — свои кадры пробника.
+  tl?.mark('t5');
   const measuredMs = performance.now() - startedAt;
 
   // Stage-8.7: локальная сцена уже нарисована для другого гекса — новый участок
@@ -2072,6 +2132,8 @@ function enterLocalMap(patchReady: WorkerPatchReadyResponse, widthKm: number): v
     pendingNeighborFly = null;
     discardStagedLocalPatch();
   }
+  // A-16: t1 — Dive-in с планетарного уровня (код центральной ячейки Patch7).
+  tl?.mark('t1', centerCell.cell);
   const requestId = ++localMapEntrySeq;
   window.clearTimeout(localMapHideTimer);
   localMapWidthKm = scale;
@@ -2431,6 +2493,12 @@ function syncBrowserUrl(options: SyncBrowserUrlOptions = {}): void {
         : String(localMapWidthKm || els.localScale.value || '1.2');
       params.set('scale', scaleVal);
     }
+  }
+
+  // A-16 (A-26): debug=local из адреса нагрузки переводится в собираемый URL —
+  // F5 после открытия локальной карты не выключает режим. Только этот параметр.
+  if (LOCAL_DEBUG_QUERY) {
+    params.set('debug', 'local');
   }
 
   const query = params.toString().replace(
@@ -3011,6 +3079,12 @@ function initEvents(): void {
     }
   });
   els.exitLocalMap.addEventListener('click', exitLocalMap);
+  // A-16 / Stage-8.10c: кнопка лог-замера видна и работает только при ?debug=local.
+  if (LOCAL_DEBUG_QUERY) {
+    els.localTransitionLogBtn.hidden = false;
+    tl = tlCreate({ gpuDone: () => !(stagedLocalPatch?.renderer ?? localMapRenderer)?.isUploading?.() });
+    els.localTransitionLogBtn.addEventListener('click', tlClick);
+  }
   els.breadcrumbPlanet.addEventListener('click', () => {
     if (localMapActive) exitLocalMap();
   });

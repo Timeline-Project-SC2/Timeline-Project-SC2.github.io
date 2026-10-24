@@ -568,7 +568,9 @@ for (let s = 0; s < options.seeds; s++) {
         const placeId = 1000 + s * 100 + cIdx * 10 + r;
 
         const tGen0 = performance.now();
-        const response = LocalMapWorker.generateLocalMap({
+        // Stage-8.10b (A-12b): генерация асинхронна (ленивый подъём ядра
+        // через createPatchFieldSampler при переданном профиле).
+        const response = await LocalMapWorker.generateLocalMap({
           patch,
           seed: seed32,
           placeId,

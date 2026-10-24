@@ -28,6 +28,13 @@ import {
 import type { BuildingSpawnRule, LocalMapPatch, PatchCell, Vec3 } from './local-map-contract.ts';
 import type { MeshModuleId } from './local-map-mesh.ts';
 import type { FieldSampler, GeographyProfileInput } from '../../site/shared/planet-geography.ts';
+// Stage-8.10b (A-12b): чистые геометрические хелперы живут в
+// local-map-geometry.ts — главный поток импортирует их оттуда напрямую,
+// а не через этот модуль (который тащит ядро). Реэкспорт нужен для
+// обратной совместимости публичного API воркера и Node-тестов.
+import { SKIRT_RING_COUNT, mapNeighborCellsToSlots, planetCurvatureDropM } from './local-map-geometry.ts';
+
+export { SKIRT_RING_COUNT, mapNeighborCellsToSlots, planetCurvatureDropM };
 
 // ---- Константы контракта ----
 export const HEIGHTFIELD_RES = 256;
@@ -1333,7 +1340,14 @@ export function localMapCacheSize(): number {
 }
 
 // ---- Main Entry Point ----
-export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorkerResponse {
+/**
+ * Stage-8.10b (A-12b): генерация стала асинхронной — сэмплер базовых полей
+ * поднимает полное Wasm-ядро через динамический импорт внутри
+ * createPatchFieldSampler (contract). Данные ответа не изменились
+ * (проверка побитовой эквивалентности — golden-тест в
+ * tests/local-map-stage8.test.mjs).
+ */
+export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<LocalMapWorkerResponse> {
   const { patch, seed, placeId, radiusM } = request;
   const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const hfRes = HEIGHTFIELD_RES;
@@ -1355,7 +1369,7 @@ export function generateLocalMap(request: LocalMapWorkerRequest): LocalMapWorker
   // 1. Heightfield (h_natural): якорь высоты — каноническая ячейка Patch7 (И-3.2),
   //    детализация — fBm и канал `detail` единого сэмплера (И-3.1), врез русла (И-3.3).
   const cellSeed = (seed ^ Math.imul((patch.centerCell + 1) >>> 0, 0x9E3779B1)) >>> 0;
-  const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
+  const sampler = request.profile ? await createPatchFieldSampler(request.profile) : null;
   const detailLattice = sampler ? sampleDetailLattice(patch, sampler, radiusM) : null;
   const riverHalfWidthM = Math.max(cellSize * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
   // Stage-8.6: русло остаётся читаемой долиной даже на региональной карте.
@@ -1545,8 +1559,6 @@ export const SKIRT_ANGULAR_SEGMENTS = 144;
 export const SKIRT_RADIAL_RINGS = 84;
 /** Радиальных шагов плотного воротника: от R_inner до 1.15 · R_patch (остальные 60 — к горизонту). */
 export const SKIRT_COLLAR_RINGS = 24;
-/** Число соседних гексов кластера Patch7 (шестиугольное кольцо slot 0..5). */
-export const SKIRT_RING_COUNT = 6;
 /** √3/2 — отношение апофемы правильного шестиугольника к радиусу описанной окружности. */
 export const HEX_APOTHEM_RATIO = 0.8660254037844386;
 /** Доля R_patch: радиус описанной окружности выделенного центрального гекса. */
@@ -1636,62 +1648,8 @@ export function hexSpacingMeters(planetRadiusM: number): number {
   );
 }
 
-/**
- * Сопоставление 6 гексов кластера (slot 0..5, направление θ_k = k·π/3) реальным
- * соседним ячейкам из `patch.cells.slice(1)` по ближайшему направлению в
- * касательном кадре: (u, v) = (dot(cell.center, east), dot(cell.center, north)).
- * Жадное сопоставление по глобальному минимуму углового расстояния даёт
- * взаимно-однозначное соответствие без дубликатов (6 слотов ↔ 6 ячеек).
- */
-export function mapNeighborCellsToSlots(patch: LocalMapPatch): readonly PatchCell[] {
-  const neighbors = patch.cells.slice(1);
-  const { east, north } = patch.frame;
-  const tangentAngle: number[] = [];
-  for (const cell of neighbors) {
-    const u =
-      (cell.center[0] as number) * (east[0] as number)
-      + (cell.center[1] as number) * (east[1] as number)
-      + (cell.center[2] as number) * (east[2] as number);
-    const v =
-      (cell.center[0] as number) * (north[0] as number)
-      + (cell.center[1] as number) * (north[1] as number)
-      + (cell.center[2] as number) * (north[2] as number);
-    tangentAngle.push(Math.atan2(v, u));
-  }
-  const pairs: Array<{ slot: number; cell: number; dist: number }> = [];
-  for (let k = 0; k < SKIRT_RING_COUNT; k++) {
-    const slotAngle = (k * Math.PI) / 3;
-    for (let c = 0; c < neighbors.length; c++) {
-      // Модуль с приведением к [0, 2π): разница углов может превысить 2π.
-      let dist = Math.abs((tangentAngle[c] as number) - slotAngle) % (2 * Math.PI);
-      if (dist > Math.PI) dist = 2 * Math.PI - dist;
-      pairs.push({ slot: k, cell: c, dist });
-    }
-  }
-  pairs.sort((a, b) => a.dist - b.dist);
-  const slotTaken = new Array<boolean>(SKIRT_RING_COUNT).fill(false);
-  const cellTaken = new Array<boolean>(neighbors.length).fill(false);
-  const result: Array<PatchCell | null> = new Array(SKIRT_RING_COUNT).fill(null);
-  for (const pair of pairs) {
-    if (slotTaken[pair.slot] || cellTaken[pair.cell]) continue;
-    slotTaken[pair.slot] = true;
-    cellTaken[pair.cell] = true;
-    result[pair.slot] = neighbors[pair.cell] ?? null;
-  }
-  // Защита от вырожденных патчей (меньше 6 соседей): пустые слоты замыкаются на центр.
-  const fallback = (patch.cells[0] ?? neighbors[0]) as PatchCell;
-  return result.map((cell) => cell ?? fallback);
-}
-
-/**
- * Сферическое проседание касательной плоскости на расстоянии r от центра:
- * Δz_drop = R_p − sqrt(max(0, R_p² − r²)). При R_p ≤ 1 проседание выключено
- * (обратная совместимость с плоской локальной картой).
- */
-export function planetCurvatureDropM(planetRadiusM: number, rM: number): number {
-  if (!(planetRadiusM > 1)) return 0;
-  return planetRadiusM - Math.sqrt(Math.max(0, planetRadiusM * planetRadiusM - rM * rM));
-}
+// mapNeighborCellsToSlots и planetCurvatureDropM перенесены в
+// local-map-geometry.ts (Stage-8.10b, A-12b) — см. реэкспорт выше.
 
 function smooth01(t: number): number {
   const x = t < 0 ? 0 : t > 1 ? 1 : t;
@@ -2079,10 +2037,10 @@ function skirtPlanetaryHeight(
  *   применяет вершинный шейдер); нормали — гладкие конечные разности полярной
  *   сетки с угловым замыканием `i % SKIRT_ANGULAR_SEGMENTS` и ориентацией `nz > 0`.
  */
-export function generateHorizonSkirt(
+export async function generateHorizonSkirt(
   request: LocalMapWorkerRequest,
   innerHeightfield?: Float32Array,
-): HorizonSkirtData {
+): Promise<HorizonSkirtData> {
   const patch = request.patch;
   const neighborSlots = mapNeighborCellsToSlots(patch);
   const radiusPatchM = request.radiusM;
@@ -2113,7 +2071,7 @@ export function generateHorizonSkirt(
   const planetHexSpacingM = hexSpacingMeters(patch.frame.radiusM);
   const planetCoordScale = Math.max(1, planetHexSpacingM / Math.max(hexSpacingM, 1));
 
-  const sampler = request.profile ? createPatchFieldSampler(request.profile) : null;
+  const sampler = request.profile ? await createPatchFieldSampler(request.profile) : null;
   const elevLattice = sampler
     ? sampleSkirtElevationLattice(patch, sampler, outerRadiusM, planetCoordScale)
     : null;
@@ -2310,7 +2268,16 @@ interface WorkerScopeLike {
 const workerScope = globalThis as unknown as Partial<WorkerScopeLike> & { importScripts?: unknown };
 if (typeof workerScope.postMessage === 'function' && typeof workerScope.importScripts === 'function') {
   workerScope.onmessage = (event: MessageEvent<LocalMapWorkerRequest>): void => {
-    const response = generateLocalMap(event.data);
-    (workerScope.postMessage as WorkerScopeLike['postMessage'])(response, localMapTransferables(response));
+    // Stage-8.10b (A-12b): генерация асинхронна — сэмплер поднимает ядро
+    // через динамический импорт. Ошибка генерации логируется в воркере,
+    // главный поток узнаёт о ней через тайм-аут/перезагрузку worker.
+    void generateLocalMap(event.data).then(
+      (response) => {
+        (workerScope.postMessage as WorkerScopeLike['postMessage'])(response, localMapTransferables(response));
+      },
+      (error: unknown) => {
+        console.error('LocalMapWorker: генерация локальной карты завершилась ошибкой:', error);
+      },
+    );
   };
 }
