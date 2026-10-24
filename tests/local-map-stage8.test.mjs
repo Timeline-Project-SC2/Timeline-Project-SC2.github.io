@@ -2897,3 +2897,93 @@ test('A-17b property: 40 канонических ячеек двух профи
   assert.ok(summaries.every((row) => row.riverMismatches === 0), '0 обрывов русла');
   assert.ok(summaries.every((row) => row.maxDepthDeltaM <= 0.5), 'глубина непрерывна с допуском 0.5 м');
 });
+
+// ---------------------------------------------------------------------------
+// A-29 / Stage-8.12c: профиль батиметрии, а не единственная точка шва.
+// 16 азимутов × (точка границы + 6 пар через 45 м) для контрольных ячеек.
+// ---------------------------------------------------------------------------
+
+const A29_CELLS = [37488, 37518, 37548, 37519];
+const A29_PROFILE_STEP_M = 45;
+const A29_PROFILE_STEPS = 6;
+const A29_PROFILE = {
+  ...A17_PROFILE,
+  masterSeedHex: 'a29a29a29a29a29a',
+  oceanPctl: 90,
+  shelfBelowPctl: 87,
+  shelfAbovePctl: 93,
+};
+
+function a29BathymetryRows(cell, local, skirt) {
+  const rows = [];
+  const boundaryM = Worker.SKIRT_COLLAR_END_RADIUS_RATIO * A17_RADIUS_M;
+  for (let az = 0; az < 16; az++) {
+    const angularIndex = az * Worker.SKIRT_ANGULAR_SEGMENTS / 16;
+    for (let step = 0; step <= A29_PROFILE_STEPS; step++) {
+      const distanceM = step * A29_PROFILE_STEP_M;
+      // До A-29 весь центральный океан — waterMirrorM == 0 независимо от
+      // координаты. Снаружи берём фактический профиль юбки после 1.15 R_patch.
+      const innerHeightM = local.meta.waterFraction === 1 ? 0 : Number.NaN;
+      const outerHeightM = a17SkirtHeightAt(skirt, angularIndex, boundaryM + distanceM);
+      const innerDepthM = Math.max(0, -innerHeightM);
+      const outerDepthM = Math.max(0, -outerHeightM);
+      rows.push({
+        cell,
+        azimuthDeg: az * 22.5,
+        distanceM,
+        innerHeightM: Number(innerHeightM.toFixed(3)),
+        outerHeightM: Number(outerHeightM.toFixed(3)),
+        heightStepM: Number(Math.abs(innerHeightM - outerHeightM).toFixed(3)),
+        innerDepthM: Number(innerDepthM.toFixed(3)),
+        outerDepthM: Number(outerDepthM.toFixed(3)),
+        depthDeltaM: Number(Math.abs(innerDepthM - outerDepthM).toFixed(3)),
+      });
+    }
+  }
+  return rows;
+}
+
+test('A-29 diagnostic: профиль батиметрии #37488/#37518/#37548/#37519', async () => {
+  const canonicalGrid = GeodesicGrid.build(128);
+  const canonicalSurface = PlanetSurface.generateSurface(canonicalGrid, A29_PROFILE);
+  const rows = [];
+  const timings = [];
+  for (const cell of A29_CELLS) {
+    const patch = Contract.buildPatch7(canonicalGrid, canonicalSurface, cell);
+    assert.ok(
+      patch.cells[0].elevation < patch.seaLevel && patch.cells[0].lakeWeight === 0,
+      `контрольный Patch7 #${cell} — океан`,
+    );
+    const request = {
+      patch, seed: 0xA29B2026, placeId: 2, radiusM: A17_RADIUS_M,
+      profile: A29_PROFILE, neighborRings: 0, patchKey: `a29-profile-${cell}`,
+    };
+    Worker.clearLocalMapCache();
+    const local = await Worker.generateLocalMap(request);
+    const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+    assert.equal(local.meta.waterFraction, 1, `#${cell}: центральный патч целиком океан`);
+    timings.push(local.meta.genMs);
+    rows.push(...a29BathymetryRows(cell, local, skirt));
+  }
+  console.table(rows);
+  const profile = [];
+  for (const cell of A29_CELLS) {
+    for (let step = 0; step <= A29_PROFILE_STEPS; step++) {
+      const group = rows.filter((row) => row.cell === cell && row.distanceM === step * A29_PROFILE_STEP_M);
+      profile.push({
+        cell,
+        distanceM: step * A29_PROFILE_STEP_M,
+        maxHeightStepM: Math.max(...group.map((row) => row.heightStepM)),
+        maxDepthDeltaM: Math.max(...group.map((row) => row.depthDeltaM)),
+      });
+    }
+  }
+  console.table(profile);
+  console.log('A29_GEN_MS', {
+    samples: timings.map((value) => Number(value.toFixed(3))),
+    mean: Number((timings.reduce((sum, value) => sum + value, 0) / timings.length).toFixed(3)),
+  });
+  assert.equal(rows.length, A29_CELLS.length * 16 * (A29_PROFILE_STEPS + 1));
+  assert.ok(rows.every((row) => row.distanceM !== 0 || row.heightStepM < 0.01), 'точка шва маскировала дефект');
+  assert.ok(rows.some((row) => row.heightStepM >= 31.5), 'профиль воспроизводит уступ не меньше 31.5 м');
+});
