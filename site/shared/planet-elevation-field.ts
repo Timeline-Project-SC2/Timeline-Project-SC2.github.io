@@ -180,7 +180,16 @@ export function sampleElevation(dir: ArrayLike<number>, stepM: number): number {
     detailOctaves, LACUNARITY, DETAIL_GAIN,
   );
 
-  const elevation = clamp(WEIGHT_BASE * base + WEIGHT_PLATE * plateValue + WEIGHT_DETAIL * detailValue, -1, 1);
+  const rawElev = WEIGHT_BASE * base + WEIGHT_PLATE * plateValue + WEIGHT_DETAIL * detailValue;
+  let elevation = rawElev;
+  if (rawElev > 0.40) {
+    const d = rawElev - 0.40;
+    elevation = rawElev + 5.0 * d * d;
+  } else if (rawElev < 0.12) {
+    const d = 0.12 - rawElev;
+    elevation = rawElev - 0.65 * d;
+  }
+  elevation = clamp(elevation, -1, 1);
   return elevation * ELEVATION_SCALE_M;
 }
 

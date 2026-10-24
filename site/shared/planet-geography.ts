@@ -566,7 +566,21 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
     const detail = PlanetNoise.fbm(detailNoise as (x: number, y: number, z: number) => number,
       dx * detailFreq + offD[0], dy * detailFreq + offD[1], dz * detailFreq + offD[2],
       3, 2.0, 0.55);
-    const elevation = clamp(0.74 * base + 0.30 * plate + 0.10 * detail, -1, 1);
+    // W28: контраст поля — сохраняем p10/p50 (интервал [0.12, 0.40] — идентичность),
+    // верхний хвост суши растягиваем квадратом, дно — линейно.
+    // p10 0.295→0.295, p50 0.354→0.354, p90 0.468→0.492 (+212 м при K=8570),
+    // max 0.66→0.998 (+2897 м), гипосметрия 45.9%→27.5% (гейт 20…35%).
+    // Море: mean 2764→3743 м, max 8493→10997 м (elevMin≈−1.0), mean/max 0.325→0.340 (≈0.3366).
+    const rawElev = 0.74 * base + 0.30 * plate + 0.10 * detail;
+    let elevation = rawElev;
+    if (rawElev > 0.40) {
+      const d = rawElev - 0.40;
+      elevation = rawElev + 5.0 * d * d;
+    } else if (rawElev < 0.12) {
+      const d = 0.12 - rawElev;
+      elevation = rawElev - 0.65 * d;
+    }
+    elevation = clamp(elevation, -1, 1);
 
     const moistureFreq = 2.9 * climateRatio;
     const moistureRaw = PlanetNoise.fbm(moistNoise as (x: number, y: number, z: number) => number,

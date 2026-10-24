@@ -73,7 +73,16 @@ function expectedElevationM(dx, dy, dz, baseOctaves) {
   );
   const plate = fbm(noiseP, nx * 1.12 * ratio + offP[0], ny * 1.12 * ratio + offP[1], nz * 1.12 * ratio + offP[2], 3, 0.52);
   const detail = fbm(noiseD, vx * 9.0 * ratio + offD[0], vy * 9.0 * ratio + offD[1], vz * 9.0 * ratio + offD[2], 2, 0.55);
-  const elev = clamp(0.74 * base + 0.30 * plate + 0.10 * detail, -1, 1);
+  const raw = 0.74 * base + 0.30 * plate + 0.10 * detail;
+  let elev = raw;
+  if (raw > 0.40) {
+    const d = raw - 0.40;
+    elev = raw + 5.0 * d * d;
+  } else if (raw < 0.12) {
+    const d = 0.12 - raw;
+    elev = raw - 0.65 * d;
+  }
+  elev = clamp(elev, -1, 1);
   return elev * ELEVATION_SCALE_M;
 }
 
@@ -101,8 +110,10 @@ test('sampleElevation совпадает с PlanetGeography.sampleFields при 
 });
 
 test('шаг за пределы Найквиста обрезает все октавы — плоскость в ноль', () => {
-  assert.equal(sampleElevation([1, 0, 0], 1e12), 0);
-  assert.equal(sampleElevation([0, 0, 1], 1e10), 0);
+  // При контрасте raw=0 -> elev = 0.12 - 0.65*(0.12-0) = -0.078 -> -3120 м
+  const expectedFlat = -0.078 * ELEVATION_SCALE_M;
+  assert.equal(sampleElevation([1, 0, 0], 1e12), expectedFlat);
+  assert.equal(sampleElevation([0, 0, 1], 1e10), expectedFlat);
 });
 
 test('обрезка по Найквисту: stepM = 600 км оставляет 4 базовые октавы (пластины 3, деталь 2)', () => {
