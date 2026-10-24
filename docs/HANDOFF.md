@@ -611,14 +611,18 @@ JS/CSS/worker файлу публикации имя с контент-хэше�
   только те, кому разрешён обход. Bypass: `OrganizationAdmin`, роли `4`/`5`, Integration `4187077`.
   Требуемых статус-чеков в ruleset нет — их и не было, поэтому «красный» чек сам по себе мерж
   не блокирует.
-- **Мерж по-прежнему только с `--admin`.** Проверка 25.10.2026 на PR #239 (все сборки зелёные,
-  `mergeStateStatus = BLOCKED`): `gh pr merge <номер> --merge` отвечает `base branch policy
-  prohibits the merge`, хотя `required_linear_history` в ruleset нет и требуемых статус-чеков тоже
-  нет. Блокирует правило **`update` (Restrict updates)** из `BotsOverwrite`: оно покрывает `~ALL`
-  ветки, то есть и `main`, а кнопка мержа обновляет целевую ветку. Рабочая команда —
-  `gh pr merge <номер> --merge --admin` (или `--squash --admin`, если нужна линейная история).
-  Чтобы мерж шёл без `--admin`: в `BotsOverwrite` либо исключить `refs/heads/main` из `update`,
-  либо добавить интеграцию Arena в bypass-список с режимом `Always`.
+- **`--admin` для мержа НЕ нужен — блокирует сам `gh`, а не GitHub.** Проверено 25.10.2026 на
+  PR #240: обычный REST-мерж прошёл, пока чек «Скрипты сайта» ещё выполнялся, и без всякого обхода:
+  `gh api -X PUT repos/{owner}/{repo}/pulls/<номер>/merge -f merge_method=merge`
+  → `{"merged": true, "message": "Pull Request successfully merged"}`. При этом
+  `mergeStateStatus` у PR остаётся `BLOCKED` (правило `update` из `BotsOverwrite` видит целевую
+  ветку, а bypass-актор интеграции клиенту не раскрывается), и `gh pr merge <номер> --merge`
+  отказывается **на своей стороне**, до запроса к API: печатает `base branch policy prohibits the
+  merge`. Это ложный отказ, а не запрет.
+  **Рабочие варианты:** `merge_method=merge` (обычный merge-коммит), `squash` или `rebase` —
+  тем же запросом; либо `gh pr merge <номер> --squash --admin`, если нужен обход клиентской проверки.
+  `BLOCKED` в `gh pr view --json mergeStateStatus` на этом репозитории — **ожидаемое состояние**,
+  а не сигнал «мерж запрещён».
 - **Классическая branch protection репозитория выключена** (баннер «Repository branch protection is
   disabled»), вся политика — в rulesets. Детали защиты интеграции Arena недоступны: `GET
   /branches/main/protection*` и `POST /rulesets` отдают `403 Resource not accessible by integration`,
@@ -630,14 +634,25 @@ JS/CSS/worker файлу публикации имя с контент-хэше�
   3. `Settings → Rules` — проверять **оба** уровня: строка «Repository» и «Organization»; правила
      организации интеграции недоступны (`GET /orgs/{org}/rulesets` → `403`), поэтому в UI их видно,
      а в API — нет.
-  4. CLI: `gh pr view <номер> --json mergeable,mergeStateStatus` (`BLOCKED` = правило или чек не
-     пропускает, `CLEAN` = можно мержить) и
-     `gh api repos/{owner}/{repo}/branches/main/protection/required_status_checks` (нужен админ-токен).
-- **`Скрипты сайта` (job из `check.yml`) красный на всех PR** — 8 числовых планетарных тестов:
-  `local-map-stage8` (гребни Stage-8.5), `local-map-texture-812d` (golden `S1`), `local-map-stand`
-  (A-17 стык/берег), `planet-full-eq` (W26b `m.11`/`m.14`). На базовом `fa18ef4` в отдельном
-  worktree — те же 172/180, то есть расхождение не от правок конкретного PR. `typecheck`, `lint`,
-  `check:planet-core`, `node --check` и `tests/travel-planner.test.js` локально проходят.
+  4. CLI: `gh pr view <номер> --json mergeable,mergeStateStatus`. Важно: здесь `BLOCKED` —
+     **ещё не запрет** (см. пункт про `update` выше), поэтому решает не этот флаг, а сам REST-мерж:
+     если он вернул `merged: true` — политика пропустила; если `405` — в тексте ответа причина.
+  5. `gh api repos/{owner}/{repo}/branches/main/protection/required_status_checks` — список
+     обязательных чеков классической protection (нужен админ-токен, у интеграции Arena `403`).
+- **`Скрипты сайта` (job из `check.yml`) красный на всех PR — 8 из 180 тестов.** Картина на
+  25.10.2026 (`npm test`, база `19bb9bf`):
+
+  | Файл | В общем прогоне | Отдельно |
+  |---|---|---|
+  | `local-map-stage8.test.mjs` | 4 падения | 36/4: гребни Stage-8.5 (открытый равнинный сектор `25°` вместо `≥ 30°`), golden-хэш `A-17` (карта и ленивый чанк), диагностика стыка/берега `#43533…#43537` |
+  | `local-map-stand.test.mjs` | 3 падения | 22/3: речные метрики на стенде A-17, W26b `m.14` (одинаковый span), W26b `m.11` (гипсометрия `45,93 %` против гейта `20…35 %`) |
+  | `local-map-texture-812d.test.mjs` | 1 падение | 2/0 — **проходит отдельно**, падает только в общем прогоне (порядок/общее состояние) |
+  | `planet-full-eq.test.mjs`, `planet-core-boundary.test.mjs` | 0 | 4/0 и 4/0 |
+
+  На базовом `fa18ef4` в отдельном worktree — те же 172/180, то есть расхождение не от правок
+  конкретного PR и не от документации. `typecheck`, `lint`, `check:planet-core`, `node --check`
+  и `tests/travel-planner.test.js` проходят. Голдены трогать вслепую нельзя: пересчёт маскирует
+  реальную регрессию, сначала нужно понять, чей это дрейф (код `local-map` против эталона).
   Поэтому чек **нельзя** добавлять в обязательные, пока тесты не починены.
 - **Переезд `ubuntu-latest` на Ubuntu 26.04** — с 19.10 по 19.11.2026 (actions/runner-images#14748).
   Деплой к нему готов: Python 3.12 ставит `actions/setup-python` (в образе 26.04 он есть в кэше,
