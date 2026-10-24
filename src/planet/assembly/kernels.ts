@@ -351,7 +351,22 @@ let sfCenters: usize = 0, sfOut: usize = 0, sfVolcPreOut: usize = 0, sfIsF32: bo
 
 @inline function sampleStoreCell(c: i32, plate: f64, base: f64, detail: f64,
   moistureRaw: f64, tempAnomaly: f64, ny: f64, volcRaw: f64): void {
-  const elevation = clampd(0.74 * base + 0.30 * plate + 0.10 * detail, -1.0, 1.0);
+  // W28/W28b: контраст поля — синхронизировано с site/shared/planet-geography-constants.ts
+  // CONTRAST_LAND_PIVOT=0.40 CONTRAST_LAND_GAIN=5.0 CONTRAST_OCEAN_PIVOT=0.12 CONTRAST_OCEAN_SCALE=0.65
+  const CONTRAST_LAND_PIVOT: f64 = 0.40;
+  const CONTRAST_LAND_GAIN: f64 = 5.0;
+  const CONTRAST_OCEAN_PIVOT: f64 = 0.12;
+  const CONTRAST_OCEAN_SCALE: f64 = 0.65;
+  const rawElev = 0.74 * base + 0.30 * plate + 0.10 * detail;
+  let elevation = rawElev;
+  if (rawElev > CONTRAST_LAND_PIVOT) {
+    const d = rawElev - CONTRAST_LAND_PIVOT;
+    elevation = rawElev + CONTRAST_LAND_GAIN * d * d;
+  } else if (rawElev < CONTRAST_OCEAN_PIVOT) {
+    const d = CONTRAST_OCEAN_PIVOT - rawElev;
+    elevation = rawElev - CONTRAST_OCEAN_SCALE * d;
+  }
+  elevation = clampd(elevation, -1.0, 1.0);
   const moisture = clamp01d(0.5 + 0.5 * moistureRaw + 0.04 * plate);
   const insolation = Math.sqrt(Math.max(0.0, 1.0 - ny * ny));
   const temperatureBase = clamp01d(0.72 * insolation + 0.28 * (tempAnomaly * 0.5 + 0.5));

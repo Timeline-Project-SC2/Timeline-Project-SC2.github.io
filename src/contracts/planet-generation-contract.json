@@ -81,7 +81,8 @@
     ],
     "geography_version": [
       "c100-soft-v1",
-      "c100-soft-v2"
+      "c100-soft-v2",
+      "c100-soft-v3"
     ],
     "preset_version": [
       "planet-presets-v1"
