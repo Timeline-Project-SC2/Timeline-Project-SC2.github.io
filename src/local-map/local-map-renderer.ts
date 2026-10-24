@@ -296,6 +296,8 @@ export class StructureRenderer {
   private skirtVAO: WebGLVertexArrayObject | null;
   private skirtPosBuf: WebGLBuffer | null;
   private skirtNormBuf: WebGLBuffer | null;
+  private skirtWaterBuf: WebGLBuffer | null;
+  private skirtRiverBuf: WebGLBuffer | null;
   private skirtIdxBuf: WebGLBuffer | null;
   private skyVAO: WebGLVertexArrayObject | null;
   private skyProgram: WebGLProgram | null;
@@ -333,6 +335,8 @@ export class StructureRenderer {
     this.skirtVAO = null;
     this.skirtPosBuf = null;
     this.skirtNormBuf = null;
+    this.skirtWaterBuf = null;
+    this.skirtRiverBuf = null;
     this.skirtIdxBuf = null;
     this.skyVAO = null;
     this.skyProgram = null;
@@ -964,6 +968,16 @@ export class StructureRenderer {
       gl.enableVertexAttribArray(1);
       gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
 
+      this.skirtWaterBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtWaterBuf);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+
+      this.skirtRiverBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtRiverBuf);
+      gl.enableVertexAttribArray(4);
+      gl.vertexAttribPointer(4, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+
       this.skirtIdxBuf = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.skirtIdxBuf);
       gl.bindVertexArray(null);
@@ -981,6 +995,10 @@ export class StructureRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, skirt.positions, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtNormBuf);
     gl.bufferData(gl.ARRAY_BUFFER, skirt.normals, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtWaterBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, skirt.waterMask, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.skirtRiverBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, skirt.riverMask, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.skirtIdxBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, skirt.indices, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
@@ -1040,12 +1058,16 @@ export class StructureRenderer {
     const gl = this.gl;
     if (this.skirtPosBuf) gl.deleteBuffer(this.skirtPosBuf);
     if (this.skirtNormBuf) gl.deleteBuffer(this.skirtNormBuf);
+    if (this.skirtWaterBuf) gl.deleteBuffer(this.skirtWaterBuf);
+    if (this.skirtRiverBuf) gl.deleteBuffer(this.skirtRiverBuf);
     if (this.skirtIdxBuf) gl.deleteBuffer(this.skirtIdxBuf);
     if (this.skirtVAO) gl.deleteVertexArray(this.skirtVAO);
     if (this.skyVAO) gl.deleteVertexArray(this.skyVAO);
     if (this.skyProgram) gl.deleteProgram(this.skyProgram);
     this.skirtPosBuf = null;
     this.skirtNormBuf = null;
+    this.skirtWaterBuf = null;
+    this.skirtRiverBuf = null;
     this.skirtIdxBuf = null;
     this.skirtVAO = null;
     this.skyVAO = null;
