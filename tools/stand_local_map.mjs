@@ -107,6 +107,7 @@ const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
 const Contract = require('../src/local-map/local-map-contract.ts');
 const Worker = require('../src/local-map/local-map-worker.ts');
+const Heightfield = require('../src/local-map/local-map-heightfield.ts');
 
 // Модуль русел после распила local-map-worker.ts (Stage-8.12d, шаг распила):
 // если файл есть, поле вреза считается ПРОИЗВОДСТВЕННЫМИ riverSegments /
@@ -171,6 +172,9 @@ const WORLDS = {
 
 const PLACE_ID = 2;
 const DEFAULT_RADIUS_M = 2500;
+/** Фиксированное окно (м) для метрик рельефа и уклона m.8, m.9, m.10 — независимо от radiusM. */
+const RELIEF_WINDOW_WIDTH_M = 5000;
+const RELIEF_WINDOW_RADIUS_M = RELIEF_WINDOW_WIDTH_M / 2;
 const CANONICAL_V = 128;
 /** Азимутов профиля батиметрии A-29 (метрика 6; метрика 3 азимутами больше не мерит). */
 const AZIMUTHS = 16;
@@ -208,16 +212,27 @@ const THRESHOLDS = {
   waterDepthDeltaM: 0.5,
   // Метрика 7: потолок доли площади под врезом, %.
   carveAreaMaxPct: 12,
-  // Метрики 8–14 (Stage-8.14, шаг 1, Воркер 26): форма и сквозная непрерывность.
+  // Метрики 8–14 (Stage-8.14, шаг 1, Воркер 26; шаг 2, Воркер 26b): форма и сквозная непрерывность.
   landReliefMinPct: 10,
   landReliefMaxPct: 25,
   oceanReliefMinPct: 5,
   meanSlopeMinPct: 4,
-  hypsometryMinPct: 40,
+  hypsometryMinPct: 20,
+  hypsometryMaxPct: 35,
   waterContourSmoothMinPct: 40,
   hexContinuityMaxM: 1,
   lodConsistencyMaxM: 2,
 };
+
+/** Ориентиры гипсометрии (печатаются в detail m.11, в вердикте не участвуют). */
+const HYPSO_EARTH_REFERENCE_PCT = 19.4;
+const HYPSO_DOMAIN_REFERENCE_PCT = 28.1;
+const HYPSO_PREV_THRESHOLD_PCT = 35;
+
+/** Коэффициенты вертикального рельефа глобуса (site/shared/planet-globe.ts:286–294) и масштаб K. */
+const GLOBE_LAND_RELIEF_FACTOR = 0.022;
+const GLOBE_OCEAN_RELIEF_FACTOR = 0.008;
+const DEFAULT_GLOBE_SCALE_K = 8570;
 
 /** CPU-реплика оптической глубины waterDepthM (ветка openSea шейдера, A-29). */
 const PELAGIC_DEPTH_M = 7.25;
@@ -237,6 +252,7 @@ function parseArgs(argv) {
     radiusM: DEFAULT_RADIUS_M,
     flatFixture: false,
     flatHeightM: 0,
+    hypsoReferencePct: null,
     help: false,
   };
   for (const arg of argv) {
@@ -258,6 +274,12 @@ function parseArgs(argv) {
       const value = Number(arg.slice('--flat-height-m='.length));
       if (!Number.isFinite(value)) throw new Error('--flat-height-m должно быть конечным числом');
       options.flatHeightM = value;
+    } else if (arg.startsWith('--hypso-reference=')) {
+      const value = Number(arg.slice('--hypso-reference='.length));
+      if (!Number.isFinite(value) || value < 0 || value > 100) {
+        throw new Error('--hypso-reference должно быть числом от 0 до 100');
+      }
+      options.hypsoReferencePct = value;
     } else {
       throw new Error(`Неизвестный аргумент: ${arg}`);
     }
@@ -267,14 +289,15 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Использование: node tools/stand_local_map.mjs [--gate] [--json] [--profile=a17|a29] [--radius-m=2500] [--flat-fixture]',
+    'Использование: node tools/stand_local_map.mjs [--gate] [--json] [--profile=a17|a29] [--radius-m=2500] [--hypso-reference=28.1] [--flat-fixture]',
     '',
-    '  (без флагов)   печать таблицы метрик по 7 контрольным ячейкам, всегда exit 0',
-    '  --gate         exit 1, если хотя бы одна метрика красная (гейт выключен по умолчанию)',
-    '  --json         та же таблица в JSON',
-    '  --profile      мир измерения: a29 (по умолчанию) или a17',
-    '  --radius-m     радиус участка, м (по умолчанию 2500 — как в отчётах A-17/A-29)',
-    '  --flat-fixture негативный контроль на синтетическом плоском heightfield (h = const)',
+    '  (без флагов)         печать таблицы метрик по 7 контрольным ячейкам, всегда exit 0',
+    '  --gate               exit 1, если хотя бы одна метрика красная (гейт выключен по умолчанию)',
+    '  --json               та же таблица в JSON',
+    '  --profile            мир измерения: a29 (по умолчанию) или a17',
+    '  --radius-m           радиус участка, м (по умолчанию 2500 — как в отчётах A-17/A-29)',
+    '  --hypso-reference    подставить ориентир гипсометрии (%) в detail m.11 (в вердикте не участвует)',
+    '  --flat-fixture       негативный контроль на синтетическом плоском heightfield (h = const)',
   ].join('\n');
 }
 
@@ -292,8 +315,13 @@ function bilinearHeight(heightfield, res, radiusM, px, py) {
   const ax = gx - ix;
   const ay = gy - iy;
   const i00 = iy * res + ix;
-  return (heightfield[i00] * (1 - ax) + heightfield[i00 + 1] * ax) * (1 - ay)
-    + (heightfield[i00 + res] * (1 - ax) + heightfield[i00 + res + 1] * ax) * ay;
+  const h00 = heightfield[i00];
+  const h10 = heightfield[i00 + 1];
+  const h01 = heightfield[i00 + res];
+  const h11 = heightfield[i00 + res + 1];
+  if (h00 === h10 && h00 === h01 && h00 === h11) return h00;
+  return (h00 * (1 - ax) + h10 * ax) * (1 - ay)
+    + (h01 * (1 - ax) + h11 * ax) * ay;
 }
 
 /** Высота юбки вдоль луча angularIndex на расстоянии radiusM (копия A-17). */
@@ -378,6 +406,10 @@ function fallbackCellTangentMeters(patch, cell) {
   const scale = sinTheta > 1e-9 ? (theta * radiusM) / sinTheta : radiusM;
   return { u: dot(cell.center, east) * scale, v: dot(cell.center, north) * scale };
 }
+
+const cellTangentMeters = typeof Heightfield?.cellTangentMeters === 'function'
+  ? Heightfield.cellTangentMeters
+  : fallbackCellTangentMeters;
 
 /** КОПИЯ (fallback до распила): riverSegments воркера (И-3.3). */
 function fallbackRiverSegments(patch, radiusM, halfWidthM) {
@@ -997,35 +1029,55 @@ function normalizeMaskArray(mask) {
   return out;
 }
 
+/** Проверка попадания вершины (x, y) сетки res × res в фиксированное окно 5 000 м вокруг центра. */
+function inReliefWindow(x, y, res, cellSize) {
+  const wx = (x + 0.5 - res / 2) * cellSize;
+  const wy = (y + 0.5 - res / 2) * cellSize;
+  return Math.abs(wx) <= RELIEF_WINDOW_RADIUS_M && Math.abs(wy) <= RELIEF_WINDOW_RADIUS_M;
+}
+
 /**
  * Метрика 8 — размах суши / ширина кадра (порог 10…25 %):
- * Δh = max(h) − min(h) по вершинам суши heightfield (terraform_map >= 2),
- * отнесённый к ширине кадра 2R, в процентах. На чисто океанском участке — N/A.
+ * Δh = max(h) − min(h) по вершинам суши heightfield (terraform_map >= 2)
+ * в пределах фиксированного окна 5 000 м вокруг центра, отнесённый к константе
+ * окна RELIEF_WINDOW_WIDTH_M = 5 000 м (независимо от radiusM), в процентах.
+ * На чисто океанском участке — N/A.
  */
 function measureLandRelief(local, radiusM) {
-  const heightfield = local.heightfield;
-  const terraform = local.terraformMap;
+  const srcLocal = local.windowLocal ?? local;
+  const res = srcLocal.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
+  const localRadiusM = Number.isFinite(srcLocal.meta?.radiusM) && srcLocal.meta.radiusM > 0
+    ? srcLocal.meta.radiusM
+    : (Number.isFinite(radiusM) && radiusM > 0 ? radiusM : RELIEF_WINDOW_RADIUS_M);
+  const cellSize = (2 * localRadiusM) / res;
+  const heightfield = srcLocal.heightfield;
+  const terraform = srcLocal.terraformMap;
   const minMarker = Worker.TERRAFORM_LAND_MIN ?? 2;
   let minH = Infinity;
   let maxH = -Infinity;
   let landVertices = 0;
-  for (let i = 0; i < heightfield.length; i++) {
-    if ((terraform[i] ?? 0) < minMarker) continue;
-    const h = heightfield[i];
-    if (h < minH) minH = h;
-    if (h > maxH) maxH = h;
-    landVertices++;
+  for (let y = 0; y < res; y++) {
+    for (let x = 0; x < res; x++) {
+      if (!inReliefWindow(x, y, res, cellSize)) continue;
+      const i = y * res + x;
+      if ((terraform[i] ?? 0) < minMarker) continue;
+      const h = heightfield[i];
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+      landVertices++;
+    }
   }
   if (landVertices === 0) {
     return {
       value: null,
       landVertices: 0,
       deltaM: null,
+      frameWidthM: RELIEF_WINDOW_WIDTH_M,
       detail: 'на участке нет суши',
     };
   }
   const deltaM = maxH - minH;
-  const frameWidthM = 2 * radiusM;
+  const frameWidthM = RELIEF_WINDOW_WIDTH_M;
   const pct = (deltaM / frameWidthM) * 100;
   return {
     value: pct,
@@ -1033,26 +1085,34 @@ function measureLandRelief(local, radiusM) {
     deltaM,
     minH,
     maxH,
-    detail: `Δh = ${round(deltaM, 2)} м (${round(minH, 2)}…${round(maxH, 2)} м) при 2R = ${round(frameWidthM, 1)} м, вершин суши: ${landVertices}`,
+    frameWidthM,
+    detail: `Δh = ${round(deltaM, 2)} м (${round(minH, 2)}…${round(maxH, 2)} м) при окне ${round(frameWidthM, 1)} м, вершин суши: ${landVertices}`,
   };
 }
 
 /**
  * Метрика 9 — размах океанского дна (порог ≥ 5 %):
  * Δh = max(h) − min(h) по вершинам океана heightfield (terraform_map == 0,
- * исключая зеркала континентальных озёр lakeWeight > 0), отнесённый к 2R, %.
+ * исключая зеркала континентальных озёр lakeWeight > 0) в пределах
+ * фиксированного окна 5 000 м вокруг центра, отнесённый к константе окна
+ * RELIEF_WINDOW_WIDTH_M = 5 000 м (независимо от radiusM), %.
  */
 function measureOceanRelief(local, patch, radiusM) {
-  const res = local.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
-  const cellSize = (2 * radiusM) / res;
-  const heightfield = local.heightfield;
-  const terraform = local.terraformMap;
+  const srcLocal = local.windowLocal ?? local;
+  const res = srcLocal.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
+  const localRadiusM = Number.isFinite(srcLocal.meta?.radiusM) && srcLocal.meta.radiusM > 0
+    ? srcLocal.meta.radiusM
+    : (Number.isFinite(radiusM) && radiusM > 0 ? radiusM : RELIEF_WINDOW_RADIUS_M);
+  const cellSize = (2 * localRadiusM) / res;
+  const heightfield = srcLocal.heightfield;
+  const terraform = srcLocal.terraformMap;
   const hasLakeCell = patch ? patch.cells.some((c) => c.lakeWeight > 0) : false;
   let minH = Infinity;
   let maxH = -Infinity;
   let oceanVertices = 0;
   for (let y = 0; y < res; y++) {
     for (let x = 0; x < res; x++) {
+      if (!inReliefWindow(x, y, res, cellSize)) continue;
       const i = y * res + x;
       if ((terraform[i] ?? 2) !== 0) continue;
       if (hasLakeCell) {
@@ -1072,11 +1132,12 @@ function measureOceanRelief(local, patch, radiusM) {
       value: null,
       oceanVertices: 0,
       deltaM: null,
+      frameWidthM: RELIEF_WINDOW_WIDTH_M,
       detail: 'на участке нет океанского дна',
     };
   }
   const deltaM = maxH - minH;
-  const frameWidthM = 2 * radiusM;
+  const frameWidthM = RELIEF_WINDOW_WIDTH_M;
   const pct = (deltaM / frameWidthM) * 100;
   return {
     value: pct,
@@ -1084,30 +1145,37 @@ function measureOceanRelief(local, patch, radiusM) {
     deltaM,
     minH,
     maxH,
-    detail: `Δh = ${round(deltaM, 2)} м (${round(minH, 2)}…${round(maxH, 2)} м) при 2R = ${round(frameWidthM, 1)} м, вершин океана: ${oceanVertices}`,
+    frameWidthM,
+    detail: `Δh = ${round(deltaM, 2)} м (${round(minH, 2)}…${round(maxH, 2)} м) при окне ${round(frameWidthM, 1)} м, вершин океана: ${oceanVertices}`,
   };
 }
 
 /**
  * Метрика 10 — средний уклон (порог ≥ 4 %):
  * среднее значение (|h_a − h_b| / cellSize) × 100 % по всем ортогональным
- * парам соседних вершин heightfield.
+ * парам соседних вершин heightfield в пределах фиксированного окна 5 000 м
+ * вокруг центра (независимо от radiusM).
  */
 function measureMeanSlope(local, radiusM) {
-  const res = local.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
-  const cellSize = (2 * radiusM) / res;
-  const heightfield = local.heightfield;
+  const srcLocal = local.windowLocal ?? local;
+  const res = srcLocal.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
+  const localRadiusM = Number.isFinite(srcLocal.meta?.radiusM) && srcLocal.meta.radiusM > 0
+    ? srcLocal.meta.radiusM
+    : (Number.isFinite(radiusM) && radiusM > 0 ? radiusM : RELIEF_WINDOW_RADIUS_M);
+  const cellSize = (2 * localRadiusM) / res;
+  const heightfield = srcLocal.heightfield;
   let slopeSumPct = 0;
   let pairs = 0;
   for (let y = 0; y < res; y++) {
     for (let x = 0; x < res; x++) {
+      if (!inReliefWindow(x, y, res, cellSize)) continue;
       const i = y * res + x;
       const h = heightfield[i];
-      if (x + 1 < res) {
+      if (x + 1 < res && inReliefWindow(x + 1, y, res, cellSize)) {
         slopeSumPct += (Math.abs(h - heightfield[i + 1]) / cellSize) * 100;
         pairs++;
       }
-      if (y + 1 < res) {
+      if (y + 1 < res && inReliefWindow(x, y + 1, res, cellSize)) {
         slopeSumPct += (Math.abs(h - heightfield[i + res]) / cellSize) * 100;
         pairs++;
       }
@@ -1118,37 +1186,118 @@ function measureMeanSlope(local, radiusM) {
     value: meanPct,
     pairs,
     cellSizeM: cellSize,
-    detail: `пар соседних вершин: ${pairs}, шаг сетки ${round(cellSize, 2)} м`,
+    windowWidthM: RELIEF_WINDOW_WIDTH_M,
+    detail: `пар соседних вершин в окне ${RELIEF_WINDOW_WIDTH_M} м: ${pairs}, шаг сетки ${round(cellSize, 2)} м`,
   };
 }
 
+function formatCommaDecimal(value, digits = 1) {
+  return Number(value).toFixed(digits).replace('.', ',');
+}
+
+function extractElevationArray(source) {
+  if (!source) return new Float64Array(0);
+  if (ArrayBuffer.isView(source) || Array.isArray(source)) {
+    return Float64Array.from(source);
+  }
+  if (source.elevation && (ArrayBuffer.isView(source.elevation) || Array.isArray(source.elevation))) {
+    return Float64Array.from(source.elevation);
+  }
+  if (source.heightfield && (ArrayBuffer.isView(source.heightfield) || Array.isArray(source.heightfield))) {
+    return Float64Array.from(source.heightfield);
+  }
+  return new Float64Array(0);
+}
+
 /**
- * Метрика 11 — гипсометрия p90−p10 (порог ≥ 40 % размаха):
- * доля межквантильного диапазона (p90 − p10) в полном размахе (max − min)
- * heightfield. При нулевом размахе (плоская плита) равна 0 %, а не N/A.
+ * Метрика 11 — гипсометрия p90−p10 (гейт: полоса 20…35 %):
+ * считается ТОЛЬКО по суше (elev > surface.seaLevel) всей планеты (сетка v=128)
+ * как (p90 − p10) / (max − min).
+ * На v=128 для A-29 даёт 45,93 % (p10 0,2954 / p50 0,3540 / p90 0,4685 / max 0,6600,
+ * суша 16 596 из 163 842). Земля даёт 19,4 % (пик 8 848 м), наш домен при K = 8 570
+ * и пике 6 147 м — 28,1 %.
+ * При нулевом размахе (идеально плоское поле) возвращает 0 % и статус FAIL (а не 100 %).
  */
-function measureHypsometry(local) {
-  const sorted = Float64Array.from(local.heightfield);
+function measureHypsometry(source, options = {}) {
+  const hasCustomReference = Number.isFinite(options.hypsoReferencePct);
+  const referencePct = hasCustomReference ? options.hypsoReferencePct : HYPSO_DOMAIN_REFERENCE_PCT;
+  const domainText = hasCustomReference
+    ? `профиль ${formatCommaDecimal(referencePct, 1)} %`
+    : `наш домен ${formatCommaDecimal(HYPSO_DOMAIN_REFERENCE_PCT, 1)} %`;
+  const referenceDetail = `ориентир: Земля ${formatCommaDecimal(HYPSO_EARTH_REFERENCE_PCT, 1)} %, `
+    + `${domainText}, прежний порог ${HYPSO_PREV_THRESHOLD_PCT} %`;
+
+  const rawElev = extractElevationArray(source);
+  const totalCells = rawElev.length;
+  const seaLevel = Number.isFinite(options.seaLevel)
+    ? options.seaLevel
+    : (Number.isFinite(source?.seaLevel) ? source.seaLevel : null);
+
+  let sorted;
+  if (seaLevel !== null) {
+    const land = [];
+    for (let i = 0; i < rawElev.length; i++) {
+      if (rawElev[i] > seaLevel) land.push(rawElev[i]);
+    }
+    sorted = Float64Array.from(land);
+  } else {
+    sorted = rawElev;
+  }
   sorted.sort();
-  if (sorted.length === 0) {
-    return { value: 0, spanM: 0, bandM: 0, detail: 'пустой heightfield' };
+  const landCells = sorted.length;
+  if (landCells === 0) {
+    return {
+      value: 0,
+      minH: 0,
+      maxH: 0,
+      p10: 0,
+      p50: 0,
+      p90: 0,
+      span: 0,
+      band: 0,
+      spanM: 0,
+      bandM: 0,
+      landCells: 0,
+      totalCells,
+      sampleCount: 0,
+      referencePct,
+      pass: false,
+      status: 'FAIL',
+      detail: `нет наземных ячеек (суша 0 из ${totalCells}); ${referenceDetail}`,
+    };
   }
   const minH = sorted[0];
-  const maxH = sorted[sorted.length - 1];
-  const spanM = maxH - minH;
-  const p10 = quantileSorted(sorted, 0.10);
-  const p90 = quantileSorted(sorted, 0.90);
-  const bandM = p90 - p10;
-  const pct = spanM > 0 ? (bandM / spanM) * 100 : 0;
+  const maxH = sorted[landCells - 1];
+  const span = maxH - minH;
+  const p10 = sorted[Math.floor(landCells * 0.10)];
+  const p50 = sorted[Math.floor(landCells * 0.50)];
+  const p90 = sorted[Math.floor(landCells * 0.90)];
+  const band = p90 - p10;
+  // Негативный контроль: идеально плоское поле (span === 0) обязано давать 0 % и FAIL, а не 100 %.
+  const pct = span > 0 ? (band / span) * 100 : 0;
+  const pass = span > 0
+    && pct >= THRESHOLDS.hypsometryMinPct
+    && pct <= THRESHOLDS.hypsometryMaxPct;
   return {
     value: pct,
     minH,
     maxH,
     p10,
+    p50,
     p90,
-    spanM,
-    bandM,
-    detail: `p10 = ${round(p10, 2)} м, p90 = ${round(p90, 2)} м, p90−p10 = ${round(bandM, 2)} м при размахе ${round(spanM, 2)} м`,
+    span,
+    band,
+    spanM: span,
+    bandM: band,
+    landCells,
+    totalCells,
+    sampleCount: landCells,
+    referencePct,
+    pass,
+    status: pass ? 'PASS' : 'FAIL',
+    detail: `p10 ${formatCommaDecimal(p10, 4)} / p50 ${formatCommaDecimal(p50, 4)} / p90 ${formatCommaDecimal(p90, 4)} / max ${formatCommaDecimal(maxH, 4)}, `
+      + `p90−p10 = ${formatCommaDecimal(band, 4)} при размахе ${formatCommaDecimal(span, 4)} `
+      + `(суша ${landCells} из ${totalCells}, v=${CANONICAL_V}); ${referenceDetail}`,
   };
 }
 
@@ -1269,34 +1418,74 @@ function measureWaterContourSmoothness(local, skirt, radiusM) {
   };
 }
 
+function normalizeAngleDeg(deg) {
+  let a = deg % 360;
+  if (a <= -180) a += 360;
+  else if (a > 180) a -= 360;
+  return a;
+}
+
+function formatSignedCommaDeg(deg, digits = 1) {
+  const sign = deg >= 0 ? '+' : '−';
+  return `${sign}${formatCommaDecimal(Math.abs(deg), digits)}°`;
+}
+
 /**
  * Метрика 13 — сквозная непрерывность A↔B (порог ≤ 1 м):
  * сравнивает ДВА РАЗНЫХ гекса — активный гекс A и каждый из его 6 соседних
  * гексов B, построенных тем же производственным generateLocalMap, в 16 общих
- * точках общей плоской грани шестиугольного среза (apothemM). Оба касательных
- * кадра ориентированы наружу сферы (+z = origin), поэтому обход грани против
- * часовой стрелки у A (+s) направлен строго навстречу обходу у B (−s), и
- * метрика тождественно симметрична для пары A↔B и B↔A.
+ * точках общей плоской грани шестиугольного среза (apothemM).
+ * Номер слота используется ТОЛЬКО для сопоставления пары (ячейка, сосед);
+ * истинный азимут направления к соседу вычисляется через cellTangentMeters + atan2.
+ * В detail дополнительно печатается диагностика «слот·60° против истинного азимута»
+ * и пометка «разность якорных высот патчей, не шов; станет швом после W23».
  */
-function measureHexContinuity(localA, patchA, neighborMap, radiusM) {
+function measureHexContinuity(localA, patchA, neighborMap, radiusM, options = {}) {
   const resA = localA.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
   const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
   const halfEdgeM = apothemM / Math.sqrt(3);
+  const rampSlopeK = halfEdgeM > 0 ? 100 / halfEdgeM : 0;
   const slotsA = Worker.mapNeighborCellsToSlots(patchA);
+  const azimuthOffsetRad = Number.isFinite(options.azimuthOffsetRad)
+    ? options.azimuthOffsetRad
+    : ((Number.isFinite(options.azimuthOffsetDeg) ? options.azimuthOffsetDeg : 0) * Math.PI) / 180;
+  const useSlotScale = options.useSlotScale === true;
   const faces = [];
 
   for (let slotA = 0; slotA < slotsA.length; slotA++) {
-    const cellB = slotsA[slotA].cell;
+    const cellEntryInA = slotsA[slotA];
+    const cellB = cellEntryInA.cell;
     const entryB = neighborMap.get(cellB);
     if (!entryB) continue;
     const slotsB = Worker.mapNeighborCellsToSlots(entryB.patch);
     const slotB = slotsB.findIndex((candidate) => candidate.cell === patchA.centerCell);
     if (slotB < 0) continue;
+    const cellEntryInB = slotsB[slotB];
 
-    const angA = (slotA * Math.PI) / 3;
-    const angB = (slotB * Math.PI) / 3;
+    const tanA = cellTangentMeters(patchA, cellEntryInA);
+    const tanB = cellTangentMeters(entryB.patch, cellEntryInB);
+    const trueAngA = Math.atan2(tanA.v, tanA.u);
+    const trueAngB = Math.atan2(tanB.v, tanB.u);
+    const angA = useSlotScale ? (slotA * Math.PI) / 3 : trueAngA + azimuthOffsetRad;
+    const angB = useSlotScale ? (slotB * Math.PI) / 3 : trueAngB + azimuthOffsetRad;
+
+    const trueAzimuthADeg = (trueAngA * 180) / Math.PI;
+    const trueAzimuthBDeg = (trueAngB * 180) / Math.PI;
+    const slotAzimuthADeg = slotA * 60;
+    const slotAzimuthBDeg = slotB * 60;
+    const slotVsTrueDeg = normalizeAngleDeg(trueAzimuthADeg - slotAzimuthADeg);
+    const slotVsTrueBDeg = normalizeAngleDeg(trueAzimuthBDeg - slotAzimuthBDeg);
+
+    // Контроль шкалы на аналитической рампе h = k·x (перепад 100 м на полуребре):
+    // при истинной шкале шов равен 0 м, при сдвиге на угол Δφ он растёт пропорционально.
+    const dAngTrue = trueAngA + Math.PI - trueAngB;
+    const cosDTrue = Math.cos(dAngTrue);
+    const sinDTrue = Math.sin(dAngTrue);
+    const centerShiftX = 2 * apothemM * Math.cos(trueAngA);
+
     const resB = entryB.local.meta?.hfRes ?? Worker.HEIGHTFIELD_RES;
     let faceMaxDeltaM = 0;
+    let faceRampDeltaM = 0;
     let worstSample = 0;
     for (let p = 0; p < HEX_EDGE_SAMPLES; p++) {
       const s = ((p + 0.5) / HEX_EDGE_SAMPLES - 0.5) * 2 * halfEdgeM;
@@ -1312,35 +1501,163 @@ function measureHexContinuity(localA, patchA, neighborMap, radiusM) {
         faceMaxDeltaM = deltaM;
         worstSample = p;
       }
+      const rampHA = rampSlopeK * xA;
+      const rampHB = rampSlopeK * (centerShiftX + xB * cosDTrue - yB * sinDTrue);
+      const rampDeltaM = Math.abs(rampHA - rampHB);
+      if (rampDeltaM > faceRampDeltaM) faceRampDeltaM = rampDeltaM;
     }
-    faces.push({ slotA, cellB, slotB, maxDeltaM: faceMaxDeltaM, worstSample });
+    faces.push({
+      slotA,
+      cellB,
+      slotB,
+      angA,
+      angB,
+      trueAngA,
+      trueAngB,
+      azimuthADeg: (angA * 180) / Math.PI,
+      azimuthBDeg: (angB * 180) / Math.PI,
+      trueAzimuthADeg,
+      trueAzimuthBDeg,
+      slotAzimuthADeg,
+      slotAzimuthBDeg,
+      slotVsTrueDeg,
+      slotVsTrueBDeg,
+      rampSeamDeltaM: faceRampDeltaM,
+      maxDeltaM: faceMaxDeltaM,
+      worstSample,
+    });
   }
 
   if (faces.length === 0) {
     return {
       value: null,
       faces: [],
+      rampSeamMaxDeltaM: 0,
+      azimuthScaleOk: true,
+      pass: false,
+      status: 'N/A',
       detail: 'нет шестиугольных соседей для сравнения A↔B',
     };
   }
   const worst = faces.reduce((a, b) => (b.maxDeltaM > a.maxDeltaM ? b : a));
+  const rampSeamMaxDeltaM = Math.max(...faces.map((f) => f.rampSeamDeltaM));
+  const azimuthScaleOk = rampSeamMaxDeltaM <= 0.1;
+  const pass = azimuthScaleOk && worst.maxDeltaM <= THRESHOLDS.hexContinuityMaxM;
+  const slotDiffs = faces.map((f) => f.slotVsTrueDeg);
+  const minSlotDiff = Math.min(...slotDiffs);
+  const maxSlotDiff = Math.max(...slotDiffs);
+  const slotDiagText = faces.map((f) => `с${f.slotA}=${formatSignedCommaDeg(f.slotVsTrueDeg, 1)}`).join(', ');
   return {
     value: worst.maxDeltaM,
     faces,
     worst,
+    rampSeamMaxDeltaM,
+    minSlotVsTrueDeg: minSlotDiff,
+    maxSlotVsTrueDeg: maxSlotDiff,
+    azimuthScaleOk,
+    pass,
+    status: pass ? 'PASS' : 'FAIL',
     detail: `худшая грань: слот ${worst.slotA} ↔ сосед ${worst.cellB} (слот ${worst.slotB}), `
       + `${HEX_EDGE_SAMPLES} точек грани, max |Δh| = ${round(worst.maxDeltaM, 2)} м (точка ${worst.worstSample + 1}/${HEX_EDGE_SAMPLES}); `
-      + `по граням: ${faces.map((f) => `с${f.slotA}(${f.cellB})=${round(f.maxDeltaM, 1)}м`).join(', ')}`,
+      + `слот·60° против истинного азимута: ${slotDiagText} (диапазон ${formatSignedCommaDeg(minSlotDiff, 1)}…${formatSignedCommaDeg(maxSlotDiff, 1)}); `
+      + `по граням: ${faces.map((f) => `с${f.slotA}(${f.cellB})=${round(f.maxDeltaM, 1)}м`).join(', ')}; `
+      + 'разность якорных высот патчей, не шов; станет швом после W23',
   };
+}
+
+/**
+ * Контроль шкалы азимутов m.13 на синтетическом поле-рампе h = k·x
+ * (k = 100 / halfEdgeM — на полуребре перепад ровно 100 м):
+ * строит растры 256×256 для патча A и всех его 6 соседей B так, что вдоль
+ * истинного шва высоты совпадают, и вызывает measureHexContinuity.
+ * При истинной шкале шов равен 0 ± 0,1 м; при сдвиге шкалы он растёт пропорционально.
+ */
+function runRampAzimuthControl(patchA, neighborPatches, radiusM = DEFAULT_RADIUS_M, options = {}) {
+  const res = options.hfRes ?? LOD_FINE_RES;
+  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
+  const halfEdgeM = apothemM / Math.sqrt(3);
+  const halfEdgeDropM = options.halfEdgeDropM ?? 100;
+  const k = halfEdgeDropM / halfEdgeM;
+  const cellSize = (2 * radiusM) / res;
+
+  const hfA = new Float32Array(res * res);
+  for (let y = 0; y < res; y++) {
+    for (let x = 0; x < res; x++) {
+      const wx = (x - res / 2) * cellSize;
+      hfA[y * res + x] = k * wx;
+    }
+  }
+  const localA = {
+    heightfield: hfA,
+    meta: { radiusM, hfRes: res, tfRes: res },
+  };
+
+  const slotsA = Worker.mapNeighborCellsToSlots(patchA);
+  const neighborMap = new Map();
+  for (let slotA = 0; slotA < slotsA.length; slotA++) {
+    const cellEntryInA = slotsA[slotA];
+    const cellB = cellEntryInA.cell;
+    const rawEntryB = neighborPatches instanceof Map ? neighborPatches.get(cellB) : neighborPatches[cellB];
+    const patchB = rawEntryB?.patch ?? rawEntryB;
+    if (!patchB) continue;
+    const slotsB = Worker.mapNeighborCellsToSlots(patchB);
+    const slotB = slotsB.findIndex((c) => c.cell === patchA.centerCell);
+    if (slotB < 0) continue;
+
+    const tanA = cellTangentMeters(patchA, cellEntryInA);
+    const tanB = cellTangentMeters(patchB, slotsB[slotB]);
+    const trueAngA = Math.atan2(tanA.v, tanA.u);
+    const trueAngB = Math.atan2(tanB.v, tanB.u);
+    const dAng = trueAngA + Math.PI - trueAngB;
+    const cosD = Math.cos(dAng);
+    const sinD = Math.sin(dAng);
+    const centerShiftX = 2 * apothemM * Math.cos(trueAngA);
+
+    const hfB = new Float32Array(res * res);
+    for (let y = 0; y < res; y++) {
+      for (let x = 0; x < res; x++) {
+        const bx = (x - res / 2) * cellSize;
+        const by = (y - res / 2) * cellSize;
+        const ax = centerShiftX + bx * cosD - by * sinD;
+        hfB[y * res + x] = k * ax;
+      }
+    }
+    neighborMap.set(cellB, {
+      patch: patchB,
+      local: {
+        heightfield: hfB,
+        meta: { radiusM, hfRes: res, tfRes: res },
+      },
+    });
+  }
+
+  return measureHexContinuity(localA, patchA, neighborMap, radiusM, options);
+}
+
+/** Среднее межцентровое расстояние dHex (м) до соседей патча (как в buildNeighborRingCells). */
+function computePatchHexSpanM(patch) {
+  const slots = Worker.mapNeighborCellsToSlots(patch);
+  let sumDist = 0;
+  let distCount = 0;
+  for (const s of slots) {
+    const pos = cellTangentMeters(patch, s);
+    const d = Math.hypot(pos.u, pos.v);
+    if (d > 1) {
+      sumDist += d;
+      distCount++;
+    }
+  }
+  return distCount > 0 ? sumDist / distCount : patch.frame.radiusM * 0.01;
 }
 
 /**
  * Метрика 14 — согласованность LOD (порог ≤ 2 м):
  * сравнивает ОДИН И ТОТ ЖЕ гекс C на разрешении 256×256 (активный центральный
  * heightfield) и на разрешении 64×64 (кольцевой LOD 1 RING_HF_RES[1] = 64 того
- * же гекса C до перехода камеры на него). Внутри контура гекса (apothemM)
- * локальные координаты сетки 64×64 переводятся ортогональным поворотом между
- * касательными кадрами в кадр гекса C и сверяются с билинейной выборкой 256×256.
+ * же гекса C до перехода камеры на него) на ОДИНАКОВОМ физическом span.
+ * У центрального кадра span = 2·radiusM (5 км), у кольцевого LOD 64 span = dHex
+ * (59–64,5 км); обе сетки опрашиваются на общем окне commonSpanM = min(fineSpanM, coarseSpanM)
+ * с переводом координат ортогональным поворотом между касательными кадрами.
  */
 function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
   if (!coarseViews || coarseViews.length === 0) {
@@ -1352,12 +1669,21 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
   }
   const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const resFine = local256.meta?.hfRes ?? LOD_FINE_RES;
-  const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * radiusM;
+  const fineSpanM = Number.isFinite(local256.meta?.spanM) && local256.meta.spanM > 0
+    ? local256.meta.spanM
+    : 2 * (local256.meta?.radiusM ?? radiusM);
+  const fineRadiusM = fineSpanM / 2;
   const views = [];
 
   for (const view of coarseViews) {
     const resCoarse = view.hfRes;
-    const cellSizeCoarse = (2 * radiusM) / resCoarse;
+    const coarseSpanM = Number.isFinite(view.spanM) && view.spanM > 0
+      ? view.spanM
+      : (view.patch ? computePatchHexSpanM(view.patch) : 2 * radiusM);
+    const coarseRadiusM = coarseSpanM / 2;
+    const commonSpanM = Math.min(fineSpanM, coarseSpanM);
+    const cellSizeCommon = commonSpanM / resCoarse;
+    const apothemM = Worker.CENTER_HEX_RADIUS_RATIO * Worker.HEX_APOTHEM_RATIO * (commonSpanM / 2);
     const eNeC = dot3(view.frameEast, patchC.frame.east);
     const eNnC = dot3(view.frameEast, patchC.frame.north);
     const nNeC = dot3(view.frameNorth, patchC.frame.east);
@@ -1366,13 +1692,15 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
     let points = 0;
     for (let y = 0; y < resCoarse; y++) {
       for (let x = 0; x < resCoarse; x++) {
-        const lx = (x - resCoarse / 2) * cellSizeCoarse;
-        const ly = (y - resCoarse / 2) * cellSizeCoarse;
+        const lx = (x - resCoarse / 2) * cellSizeCommon;
+        const ly = (y - resCoarse / 2) * cellSizeCommon;
         if (Worker.clusterHexMetric(lx, ly) > apothemM) continue;
         const cx = lx * eNeC + ly * nNeC;
         const cy = lx * eNnC + ly * nNnC;
-        const h64 = view.heightfield[y * resCoarse + x];
-        const h256 = bilinearHeight(local256.heightfield, resFine, radiusM, cx, cy);
+        const h64 = coarseSpanM === commonSpanM
+          ? view.heightfield[y * resCoarse + x]
+          : bilinearHeight(view.heightfield, resCoarse, coarseRadiusM, lx, ly);
+        const h256 = bilinearHeight(local256.heightfield, resFine, fineRadiusM, cx, cy);
         const deltaM = Math.abs(h256 - h64);
         if (deltaM > maxDeltaM) maxDeltaM = deltaM;
         points++;
@@ -1381,6 +1709,9 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
     views.push({
       sourceLabel: view.sourceLabel,
       hfRes: resCoarse,
+      fineSpanM,
+      coarseSpanM,
+      commonSpanM,
       points,
       maxDeltaM,
     });
@@ -1391,8 +1722,56 @@ function measureLodConsistency(local256, patchC, coarseViews, radiusM) {
     value: worst.maxDeltaM,
     views,
     worst,
-    detail: `LOD ${resFine} против ${worst.hfRes} (ракурс соседа ${worst.sourceLabel}, точек в гексе: ${worst.points}): `
-      + `max |Δh| = ${round(worst.maxDeltaM, 2)} м`,
+    detail: `LOD ${resFine} против ${worst.hfRes} (ракурс соседа ${worst.sourceLabel}, `
+      + `общий span ${round(worst.commonSpanM, 1)} м при span64=${round(worst.coarseSpanM, 1)} м, `
+      + `точек в гексе: ${worst.points}): max |Δh| = ${round(worst.maxDeltaM, 2)} м`,
+  };
+}
+
+/**
+ * Вертикальное преувеличение глобуса (только печать, без порога):
+ *   суша  0,022 · R / ((elevMax − sea) · K)
+ *   океан 0,008 · R / ((sea − elevMin) · K)
+ *   плюс отношение «океан / суша».
+ * Причина: site/shared/planet-globe.ts:286–294 нормирует высоту на размах поля,
+ * поэтому глобус от смены K не меняется вообще.
+ */
+function measureGlobeVerticalExaggeration(surface, options = {}) {
+  const scaleK = Number.isFinite(options.scaleK) && options.scaleK > 0
+    ? options.scaleK
+    : DEFAULT_GLOBE_SCALE_K;
+  const radiusM = Number.isFinite(options.radiusM) && options.radiusM > 0
+    ? options.radiusM
+    : ((surface?.radiusKm ?? 6371) * 1000);
+  const seaLevel = Number.isFinite(surface?.seaLevel) ? surface.seaLevel : 0;
+  const elevationMax = Number.isFinite(surface?.elevationMax) ? surface.elevationMax : 0;
+  const elevationMin = Number.isFinite(surface?.elevationMin) ? surface.elevationMin : 0;
+  const landSpan = elevationMax - seaLevel;
+  const oceanSpan = seaLevel - elevationMin;
+  const landExaggeration = landSpan > 0
+    ? (GLOBE_LAND_RELIEF_FACTOR * radiusM) / (landSpan * scaleK)
+    : 0;
+  const oceanExaggeration = oceanSpan > 0
+    ? (GLOBE_OCEAN_RELIEF_FACTOR * radiusM) / (oceanSpan * scaleK)
+    : 0;
+  const oceanToLandRatio = landExaggeration > 0 ? oceanExaggeration / landExaggeration : 0;
+  return {
+    scaleK,
+    radiusM,
+    seaLevel,
+    elevationMin,
+    elevationMax,
+    landSpan,
+    oceanSpan,
+    landExaggeration,
+    oceanExaggeration,
+    oceanToLandRatio,
+    detail: `суша ${formatCommaDecimal(landExaggeration, 1)}×, океан ${formatCommaDecimal(oceanExaggeration, 1)}×, `
+      + `отношение океан/суша = ${formatCommaDecimal(oceanToLandRatio, 2)} `
+      + `(при K = ${scaleK}, R = ${radiusM} м, sea = ${round(seaLevel, 4)}, `
+      + `elevMin = ${round(elevationMin, 4)}, elevMax = ${round(elevationMax, 4)}; `
+      + `ориентир домена при K = 8 570: 46,1× / 4,6×, отношение 0,10; `
+      + `site/shared/planet-globe.ts:286–294 нормирует высоту на размах поля)`,
   };
 }
 
@@ -1457,6 +1836,9 @@ function buildFormAndContinuityRows({
   neighborMap,
   coarseViews,
   radiusM,
+  planetSurface,
+  planetElevation,
+  hypsoReferencePct,
 }) {
   const rows = [];
 
@@ -1496,13 +1878,13 @@ function buildFormAndContinuityRows({
     meanSlope.detail,
   ));
 
-  // --- Метрика 11: гипсометрия p90−p10 ---
-  const hypsometry = measureHypsometry(local);
+  // --- Метрика 11: гипсометрия p90−p10 (по суше elev > seaLevel всей планеты v=128) ---
+  const hypsometry = measureHypsometry(planetSurface ?? planetElevation ?? local, { hypsoReferencePct });
   rows.push(metricRow(
     cell, zone, METRIC_TITLES.hypsometry,
-    round(hypsometry.value, 2), `${hypsometry.value.toFixed(1)} %`,
-    '≥ 40 % размаха',
-    hypsometry.value >= THRESHOLDS.hypsometryMinPct ? 'PASS' : 'FAIL',
+    round(hypsometry.value, 2), `${hypsometry.value.toFixed(2)} %`,
+    '20…35 %',
+    hypsometry.pass ? 'PASS' : 'FAIL',
     hypsometry.detail,
   ));
 
@@ -1528,7 +1910,7 @@ function buildFormAndContinuityRows({
     '≤ 1 м',
     hexContinuity.value === null
       ? 'N/A'
-      : (hexContinuity.value <= THRESHOLDS.hexContinuityMaxM ? 'PASS' : 'FAIL'),
+      : (hexContinuity.pass ? 'PASS' : 'FAIL'),
     hexContinuity.detail,
   ));
 
@@ -1549,7 +1931,8 @@ function buildFormAndContinuityRows({
 }
 
 async function getOrBuildCellEntry(cellCache, grid, surface, world, cell, radiusM) {
-  if (cellCache.has(cell)) return cellCache.get(cell);
+  const cacheKey = `${cell}:${radiusM}`;
+  if (cellCache.has(cacheKey)) return cellCache.get(cacheKey);
   if (grid.neighborCount[cell] !== 6) return null;
   const patch = Contract.buildPatch7(grid, surface, cell);
   const request = {
@@ -1559,18 +1942,24 @@ async function getOrBuildCellEntry(cellCache, grid, surface, world, cell, radius
     radiusM,
     profile: world.profile,
     neighborRings: 1,
-    patchKey: `stand-${world.label}-${cell}`,
+    patchKey: `stand-${world.label}-${cell}-r${radiusM}`,
   };
   Worker.clearLocalMapCache();
   const local = await Worker.generateLocalMap(request);
   const entry = { patch, request, local };
-  cellCache.set(cell, entry);
+  cellCache.set(cacheKey, entry);
   return entry;
 }
 
-async function measureCell(grid, surface, world, cell, radiusM, cellCache = new Map()) {
+async function measureCell(grid, surface, world, cell, radiusM, cellCache = new Map(), options = {}) {
   const centerEntry = await getOrBuildCellEntry(cellCache, grid, surface, world, cell, radiusM);
   const { patch, request, local } = centerEntry;
+  const windowEntry = radiusM === RELIEF_WINDOW_RADIUS_M
+    ? centerEntry
+    : await getOrBuildCellEntry(cellCache, grid, surface, world, cell, RELIEF_WINDOW_RADIUS_M);
+  const localForForm = radiusM === RELIEF_WINDOW_RADIUS_M
+    ? local
+    : { ...local, windowLocal: windowEntry?.local };
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
   const zone = zoneOf(patch);
   const rows = [];
@@ -1600,6 +1989,7 @@ async function measureCell(grid, surface, world, cell, radiusM, cellCache = new 
           frameEast: nbEntry.patch.frame.east,
           frameNorth: nbEntry.patch.frame.north,
           hfRes: ring64.hfRes,
+          spanM: ring64.spanM ?? computePatchHexSpanM(nbEntry.patch),
           heightfield: ring64.heightfield,
         });
       }
@@ -1720,12 +2110,15 @@ async function measureCell(grid, surface, world, cell, radiusM, cellCache = new 
   rows.push(...buildFormAndContinuityRows({
     cell,
     zone,
-    local,
+    local: localForForm,
     skirt,
     patch,
     neighborMap,
     coarseViews,
     radiusM,
+    planetSurface: surface,
+    planetElevation: surface.elevation,
+    hypsoReferencePct: options.hypsoReferencePct,
   }));
 
   return rows;
@@ -1841,8 +2234,16 @@ export function runFlatFixtureControl(options = {}) {
     frameEast: patch.frame.east,
     frameNorth: patch.frame.north,
     hfRes: LOD_COARSE_RES,
+    spanM: options.coarseSpanM ?? computePatchHexSpanM(patch),
     heightfield: new Float32Array(LOD_COARSE_RES * LOD_COARSE_RES).fill(constantHeightM + lodHeightOffsetM),
   }];
+
+  const flatPlanetElevation = options.planetElevation
+    ?? new Float32Array(grid.cellCount).fill(constantHeightM);
+  const flatPlanetSurface = options.planetSurface ?? {
+    elevation: flatPlanetElevation,
+    seaLevel: constantHeightM - 1,
+  };
 
   const rows = buildFormAndContinuityRows({
     cell,
@@ -1853,6 +2254,9 @@ export function runFlatFixtureControl(options = {}) {
     neighborMap,
     coarseViews,
     radiusM,
+    planetSurface: flatPlanetSurface,
+    planetElevation: flatPlanetElevation,
+    hypsoReferencePct: options.hypsoReferencePct,
   });
   const summary = summarizeRows(rows);
   return {
@@ -1922,7 +2326,7 @@ export function gateExitCode(summary) {
 
 /**
  * Полный прогон стенда: таблица метрик по всем контрольным ячейкам.
- * Опции: { world: 'a29' | 'a17', radiusM: число }.
+ * Опции: { world: 'a29' | 'a17', radiusM: число, hypsoReferencePct: число | null }.
  */
 export async function runStand(options = {}) {
   const worldName = options.world ?? 'a29';
@@ -1934,9 +2338,12 @@ export async function runStand(options = {}) {
   const cellCache = new Map();
   const rows = [];
   for (const cell of CONTROL_CELLS) {
-    rows.push(...await measureCell(grid, surface, world, cell, radiusM, cellCache));
+    rows.push(...await measureCell(grid, surface, world, cell, radiusM, cellCache, options));
   }
   const summary = summarizeRows(rows);
+  const globeVerticalExaggeration = measureGlobeVerticalExaggeration(surface, {
+    scaleK: options.scaleK,
+  });
   return {
     tool: 'stand_local_map',
     world: worldName,
@@ -1946,6 +2353,7 @@ export async function runStand(options = {}) {
     controlCells: [...CONTROL_CELLS],
     riverCarveSource: RIVER_CARVE_SOURCE,
     thresholds: { ...THRESHOLDS },
+    globeVerticalExaggeration,
     rows,
     summary,
     gate: options.gate === true,
@@ -1959,6 +2367,8 @@ export {
   WORLDS,
   METRIC_TITLES,
   DEFAULT_RADIUS_M,
+  RELIEF_WINDOW_WIDTH_M,
+  RELIEF_WINDOW_RADIUS_M,
   CANONICAL_V,
   CARVE_AREA_GRID,
   CARVE_AREA_RADIUS_RATIO,
@@ -1966,6 +2376,15 @@ export {
   LOD_FINE_RES,
   LOD_COARSE_RES,
   RIVER_CARVE_SOURCE,
+  HYPSO_EARTH_REFERENCE_PCT,
+  HYPSO_DOMAIN_REFERENCE_PCT,
+  HYPSO_PREV_THRESHOLD_PCT,
+  GLOBE_LAND_RELIEF_FACTOR,
+  GLOBE_OCEAN_RELIEF_FACTOR,
+  DEFAULT_GLOBE_SCALE_K,
+  cellTangentMeters,
+  computePatchHexSpanM,
+  runRampAzimuthControl,
   measureLandRelief,
   measureOceanRelief,
   measureMeanSlope,
@@ -1973,6 +2392,7 @@ export {
   measureWaterContourSmoothness,
   measureHexContinuity,
   measureLodConsistency,
+  measureGlobeVerticalExaggeration,
   formatTable,
   parseArgs,
   usage,
@@ -1995,6 +2415,7 @@ if (invokedDirectly) {
     ? runFlatFixtureControl({
         radiusM: options.radiusM,
         constantHeightM: options.flatHeightM,
+        hypsoReferencePct: options.hypsoReferencePct,
         gate: options.gate,
       })
     : await runStand(options);
@@ -2009,6 +2430,9 @@ if (invokedDirectly) {
   } else {
     console.log(`STAND_LOCAL_MAP мир=${report.worldLabel} radiusM=${report.radiusM} v=${report.canonicalV}`);
     console.log(formatTable(report.rows, report.summary));
+    if (report.globeVerticalExaggeration) {
+      console.log(`Вертикальное преувеличение глобуса (без порога): ${report.globeVerticalExaggeration.detail}`);
+    }
     if (report.summary.failedMetrics.length > 0) {
       console.log(`Красные метрики: ${report.summary.failedMetrics.join(', ')}`);
     }

@@ -16,7 +16,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
+const PlanetSurface = require('../site/shared/planet-surface.ts').default;
+const PlanetElevationField = require('../site/shared/planet-elevation-field.ts');
+const Contract = require('../src/local-map/local-map-contract.ts');
+const Worker = require('../src/local-map/local-map-worker.ts');
 
 const TOOL_PATH = fileURLToPath(new URL('../tools/stand_local_map.mjs', import.meta.url));
 
@@ -69,7 +77,8 @@ test('стенд: конфигурация измерений зафиксиро
   assert.equal(stand.THRESHOLDS.landReliefMaxPct, 25, 'm.8 размах суши: максимум 25 %');
   assert.equal(stand.THRESHOLDS.oceanReliefMinPct, 5, 'm.9 размах океанского дна ≥ 5 %');
   assert.equal(stand.THRESHOLDS.meanSlopeMinPct, 4, 'm.10 средний уклон ≥ 4 %');
-  assert.equal(stand.THRESHOLDS.hypsometryMinPct, 40, 'm.11 гипсометрия p90−p10 ≥ 40 % размаха');
+  assert.equal(stand.THRESHOLDS.hypsometryMinPct, 20, 'm.11 гипсометрия p90−p10: минимум полосы 20 %');
+  assert.equal(stand.THRESHOLDS.hypsometryMaxPct, 35, 'm.11 гипсометрия p90−p10: потолок полосы 35 %');
   assert.equal(stand.THRESHOLDS.waterContourSmoothMinPct, 40, 'm.12 гладкость контура воды ≥ 40 %');
   assert.equal(stand.THRESHOLDS.hexContinuityMaxM, 1, 'm.13 непрерывность A↔B ≤ 1 м');
   assert.equal(stand.THRESHOLDS.lodConsistencyMaxM, 2, 'm.14 согласованность LOD ≤ 2 м');
@@ -346,8 +355,18 @@ test('синтетические пробы m.8…m.14: метрики чувс�
   assert.ok(m9.value >= 5, `m.9 ≥ 5 % (${m9.value})`);
   const m10 = stand.measureMeanSlope(local, radiusM);
   assert.ok(m10.value >= 4, `m.10 ≥ 4 % (${m10.value})`);
-  const m11 = stand.measureHypsometry(local);
-  assert.ok(m11.value >= 40, `m.11 ≥ 40 % (${m11.value})`);
+  // Степенной планетный профиль с межквантильным размахом p90−p10 ≈ 28 % (внутри коридора 20…35 %).
+  const syntheticPlanetElev = new Float32Array(1001);
+  for (let i = 0; i < syntheticPlanetElev.length; i++) {
+    const t = (i / (syntheticPlanetElev.length - 1)) * 2 - 1;
+    syntheticPlanetElev[i] = Math.sign(t) * Math.pow(Math.abs(t), 5.7);
+  }
+  const m11 = stand.measureHypsometry(syntheticPlanetElev);
+  assert.ok(
+    m11.value >= stand.THRESHOLDS.hypsometryMinPct && m11.value <= stand.THRESHOLDS.hypsometryMaxPct,
+    `m.11 в полосе 20…35 % (${m11.value})`,
+  );
+  assert.equal(m11.status, 'PASS');
   const m12 = stand.measureWaterContourSmoothness(local, null, radiusM);
   assert.ok(m12.value >= 40, `m.12 ≥ 40 % на гладкой маске (${m12.value})`);
 
@@ -425,4 +444,298 @@ test('стенд: неизвестный профиль и неизвестны�
     },
     { gate: true, json: true, flatFixture: true, flatHeightM: 12, world: 'a17', radiusM: 1200 },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Новые тесты W26b (пункты 1–4 + дополнение #234): шкала азимутов m.13 на
+// рампе h = k·x, фиксированное окно 5 000 м (m.8/m.9/m.10), одинаковый span
+// m.14, наземная гипсометрия m.11 (elev > seaLevel) и преувеличение глобуса.
+// ---------------------------------------------------------------------------
+
+test('W26b п.1: m.13 (measureHexContinuity) — контроль азимута на рампе h = k·x (0 ± 0,1 м), диагностика слот·60° и пометка W23', () => {
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
+  const radiusM = stand.DEFAULT_RADIUS_M;
+
+  for (const cell of stand.CONTROL_CELLS) {
+    const patchA = Contract.buildPatch7(grid, surface, cell);
+    const neighborPatches = new Map();
+    for (let k = 1; k < patchA.cells.length; k++) {
+      const nbCell = patchA.cells[k].cell;
+      if (grid.neighborCount[nbCell] !== 6) continue;
+      neighborPatches.set(nbCell, Contract.buildPatch7(grid, surface, nbCell));
+    }
+
+    // На синтетическом поле-рампе h = k·x (перепад 100 м на полуребре)
+    // при истинной шкале азимутов шов равен 0 ± 0,1 м на всех 7 ячейках.
+    const rampTrue = stand.runRampAzimuthControl(patchA, neighborPatches, radiusM);
+    assert.equal(rampTrue.faces.length, 6, `ячейка ${cell}: все 6 шестиугольных граней сопоставлены`);
+    assert.ok(
+      rampTrue.value <= 0.1,
+      `ячейка ${cell}: на рампе h = k·x при истинной шкале шов 0 ± 0,1 м (${rampTrue.value})`,
+    );
+    assert.equal(rampTrue.azimuthScaleOk, true);
+    assert.equal(rampTrue.status, 'PASS');
+  }
+
+  // Проверяем ненулевую диагностику «слот·60° против истинного азимута» и пометку W23 в detail отчёта:
+  // #37488: −29,6…−30,3°, #37548: до −90,4°, #37436: +14,6…+17,8°.
+  const row37488 = report.rows.find((r) => r.cell === 37488 && r.metric === stand.METRIC_TITLES.hexContinuity);
+  const row37548 = report.rows.find((r) => r.cell === 37548 && r.metric === stand.METRIC_TITLES.hexContinuity);
+  const row137436 = report.rows.find((r) => r.cell === 137436 && r.metric === stand.METRIC_TITLES.hexContinuity);
+
+  assert.match(row37488.detail, /слот·60° против истинного азимута:.*диапазон −30,3°…−29,6°/);
+  assert.match(row37548.detail, /слот·60° против истинного азимута:.*−90,4°/);
+  assert.match(row137436.detail, /слот·60° против истинного азимута:.*диапазон \+14,6°…\+17,8°/);
+
+  for (const row of report.rows.filter((r) => r.metric === stand.METRIC_TITLES.hexContinuity)) {
+    assert.match(row.detail, /разность якорных высот патчей, не шов; станет швом после W23/);
+  }
+});
+
+test('W26b п.1 (негативный контроль «сдвинутая шкала» на рампе h = k·x): при сдвиге на 30° шов растёт пропорционально и падает', () => {
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
+  const radiusM = stand.DEFAULT_RADIUS_M;
+  const patchA = Contract.buildPatch7(grid, surface, 37488);
+  const neighborPatches = new Map();
+  for (let k = 1; k < patchA.cells.length; k++) {
+    const nbCell = patchA.cells[k].cell;
+    neighborPatches.set(nbCell, Contract.buildPatch7(grid, surface, nbCell));
+  }
+
+  // На синтетической рампе h = k·x (перепад 100 м на полуребре):
+  // при 0° шов ≤ 0,1 м (PASS); при 10°, 20°, 30° шов монотонно и пропорционально растёт.
+  const r0 = stand.runRampAzimuthControl(patchA, neighborPatches, radiusM, { azimuthOffsetDeg: 0 });
+  const r10 = stand.runRampAzimuthControl(patchA, neighborPatches, radiusM, { azimuthOffsetDeg: 10 });
+  const r20 = stand.runRampAzimuthControl(patchA, neighborPatches, radiusM, { azimuthOffsetDeg: 20 });
+  const r30 = stand.runRampAzimuthControl(patchA, neighborPatches, radiusM, { azimuthOffsetDeg: 30 });
+  const rSlot = stand.runRampAzimuthControl(patchA, neighborPatches, radiusM, { useSlotScale: true });
+
+  assert.ok(r0.value <= 0.1, `при 0° шов равен 0 ± 0,1 м (${r0.value})`);
+  assert.equal(r0.status, 'PASS');
+  assert.ok(r10.value > 50 && r10.value < r20.value, `при 10° шов вырос до ~60 м (${r10.value})`);
+  assert.ok(r20.value > 100 && r20.value < r30.value, `при 20° шов вырос до ~118 м (${r20.value})`);
+  assert.ok(r30.value > 150, `при 30° шов вырос пропорционально до ~173 м (${r30.value})`);
+  assert.equal(r30.azimuthScaleOk, false);
+  assert.equal(r30.status, 'FAIL', 'при сдвиге на 30° проверка на рампе обязана падать');
+
+  // Прежняя шкала slot·π/3 (на #37488 смещённая на ~−30°) на той же рампе тоже обязана падать.
+  assert.ok(rSlot.value > 150, `прежняя шкала slot·60° на #37488 даёт разрыв ~173 м (${rSlot.value})`);
+  assert.equal(rSlot.status, 'FAIL');
+});
+
+test('W26b доп. п.2 (негативный контроль окна 5 000 м): --radius-m=2500 и --radius-m=52136 дают ОДИНАКОВЫЕ m.8 / m.9 / m.10', async () => {
+  assert.equal(stand.RELIEF_WINDOW_WIDTH_M, 5000, 'ширина фиксированного окна равна 5 000 м');
+  assert.equal(stand.DEFAULT_RADIUS_M, 2500, 'до слияния #233 DEFAULT_RADIUS_M остаётся 2500 м');
+
+  const rep2500 = report;
+  const rep52136 = await stand.runStand({ radiusM: 52136 });
+  const targetMetrics = [
+    stand.METRIC_TITLES.landRelief,
+    stand.METRIC_TITLES.oceanRelief,
+    stand.METRIC_TITLES.meanSlope,
+  ];
+
+  for (const cell of stand.CONTROL_CELLS) {
+    for (const metric of targetMetrics) {
+      const a = rep2500.rows.find((r) => r.cell === cell && r.metric === metric);
+      const b = rep52136.rows.find((r) => r.cell === cell && r.metric === metric);
+      assert.equal(b.value, a.value, `ячейка ${cell} (${metric}): value при radiusM=52136 равен radiusM=2500`);
+      assert.equal(b.valueText, a.valueText, `ячейка ${cell} (${metric}): valueText совпадает`);
+      assert.equal(b.status, a.status, `ячейка ${cell} (${metric}): status совпадает`);
+      assert.equal(b.detail, a.detail, `ячейка ${cell} (${metric}): detail совпадает`);
+    }
+  }
+
+  // Прямая проверка фильтра окна 5 000 м: выброс за пределами |x| <= 2500 м при radiusM=52136 игнорируется.
+  const res = stand.LOD_FINE_RES;
+  const hfBig = new Float32Array(res * res).fill(10);
+  const tfBig = new Uint8Array(res * res).fill(2);
+  // Кладём огромный пик +5000 м в угол (x = 0, y = 0), который при radiusM=52136 лежит на −52 км (вне окна ±2500 м).
+  hfBig[0] = 5000;
+  const localBig = {
+    heightfield: hfBig,
+    terraformMap: tfBig,
+    meta: { radiusM: 52136, hfRes: res, tfRes: res },
+  };
+  const m8Windowed = stand.measureLandRelief(localBig, 52136);
+  assert.equal(m8Windowed.value, 0, 'выброс вне окна 5 000 м не влияет на m.8');
+  assert.equal(m8Windowed.frameWidthM, 5000, 'знаменатель m.8 равен фиксированному окну 5 000 м');
+});
+
+test('W26b п.2: m.14 (measureLodConsistency) сравнивает одинаковый span — 0 м на константном поле и ≤ 2 м на реальном', () => {
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
+  const radiusM = stand.DEFAULT_RADIUS_M;
+  const resFine = stand.LOD_FINE_RES;
+  const resCoarse = stand.LOD_COARSE_RES;
+
+  // 1) На константном поле при реальном span грубого LOD (dHex ≈ 59–64,5 км против 5 км у 256)
+  //    рассогласование строго равно 0.
+  for (const constantH of [0, -252.5, 137.25]) {
+    const patchC = Contract.buildPatch7(grid, surface, 37488);
+    const nbCell = patchC.cells[1].cell;
+    const patchB = Contract.buildPatch7(grid, surface, nbCell);
+    const dHexB = stand.computePatchHexSpanM(patchB);
+    assert.ok(dHexB > 50_000 && dHexB < 70_000, `span грубого LOD dHex в пределах 50…70 км (${dHexB})`);
+
+    const local256 = {
+      heightfield: new Float32Array(resFine * resFine).fill(constantH),
+      meta: { radiusM, hfRes: resFine, tfRes: resFine },
+    };
+    const coarseViews = [{
+      sourceLabel: String(nbCell),
+      frameEast: patchB.frame.east,
+      frameNorth: patchB.frame.north,
+      hfRes: resCoarse,
+      spanM: dHexB,
+      heightfield: new Float32Array(resCoarse * resCoarse).fill(constantH),
+    }];
+    const resConst = stand.measureLodConsistency(local256, patchC, coarseViews, radiusM);
+    assert.equal(resConst.value, 0, `на константном поле h=${constantH} рассогласование ровно 0`);
+    assert.equal(resConst.worst.commonSpanM, 2 * radiusM, 'сравнение ведётся на одинаковом span = 5000 м');
+  }
+
+  // 2) На реальном планетном поле высот (sampleElevation на сетке 256 при span 5 км
+  //    и на сетке 64 при span dHex = 59–64,5 км) рассогласование ≤ 2 м на всех 7 ячейках.
+  for (const cell of stand.CONTROL_CELLS) {
+    const patchC = Contract.buildPatch7(grid, surface, cell);
+    const fineSpanM = 2 * radiusM;
+    const stepFineM = fineSpanM / resFine;
+    const hf256 = new Float32Array(resFine * resFine);
+    for (let y = 0; y < resFine; y++) {
+      const wy = ((y - resFine / 2) / resFine) * fineSpanM;
+      for (let x = 0; x < resFine; x++) {
+        const wx = ((x - resFine / 2) / resFine) * fineSpanM;
+        const dir = Contract.localPointToDirection(patchC, wx, wy);
+        hf256[y * resFine + x] = PlanetElevationField.sampleElevation(
+          dir, stepFineM, stand.WORLDS.a29.profile,
+        );
+      }
+    }
+    const nbCell = patchC.cells[1].cell;
+    const patchB = Contract.buildPatch7(grid, surface, nbCell);
+    const dHexB = stand.computePatchHexSpanM(patchB);
+    const stepCoarseM = dHexB / resCoarse;
+    const hf64 = new Float32Array(resCoarse * resCoarse);
+    for (let y = 0; y < resCoarse; y++) {
+      const wy = ((y - resCoarse / 2) / resCoarse) * dHexB;
+      for (let x = 0; x < resCoarse; x++) {
+        const wx = ((x - resCoarse / 2) / resCoarse) * dHexB;
+        const dir = Contract.localPointToDirection(patchC, wx, wy);
+        hf64[y * resCoarse + x] = PlanetElevationField.sampleElevation(
+          dir, stepCoarseM, stand.WORLDS.a29.profile,
+        );
+      }
+    }
+    const m14Real = stand.measureLodConsistency(
+      { heightfield: hf256, meta: { radiusM, hfRes: resFine } },
+      patchC,
+      [{
+        sourceLabel: String(nbCell),
+        frameEast: patchC.frame.east,
+        frameNorth: patchC.frame.north,
+        hfRes: resCoarse,
+        spanM: dHexB,
+        heightfield: hf64,
+      }],
+      radiusM,
+    );
+    assert.ok(
+      m14Real.value <= stand.THRESHOLDS.lodConsistencyMaxM,
+      `ячейка ${cell}: на реальном поле рассогласование LOD ≤ 2 м (${m14Real.value})`,
+    );
+  }
+
+  // Кроме того, на живом прогоне стенда все 5 глубоководных ячеек проходят порог ≤ 2 м.
+  for (const oceanCell of [37488, 37518, 37548, 37519, 137363]) {
+    const row = report.rows.find((r) => r.cell === oceanCell && r.metric === stand.METRIC_TITLES.lodConsistency);
+    assert.ok(row && row.value <= stand.THRESHOLDS.lodConsistencyMaxM, `живая карта ${oceanCell}: m.14 ≤ 2 м (${row?.value})`);
+    assert.equal(row.status, 'PASS');
+  }
+});
+
+test('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference', () => {
+  const grid = GeodesicGrid.build(stand.CANONICAL_V);
+  const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
+  const direct = stand.measureHypsometry(surface);
+  assert.equal(direct.totalCells, 163_842, 'всего ячеек сетки v=128: 163 842');
+  assert.equal(direct.landCells, 16_596, 'наземных ячеек elev > seaLevel: 16 596');
+  assert.equal(Number(direct.p10.toFixed(4)), 0.2954, `p10 = 0,2954 (${direct.p10})`);
+  assert.equal(Number(direct.p50.toFixed(4)), 0.3540, `p50 = 0,3540 (${direct.p50})`);
+  assert.equal(Number(direct.p90.toFixed(4)), 0.4685, `p90 = 0,4685 (${direct.p90})`);
+  assert.equal(Number(direct.maxH.toFixed(4)), 0.6600, `max = 0,6600 (${direct.maxH})`);
+  assert.equal(Number(direct.value.toFixed(2)), 45.93, `ожидаемое значение на v=128: 45,93 % (${direct.value})`);
+  assert.equal(direct.status, 'FAIL', '45,93 % вне полосы 20…35 % даёт FAIL');
+  assert.match(direct.detail, /p10 0,2954 \/ p50 0,3540 \/ p90 0,4685 \/ max 0,6600/);
+  assert.match(direct.detail, /суша 16596 из 163842/);
+  assert.match(direct.detail, /ориентир: Земля 19,4 %, наш домен 28,1 %, прежний порог 35 %/);
+
+  // Во всех 7 строках отчёта m.11 равен 45.93 % и имеет порог 20…35 %.
+  const m11Rows = report.rows.filter((r) => r.metric === stand.METRIC_TITLES.hypsometry);
+  assert.equal(m11Rows.length, stand.CONTROL_CELLS.length);
+  for (const row of m11Rows) {
+    assert.equal(row.threshold, '20…35 %');
+    assert.equal(row.value, 45.93);
+    assert.equal(row.valueText, '45.93 %');
+    assert.equal(row.status, 'FAIL');
+    assert.match(row.detail, /суша 16596 из 163842/);
+  }
+
+  // Флаг --hypso-reference=<pct> подставляет ориентир другого профиля в detail, но НЕ меняет вердикт.
+  const parsedOpts = stand.parseArgs(['--hypso-reference=24.6']);
+  assert.equal(parsedOpts.hypsoReferencePct, 24.6);
+  const withCustomRef = stand.measureHypsometry(surface, { hypsoReferencePct: 24.6 });
+  assert.match(withCustomRef.detail, /ориентир: Земля 19,4 %, профиль 24,6 %, прежний порог 35 %/);
+  assert.equal(withCustomRef.value, direct.value, 'значение m.11 не зависит от --hypso-reference');
+  assert.equal(withCustomRef.status, direct.status, 'вердикт m.11 не зависит от --hypso-reference');
+});
+
+test('W26b п.3 (негативный контроль m.11): идеально плоское поле даёт FAIL и 0 %, а не 100 %', () => {
+  for (const constElev of [0, -0.5, 0.2832, 42.5]) {
+    const flatField = new Float32Array(163_842).fill(constElev);
+    const res = stand.measureHypsometry(flatField);
+    assert.equal(res.value, 0, `плоское поле elev=${constElev} обязано давать 0 %, а не 100 %`);
+    assert.notEqual(res.value, 100);
+    assert.equal(res.pass, false);
+    assert.equal(res.status, 'FAIL', `плоское поле elev=${constElev} обязано давать FAIL`);
+  }
+});
+
+test('W26b п.4: вертикальное преувеличение глобуса (печать без порога, суша/океан и отношение)', () => {
+  // На опорных параметрах домена при K = 8 570 ожидается 46,1× / 4,6×, отношение 0,10.
+  const refEx = stand.measureGlobeVerticalExaggeration(
+    {
+      radiusKm: 6371,
+      seaLevel: 0.283141,
+      elevationMax: 0.638,
+      elevationMin: -1.0,
+    },
+    { scaleK: 8570 },
+  );
+  assert.equal(Number(refEx.landExaggeration.toFixed(1)), 46.1, `суша 46,1× (${refEx.landExaggeration})`);
+  assert.equal(Number(refEx.oceanExaggeration.toFixed(1)), 4.6, `океан 4,6× (${refEx.oceanExaggeration})`);
+  assert.equal(Number(refEx.oceanToLandRatio.toFixed(2)), 0.10, `отношение 0,10 (${refEx.oceanToLandRatio})`);
+
+  // Отношение океан/суша не меняется от смены K (глобус нормирует высоту на размах поля).
+  const refEx900 = stand.measureGlobeVerticalExaggeration(
+    {
+      radiusKm: 6371,
+      seaLevel: 0.283141,
+      elevationMax: 0.638,
+      elevationMin: -1.0,
+    },
+    { scaleK: 900 },
+  );
+  assert.ok(
+    Math.abs(refEx900.oceanToLandRatio - refEx.oceanToLandRatio) < 1e-12,
+    'отношение океан/суша инвариантно к K',
+  );
+
+  // В живом отчёте стенда поле присутствует и не добавляет порога в таблицу.
+  assert.ok(report.globeVerticalExaggeration, 'в отчёте стенда есть globeVerticalExaggeration');
+  assert.ok(report.globeVerticalExaggeration.landExaggeration > 0);
+  assert.ok(report.globeVerticalExaggeration.oceanExaggeration > 0);
+  assert.match(report.globeVerticalExaggeration.detail, /site\/shared\/planet-globe\.ts:286–294/);
 });
