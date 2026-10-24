@@ -718,12 +718,13 @@ export function worldRiverDepthAt(
   dir: Vec3, segments: readonly WorldRiverSegment[], _radiusM: number, planetRadiusM: number,
   /** Если дана базовая высота, у водного устья ограничиваем поверхность нулевым зеркалом. */
   baseHeightM?: number,
-  info?: { seaBlend: number },
+  info?: { seaBlend: number; channelFactor?: number },
 ): number {
   const halfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const depthM = RIVER_CHANNEL_DEPTH_M;
   let deepest = 0;
   let seaBlend = 0;
+  let channelFactor = 0;
   for (const segment of segments) {
     // Один геодезический поиск вместо двух (долина + стрежень): одна и та
     // же физическая дистанция определяет обе гладкие огибающие.
@@ -733,6 +734,7 @@ export function worldRiverDepthAt(
     const valley = valleyT * valleyT * (3 - 2 * valleyT);
     const channelT = Math.max(0, 1 - distanceM / halfWidthM);
     const channel = channelT * channelT * (3 - 2 * channelT);
+    if (info && channel > channelFactor) channelFactor = channel;
     let mouthFade = 1;
     if (segment.toWater) {
       // 3D-полоса берега одна и та же в каждом Patch7. На середине ребра
@@ -754,7 +756,10 @@ export function worldRiverDepthAt(
       * (0.45 * valley + 0.55 * channel) * mouthFade;
     if (carve > deepest) deepest = carve;
   }
-  if (info) info.seaBlend = seaBlend;
+  if (info) {
+    info.seaBlend = seaBlend;
+    info.channelFactor = channelFactor;
+  }
   return baseHeightM !== undefined
     ? deepest + Math.max(0, baseHeightM - deepest) * seaBlend
     : deepest;
@@ -787,6 +792,7 @@ function applyWorldRiverHeights(
       maxY: Math.max(a.v, b.v) + margin,
     };
   });
+  const riverInfo = { seaBlend: 0, channelFactor: 0 };
   for (let y = 0; y < res; y++) {
     const wy = (y - res / 2) * stepM;
     for (let x = 0; x < res; x++) {
@@ -798,10 +804,11 @@ function applyWorldRiverHeights(
       const dir = localPointToDirection(patch, wx, wy);
       if (base.landMask[idx] === 0 && nearestPatchCell(patch, dir).lakeWeight > 0) continue;
       const rawHeight = base.heightM[idx] as number;
-      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM, rawHeight);
+      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM, rawHeight, riverInfo);
       heightfield[idx] = rawHeight - carve;
-      if (base.landMask[idx] === 1
-        && worldRiverCarveFactor(dir, segments, patch.frame.radiusM, halfWidthM) >= 0.45) {
+      // Та же физическая дистанция уже дала огибающую стрежня; не ищем
+      // ближайшую дугу ВТОРОЙ раз для маски на каждом пикселе 256².
+      if (base.landMask[idx] === 1 && riverInfo.channelFactor >= 0.45) {
         base.terraformMap[idx] = 1;
         spawnMask[idx] = 0;
       }

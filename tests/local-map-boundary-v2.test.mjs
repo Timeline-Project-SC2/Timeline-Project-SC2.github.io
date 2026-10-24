@@ -9,6 +9,7 @@ const Surface = require('../site/shared/planet-surface.ts').default;
 const Contract = require('../src/local-map/local-map-contract.ts');
 const Worker = require('../src/local-map/local-map-worker.ts');
 const Heightfield = require('../src/local-map/local-map-heightfield.ts');
+const Geometry = require('../src/local-map/local-map-geometry.ts');
 const Rivers = require('../src/local-map/local-map-rivers.ts');
 const Stand = await import('../tools/stand_local_map.mjs');
 
@@ -71,6 +72,20 @@ test('речные физические ширина/глубина не зав�
     const r2 = Worker.worldRiverDepthAt(dir, segments, 2 * radiusM, patch.frame.radiusM);
     assert.ok(r1 > 0.5, `створ в зоне вреза: ${r1} м`);
     assert.ok(Math.abs(r1 - r2) <= 0.1, `при 2× radiusPatchM Δглубины=${r1 - r2} м ≤ 0,1`);
+  }
+  // Маска русла использует ту же дистанцию, что и физический врез. Если
+  // разделить вычисления, прежние пиксели terraform/spawn обязаны совпасть.
+  for (const distanceM of [0, 100, 800, 1100, 1600, 2000, 5000]) {
+    const angleM = distanceM / patch.frame.radiusM;
+    const dir = patch.frame.origin.map((value, i) =>
+      Math.cos(angleM) * value + Math.sin(angleM) * main.normal[i]);
+    const info = { seaBlend: 0, channelFactor: 0 };
+    Worker.worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM, undefined, info);
+    const originalMask = Geometry.worldRiverCarveFactor(
+      dir, segments, patch.frame.radiusM, Rivers.RIVER_CHANNEL_HALF_WIDTH_M,
+    );
+    assert.ok(Math.abs(info.channelFactor - originalMask) <= 1e-12,
+      `при ${distanceM} м маркер=стрежень: ${info.channelFactor} ≈ ${originalMask}`);
   }
   assert.ok(Worker.worldRiverDepthAt(patch.frame.origin, segments, radiusM, patch.frame.radiusM) >= 3);
   assert.ok(Rivers.RIVER_CHANNEL_HALF_WIDTH_M > 0);
