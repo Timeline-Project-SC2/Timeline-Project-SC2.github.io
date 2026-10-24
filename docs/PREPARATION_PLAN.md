@@ -2,9 +2,11 @@
 
 > **Статус документа:** комплексный план, синхронизированный с выполненной архитектурой `CR-01` (PR #130, #131, #133, #137, #138, #139), волнами `PR 6.1`, `Wave-DX-1`, `Stage-7`, `Stage-8` и семью итерациями локальной карты **Stage-8.1 … Stage-8.7** (PR #163–#167, #169, #171, #176–#200, #202–#204). Этапы 1–8 реализованы на строгом TypeScript + гибридном Wasm-ускорителе `planet-core`: работают цепочка навигации из атласа сектора на страницу планеты `/planet-globe/`, бесшовное замещение геометрии, упреждающий `prefetch`, срез `Patch7` (`local-map-patch-v1`, И-3) и интерактивный 3D-экран локальной карты с процедурным конструктором построек (`1250 … 1.2 км`, гейт **G4**), кольцевыми LOD-областями 1–5 (`91` ячейка в сумме с центром), непрерывной сферической юбкой планетарного горизонта с дневным куполом неба, фиксированным физическим радиусом гекса, межъячеечной синхронизацией, знаковой батиметрией, сквозными реками, 5 высотными поясами, ориентацией камеры строго по Северу, атомарным ре-бейзингом камеры `rebaseLocalCameraState` и голографическими квик-стрелками (детали — [`stages/STAGE_8_PLANETARY_HORIZON.md`](stages/STAGE_8_PLANETARY_HORIZON.md)); проект гибридного атласа растительности Этапа 9 зафиксирован в [`stages/stage-9-vegetation-atlas.md`](stages/stage-9-vegetation-atlas.md), кодовая реализация Этапов 9–12 — следующие шаги.
 >
-> **Дата редакции:** 23 октября 2026 года.
+> **Дата редакции:** 24 октября 2026 года.
 >
-> **Факт и детали этапов:** архитектурный план модернизации [`CHANGE_REQUEST_PLAN.md`](CHANGE_REQUEST_PLAN.md), живой журнал [`stages/stage_patches.md`](stages/stage_patches.md), отчёты [`stages/stage-1-spike-report.md`](stages/stage-1-spike-report.md), [`stages/stage-2-data-and-sync.md`](stages/stage-2-data-and-sync.md), [`stages/stage-3-geodesic-core.md`](stages/stage-3-geodesic-core.md), [`stages/stage-4-fields-c100-soft.md`](stages/stage-4-fields-c100-soft.md), [`stages/stage-5-hydrology-biomes.md`](stages/stage-5-hydrology-biomes.md), [`stages/stage-6-webgl-globe.md`](stages/stage-6-webgl-globe.md), [`stages/stage-7-planet-page.md`](stages/stage-7-planet-page.md), [`stages/stage-8-local-map.md`](stages/stage-8-local-map.md), отчёт итераций планетарного горизонта [`stages/STAGE_8_PLANETARY_HORIZON.md`](stages/STAGE_8_PLANETARY_HORIZON.md) (Stage-8.1 … Stage-8.7) и проект атласа растительности [`stages/stage-9-vegetation-atlas.md`](stages/stage-9-vegetation-atlas.md) с пакетом промптов тайлов [`prompts/stage-9-vegetation-tiles.md`](prompts/stage-9-vegetation-tiles.md). План ниже фиксирует статус, инварианты и решения, влияющие на дальнейший порядок работ; детальные измерения и история изменений остаются в этих документах.
+> **Факт и детали этапов:** архитектурный план модернизации [`CHANGE_REQUEST_PLAN.md`](CHANGE_REQUEST_PLAN.md), живой журнал [`stages/stage_patches.md`](stages/stage_patches.md), отчёты [`stages/stage-1-spike-report.md`](stages/stage-1-spike-report.md), [`stages/stage-2-data-and-sync.md`](stages/stage-2-data-and-sync.md), [`stages/stage-3-geodesic-core.md`](stages/stage-3-geodesic-core.md), [`stages/stage-4-fields-c100-soft.md`](stages/stage-4-fields-c100-soft.md), [`stages/stage-5-hydrology-biomes.md`](stages/stage-5-hydrology-biomes.md), [`stages/stage-6-webgl-globe.md`](stages/stage-6-webgl-globe.md), [`stages/stage-7-planet-page.md`](stages/stage-7-planet-page.md), [`stages/stage-8-local-map.md`](stages/stage-8-local-map.md), отчёт итераций планетарного горизонта [`stages/STAGE_8_PLANETARY_HORIZON.md`](stages/STAGE_8_PLANETARY_HORIZON.md) (Stage-8.1 … Stage-8.7) и проект атласа растительности [`stages/stage-9-vegetation-atlas.md`](stages/stage-9-vegetation-atlas.md) с пакетом промптов тайлов [`prompts/stage-9-vegetation-tiles.md`](prompts/stage-9-vegetation-tiles.md) и гайдлайнер под-уровня Этапов 9–12 [`stages/stage-9-12-sector-deep-render-plan.md`](stages/stage-9-12-sector-deep-render-plan.md) (секториальный рендер, буквенный адрес, навигация). План ниже фиксирует статус, инварианты и решения, влияющие на дальнейший порядок работ; детальные измерения и история изменений остаются в этих документах.
+>
+> **Данные под-уровня Этапов 9–12 (24.10.2026, проектная стадия):** сектор `10 000 × 10 000` — `173` системы и `8` столиц (`data/systems.csv`), `7` записей мест у `6` систем (`data/places.csv`); тела заявлены только у этих `6` систем из `173`; глубина `L0…L9` + системный кадр `S0…S2`, буквенный адрес `KP·REQHC` (тиры `2 000 / 400 / 80 / 16 / 3,2` св.г., `173/173` адреса различны), ближайшая пара `Орна–Зеф 50,0` св.г., медиана ближайшего соседа `100,9` св.г. Источник чисел — [`stages/stage-9-12-sector-deep-render-plan.md`](stages/stage-9-12-sector-deep-render-plan.md) §2–§3.
 >
 > **Парный документ для владельца и администраторов:** [`PREPARATION_PLAN_ADMINS.md`](PREPARATION_PLAN_ADMINS.md).
 >
@@ -59,7 +61,7 @@
 | План `CR-01` + волна `PR 6.1` | Полностью закрыты (PR #130, #131, #133, #137, #138, #139 + волна `PR 6.1`): завершена миграция клиентского и вычислительного кода на строгий TypeScript + Vite-сборку в `.publish/` (`site/shared/*.ts`, `site/planet-globe/*.ts`, `site/planet-test/*.ts`, `src/atlas/*.ts`, `src/planet/*`, `src/local-map/*`), введено Wasm-ядро `planet-core` (`> 3,0×`, FULL EQ), удалены все легаси-дубликаты (`site/shared/app.js`, `site/shared/temp_code_structures.js`, `site/planet-test/planet-test.js`, `site/planet-test/planet-worker.js`, `site/shared/planet-geometry.js`) с соблюдением инвариантов И-1…И-6. |
 | Этап 7 | Опубликован в `main` (волна `Stage-7`: PR #155, #156, #157, #158): страница планеты `/planet-globe/?place=&system=&cell=` встроена в цепочку из атласа сектора (`src/atlas/{config,data-loader,dossier-card}.ts`), подключены `verifyGenerationKey` (И-4), `transitionGeometry` (`uHide`/`uCenterGrow`), `flyToDirection`, `onCameraIntent` + `prefetch`/`extract-patch` воркера на `canonicalV` (И-1, И-3) и производные ключи §8.8 (`tests/planet-stage7-worker.test.mjs`). Отчёт — `docs/stages/stage-7-planet-page.md`. |
 | Этап 8 | Реализован в волне `Stage-8`: рельеф и реки `src/local-map/local-map-worker.ts` сшиты с `Patch7` по И-3 (с LRU-кэшем на 8 участков), `StructureRenderer` (`src/local-map/local-map-renderer.ts`) переведён на порционную GPU-догрузку `gl.bufferSubData` без пересоздания VAO (Патч 8, `tests/local-map-stage8.test.mjs`), на `/planet-globe/` добавлен интерактивный Dive-in экран 3D локальной карты (`1250 … 1.2 км`, кольцо соседей `0..5`), CPU-гейт **G4** подтверждён в `tools/bench_local_map_stage8.mjs` (`generateLocalMap` median `27,4 мс` на `v=64` и `26,5 мс` на `v=128` при пороге `<= 150 мс`, `0` нарушений `buildingSpawnMask`). Итерациями **Stage-8.1 … Stage-8.7** (PR #163–#167, #169, #171, #176–#200, #202–#204) сцена доведена до планетарного горизонта: выделен центральный гекс в окружении кольцевых LOD-областей `1–5` (`6/12/18/24/30` ячеек, `RING_HF_RES = [256, 64, 32, 16, 8, 4]`, `ringGenMs ≈ 7 мс`, CPU `≈ 216 КиБ`, GPU `2,4 МБ`, `2 + число колец` terrain-draw) и 10-кольцевой непрерывной сферической юбки горизонта (**145 × 85 = 12 325 вершин**) с дневным куполом неба; зафиксирован физический радиус гекса (`LOCAL_PATCH_BASE_RADIUS_M = 2500 м`, `patchPhysicalHalfSpanM`) с 11-ступенчатой логарифмической шкалой обзора камеры (`1250 … 1.2 км`); введена межъячеечная синхронизация (общий `planetSeed`, знаковая батиметрия `z < 0`, отмена положительной `elevCalibration` на океанском патче), сквозные реки на любой высоте (`terraformMap = 0` + `isRiverStream`), 5 метрических высотных поясов суши, ориентация камеры по Северу (`LOCAL_REST_YAW = -π/2`), атомарный ре-бейзинг `rebaseLocalCameraState` (`d_hex = 1.15 · R_patch`, сглаживание остатка `≤ 220 мс`) и голографические квик-стрелки (`local-map-quick-nav.ts`). Визуальная приёмка G6.1 и G6.2 остаётся за владельцем. Отчёты — `docs/stages/stage-8-local-map.md` и `docs/stages/STAGE_8_PLANETARY_HORIZON.md`. |
-| Этапы 9–12 | Архитектура гибридного атласа растительности и пакет промптов тайлов **Этапа 9** (`docs/stages/stage-9-vegetation-atlas.md`, `docs/prompts/stage-9-vegetation-tiles.md`, PR #170), а также планово-типовой расчёт страницы звёздной системы **Этапа 10** (§12, PR #168) уже спроектированы и зафиксированы; кодовая реализация процедурного атласа текстур, страницы системы, масштабирования каталога до 500 планет и финальной стабилизации (Этапы 9–12) — следующие шаги. |
+| Этапы 9–12 | Архитектура гибридного атласа растительности и пакет промптов тайлов **Этапа 9** (`docs/stages/stage-9-vegetation-atlas.md`, `docs/prompts/stage-9-vegetation-tiles.md`, PR #170), планово-типовой расчёт страницы звёздной системы **Этапа 10** (§12, PR #168) и **под-уровень глубинного секториального рендера** (`docs/stages/stage-9-12-sector-deep-render-plan.md`, 24.10.2026: 13 уровней `L0…L9 + S0…S2`, буквенный адрес `KP·REQHC`, `Shift+клик` → карточка точки, немедленный вывод растра без эталона, маркер по глубине, системный кадр `S0…S2`, волны `SW-1…SW-6`) спроектированы и зафиксированы; кодовая реализация процедурного атласа текстур, страницы системы, секториального рендера, масштабирования каталога до 500 планет и финальной стабилизации (Этапы 9–12) — следующие шаги. |
 | Редактор «Лаборатория планет» | Направление будущего визуального конструктора профилей поверх боевого глобуса зафиксировано в `stages/stage_patches.md`, реализация не начата. |
 
 ### Главный архитектурный принцип
@@ -117,7 +119,7 @@
 | Запрошенный уровень | Состояние | Текущая реализация |
 |---|---|---|
 | Галактика | Готово | `site/index.html`, `site/galaxy.ts`, `site/galaxy.css`, `site/shared/{focus-fx,cursor-fx,galaxy-spiral,lag-fx}.ts` |
-| Сектор | Готово | `templates/atlas-shell.html`, тонкие входы `site/sector/sector.html` и `site/minimal/minimal.html`, модульное ядро `src/atlas/*.ts` (`app.ts`, `config.ts`, `data-loader.ts`, `tile-pyramid.ts`, `canvas-renderer.ts`, `catalog-panel.ts`, `dossier-card.ts`, `coords-readout.ts`, `atlas-variants.ts`) |
+| Сектор | Готово (растр и тайлы заменяются под-уровнем Этапов 9–12, §12) | `templates/atlas-shell.html`, тонкие входы `site/sector/sector.html` и `site/minimal/minimal.html`, модульное ядро `src/atlas/*.ts` (`app.ts`, `config.ts`, `data-loader.ts`, `tile-pyramid.ts` — удаляется в волне `SW-2`, `canvas-renderer.ts`, `catalog-panel.ts`, `dossier-card.ts`, `coords-readout.ts`, `atlas-variants.ts`) |
 | Система | Нет страницы | Есть каталог систем и связи мест с системами (`data/systems.csv`, `data/places.csv`) |
 | Планета (ядро и страница в цепочке) | Готово (Этапы 6–7) | Единое ядро `site/shared/{geodesic-grid,planet-noise,planet-geography,planet-surface,planet-globe,planet-generation-contract}.ts` + Wasm `src/planet/{assembly/kernels.ts,planet-core-host.ts,planet-core-bytes.ts}`; боевая страница `/planet-globe/` (`site/planet-globe/{index.html,planet-globe.css,planet-globe.ts,planet-globe-worker.ts}`) с переходом из `src/atlas/dossier-card.ts` и FX-стенд `/planet-test/` (`site/planet-test/planet-test.ts` + `src/planet/planet-globe-fx.ts`) |
 | Континент/область | Готово (Этап 7) | C100-идентичности (`c100-soft-v1`), гидрология/дренажные регионы/биомы (`c100-soft-v2`), инспектор канонической ячейки/региона C100/`Patch7` и ключи §8.8 на `/planet-globe/` |
@@ -1580,6 +1582,53 @@ startup time сайта/каталога не более чем на 5% (и не
 - Тесты, браузеры, мобильные устройства, доступность.
 - Документация.
 - Поэтапное включение планет.
+
+#### Под-уровень Этапов 9–12: глубинный секториальный рендер (проектная стадия, 24.10.2026)
+
+Параллельно планетарному контуру (он отложен и не затрагивается) спроектирован
+под-уровень перевода **атласа сектора** на процедурный рендер без растровой подложки:
+[`stages/stage-9-12-sector-deep-render-plan.md`](stages/stage-9-12-sector-deep-render-plan.md).
+Ключевые решения:
+
+- **13 уровней глубины** = `L0…L9` (сектор, `10 000 → 19,5` св.г. в кадре, `0,192 → 98,3` px/св.г.)
+  + `S0…S2` (системный кадр в а.е.). Единой непрерывной шкалы не существует: при
+  `1 000 px/св.г.` один пиксель равен `63 а.е.`, а орбита Земли занимает `0,03 px`,
+  поэтому вход в систему — **смена кадра** (`1 400 мс`, отношение `≈ 1,24 · 10⁴`), а не зум.
+- **Секториальная буквенная адресация** вместо механики `X`/`Y` в интерфейсе: `KP·REQHC`
+  (сектор `KP`, затем пять тиров `5 × 5` по `2 000 / 400 / 80 / 16 / 3,2` св.г., алфавит `A…Y`,
+  суффикс тела `/c`). Адрес — производная биекция координат; `x`,`y` остаются каноном
+  математики и админского режима `?coords=1`, поэтому `tools/sync.py` не меняется.
+  Уникальность проверена: `173/173` адреса при минимальной паре `50,0` св.г. и ячейке `16` св.г.
+- **`Shift+клик` переделан в «карточку точки»**: адрес, `x`, `y`, ближайшая система и расстояние
+  до неё, уровень и видимая ширина; три кнопки копирования (адрес / `x⇥y` / всё). Без растровой
+  подложки пару чисел нечем проверить, поэтому якорем становится ближайшая система. В режиме
+  `?coords=1` сохраняется прежнее «сразу в буфер `x<TAB>y`».
+- **Растр удаляется сразу, без ориентира и без стадий** (уточнение владельца 24.10):
+  `assets/src/koprulu-sector.jpg`, `assets/tiles*`, `assets/map-preview.webp`,
+  `tile-pyramid.ts`, `CONFIG.tiles`, `links.sectorMapPreview`, `build_tiles` уходят в одном PR
+  с процедурным полем. Причина в цифрах: растр, доведённый до `L9`, — `3,69 млн` тайлов
+  (`≈ 166 ГБ`), до `1 000 px/св.г.` — `381 млн` тайлов (`≈ 17 ТБ`), и на глубине он кратно
+  размыт. Ориентир — только математика: поле `10 000 × 10 000`.
+- **Положение систем не меняется** (`x`,`y` из CSV), **маркер** получает непрерывный размер
+  `2,5 … 40 px` по видимой ширине вместо мировых радиусов `markerLod`; на телефоне
+  «вся карта по ширине» и отъезд до `16 000 св.г.`.
+- **Навигация.** Клик по маркеру — ступенчатое приближение в визуальном паттерне галактики
+  (`focus-fx`: прицел → сжатие рамки → захват → вложенные кадры), но **без паузы**
+  `focusZoomDelay = 1 000 мс`: `T = clamp(760 + 80·Δ, 760, 1 500)` мс при любых глубинах.
+  **Стрелки** указывают на ближайшие объекты **относительно центра текущей позиции камеры**
+  (не «что видно в кадре»): отбор по расстоянию + угол `atan2`, до `5` отдельных стрелок,
+  остальные — в счётчике `+n` («+6 · до 2 152 св.г.»), подпись «имя · N св.г.» видна всегда
+  (`hover` — только акцент), расстояние печатается строго с единицей через `formatDistanceLy`
+  (`90,8 св.г.`, `1 303 св.г.`, `≥ 10 000 св.г.`), на телефоне допустим сдвиг стрелки ради
+  читаемости. Стрелка интерактивна: откат на **2 тира
+  адреса** (`×25` по ширине, кламп `16 000 св.г.`) → **рефокус на текущий сектор** →
+  **смещение на целевой сектор** → **конечное приближение**; те же `≤ 1 500 мс`,
+  камера на всё время анимации принадлежит `sector-flight.ts` (`И-13`, `И-14`).
+- **Системный кадр `S0…S2`** — честный каркас: звезда, лог-компрессия орбит, кламп
+  видимого размера тела и статус «тела не занесены» (в снимке `data/places.csv` тела есть
+  только у `6` систем из `173`), с переходом в существующий `/planet-globe/`.
+- Матрица волн `SW-1…SW-6` (`≈ 72–108` агено-часов), инварианты `И-7…И-11` и гейты
+  `G7.1…G7.9` зафиксированы в документе. Рантайм на этой стадии **не менялся**.
 
 ---
 
