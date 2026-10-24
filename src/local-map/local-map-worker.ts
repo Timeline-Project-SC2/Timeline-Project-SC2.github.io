@@ -37,6 +37,7 @@ import type { GeographyProfileInput } from '../../site/shared/planet-geography.t
 import {
   CENTER_HEX_APOTHEM_RATIO, SKIRT_RING_COUNT, mapNeighborCellsToSlots,
   planetCurvatureDropM, directionToLocalPoint, worldRiverSegment, worldRiverCarveFactor,
+  worldRiverDistanceM, prepareWorldRiverSegment,
 } from './local-map-geometry.ts';
 import type { WorldRiverSegment } from './local-map-geometry.ts';
 import type { Vec3 } from './local-map-contract.ts';
@@ -708,7 +709,8 @@ export async function worldRiverSegmentsForPatch(
     segments.push(worldRiverSegment(inflow.fromCell, inflow.toCell, inflow.fromCenter,
       receiver.center, toWater, toWater && inflow.streamWeight <= 0));
   }
-  return segments;
+  const valleyWidthM = RIVER_CHANNEL_HALF_WIDTH_M * 2.4;
+  return segments.map((segment) => prepareWorldRiverSegment(segment, patch.frame.radiusM, valleyWidthM));
 }
 
 /** Вырез долины из тех же мировых дуг на любой разрешённой сетке. */
@@ -716,15 +718,21 @@ export function worldRiverDepthAt(
   dir: Vec3, segments: readonly WorldRiverSegment[], _radiusM: number, planetRadiusM: number,
   /** Если дана базовая высота, у водного устья ограничиваем поверхность нулевым зеркалом. */
   baseHeightM?: number,
+  info?: { seaBlend: number },
 ): number {
   const halfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const depthM = RIVER_CHANNEL_DEPTH_M;
   let deepest = 0;
   let seaBlend = 0;
   for (const segment of segments) {
-    const valley = worldRiverCarveFactor(dir, [segment], planetRadiusM, halfWidthM * 2.4);
-    if (valley <= 0) continue;
-    const channel = worldRiverCarveFactor(dir, [segment], planetRadiusM, halfWidthM);
+    // Один геодезический поиск вместо двух (долина + стрежень): одна и та
+    // же физическая дистанция определяет обе гладкие огибающие.
+    const distanceM = worldRiverDistanceM(dir, segment, planetRadiusM, halfWidthM * 2.4);
+    if (!Number.isFinite(distanceM)) continue;
+    const valleyT = 1 - distanceM / (halfWidthM * 2.4);
+    const valley = valleyT * valleyT * (3 - 2 * valleyT);
+    const channelT = Math.max(0, 1 - distanceM / halfWidthM);
+    const channel = channelT * channelT * (3 - 2 * channelT);
     let mouthFade = 1;
     if (segment.toWater) {
       // 3D-полоса берега одна и та же в каждом Patch7. На середине ребра
@@ -746,6 +754,7 @@ export function worldRiverDepthAt(
       * (0.45 * valley + 0.55 * channel) * mouthFade;
     if (carve > deepest) deepest = carve;
   }
+  if (info) info.seaBlend = seaBlend;
   return baseHeightM !== undefined
     ? deepest + Math.max(0, baseHeightM - deepest) * seaBlend
     : deepest;
@@ -886,7 +895,9 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
     ringCells = buildNeighborRingCells(
       patch, neighborRings, radiusM, planetSeed, true,
       worldRiverSegments.length > 0
-        ? (dir, heightM) => worldRiverDepthAt(dir, worldRiverSegments, radiusM, patch.frame.radiusM, heightM)
+        ? (dir, heightM, info) => worldRiverDepthAt(
+          dir, worldRiverSegments, radiusM, patch.frame.radiusM, heightM, info,
+        )
         : undefined,
       masterSeedHex,
     );

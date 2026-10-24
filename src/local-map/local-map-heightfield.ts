@@ -21,16 +21,23 @@ import { createElevationField } from '../../site/shared/planet-elevation-field.t
 /** W28c: одно поле по сиду/радиусу, единицы переводятся в метры РОВНО один раз. */
 export const DEFAULT_ELEVATION_SEED_HEX = '0123456789abcdef';
 const elevationByWorld = new Map<string, ReturnType<typeof createElevationField>>();
+let mostRecentElevation: { seed: string; radiusKm: number; field: ReturnType<typeof createElevationField> } | null = null;
 
 export function sampleElevationForSeed(
   dir: ArrayLike<number>, stepM: number,
   masterSeedHex = DEFAULT_ELEVATION_SEED_HEX, radiusKm = 6371, seaLevel = 0,
 ): number {
-  const key = `${masterSeedHex.toLowerCase()}:${radiusKm}`;
-  let field = elevationByWorld.get(key);
-  if (!field) {
-    field = createElevationField({ masterSeedHex, radiusKm });
+  // На одной генерации 10⁴+ соседних вершин используют одно поле. Не
+  // конструируем строковый ключ/Map.get на КАЖДЫЙ сэмпл, но при смене
+  // профиля сохраняем кеш по двум параметрам W28c, не по центру патча.
+  let field: ReturnType<typeof createElevationField>;
+  if (mostRecentElevation?.seed === masterSeedHex && mostRecentElevation.radiusKm === radiusKm) {
+    field = mostRecentElevation.field;
+  } else {
+    const key = `${masterSeedHex.toLowerCase()}:${radiusKm}`;
+    field = elevationByWorld.get(key) ?? createElevationField({ masterSeedHex, radiusKm });
     elevationByWorld.set(key, field);
+    mostRecentElevation = { seed: masterSeedHex, radiusKm, field };
   }
   // Глобальная поверхность задаёт море квантилем seaLevel, не полевым нулём.
   // Общая для суши и воды вертикаль (field − seaLevel)·K: иначе вода с
@@ -335,7 +342,7 @@ function buildRingCellHeightfield(
   span: number,
   planetSeed: number,
   withDetail: boolean,
-  worldRiverDepthAt?: (dir: Vec3, baseHeightM: number) => number,
+  worldRiverDepthAt?: (dir: Vec3, baseHeightM: number, info?: { seaBlend: number }) => number,
   targetCenter?: Vec3,
   masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
   outerLattice?: RingSharedLattice,
@@ -387,13 +394,14 @@ function buildRingCellHeightfield(
   );
   // На ровном поле целая вершина LOD 1 требует ОДИН сэмпл, а не четыре
   // fineAt. Но у высокочастотного v3 локально возможна кривизна >2 м:
-      // блоки 8×8 грубых вершин с расхождением поля и 17² решётки >1,5 м
+  // Блоки 8×8 грубых вершин с расхождением поля и 17² решётки >1,5 м
   // восстанавливаем точно из четырёх узлов ЦЕЛЕВОГО 256² растра. Сначала
   // вычисляем грубые вершины всего блока, чтобы даже случайное совпадение
   // одной вершины с бикубикой не спрятало соседний резкий переход.
   const coarseFast = targetPatch ? new Float32Array(res * res) : null;
   const roughBlock = targetPatch ? new Float32Array(Math.ceil(res / 8) ** 2) : null;
   if (targetPatch && coarseFast && roughBlock) {
+    const riverInfo = { seaBlend: 0 };
     const blocks = Math.ceil(res / 8);
     for (let y = 0; y < res; y++) {
       const ly = (y - res / 2) * stepM;
@@ -407,13 +415,13 @@ function buildRingCellHeightfield(
           withDetail, sourceStepM);
         const idx = y * res + x;
         const h = field + detail;
-        const correction = worldRiverDepthAt?.(dir, h) ?? 0;
+        const correction = worldRiverDepthAt?.(dir, h, riverInfo) ?? 0;
         coarseFast[idx] = h - correction;
         const blockIndex = Math.floor(y / 8) * blocks + Math.floor(x / 8);
         // Резкий изгиб самого русла/устья не виден в ошибке базового поля.
         // В таких блоках та же билинейная выборка 256², что у центра C.
         roughBlock[blockIndex] = Math.max(roughBlock[blockIndex] as number,
-          correction > 0.5 ? 2 : Math.abs(field - elevationFromLattice(lattice, steps,
+          riverInfo.seaBlend > 0.05 ? 2 : Math.abs(field - elevationFromLattice(lattice, steps,
             x * steps / res, y * steps / res)));
       }
     }
@@ -480,7 +488,7 @@ export function buildNeighborRingCells(
   radiusPatchM: number,
   planetSeed: number,
   withDetail: boolean,
-  worldRiverDepthAt?: (dir: Vec3, baseHeightM: number) => number,
+  worldRiverDepthAt?: (dir: Vec3, baseHeightM: number, info?: { seaBlend: number }) => number,
   masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
 ): LocalMapRingCell[] {
   const normAngle = (a: number): number => (a + 2 * Math.PI) % (2 * Math.PI);

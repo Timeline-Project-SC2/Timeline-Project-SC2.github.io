@@ -98,6 +98,13 @@ export interface WorldRiverSegment {
   readonly toWater: boolean;
   /** Устье без streamWeight: глубина ограничена 10 м, не каньоном 0,0045·R. */
   readonly mouth: boolean;
+  /** Подготовленный угловой отсев для повторных физических запросов той же долины. */
+  readonly searchLimit?: {
+    readonly maxDistanceM: number;
+    readonly planetRadiusM: number;
+    readonly midCos: number;
+    readonly endCos: number;
+  };
 }
 
 export function worldRiverSegment(
@@ -121,10 +128,53 @@ export function worldRiverSegment(
   };
 }
 
-/**
- * Расстояние от мировой точки до геодезической дуги стока, включая концы.
- * Одна и та же физическая точка даёт один factor из любого касательного кадра.
- */
+/** Подготовка углового отсева на всю жизнь набора дуг; не меняет геометрию. */
+export function prepareWorldRiverSegment(
+  segment: WorldRiverSegment, planetRadiusM: number, maxDistanceM: number,
+): WorldRiverSegment {
+  const maxAngle = maxDistanceM / planetRadiusM;
+  const prepared = { ...segment };
+  Object.defineProperty(prepared, 'searchLimit', {
+    value: {
+      maxDistanceM, planetRadiusM,
+      midCos: Math.cos(segment.halfAngle + maxAngle),
+      endCos: Math.cos(maxAngle),
+    },
+    enumerable: false,
+  });
+  return prepared;
+}
+
+/** Метров до одного геодезического ребра (Infinity за физическим пределом). */
+export function worldRiverDistanceM(
+  dir: Vec3, segment: WorldRiverSegment, planetRadiusM: number, maxDistanceM: number,
+): number {
+  const { from, to, middle, normal } = segment;
+  const cached = segment.searchLimit;
+  const matches = cached?.maxDistanceM === maxDistanceM && cached.planetRadiusM === planetRadiusM;
+  const maxAngle = matches ? 0 : maxDistanceM / planetRadiusM;
+  const midDot = dir[0] * middle[0] + dir[1] * middle[1] + dir[2] * middle[2];
+  if (midDot < (matches ? cached!.midCos : Math.cos(segment.halfAngle + maxAngle))) return Infinity;
+  const cross = dir[0] * normal[0] + dir[1] * normal[1] + dir[2] * normal[2];
+  const fromSide = (from[1] * dir[2] - from[2] * dir[1]) * normal[0]
+    + (from[2] * dir[0] - from[0] * dir[2]) * normal[1]
+    + (from[0] * dir[1] - from[1] * dir[0]) * normal[2];
+  const toSide = (dir[1] * to[2] - dir[2] * to[1]) * normal[0]
+    + (dir[2] * to[0] - dir[0] * to[2]) * normal[1]
+    + (dir[0] * to[1] - dir[1] * to[0]) * normal[2];
+  let distanceM: number;
+  if (fromSide < 0 || toSide < 0) {
+    const end = fromSide < 0 ? from : to;
+    const endDot = dir[0] * end[0] + dir[1] * end[1] + dir[2] * end[2];
+    if (endDot < (matches ? cached!.endCos : Math.cos(maxAngle))) return Infinity;
+    distanceM = Math.acos(Math.max(-1, Math.min(1, endDot))) * planetRadiusM;
+  } else {
+    distanceM = Math.asin(Math.min(1, Math.abs(cross))) * planetRadiusM;
+  }
+  return distanceM < maxDistanceM ? distanceM : Infinity;
+}
+
+/** Одинаковый физический factor в любом касательном кадре. */
 export function worldRiverCarveFactor(
   dir: Vec3,
   segments: readonly WorldRiverSegment[],
@@ -133,28 +183,8 @@ export function worldRiverCarveFactor(
 ): number {
   if (!(halfWidthM > 0)) return 0;
   let best = halfWidthM;
-  const maxAngle = halfWidthM / planetRadiusM;
-  const cosMax = Math.cos(maxAngle);
   for (const segment of segments) {
-    const { from, to, middle, normal } = segment;
-    const midDot = dir[0] * middle[0] + dir[1] * middle[1] + dir[2] * middle[2];
-    if (midDot < Math.cos(segment.halfAngle + maxAngle)) continue;
-    const cross = dir[0] * normal[0] + dir[1] * normal[1] + dir[2] * normal[2];
-    const fromSide = (from[1] * dir[2] - from[2] * dir[1]) * normal[0]
-      + (from[2] * dir[0] - from[0] * dir[2]) * normal[1]
-      + (from[0] * dir[1] - from[1] * dir[0]) * normal[2];
-    const toSide = (dir[1] * to[2] - dir[2] * to[1]) * normal[0]
-      + (dir[2] * to[0] - dir[0] * to[2]) * normal[1]
-      + (dir[0] * to[1] - dir[1] * to[0]) * normal[2];
-    let distanceM: number;
-    if (fromSide < 0 || toSide < 0) {
-      const end = fromSide < 0 ? from : to;
-      const endDot = dir[0] * end[0] + dir[1] * end[1] + dir[2] * end[2];
-      if (endDot < cosMax) continue;
-      distanceM = Math.acos(Math.max(-1, Math.min(1, endDot))) * planetRadiusM;
-    } else {
-      distanceM = Math.asin(Math.min(1, Math.abs(cross))) * planetRadiusM;
-    }
+    const distanceM = worldRiverDistanceM(dir, segment, planetRadiusM, best);
     if (distanceM < best) best = distanceM;
   }
   const t = 1 - best / halfWidthM;
