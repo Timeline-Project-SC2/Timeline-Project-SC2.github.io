@@ -51,7 +51,7 @@ import {
   sampleLocalTerrainHeightM, smooth01, clampScalar, buildBaseHeightfield,
 } from './local-map-heightfield.ts';
 import type { LocalMapRingCell } from './local-map-heightfield.ts';
-import { RIVER_HALF_WIDTH_RATIO, RIVER_CHANNEL_DEPTH_M, applyRiverCarve } from './local-map-rivers.ts';
+import { RIVER_CHANNEL_DEPTH_M, RIVER_CHANNEL_HALF_WIDTH_M, applyRiverCarve } from './local-map-rivers.ts';
 
 export {
   HEIGHTFIELD_RES, TERRAFORM_RES, METERS_PER_ELEVATION_UNIT, LAND_FBM_AMPLITUDE_M,
@@ -525,7 +525,11 @@ function localMapFingerprint(request: LocalMapWorkerRequest): string {
   // Stage-8.7: neighborRings входит в отпечаток — ringCells=0 и ringCells=5
   // не должны berkongsiовать запись кэша.
   const rings = String(clampScalar(Math.floor(request.neighborRings ?? RING_LEVELS), 0, RING_LEVELS));
-  return `${seedHex}|${rule}|${rings}`;
+  // Два v2-патча с одним centerCell, но разными притоками НЕ взаимозаменяемы:
+  // в частности boundaryInflows=[] должен дать измеримое расхождение LOD.
+  const boundary = request.patch.boundaryInflows ?? [];
+  const inflows = boundary.map((edge) => `${edge.fromCell}>${edge.toCell}`).join(',');
+  return `${seedHex}|${rule}|${rings}|${request.patch.version}|${inflows}`;
 }
 
 function cloneInstanceBuffers(instanceBuffers: InstanceBuffers): InstanceBuffers {
@@ -709,11 +713,14 @@ export async function worldRiverSegmentsForPatch(
 
 /** Вырез долины из тех же мировых дуг на любой разрешённой сетке. */
 export function worldRiverDepthAt(
-  dir: Vec3, segments: readonly WorldRiverSegment[], radiusM: number, planetRadiusM: number,
+  dir: Vec3, segments: readonly WorldRiverSegment[], _radiusM: number, planetRadiusM: number,
+  /** Если дана базовая высота, у водного устья ограничиваем поверхность нулевым зеркалом. */
+  baseHeightM?: number,
 ): number {
-  const halfWidthM = Math.max((4 * radiusM) / HEIGHTFIELD_RES, radiusM * RIVER_HALF_WIDTH_RATIO);
+  const halfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const depthM = RIVER_CHANNEL_DEPTH_M;
   let deepest = 0;
+  let seaBlend = 0;
   for (const segment of segments) {
     const valley = worldRiverCarveFactor(dir, [segment], planetRadiusM, halfWidthM * 2.4);
     if (valley <= 0) continue;
@@ -728,12 +735,20 @@ export function worldRiverDepthAt(
         + dir[2] * (segment.from[2] - segment.to[2])
       ) / (2 * Math.sin(segment.halfAngle));
       mouthFade = smooth01(signedM / Math.min(20_000, segment.halfAngle * planetRadiusM * 0.8));
+      // На водной стороне устья и в его плавном 20-км переходе зеркало
+      // подходит к z=0 БЕЗ скачка на середине дуги. Одинаковая дуга в
+      // обоих Patch7 даёт ту же высоту на кольце и у соседнего центра.
+      if (baseHeightM !== undefined && baseHeightM > 0) {
+        seaBlend = Math.max(seaBlend, (1 - mouthFade) * valley);
+      }
     }
     const carve = (segment.mouth ? Math.min(10, depthM) : depthM)
       * (0.45 * valley + 0.55 * channel) * mouthFade;
     if (carve > deepest) deepest = carve;
   }
-  return deepest;
+  return baseHeightM !== undefined
+    ? deepest + Math.max(0, baseHeightM - deepest) * seaBlend
+    : deepest;
 }
 
 /** Сохраняет прежние water/terraform/spawn семантики, заменяя только высоту вреза. */
@@ -748,7 +763,7 @@ function applyWorldRiverHeights(
   if (segments.length === 0) return;
   const res = HEIGHTFIELD_RES;
   const stepM = 2 * radiusM / res;
-  const halfWidthM = Math.max(stepM * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
+  const halfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   // Обычный путь (суша/океан вне долины) уже записан applyRiverCarve.
   // Проверяем только узкую мировую bbox дуг, построенную из ИСТИННЫХ 3D
   // концов flowReceiver: не считаем exp-карту для всех 65 536 вершин реки.
@@ -773,8 +788,9 @@ function applyWorldRiverHeights(
       }
       const dir = localPointToDirection(patch, wx, wy);
       if (base.landMask[idx] === 0 && nearestPatchCell(patch, dir).lakeWeight > 0) continue;
-      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM);
-      heightfield[idx] = (base.heightM[idx] as number) - carve;
+      const rawHeight = base.heightM[idx] as number;
+      const carve = worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM, rawHeight);
+      heightfield[idx] = rawHeight - carve;
       if (base.landMask[idx] === 1
         && worldRiverCarveFactor(dir, segments, patch.frame.radiusM, halfWidthM) >= 0.45) {
         base.terraformMap[idx] = 1;
@@ -870,7 +886,7 @@ export async function generateLocalMap(request: LocalMapWorkerRequest): Promise<
     ringCells = buildNeighborRingCells(
       patch, neighborRings, radiusM, planetSeed, true,
       worldRiverSegments.length > 0
-        ? (dir) => worldRiverDepthAt(dir, worldRiverSegments, radiusM, patch.frame.radiusM)
+        ? (dir, heightM) => worldRiverDepthAt(dir, worldRiverSegments, radiusM, patch.frame.radiusM, heightM)
         : undefined,
       masterSeedHex,
     );
@@ -1172,8 +1188,7 @@ export async function generateHorizonSkirt(
   const positions = new Float32Array(vertexCount * 3);
   const waterMask = new Uint8Array(vertexCount);
   const riverMask = new Uint8Array(vertexCount);
-  const riverHalfWidthM = Math.max((4 * radiusPatchM) / HEIGHTFIELD_RES,
-    radiusPatchM * RIVER_HALF_WIDTH_RATIO);
+  const riverHalfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const worldRiverSegments = await worldRiverSegmentsForPatch(patch, request.profile);
 
   // Радиусы рядов: 36 плотных шагов воротника от R_inner до 1.15 · R_patch,
@@ -1205,8 +1220,9 @@ export async function generateHorizonSkirt(
     let h = sampleLocalTerrainHeightM(
       dir, fieldStepM, patch.frame.radiusM, planetSeed, !!request.profile,
       typeof request.profile?.masterSeedHex === 'string' ? request.profile.masterSeedHex : undefined,
+      patch.seaLevel,
     );
-    h -= worldRiverDepthAt(dir, worldRiverSegments, radiusPatchM, patch.frame.radiusM);
+    h -= worldRiverDepthAt(dir, worldRiverSegments, radiusPatchM, patch.frame.radiusM, h);
     return h;
   };
 

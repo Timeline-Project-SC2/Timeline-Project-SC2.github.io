@@ -24,7 +24,7 @@ const elevationByWorld = new Map<string, ReturnType<typeof createElevationField>
 
 export function sampleElevationForSeed(
   dir: ArrayLike<number>, stepM: number,
-  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX, radiusKm = 6371,
+  masterSeedHex = DEFAULT_ELEVATION_SEED_HEX, radiusKm = 6371, seaLevel = 0,
 ): number {
   const key = `${masterSeedHex.toLowerCase()}:${radiusKm}`;
   let field = elevationByWorld.get(key);
@@ -32,7 +32,10 @@ export function sampleElevationForSeed(
     field = createElevationField({ masterSeedHex, radiusKm });
     elevationByWorld.set(key, field);
   }
-  return field.sampleElevation(dir, stepM) * METERS_PER_ELEVATION_UNIT;
+  // Глобальная поверхность задаёт море квантилем seaLevel, не полевым нулём.
+  // Общая для суши и воды вертикаль (field − seaLevel)·K: иначе вода с
+  // field>0 под океанским квантилем рисуется ВЫШЕ нулевого зеркала моря.
+  return (field.sampleElevation(dir, stepM) - seaLevel) * METERS_PER_ELEVATION_UNIT;
 }
 
 // ---- Константы рельефа и терраформинга ----
@@ -332,7 +335,7 @@ function buildRingCellHeightfield(
   span: number,
   planetSeed: number,
   withDetail: boolean,
-  worldRiverDepthAt?: (dir: Vec3) => number,
+  worldRiverDepthAt?: (dir: Vec3, baseHeightM: number) => number,
   targetCenter?: Vec3,
   masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
   outerLattice?: RingSharedLattice,
@@ -365,8 +368,9 @@ function buildRingCellHeightfield(
     if (cached !== undefined) return cached;
     const dir = localPointToDirection(targetPatch as LocalMapPatch,
       (ix - HEIGHTFIELD_RES / 2) * sourceStepM, (iy - HEIGHTFIELD_RES / 2) * sourceStepM);
-    const h = sampleLocalTerrainHeightM(dir, sourceStepM, patch.frame.radiusM, planetSeed,
-      withDetail, masterSeedHex) - (worldRiverDepthAt?.(dir) ?? 0);
+    let h = sampleLocalTerrainHeightM(dir, sourceStepM, patch.frame.radiusM, planetSeed,
+      withDetail, masterSeedHex, patch.seaLevel);
+    h -= worldRiverDepthAt?.(dir, h) ?? 0;
     const result = Math.fround(h);
     fineValues.set(idx, result);
     return result;
@@ -398,14 +402,18 @@ function buildRingCellHeightfield(
         if (clusterHexMetric(lx, ly) > apothemM + stepM) continue;
         const dir = localPointToDirection(targetPatch,
           lx * eCe + ly * nCe, lx * eCn + ly * nCn);
-        const field = sampleElevationForSeed(dir, sourceStepM, masterSeedHex, patch.frame.radiusM / 1000);
+        const field = sampleElevationForSeed(dir, sourceStepM, masterSeedHex, patch.frame.radiusM / 1000, patch.seaLevel);
         const detail = sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed,
           withDetail, sourceStepM);
         const idx = y * res + x;
-        coarseFast[idx] = field + detail - (worldRiverDepthAt?.(dir) ?? 0);
+        const h = field + detail;
+        const correction = worldRiverDepthAt?.(dir, h) ?? 0;
+        coarseFast[idx] = h - correction;
         const blockIndex = Math.floor(y / 8) * blocks + Math.floor(x / 8);
+        // Резкий изгиб самого русла/устья не виден в ошибке базового поля.
+        // В таких блоках та же билинейная выборка 256², что у центра C.
         roughBlock[blockIndex] = Math.max(roughBlock[blockIndex] as number,
-          Math.abs(field - elevationFromLattice(lattice, steps,
+          correction > 0.5 ? 2 : Math.abs(field - elevationFromLattice(lattice, steps,
             x * steps / res, y * steps / res)));
       }
     }
@@ -447,7 +455,8 @@ function buildRingCellHeightfield(
         if (visible) {
           const dir = localPointToDirection(patch, wx, wy);
           h += sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed,
-            withDetail, sourceStepM) - (worldRiverDepthAt?.(dir) ?? 0);
+            withDetail, sourceStepM);
+          h -= worldRiverDepthAt?.(dir, h) ?? 0;
         }
       }
       const idx = y * res + x;
@@ -471,7 +480,7 @@ export function buildNeighborRingCells(
   radiusPatchM: number,
   planetSeed: number,
   withDetail: boolean,
-  worldRiverDepthAt?: (dir: Vec3) => number,
+  worldRiverDepthAt?: (dir: Vec3, baseHeightM: number) => number,
   masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
 ): LocalMapRingCell[] {
   const normAngle = (a: number): number => (a + 2 * Math.PI) % (2 * Math.PI);
@@ -684,7 +693,7 @@ export function sampleElevationLattice(
     const wy = offsetY - radiusM + y * intervalM;
     for (let x = 0; x <= steps; x++) {
       const dir = localPointToDirection(patch, offsetX - radiusM + x * intervalM, wy);
-      grid[y * nodes + x] = sampleElevationForSeed(dir, sourceStepM, masterSeedHex, patch.frame.radiusM / 1000);
+      grid[y * nodes + x] = sampleElevationForSeed(dir, sourceStepM, masterSeedHex, patch.frame.radiusM / 1000, patch.seaLevel);
     }
   }
   return grid;
@@ -749,13 +758,16 @@ export function sampleLocalTerrainDetailM(
   // период <8 шагов мягко приглушается. Третья (1,3 км) ещё мельче.
   const octave2 = sourceStepM > 0 ? smooth01((2600 / sourceStepM - 8) / 6) : 1;
   const octave3 = sourceStepM > 0 ? smooth01((1300 / sourceStepM - 3.2) / 6) : 1;
-  const profile = sourceStepM > 0 ? smooth01((5200 / 1.8 / sourceStepM - 6.5) / 5) : 1;
+  // Частота профильной детали увеличена без изменения амплитуды 140 м:
+  // 5-км окно различает гребни ~1,6 км, а крупный LOD с шагом 407 м
+  // отсекает их до появления растрового шва (период < 6,5 текселя).
+  const profile = sourceStepM > 0 ? smooth01((5200 / 3.2 / sourceStepM - 6.5) / 5) : 1;
   const n0 = valueNoise2D(ux, uy, seed) * 2 - 1;
   const n1 = octave2 > 0 ? valueNoise2D(ux * 2, uy * 2, seed + 7919) * 2 - 1 : 0;
   const n2 = octave3 > 0 ? valueNoise2D(ux * 4, uy * 4, seed + 2 * 7919) * 2 - 1 : 0;
   const signedMacro = (n0 + n1 * 0.5 * octave2 + n2 * 0.25 * octave3) / 1.75;
   const signedDetail = withDetail && profile > 0
-    ? valueNoise2D(ux * 1.8 + 13.7, uy * 1.8 - 7.9, seed ^ 0x2F5A11) * 2 - 1
+    ? valueNoise2D(ux * 3.2 + 13.7, uy * 3.2 - 7.9, seed ^ 0x2F5A11) * 2 - 1
     : 0;
   return signedMacro * LAND_FBM_AMPLITUDE_M
     + signedDetail * (withDetail ? PROFILE_DETAIL_AMPLITUDE_M * profile : 0);
@@ -769,8 +781,9 @@ export function sampleLocalTerrainHeightM(
   seed: number,
   withDetail: boolean,
   masterSeedHex = DEFAULT_ELEVATION_SEED_HEX,
+  seaLevel = 0,
 ): number {
-  return sampleElevationForSeed(dir, stepM, masterSeedHex, planetRadiusM / 1000)
+  return sampleElevationForSeed(dir, stepM, masterSeedHex, planetRadiusM / 1000, seaLevel)
     + sampleLocalTerrainDetailM(dir, planetRadiusM, seed, withDetail, stepM);
 }
 
@@ -831,7 +844,7 @@ export function buildBaseHeightfield(
         const visible = withDetail && !fineWindow
           && clusterHexMetric(wx, wy) <= visibleApothemM * 1.15 + 2 * stepM;
         const field = visible
-          ? sampleElevationForSeed(dir, stepM, masterSeedHex, patch.frame.radiusM / 1000)
+          ? sampleElevationForSeed(dir, stepM, masterSeedHex, patch.frame.radiusM / 1000, patch.seaLevel)
           : elevationFromLattice(fieldLattice, steps, x * gridRatio, y * gridRatio);
         heightM[idx] = field + sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, withDetail, stepM);
       }

@@ -8,7 +8,9 @@ import { isWaterCell } from './local-map-contract.ts';
 import type { LocalMapPatch } from './local-map-contract.ts';
 
 // ---- Русла рек ----
-/** Полуширина русла реки в долях радиуса участка. */
+/** Физическая полуширина русла, м: одна и та же при любом radiusPatchM. */
+export const RIVER_CHANNEL_HALF_WIDTH_M = 1600;
+/** Исторический экспорт для внешних диагностик, больше НЕ множитель ширины. */
 export const RIVER_HALF_WIDTH_RATIO = 0.03;
 
 /** Исторический коэффициент оставлен для совместимости внешних импортов. */
@@ -205,7 +207,7 @@ export function applyRiverCarve(
 ): Float32Array {
   const hfRes = HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / hfRes;
-  const riverHalfWidthM = Math.max(cellSize * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
+  const riverHalfWidthM = RIVER_CHANNEL_HALF_WIDTH_M;
   const mouthWithoutStream = !patch.river.flowsThroughCenter
     && patch.river.inlets.length === 0
     && outletIsWater(patch);

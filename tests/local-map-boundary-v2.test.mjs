@@ -9,6 +9,7 @@ const Surface = require('../site/shared/planet-surface.ts').default;
 const Contract = require('../src/local-map/local-map-contract.ts');
 const Worker = require('../src/local-map/local-map-worker.ts');
 const Heightfield = require('../src/local-map/local-map-heightfield.ts');
+const Rivers = require('../src/local-map/local-map-rivers.ts');
 const Stand = await import('../tools/stand_local_map.mjs');
 
 const grid = Grid.build(128);
@@ -55,6 +56,25 @@ test('Patch7 v2: граничные притоки из surface, проверк�
   assert.equal(Contract.verifyPatchInvariants({ ...valid, boundaryInflows: [
     { ...valid.boundaryInflows[0], fromCell: valid.centerCell },
   ] }).checks['boundary-inflows-v2'], false, 'отрицательный контроль: дуга изнутри патча отвергнута');
+});
+
+test('речные физические ширина/глубина не зависят от радиуса патча', async () => {
+  const patch = patchFor(14074);
+  const segments = await Worker.worldRiverSegmentsForPatch(patch, world.profile);
+  const main = segments.find((seg) => seg.fromCell === patch.centerCell);
+  assert.ok(main);
+  const angle = 1100 / patch.frame.radiusM;
+  const offsetDir = patch.frame.origin.map((value, i) =>
+    Math.cos(angle) * value + Math.sin(angle) * main.normal[i]);
+  for (const dir of [patch.frame.origin, offsetDir]) {
+    const r1 = Worker.worldRiverDepthAt(dir, segments, radiusM, patch.frame.radiusM);
+    const r2 = Worker.worldRiverDepthAt(dir, segments, 2 * radiusM, patch.frame.radiusM);
+    assert.ok(r1 > 0.5, `створ в зоне вреза: ${r1} м`);
+    assert.ok(Math.abs(r1 - r2) <= 0.1, `при 2× radiusPatchM Δглубины=${r1 - r2} м ≤ 0,1`);
+  }
+  assert.ok(Worker.worldRiverDepthAt(patch.frame.origin, segments, radiusM, patch.frame.radiusM) >= 3);
+  assert.ok(Rivers.RIVER_CHANNEL_HALF_WIDTH_M > 0);
+  assert.equal(Rivers.RIVER_CHANNEL_DEPTH_M, 10);
 });
 
 test('m.14: 20 наземных центров × 6 граней × ≥ 20 общих узлов, max ≤ 2 м', async () => {

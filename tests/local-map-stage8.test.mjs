@@ -214,10 +214,10 @@ test('И-3.2: решётка Float64, деталь и врез, знак вод�
     const seededSurface = PlanetSurface.generateSurface(grid, profile);
     const positive = (cell) => H.sampleElevationForSeed([
       grid.centers[cell * 3], grid.centers[cell * 3 + 1], grid.centers[cell * 3 + 2],
-    ], sourceStepM, seed) > 100;
+    ], sourceStepM, seed, profile.radiusKm, seededSurface.seaLevel) > 100;
     const negative = (cell) => H.sampleElevationForSeed([
       grid.centers[cell * 3], grid.centers[cell * 3 + 1], grid.centers[cell * 3 + 2],
-    ], sourceStepM, seed) < -100;
+    ], sourceStepM, seed, profile.radiusKm, seededSurface.seaLevel) < -100;
     const landId = Array.from({ length: grid.cellCount }, (_, i) => i).find((i) =>
       isHex(i) && seededSurface.elevation[i] > seededSurface.seaLevel
       && seededSurface.lakeWeight[i] === 0 && seededSurface.streamWeight[i] === 0 && positive(i));
@@ -242,7 +242,7 @@ test('И-3.2: решётка Float64, деталь и врез, знак вод�
     let shiftDetected = false;
     for (const [x, y] of [[3, 4], [19, 26], [32, 32], [49, 50], [62, 57]]) {
       const dir = direction(land, x, y, intervalM);
-      const sampleElevation = H.sampleElevationForSeed(dir, sourceStepM, seed);
+      const sampleElevation = H.sampleElevationForSeed(dir, sourceStepM, seed, profile.radiusKm, land.seaLevel);
       const idx = y * (steps + 1) + x;
       assert.ok(Math.abs(lattice[idx] - sampleElevation) <= 1e-9,
         `${seed}: решётка[${idx}] = sampleElevation(dir, sourceStepM) без сдвига/округления`);
@@ -268,7 +268,7 @@ test('И-3.2: решётка Float64, деталь и врез, знак вод�
     assert.ok(Math.abs(perturbed[CENTER] - mirror) > 1e-3,
       'негативный контроль: возмущение озёрной вершины на 0,01 м замечено');
 
-    const riverBase = H.sampleElevationForSeed(river.frame.origin, sourceStepM, seed)
+    const riverBase = H.sampleElevationForSeed(river.frame.origin, sourceStepM, seed, profile.radiusKm, river.seaLevel)
       + H.sampleLocalTerrainDetailM(river.frame.origin, river.frame.radiusM,
         planetSeed, true, sourceStepM);
     assert.ok(riverMap.heightfield[CENTER] <= riverBase - 1,
@@ -277,7 +277,7 @@ test('И-3.2: решётка Float64, деталь и врез, знак вод�
     for (let y = 96; y <= 160; y += 8) {
       for (let x = 96; x <= 160; x += 8) {
         const dir = direction(land, x, y, sourceStepM);
-        const baseline = H.sampleElevationForSeed(dir, sourceStepM, seed)
+        const baseline = H.sampleElevationForSeed(dir, sourceStepM, seed, profile.radiusKm, land.seaLevel)
           + H.sampleLocalTerrainDetailM(dir, land.frame.radiusM, planetSeed, true, sourceStepM);
         const hf = landMap.heightfield[y * HF_RES + x];
         if (hf >= baseline - 0.01) {
@@ -286,7 +286,7 @@ test('И-3.2: решётка Float64, деталь и врез, знак вод�
         } else {
           assert.ok(hf <= baseline, 'с врезом итог не выше field + detail');
         }
-        if (Math.abs(hf - H.sampleElevationForSeed(dir, 5_000_000, seed)
+        if (Math.abs(hf - H.sampleElevationForSeed(dir, 5_000_000, seed, profile.radiusKm, land.seaLevel)
           - H.sampleLocalTerrainDetailM(dir, land.frame.radiusM, planetSeed, true, sourceStepM)) > 1) {
           wrongStepDetected = true;
         }

@@ -499,18 +499,20 @@ const RIVER_CARVE_SOURCE = Rivers ? 'local-map-rivers.ts' : 'копия прив
 
 /**
  * Поле вреза патча теми же segments/halfWidth, что считает воркер при
- * генерации heightfield: halfWidthM = max(2·cellSize, radiusM ·
- * RIVER_HALF_WIDTH_RATIO) и segments = riverSegments(patch, radiusM,
- * halfWidthM). Экспортируемая константа полуширины берётся из модуля русел,
- * если он есть, иначе из воркера (значение одно и то же — 0,03).
+ * генерации heightfield: физическая полуширина RIVER_CHANNEL_HALF_WIDTH_M
+ * не зависит от radiusPatchM. При старой версии модуля остаётся fallback
+ * max(2·cellSize, radiusM · RIVER_HALF_WIDTH_RATIO).
  */
 function buildRiverCarveField(patch, radiusM) {
   const res = Worker.HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / res;
-  const halfWidthRatio = (Rivers && Number.isFinite(Rivers.RIVER_HALF_WIDTH_RATIO))
+  const legacyRatio = (Rivers && Number.isFinite(Rivers.RIVER_HALF_WIDTH_RATIO))
     ? Rivers.RIVER_HALF_WIDTH_RATIO
     : Worker.RIVER_HALF_WIDTH_RATIO;
-  const halfWidthM = Math.max(2 * cellSize, radiusM * halfWidthRatio);
+  const halfWidthM = Number.isFinite(Rivers?.RIVER_CHANNEL_HALF_WIDTH_M)
+    ? Rivers.RIVER_CHANNEL_HALF_WIDTH_M
+    : Math.max(2 * cellSize, radiusM * legacyRatio);
+  const halfWidthRatio = halfWidthM / radiusM; // только диагностическое отношение, не правило ширины
   const segments = riverSegmentsImpl(patch, radiusM, halfWidthM);
   return {
     segments,
@@ -1654,7 +1656,7 @@ function rasterComponents(entry, coords, radiusM, planetSeed, masterSeedHex) {
       const nearest = Contract.nearestPatchCell(patch, dir);
       const steps = Heightfield.ELEVATION_LATTICE_STEPS;
       const field = Heightfield.elevationFromLattice(fieldLattice, steps, ix * steps / res, iy * steps / res);
-      const directField = Heightfield.sampleElevationForSeed(dir, stepM, masterSeedHex);
+      const directField = Heightfield.sampleElevationForSeed(dir, stepM, masterSeedHex, patch.frame.radiusM / 1000, patch.seaLevel);
       const detail = Heightfield.sampleLocalTerrainDetailM(dir, patch.frame.radiusM, planetSeed, true, stepM);
       const lake = nearest.lakeWeight > 0
         ? (Contract.waterLevelOf(nearest, patch.seaLevel) - patch.seaLevel) * Worker.METERS_PER_ELEVATION_UNIT
@@ -1734,8 +1736,10 @@ export function diagnoseWorstHexSeam(cellCache, world, rows, radiusM, focusCell 
       directFieldRaster: delta('directField'),
       directFieldAtDir: Heightfield.sampleElevationForSeed(
         Contract.localPointToDirection(entryA.patch, a.u, a.v), rawStep, world.profile.masterSeedHex,
+        entryA.patch.frame.radiusM / 1000, entryA.patch.seaLevel,
       ) - Heightfield.sampleElevationForSeed(
         Contract.localPointToDirection(entryB.patch, b.u, b.v), rawStep, world.profile.masterSeedHex,
+        entryB.patch.frame.radiusM / 1000, entryB.patch.seaLevel,
       ),
     },
     perSideM: {
@@ -2632,7 +2636,8 @@ export async function measureLandSample(
     const fine = rasterComponents(entry, { u: point.cx, v: point.cy }, radiusM,
       planetSeed, world.profile.masterSeedHex);
     const dir = Contract.localPointToDirection(entry.patch, point.cx, point.cy);
-    const directField = Heightfield.sampleElevationForSeed(dir, rawStepM, world.profile.masterSeedHex);
+    const directField = Heightfield.sampleElevationForSeed(dir, rawStepM, world.profile.masterSeedHex,
+      entry.patch.frame.radiusM / 1000, entry.patch.seaLevel);
     const directDetail = Heightfield.sampleLocalTerrainDetailM(
       dir, entry.patch.frame.radiusM, planetSeed, true, rawStepM,
     );
