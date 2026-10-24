@@ -6,8 +6,12 @@ import { readFileSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const GeodesicGrid = require('../site/shared/geodesic-grid.ts').default;
 const PlanetSurface = require('../site/shared/planet-surface.ts').default;
-const PlanetGlobe = require('../site/shared/planet-globe.ts').default;
+const GlobeShared = require('../site/shared/planet-globe.ts');
+const PlanetGlobe = GlobeShared.default;
 const { buildGlobeGeometry } = require('../site/shared/planet-globe-pack.ts');
+const LocalMapContract = require('../src/local-map/local-map-contract.ts');
+const LocalMapHeightfield = require('../src/local-map/local-map-heightfield.ts');
+const LocalMapWorker = require('../src/local-map/local-map-worker.ts');
 
 const V = 16;
 const grid = GeodesicGrid.build(V);
@@ -471,4 +475,229 @@ test('A-16: кнопка и обработчик живут только при 
     'utf8',
   );
   assert.ok(!/^import /m.test(moduleSrc), 'модуль не тащит зависимостей');
+});
+
+/* ---------------------------------------------------------------
+   W24: масштаб клетки и пропорция вертикали
+   ------------------------------------------------------------
+   Одна клетка на планетарном и стратегическом уровне и одна
+   пропорция вертикали у обеих ветвей рельефа. Числа живут в
+   общей таблице `GLOBE_CELL_SCALE` / `GLOBE_RELIEF` модуля
+   `site/shared/planet-globe.ts`; здесь проверяется, что оба
+   масштаба сходятся с реальной геометрией и друг с другом.
+   ------------------------------------------------------------ */
+
+/** Те же нормы v=16, что у `surface` выше: нужны генератору локальной карты. */
+const LOCAL_MAP_PROFILE = {
+  masterSeedHex: '0123456789abcdef',
+  radiusKm: 6371,
+  surfaceClass: 'terrestrial',
+  geographyVersion: 'c100-soft-v2',
+  continentMeanCells: 7,
+  oceanBasinMeanCells: 94,
+  drainageMeanCells: 2,
+  coastSoftWidthCells: 0.375,
+  continentSoftWidthCells: 0.5,
+  biomeSoftWidthCells: 0.25,
+};
+
+/** Сухая гексагональная клетка — центр участка для локальной карты. */
+function pickDryHexCell() {
+  for (let c = 0; c < grid.cellCount; c++) {
+    if (grid.neighborCount[c] !== 6) continue;
+    if (surface.elevation[c] < surface.seaLevel) continue;
+    if (surface.streamWeight[c] > 0 || surface.lakeWeight[c] !== 0) continue;
+    return c;
+  }
+  return -1;
+}
+
+test('W24: шаг центров соседних клеток на глобусе и в локальной карте совпадает в пределах 1 %', async () => {
+  const table = GlobeShared.GLOBE_CELL_SCALE;
+
+  // 1. Глобус: касательное расстояние между центрами соседних клеток v=128
+  //    при R = 6 371 км, среднее по всем парам соседей.
+  const earthGrid = GeodesicGrid.build(table.gridV);
+  assert.equal(earthGrid.cellCount, table.cellCount, 'v=128 — каноническая сетка таблицы');
+  const radiusM = table.planetRadiusKm * 1000;
+  const centers = earthGrid.centers;
+  const neighbors = earthGrid.neighbors;
+  let spacingSum = 0;
+  let pairCount = 0;
+  let spacingMin = Infinity;
+  let spacingMax = 0;
+  for (let c = 0; c < earthGrid.cellCount; c++) {
+    for (let k = 0; k < 6; k++) {
+      const d = neighbors[c * 6 + k];
+      if (d < 0 || d <= c) continue;
+      const dot = (centers[c * 3] * centers[d * 3])
+        + (centers[c * 3 + 1] * centers[d * 3 + 1])
+        + (centers[c * 3 + 2] * centers[d * 3 + 2]);
+      const angle = Math.acos(Math.min(1, Math.max(-1, dot)));
+      const tangentM = angle * radiusM;
+      spacingSum += tangentM;
+      pairCount++;
+      if (tangentM < spacingMin) spacingMin = tangentM;
+      if (tangentM > spacingMax) spacingMax = tangentM;
+    }
+  }
+  assert.ok(pairCount > 400000, `пар соседей достаточно для среднего (${pairCount})`);
+  const globeSpacingM = spacingSum / pairCount;
+  // Голдбергова сетка нерегулярна: у отдельной пары шаг гуляет в пределах
+  // ±10 %, у среднего по сетке — нет. Именно среднее задаёт масштаб карты.
+  assert.ok(
+    Math.abs(globeSpacingM - table.cellCenterSpacingM) / table.cellCenterSpacingM < 0.01,
+    `средний шаг глобуса ${globeSpacingM.toFixed(1)} м против табличных `
+      + `${table.cellCenterSpacingM.toFixed(1)} м (допуск 1 %)`,
+  );
+  // Площадь клетки и апофема — те же числа, что зафиксированы решением.
+  assert.ok(Math.abs(table.cellAreaKm2 - 3113) / 3113 < 0.001, `площадь клетки ${table.cellAreaKm2}`);
+  assert.ok(Math.abs(table.cellApothemM - 30000) / 30000 < 0.01, `апофема ${table.cellApothemM}`);
+  assert.ok(Math.abs(table.cellEdgeM - 34600) / 34600 < 0.01, `ребро ${table.cellEdgeM}`);
+  assert.ok(spacingMin < globeSpacingM && spacingMax > globeSpacingM);
+
+  // 2. Локальная карта: тот же физический участок, что и клетка планеты.
+  const dryCell = pickDryHexCell();
+  assert.ok(dryCell >= 0, 'нужна сухая клетка для центра участка');
+  const patch = LocalMapContract.buildPatch7(grid, surface, dryCell);
+  LocalMapWorker.clearLocalMapCache();
+  const local = await LocalMapWorker.generateLocalMap({
+    patch: patch,
+    seed: 12345,
+    placeId: Number(7),
+    radiusM: table.strategicPatchRadiusM,
+    profile: LOCAL_MAP_PROFILE,
+    patchKey: 'w24-cell-scale',
+  });
+  assert.ok(Array.isArray(local.ringCells) && local.ringCells.length >= 6, 'кольца соседей посчитаны');
+  const localSpacing = local.ringCells.slice(0, 6).map(
+    (cell) => Math.hypot(cell.offsetM[0], cell.offsetM[1]),
+  );
+  for (const spacingM of localSpacing) {
+    assert.ok(
+      Math.abs(spacingM - globeSpacingM) / globeSpacingM < 0.01,
+      `шаг локальной карты ${spacingM.toFixed(1)} м против глобуса `
+        + `${globeSpacingM.toFixed(1)} м (допуск 1 %)`,
+    );
+  }
+  // Контроль регрессии: до W24 радиус 2 500 м давал шаг 2 875 м — сжатие 21×.
+  assert.ok(
+    globeSpacingM / (LocalMapHeightfield.SKIRT_HEX_SPACING_RATIO * 2500) > 20,
+    'прежняя пара 2 500 м / 2 875 м действительно была сжатием ~21×',
+  );
+  // Шаг центров и шаг камеры страницы — одно отношение.
+  assert.equal(LocalMapHeightfield.SKIRT_HEX_SPACING_RATIO, table.strategicHexStepRatio);
+  // Радиус участка — тот же, что у юбки горизонта для этой же планеты:
+  // обе стороны берут шаг сетки из одной формулы, поэтому таблица не спорит
+  // с `hexSpacingMeters` воркера.
+  const workerSpacingM = LocalMapWorker.hexSpacingMeters(table.planetRadiusKm * 1000);
+  assert.ok(
+    Math.abs(workerSpacingM - table.cellCenterSpacingM) / table.cellCenterSpacingM < 0.01,
+    `hexSpacingMeters воркера ${workerSpacingM.toFixed(1)} м против табличных `
+      + `${table.cellCenterSpacingM.toFixed(1)} м`,
+  );
+  assert.ok(
+    Math.abs(table.strategicPatchRadiusM - workerSpacingM / table.strategicHexStepRatio) < 1,
+    'радиус участка = шаг сетки / отношение шага',
+  );
+});
+
+test('W24: отношение вертикали океан/суша = 1,79 ± 0,05, коэффициенты — из общей таблицы', () => {
+  const relief = GlobeShared.GLOBE_RELIEF;
+  const drawnRatio = relief.oceanMax / relief.landMax;
+  const trueRatio = relief.oceanReliefM / relief.landReliefM;
+  // Обе ветви несут одно преувеличение: (коэффициент · R) / истинная амплитуда.
+  const exaggerationLand = (relief.landMax * 6371000) / relief.landReliefM;
+  const exaggerationOcean = (relief.oceanMax * 6371000) / relief.oceanReliefM;
+  assert.ok(
+    Math.abs(exaggerationLand - relief.verticalExaggeration) < 0.1,
+    `преувеличение суши ${exaggerationLand.toFixed(2)} против табличных ${relief.verticalExaggeration}`,
+  );
+  assert.ok(
+    Math.abs(exaggerationOcean - relief.verticalExaggeration) < 0.1,
+    `преувеличение океана ${exaggerationOcean.toFixed(2)} против табличных ${relief.verticalExaggeration}`,
+  );
+  assert.ok(
+    Math.abs(exaggerationLand - exaggerationOcean) < 0.1,
+    `ветви преувеличены одинаково (${exaggerationLand.toFixed(2)} / ${exaggerationOcean.toFixed(2)})`,
+  );
+  assert.ok(
+    Math.abs(drawnRatio - 1.79) <= 0.05,
+    `нарисованное отношение ${drawnRatio.toFixed(3)} должно быть 1,79 ± 0,05`,
+  );
+  assert.ok(
+    Math.abs(drawnRatio - trueRatio) <= 0.05,
+    `отношение коэффициентов ${drawnRatio.toFixed(3)} против истинного `
+      + `${trueRatio.toFixed(3)} (дно 10 995 м, суша 6 147 м)`,
+  );
+  // Прежняя пара давала 2,75 в пользу суши — именно её и убрали.
+  assert.ok(Math.abs(0.022 / 0.008 - 2.75) < 1e-12);
+  assert.ok(drawnRatio < 2.75);
+
+  // Геометрия несёт ровно табличные коэффициенты: крайние клетки поля высот
+  // получают полный размах своей ветви.
+  const geometry = buildGlobeGeometry(grid, surface, { colorMode: 'biome', reliefScale: 1 });
+  const radiusOfCenter = (cell) => Math.hypot(
+    geometry.positions[cell * 3],
+    geometry.positions[cell * 3 + 1],
+    geometry.positions[cell * 3 + 2],
+  );
+  let highLand = -1;
+  let deepOcean = -1;
+  for (let c = 0; c < surface.cellCount; c++) {
+    if (highLand < 0 || surface.elevation[c] > surface.elevation[highLand]) highLand = c;
+    if (deepOcean < 0 || surface.elevation[c] < surface.elevation[deepOcean]) deepOcean = c;
+  }
+  const landDelta = radiusOfCenter(highLand) - 1;
+  const oceanDelta = 1 - radiusOfCenter(deepOcean);
+  assert.ok(Math.abs(landDelta - relief.landMax) < 2e-5, `суша +${landDelta} против табличных +${relief.landMax}`);
+  assert.ok(Math.abs(oceanDelta - relief.oceanMax) < 2e-5, `океан −${oceanDelta} против табличных −${relief.oceanMax}`);
+  const geometryRatio = oceanDelta / landDelta;
+  assert.ok(
+    Math.abs(geometryRatio - 1.79) <= 0.05,
+    `отношение вертикали в геометрии ${geometryRatio.toFixed(3)} должно быть 1,79 ± 0,05`,
+  );
+  // reliefScale у обеих ветвей общий — «усиленный» рельеф сохраняет пропорцию.
+  const scaled = buildGlobeGeometry(grid, surface, { colorMode: 'biome', reliefScale: 1.6 });
+  const scaledLand = Math.hypot(
+    scaled.positions[highLand * 3],
+    scaled.positions[highLand * 3 + 1],
+    scaled.positions[highLand * 3 + 2],
+  ) - 1;
+  assert.ok(Math.abs(scaledLand - relief.landMax * 1.6) < 3e-5, `усиленная суша ${scaledLand}`);
+});
+
+test('W24: упаковка геометрии (pack) и CPU-полигоны берут рельеф из одной таблицы', () => {
+  const geometry = buildGlobeGeometry(grid, surface, { colorMode: 'biome', reliefScale: 1 });
+  let maxDiff = 0;
+  for (let c = 0; c < surface.cellCount; c++) {
+    const polygon = PlanetGlobe.cellPolygon(grid, surface, c, { reliefScale: 1, inflate: 1 });
+    const packedRadius = Math.hypot(
+      geometry.positions[c * 3],
+      geometry.positions[c * 3 + 1],
+      geometry.positions[c * 3 + 2],
+    );
+    const polygonRadius = Math.hypot(polygon.center[0], polygon.center[1], polygon.center[2]);
+    maxDiff = Math.max(maxDiff, Math.abs(packedRadius - polygonRadius));
+  }
+  // pack отдаёт f32, cellPolygon считает в f64 — допуск на квантование.
+  assert.ok(maxDiff < 2e-5, `pack и cellPolygon расходятся на ${maxDiff}`);
+
+  // В упаковке не осталось собственной копии коэффициентов.
+  const packSrc = readFileSync(
+    new URL('../site/shared/planet-globe-pack.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(packSrc, /import PlanetGlobe, \{ reliefDelta \} from '\.\/planet-globe\.ts';/);
+  assert.ok(!/function reliefDelta/.test(packSrc), 'reliefDelta в pack не дублируется');
+  assert.ok(!/\* 0\.02/.test(packSrc), 'в pack нет литералов вертикали');
+
+  // Страница берёт радиус участка и шаг камеры из таблицы, а не из литерала.
+  const pageSrc = readFileSync(
+    new URL('../site/planet-globe/planet-globe.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(pageSrc, /const LOCAL_PATCH_BASE_RADIUS_M = GLOBE_CELL_SCALE\.strategicPatchRadiusM;/);
+  assert.match(pageSrc, /export const LOCAL_HEX_STEP_RATIO = GLOBE_CELL_SCALE\.strategicHexStepRatio;/);
+  assert.ok(!/LOCAL_PATCH_BASE_RADIUS_M = 2500/.test(pageSrc), 'литерал 2 500 м убран');
 });

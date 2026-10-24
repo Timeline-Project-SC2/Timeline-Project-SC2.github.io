@@ -283,14 +283,77 @@ const TEMPERATURE_RAMP = [
   [0.86, 0.96, 0.42, 0.10], [1.00, 0.72, 0.08, 0.05],
 ];
 
-function reliefDelta(surface: SurfaceResult, elevation: number, reliefScale: number): number {
+/* ------------------------------------------------- ЕДИНАЯ ТАБЛИЦА МАСШТАБОВ
+   W24. Клетка планетарного и стратегического уровня — одна клетка, и
+   пропорция вертикали у обеих ветвей рельефа — из одного места. Таблицы ниже
+   — единственный источник чисел: страница берёт из них радиус участка
+   локальной карты, упаковщик GPU-геометрии (A-12a) импортирует `reliefDelta`
+   отсюда и не держит своей копии коэффициентов, поэтому страница, CPU-полигоны
+   и воркер читают одно и то же. Нормировка на размах поля
+   (`(elevation − seaLevel) / span`) не меняется: множители задают только, во
+   сколько раз размах ветви преувеличен относительно радиуса планеты.
+
+   `GLOBE_CELL_SCALE` — каноническая клетка глобуса:
+     planetRadiusKm          6 371 км, каноническая частота сетки v = 128;
+     gridV / cellCount       v = 128, N = 10·v² + 2 = 163 842 клетки;
+     cellAreaKm2             площадь равновеликой клетки, 3 113,1 км²;
+     cellEdgeM               ребро равновеликого шестиугольника, 34,6 км;
+     cellApothemM            апофема `a = √(A / 2√3)`, 30,0 км;
+     cellCenterSpacingM      шаг центров соседних клеток `d = 2a`, 60,0 км;
+     strategicHexStepRatio   `d_hex = 1,15 · R_patch` — то же отношение, что
+                            `SKIRT_HEX_SPACING_RATIO` воркера и
+                            `LOCAL_HEX_STEP_RATIO` страницы;
+     strategicPatchRadiusM   радиус участка локальной карты `R = d / 1,15`
+                            = 52,1 км. Прежние 2 500 м давали шаг 2 875 м —
+                            сжатие 21× относительно глобуса.
+
+   `GLOBE_RELIEF` — пропорция вертикали. Прежняя пара суша 0,022 / океан 0,008
+   давала 2,75 в пользу суши, хотя дно глубже суши в 1,79 раза. Пара
+   суша 0,012 / океан 0,0215 повторяет отношение истинных амплитуд поля высот
+   (10 995 м против 6 147 м при K = 8 570 м/ед.) и даёт обеим ветвям одно и то
+   же преувеличение 12,4×:
+     0,012  · 6 371 000 / 6 147  = 12,44   (суша)
+     0,0215 · 6 371 000 / 10 995 = 12,46   (океан)
+   Окончательное число — за владельцем на визуальной приёмке, меняется здесь
+   и только здесь. */
+const CELL_PLANET_RADIUS_KM = 6371;
+const CELL_GRID_V = 128;
+const CELL_COUNT = 10 * CELL_GRID_V * CELL_GRID_V + 2;
+const CELL_RADIUS_M = CELL_PLANET_RADIUS_KM * 1000;
+const CELL_AREA_M2 = (4 * Math.PI * CELL_RADIUS_M * CELL_RADIUS_M) / CELL_COUNT;
+const CELL_APOTHEM_M = Math.sqrt(CELL_AREA_M2 / (2 * Math.sqrt(3)));
+const CELL_CENTER_SPACING_M = 2 * CELL_APOTHEM_M;
+const STRATEGIC_HEX_STEP_RATIO = 1.15;
+
+export const GLOBE_CELL_SCALE = {
+  planetRadiusKm: CELL_PLANET_RADIUS_KM,
+  gridV: CELL_GRID_V,
+  cellCount: CELL_COUNT,
+  cellAreaKm2: CELL_AREA_M2 / 1e6,
+  cellEdgeM: Math.sqrt((2 * CELL_AREA_M2) / (3 * Math.sqrt(3))),
+  cellApothemM: CELL_APOTHEM_M,
+  cellCenterSpacingM: CELL_CENTER_SPACING_M,
+  strategicHexStepRatio: STRATEGIC_HEX_STEP_RATIO,
+  strategicPatchRadiusM: CELL_CENTER_SPACING_M / STRATEGIC_HEX_STEP_RATIO,
+} as const;
+
+export const GLOBE_RELIEF = {
+  landMax: 0.012,
+  oceanMax: 0.0215,
+  landReliefM: 6147,
+  oceanReliefM: 10995,
+  verticalExaggeration: 12.4,
+} as const;
+
+/** Радиальное смещение клетки от единичного радиуса (обе ветви — из таблицы). */
+export function reliefDelta(surface: SurfaceResult, elevation: number, reliefScale: number): number {
   const sea = surface.seaLevel || 0;
   if (elevation >= sea) {
     const span = Math.max(1e-9, (surface.elevationMax || sea) - sea);
-    return clamp01((elevation - sea) / span) * 0.022 * reliefScale;
+    return clamp01((elevation - sea) / span) * GLOBE_RELIEF.landMax * reliefScale;
   }
   const depthSpan = Math.max(1e-9, sea - (surface.elevationMin || sea));
-  return -clamp01((sea - elevation) / depthSpan) * 0.008 * reliefScale;
+  return -clamp01((sea - elevation) / depthSpan) * GLOBE_RELIEF.oceanMax * reliefScale;
 }
 
 function buildCellColors(surface: SurfaceResult, mode?: string): Float32Array {
