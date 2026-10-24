@@ -145,6 +145,7 @@ layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in float a_waterMask;
 layout(location = 3) in vec2 a_ringLocal;
+layout(location = 4) in float a_riverMask;
 
 uniform mat4 u_viewProj;
 uniform float u_fogStart;
@@ -157,12 +158,14 @@ out vec3 v_normal;
 out vec2 v_uv;         // для сэмплинга зон
 out float v_fog;
 out vec3 v_viewVec;    // вектор от точки поверхности к камере (для Fresnel и блика воды)
-out float v_waterMask; // байтовая маска кольцевой ячейки, нормализованная в 0..1
+out float v_waterMask; // семантическая маска воды, нормализованная в 0..1
 out vec2 v_ringLocal;  // локальные XY ячейки для batch-draw без per-cell uniform
+out float v_riverMask; // семантическая маска стрежня юбки, 0..1
 
 void main() {
   v_waterMask = a_waterMask;
   v_ringLocal = a_ringLocal;
+  v_riverMask = a_riverMask;
   // v_worldPos хранит ИСХОДНУЮ гипсометрическую высоту a_position.z: вода
   // (z <= 0) и изолинии считаются над уровнем моря, а не по просевшему z.
   v_worldPos  = a_position;
@@ -208,7 +211,8 @@ in vec2  v_uv;
 in float v_fog;
 in vec3  v_viewVec;
 in float v_waterMask;
-in vec2  v_ringLocal;
+in vec2 v_ringLocal;
+in float v_riverMask;
 
 uniform usampler2D u_zoning_map;     // RG8UI
 uniform sampler2D  u_terraform_map;  // R8
@@ -374,24 +378,38 @@ void main() {
   // Признак водного зеркала дополнительно проверяет сырую маску терраформинга
   // в центре и неизменность мировой высоты на юбке: пологая суша не может
   // ошибочно попасть в цвет океана ни при каком масштабе.
-  vec3 safeNormal = (dot(v_normal, v_normal) > 1e-8)
+  vec3 rawSafeNormal = (dot(v_normal, v_normal) > 1e-8)
     ? normalize(v_normal)
     : vec3(0.0, 0.0, 1.0);
-  float normalHoriz = length(v_normal.xy);
+  // A-17b: одинаковая полоса затухания микрорельефа по обе стороны грани.
+  // Внутри резкость плавно нарастает от границы, снаружи возвращается после
+  // воротника; скачка normal/slope, делавшего центр отдельной плиткой, нет.
+  float centerEdgeSmooth = isCentral
+    ? smoothstep(hexApothem * 0.70, hexApothem * 0.98, centerHexDist)
+    : 0.0;
+  float skirtEdgeSmooth = (u_isSkirt >= 0.5)
+    ? 1.0 - smoothstep(hexApothem * 1.02, hexApothem * 1.35, centerHexDist)
+    : 0.0;
+  vec3 safeNormal = normalize(mix(rawSafeNormal, vec3(0.0, 0.0, 1.0), max(centerEdgeSmooth, skirtEdgeSmooth)));
+  float normalHoriz = length(safeNormal.xy);
   float zStep = abs(dFdx(v_worldPos.z)) + abs(dFdy(v_worldPos.z));
   bool ringWater = isRing && v_waterMask > 0.5;
+  bool skirtWater = u_isSkirt >= 0.5 && v_waterMask > 0.5;
+  bool skirtRiver = u_isSkirt >= 0.5 && v_riverMask > 0.5;
+  bool centralWater = isCentral && rawTerraform < 0.002;
+  bool centralRiver = isCentral && rawTerraform >= 0.002 && rawTerraform < 0.006;
   bool waterMirrorSurface = isCentral
-    ? (rawTerraform < 0.002 && zStep < 0.02)
+    ? (centralWater && zStep < 0.02)
     : isRing
       ? (ringWater && zStep < 0.005)
-      : (normalHoriz < 0.00002 && zStep < 0.005);
+      : (skirtWater && normalHoriz < 0.0015 && zStep < 0.02);
   bool isFlatWaterMirror = (zone == 0u) && (normalHoriz < 0.0015) && waterMirrorSurface;
 
   // Stage-8.6: распознавание рек на любой высоте по явному маркеру воды
   // в terraform_map (байт 0 → rawTerraform < 0.002) и влажная галечно-песчаная
   // пойма вдоль водных текселей (0.002 <= rawTerraform < 0.012).
-  bool isExplicitWaterTexel = (isCentral && rawTerraform < 0.002) || ringWater;
-  bool isRiverStream = isCentral && isExplicitWaterTexel && (v_worldPos.z > 0.05) && !isFlatWaterMirror;
+  bool isExplicitWaterTexel = centralWater || centralRiver || ringWater || skirtWater || skirtRiver;
+  bool isRiverStream = centralRiver || skirtRiver;
   float riverBankMask = 0.0;
   if (isCentral && zone == 0u && !isFlatWaterMirror && !isExplicitWaterTexel && v_worldPos.z > 0.05) {
     bool isBankBand = (rawTerraform >= 0.002) && (rawTerraform < 0.012);
@@ -565,7 +583,7 @@ void main() {
   float shoreWave = (terrainValueNoise(shoreUv * 3.4 + vec2(4.1, -2.7)) - 0.5) * 1.8
                   + (terrainValueNoise(shoreUv * 9.8 + vec2(-7.3, 5.4)) - 0.5) * 0.7;
   float effectiveShoreZ = v_worldPos.z + shoreWave * smoothstep(0.0, 5.0, v_worldPos.z);
-  bool coastalBand = isRing ? ringWater : (u_isSkirt >= 0.5 || rawTerraform < 0.002);
+  bool coastalBand = isRing ? ringWater : (skirtWater || centralWater);
   bool isCoastalShore = coastalBand && (effectiveShoreZ < 4.8);
 
   // И-3.2/И-3.3 и Stage-8.6: объёмная глубокая вода с батиметрией, двухоктавной
@@ -573,7 +591,7 @@ void main() {
   float waterSurfaceMask = 0.0;
   float waterSpecTerm = 0.0;
   vec3 waterSurfaceNormal = vec3(0.0, 0.0, 1.0);
-  if (zone == 0u && (v_worldPos.z <= 0.0 || ringWater || isFlatWaterMirror || isCoastalShore || isRiverStream)) {
+  if (zone == 0u && (v_worldPos.z <= 0.0 || ringWater || skirtWater || isFlatWaterMirror || isCoastalShore || isRiverStream)) {
     float depthBelowZero = max(0.0, -v_worldPos.z);
     float waterBlend = isFlatWaterMirror ? 1.0 : smoothstep(0.0, 3.0, depthBelowZero);
 
@@ -590,7 +608,8 @@ void main() {
 
     float waterDepthM = 0.0;
     if (isRiverStream) {
-      float thalweg = 1.0 - smoothstep(0.0, 0.0019, rawTerraform);
+      float thalweg = (centralRiver || skirtRiver)
+        ? 1.0 : (1.0 - smoothstep(0.0, 0.0019, rawTerraform));
       waterDepthM = mix(1.4, 8.8, thalweg) + terrainValueNoise(shoreUv * 14.0) * 3.2;
     } else if (isFlatWaterMirror && v_worldPos.z > 0.0) {
       waterDepthM = (openSeaProgress * 16.0 + bathyWave * 0.85 + bathyShelf * 0.60)
@@ -661,9 +680,9 @@ void main() {
     }
 
     float riverWater = isRiverStream
-      ? (1.0 - smoothstep(0.0014, 0.0021, rawTerraform) * 0.24)
+      ? ((centralRiver || skirtRiver) ? 1.0 : (1.0 - smoothstep(0.0014, 0.0021, rawTerraform) * 0.24))
       : 0.0;
-    float shoreWater = (isFlatWaterMirror || ringWater)
+    float shoreWater = (isFlatWaterMirror || ringWater || skirtWater)
       ? 1.0
       : max(max(waterBlend, riverWater), 1.0 - smoothstep(0.0, 1.8, effectiveShoreZ));
     float waterOpacity = mix(0.86, 0.99, smoothstep(1.5, 10.0, waterDepthM));

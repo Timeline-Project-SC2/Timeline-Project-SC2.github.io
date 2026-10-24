@@ -39,6 +39,11 @@ export interface GeographyProfile {
   continentSoftWidthCells: number;
   biomeSoftWidthCells: number;
   transitionEntropyPctl: number;
+  // Дополнительные октавы базового fBm высоты (Stage-8.14, шаг 2).
+  // При 0 (ключ отсутствует в профиле) вывод побитово совпадает с
+  // каноническим; каждая октава продолжает ту же цепочку с gain 0.5
+  // (H = 1.0, равносклоновый фрактал) до требуемой детализации.
+  extraOctaves?: number;
 }
 
 export type GeographyProfileInput = Record<string, unknown>;
@@ -457,6 +462,14 @@ function normalizeProfile(input?: GeographyProfileInput | null): GeographyProfil
   if (profile.coastSoftWidthCells < 0 || profile.continentSoftWidthCells < 0 || profile.biomeSoftWidthCells < 0) {
     throw new Error('PlanetGeography: ширины мягких переходов не могут быть отрицательными');
   }
+  // Stage-8.14, шаг 2: extraOctaves по умолчанию 0. Ключ профиля не пишем,
+  // когда 0 — профиль остаётся побитово таким же, как у канонической версии
+  // (meta.profile в фикстуре FULL EQ не меняется).
+  const extraOctaves = finiteOr(profileValue(src, 'extraOctaves', 'extra_octaves', 0), 0);
+  if (!Number.isInteger(extraOctaves) || extraOctaves < 0 || extraOctaves > 128) {
+    throw new Error('PlanetGeography: extraOctaves должно быть целым от 0 до 128');
+  }
+  if (extraOctaves > 0) profile.extraOctaves = extraOctaves;
   return profile;
 }
 
@@ -543,9 +556,12 @@ function createFieldSampler(input?: GeographyProfileInput | null): FieldSamplerI
     const plate = PlanetNoise.fbm(plateNoise as (x: number, y: number, z: number) => number,
       nx * 1.12 + offP[0], ny * 1.12 + offP[1], nz * 1.12 + offP[2], 3, 2.0, 0.52);
     const elevationFreq = 2.15 * ratio;
+    // Stage-8.14, шаг 2: дополнительные октавы базового fBm продолжают ту же
+    // цепочку (gain 0.5, H = 1.0). При extraOctaves = 0 вызов идентичен канону.
+    const baseOctaves = 5 + (profile.extraOctaves ?? 0);
     const base = PlanetNoise.fbm(elevNoise,
       dx * elevationFreq + offE[0], dy * elevationFreq + offE[1], dz * elevationFreq + offE[2],
-      5, 2.0, 0.5);
+      baseOctaves, 2.0, 0.5);
     const detailFreq = 9.0 * ratio;
     const detail = PlanetNoise.fbm(detailNoise as (x: number, y: number, z: number) => number,
       dx * detailFreq + offD[0], dy * detailFreq + offD[1], dz * detailFreq + offD[2],
