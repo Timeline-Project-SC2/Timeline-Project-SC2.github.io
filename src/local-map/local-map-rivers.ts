@@ -4,6 +4,7 @@
 
 import { HEIGHTFIELD_RES, TERRAFORM_LAND_MIN, cellTangentMeters } from './local-map-heightfield.ts';
 import type { BaseHeightfield } from './local-map-heightfield.ts';
+import { isWaterCell } from './local-map-contract.ts';
 import type { LocalMapPatch } from './local-map-contract.ts';
 
 // ---- Русла рек ----
@@ -21,13 +22,23 @@ interface RiverSegment {
   readonly maxU: number; readonly maxV: number;
 }
 
+function outletIsWater(patch: LocalMapPatch): boolean {
+  const outletCell = patch.river.outlet
+    ? patch.cells[patch.river.outlet.slot + 1]
+    : undefined;
+  return outletCell !== undefined && isWaterCell(outletCell, patch.seaLevel);
+}
+
 /**
  * И-3.3: русло входит строго через грани соседей-притоков (`inlets`) и выходит
  * строго через грань `flowReceiver` центра (`outlet`) в касательном кадре.
  */
 export function riverSegments(patch: LocalMapPatch, radiusM: number, halfWidthM: number): RiverSegment[] {
   const raw: Array<Omit<RiverSegment, 'minU' | 'minV' | 'maxU' | 'maxV'>> = [];
-  if (patch.river.flowsThroughCenter || patch.river.inlets.length > 0) {
+  // Устье остаётся руслом, даже если порог глобальной streamWeight обнулил
+  // вес центральной ячейки. Обычный flowReceiver на сушу руслом не становится.
+  const hasWaterOutlet = outletIsWater(patch);
+  if (patch.river.flowsThroughCenter || patch.river.inlets.length > 0 || hasWaterOutlet) {
     for (const edge of patch.river.inlets) {
       const cell = patch.cells[edge.slot + 1];
       if (!cell) continue;
@@ -82,6 +93,93 @@ export function riverCarveFactor(wx: number, wy: number, segments: readonly Rive
   return t * t * (3 - 2 * t);
 }
 
+/** Вариант для широкой долины: bbox стрежня не должен её обрезать. */
+function expandedCarveFactor(
+  wx: number,
+  wy: number,
+  segments: readonly RiverSegment[],
+  halfWidthM: number,
+): number {
+  if (segments.length === 0 || !(halfWidthM > 0)) return 0;
+  let best = Infinity;
+  for (const seg of segments) {
+    if (
+      wx < Math.min(seg.u0, seg.u1) - halfWidthM
+      || wx > Math.max(seg.u0, seg.u1) + halfWidthM
+      || wy < Math.min(seg.v0, seg.v1) - halfWidthM
+      || wy > Math.max(seg.v0, seg.v1) + halfWidthM
+    ) continue;
+    const d = distanceToSegment(wx, wy, seg);
+    if (d < best) best = d;
+  }
+  if (best >= halfWidthM) return 0;
+  const t = 1 - best / halfWidthM;
+  return t * t * (3 - 2 * t);
+}
+
+/** Подтексельное усреднение переходной зоны убирает лестницу кромки. */
+function supersampledCarveFactor(
+  wx: number,
+  wy: number,
+  cellSize: number,
+  segments: readonly RiverSegment[],
+  halfWidthM: number,
+): number {
+  const center = expandedCarveFactor(wx, wy, segments, halfWidthM);
+  // Вне перехода дополнительные выборки не меняют плоское поле и не нужны.
+  if (center <= 0 || center >= 1) return center;
+  const offset = cellSize / 3;
+  let sum = 0;
+  for (let sy = -1; sy <= 1; sy++) {
+    for (let sx = -1; sx <= 1; sx++) {
+      sum += expandedCarveFactor(wx + sx * offset, wy + sy * offset, segments, halfWidthM);
+    }
+  }
+  return sum / 9;
+}
+
+/** Понижает локальные пики связной маски до заданного шага между вершинами. */
+function limitHeightSteps(
+  heightfield: Float32Array,
+  mask: Uint8Array,
+  cells: readonly number[],
+  resolution: number,
+  maxStepM: number,
+): void {
+  const queued = new Uint8Array(mask);
+  const queue = cells.slice();
+  let head = 0;
+  const enqueue = (idx: number): void => {
+    if (queued[idx] === 1) return;
+    queued[idx] = 1;
+    queue.push(idx);
+  };
+  while (head < queue.length) {
+    const idx = queue[head++] as number;
+    queued[idx] = 0;
+    const x = idx % resolution;
+    const y = Math.floor(idx / resolution);
+    const neighbors = [
+      x > 0 ? idx - 1 : -1,
+      x + 1 < resolution ? idx + 1 : -1,
+      y > 0 ? idx - resolution : -1,
+      y + 1 < resolution ? idx + resolution : -1,
+    ];
+    for (const neighbor of neighbors) {
+      if (neighbor < 0 || mask[neighbor] !== 1) continue;
+      const height = heightfield[idx] as number;
+      const neighborHeight = heightfield[neighbor] as number;
+      if (height - neighborHeight > maxStepM + 1e-4) {
+        heightfield[idx] = neighborHeight + maxStepM;
+        enqueue(idx);
+      } else if (neighborHeight - height > maxStepM + 1e-4) {
+        heightfield[neighbor] = height + maxStepM;
+        enqueue(neighbor);
+      }
+    }
+  }
+}
+
 /**
  * Stage-8.12d: проход вреза русла по готовому базовому рельефу.
  *
@@ -106,11 +204,20 @@ export function applyRiverCarve(
   const hfRes = HEIGHTFIELD_RES;
   const cellSize = (2 * radiusM) / hfRes;
   const riverHalfWidthM = Math.max(cellSize * 2, radiusM * RIVER_HALF_WIDTH_RATIO);
-  // Stage-8.6: русло остаётся читаемой долиной даже на региональной карте.
-  const riverDepthM = Math.max(10, radiusM * RIVER_DEPTH_RATIO * 1.8);
+  const mouthWithoutStream = !patch.river.flowsThroughCenter
+    && patch.river.inlets.length === 0
+    && outletIsWater(patch);
+  // У нового устья глубина ограничена речным диапазоном; существующие русла
+  // сохраняют прежнюю масштабную формулу и побитовый контракт.
+  const scaledDepthM = Math.max(10, radiusM * RIVER_DEPTH_RATIO * 1.8);
+  const riverDepthM = mouthWithoutStream ? Math.min(10, scaledDepthM) : scaledDepthM;
   const segments = riverSegments(patch, radiusM, riverHalfWidthM);
   const terraformMap = base.terraformMap;
   const heightfield = new Float32Array(hfRes * hfRes);
+  const valleyMask = mouthWithoutStream ? new Uint8Array(hfRes * hfRes) : null;
+  const bankMask = mouthWithoutStream ? new Uint8Array(hfRes * hfRes) : null;
+  const valleyCells: number[] = [];
+  const bankCells: number[] = [];
 
   for (let y = 0; y < hfRes; y++) {
     for (let x = 0; x < hfRes; x++) {
@@ -120,10 +227,32 @@ export function applyRiverCarve(
         const wx = (x - hfRes / 2) * cellSize;
         const wy = (y - hfRes / 2) * cellSize;
         // И-3.3/Stage-8.6: плавный врез русла от входных граней к центру и к выходной грани.
-        const carve = riverCarveFactor(wx, wy, segments, riverHalfWidthM);
-        const valley = riverCarveFactor(wx, wy, segments, riverHalfWidthM * 2.4);
+        const carve = mouthWithoutStream
+          ? supersampledCarveFactor(wx, wy, cellSize, segments, riverHalfWidthM)
+          : riverCarveFactor(wx, wy, segments, riverHalfWidthM);
+        const valley = mouthWithoutStream
+          ? supersampledCarveFactor(wx, wy, cellSize, segments, riverHalfWidthM * 2.4)
+          : riverCarveFactor(wx, wy, segments, riverHalfWidthM * 2.4);
+        if (
+          bankMask
+          && expandedCarveFactor(wx, wy, segments, riverHalfWidthM * 2.4 + cellSize * 3) > 0
+        ) {
+          // Буфер оставляет место пологому переходу от поймы к исходной суше.
+          bankMask[idx] = 1;
+          bankCells.push(idx);
+          spawnMask[idx] = 0;
+        }
         // A-27: широкая неглубокая долина (борта/пойма) плюс прежний узкий стрежень.
-        if (valley > 0) height -= riverDepthM * (0.45 * valley + 0.55 * carve);
+        if (valley > 0) {
+          height -= riverDepthM * (0.45 * valley + 0.55 * carve);
+          if (valleyMask) {
+            // Пойма устья не получает последующее терраформ-смешивание: оно
+            // иначе возвращает шум суши уже после сглаживания кромки.
+            spawnMask[idx] = 0;
+            valleyMask[idx] = 1;
+            valleyCells.push(idx);
+          }
+        }
         if (carve >= 0.45) {
           // A-17b: байт 1 отличает стрежень реки от океана/озера (байт 0).
           terraformMap[idx] = 1;
@@ -135,6 +264,17 @@ export function applyRiverCarve(
       }
       heightfield[idx] = height;
     }
+  }
+
+  // Природное зерно суши может сложиться с профилем вреза. Релаксация
+  // понижает только локальные пики фактической поймы; второй, более свободный
+  // проход гасит возможную ступень на её внешней границе. Морское дно не
+  // входит ни в одну маску.
+  if (valleyMask && valleyCells.length > 0) {
+    limitHeightSteps(heightfield, valleyMask, valleyCells, hfRes, 1.9);
+  }
+  if (bankMask && bankCells.length > 0) {
+    limitHeightSteps(heightfield, bankMask, bankCells, hfRes, 6);
   }
   return heightfield;
 }
