@@ -14,7 +14,7 @@ const {
   createSectorField,
   hashSeed,
 } = fieldModule;
-const { edgeDistance, fitScaleFor, maxScaleForTargetEdge } = require('../src/atlas/level-ladder.ts');
+const { edgeDistance, fitScaleFor, maxScaleForTargetWidth } = require('../src/atlas/level-ladder.ts');
 const { CONFIG } = require('../src/atlas/config.ts');
 
 const MAP_SIZE = 10000;
@@ -385,22 +385,22 @@ test('реальные edgeDist из сцены: на упоре fade = 0, на 
   // проводке обязано быть безопасным. Если константы поля снова окажутся
   // в других единицах, этот тест упадёт.
   const viewports = [
-    { w: 1920, h: 1080, expectedMaxScale: 0.54, expectedFitScale: 0.10152 },
-    { w: 390, h: 844, expectedMaxScale: 0.195, expectedFitScale: 0.03666 },
+    { w: 1920, h: 1080, expectedMaxScale: 1.92, expectedEdge: 0.28125, expectedFitScale: 0.10152 },
+    { w: 390, h: 844, expectedMaxScale: 0.39, expectedEdge: 0.5, expectedFitScale: 0.03666 },
   ];
   for (const spec of viewports) {
     const viewport = { w: spec.w, h: spec.h };
     const label = `${spec.w}×${spec.h}`;
 
-    const maxScale = maxScaleForTargetEdge(viewport, MAP_SIZE, CONFIG.view.fitInset);
+    const maxScale = maxScaleForTargetWidth(viewport, MAP_SIZE, CONFIG.view.fitInset);
     assert.ok(
       Math.abs(maxScale - spec.expectedMaxScale) <= 1e-9,
-      `${label}: maxScaleForTargetEdge = ${maxScale} px/ед, ожидалось ${spec.expectedMaxScale} px/ед`,
+      `${label}: maxScaleForTargetWidth = ${maxScale} px/ед, ожидалось ${spec.expectedMaxScale} px/ед`,
     );
     const edgeAtMaxLy = edgeDistance(viewport, maxScale);
     assert.ok(
-      Math.abs(edgeAtMaxLy - 1) <= 1e-9,
-      `${label}: edgeDistance на упоре = ${edgeAtMaxLy} св.г., ожидалось 1,00 св.г.`,
+      Math.abs(edgeAtMaxLy - spec.expectedEdge) <= 1e-9,
+      `${label}: edgeDistance на упоре = ${edgeAtMaxLy} св.г., ожидалось ${spec.expectedEdge} св.г.`,
     );
     assert.equal(
       localFadeFor(edgeAtMaxLy),

@@ -71,10 +71,10 @@ const dataKernel = makeKernel(dataSystems, dataPlaces);
 const near = (actual, expected, tolerance = 1e-12) => Math.abs(actual - expected) <= tolerance;
 
 function checkSystemFramePart1() {
-  // уровни системного кадра берутся как S0…S2 на позициях 13…15 в LEVELS
-  assert.equal(ladder.LEVELS.length, 16);
+  // уровни системного кадра берутся как S0…S2 с номерами 13…15 через levelSpec
+  assert.equal(ladder.LEVELS.length, 13);
   assert.deepEqual(
-    [13, 14, 15].map((level) => ladder.LEVELS[level].id),
+    [13, 14, 15].map((level) => ladder.levelSpec(level).id),
     ['S0', 'S1', 'S2'],
   );
   const api = systemFrame.createSystemFrame(dataKernel);

@@ -13,12 +13,32 @@ export interface LevelSpec {
   readonly frameBudgetMs: number;
 }
 
+export const MAX_VISIBLE_WIDTH = 10000;
+export const MIN_VISIBLE_WIDTH = 16000;
+export const HYSTERESIS = 0.12;
+
+/** Самый глубокий секторный уровень лестницы: L9 (Z-4b). */
+export const DEEPEST_SECTOR_LEVEL = 9;
+
+/**
+ * Предел зума задан полной шириной кадра (Z-4b): на упоре в кадр по горизонтали
+ * входит ровно `1` св.г. (`lyToUnits(1)` единиц карты) — это номинальная
+ * ширина `L9`. Не расстояние до границы: та метрика (`edgeDistance`) на упоре
+ * зависит от пропорций экрана и на `1920×1080` даёт `0,28` св.г.
+ */
+export const TARGET_WIDTH_LY = 1;
+
+/** Номинальная полная видимая ширина секторного уровня `n`: `10000 / 10^(n/9)`, ед. карты. */
+function sectorWidth(level: number): number {
+  return MAX_VISIBLE_WIDTH / 10 ** (level / DEEPEST_SECTOR_LEVEL);
+}
+
 export const LEVELS: readonly LevelSpec[] = Object.freeze([
   Object.freeze({
     level: 0,
     id: 'L0',
     frame: 'S',
-    visibleWidth: 10000,
+    visibleWidth: sectorWidth(0),
     addressLetters: 0,
     markerPx: 2.5,
     frameBudgetMs: 8,
@@ -27,7 +47,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 1,
     id: 'L1',
     frame: 'S',
-    visibleWidth: 5000,
+    visibleWidth: sectorWidth(1),
     addressLetters: 1,
     markerPx: 3.3,
     frameBudgetMs: 8,
@@ -36,7 +56,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 2,
     id: 'L2',
     frame: 'S',
-    visibleWidth: 2500,
+    visibleWidth: sectorWidth(2),
     addressLetters: 2,
     markerPx: 4.5,
     frameBudgetMs: 10,
@@ -45,7 +65,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 3,
     id: 'L3',
     frame: 'S',
-    visibleWidth: 1250,
+    visibleWidth: sectorWidth(3),
     addressLetters: 2,
     markerPx: 6.0,
     frameBudgetMs: 10,
@@ -54,7 +74,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 4,
     id: 'L4',
     frame: 'S',
-    visibleWidth: 625,
+    visibleWidth: sectorWidth(4),
     addressLetters: 3,
     markerPx: 8.0,
     frameBudgetMs: 12,
@@ -63,7 +83,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 5,
     id: 'L5',
     frame: 'S',
-    visibleWidth: 312.5,
+    visibleWidth: sectorWidth(5),
     addressLetters: 3,
     markerPx: 10.7,
     frameBudgetMs: 12,
@@ -72,7 +92,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 6,
     id: 'L6',
     frame: 'S',
-    visibleWidth: 156.25,
+    visibleWidth: sectorWidth(6),
     addressLetters: 4,
     markerPx: 14.3,
     frameBudgetMs: 14,
@@ -81,7 +101,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 7,
     id: 'L7',
     frame: 'S',
-    visibleWidth: 78.125,
+    visibleWidth: sectorWidth(7),
     addressLetters: 4,
     markerPx: 19.2,
     frameBudgetMs: 14,
@@ -90,50 +110,25 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     level: 8,
     id: 'L8',
     frame: 'S',
-    visibleWidth: 39.0625,
+    visibleWidth: sectorWidth(8),
     addressLetters: 5,
-    markerPx: 25.7,
+    markerPx: 25.6,
     frameBudgetMs: 16,
   }),
   Object.freeze({
     level: 9,
     id: 'L9',
     frame: 'S',
-    visibleWidth: 19.53125,
+    // Жёсткая связь с пределом зума: ширина L9 — это `lyToUnits(1)`, а не литерал.
+    visibleWidth: lyToUnits(TARGET_WIDTH_LY),
     addressLetters: 5,
     markerPx: 34.3,
     frameBudgetMs: 16,
   }),
-  // L10…L12 — та же геометрия 10 000 / 2^n в единицах карты (добавлены в SW-3 до перевода
-  // единиц по §17.23; таблица порогов в единицах сохраняется без изменений).
-  // markerDiameter(2) = 89,5 px упирается в кламп 40 px, поэтому в таблице стоит 40.
-  Object.freeze({
-    level: 10,
-    id: 'L10',
-    frame: 'S',
-    visibleWidth: 9.765625,
-    addressLetters: 5,
-    markerPx: 40,
-    frameBudgetMs: 16,
-  }),
-  Object.freeze({
-    level: 11,
-    id: 'L11',
-    frame: 'S',
-    visibleWidth: 4.8828125,
-    addressLetters: 5,
-    markerPx: 40,
-    frameBudgetMs: 16,
-  }),
-  Object.freeze({
-    level: 12,
-    id: 'L12',
-    frame: 'S',
-    visibleWidth: 2.44140625,
-    addressLetters: 5,
-    markerPx: 40,
-    frameBudgetMs: 16,
-  }),
+  // Системный кадр S0…S2 не тронут: те же уровни 13…15 и видимые ширины
+  // 100 / 16 / 2 (а.е.). Секторных уровней 10…12 больше нет — `levelSpec(10)`
+  // обязан бросать RangeError, поэтому записи ищутся по полю `level`, а не
+  // по индексу массива.
   Object.freeze({
     level: 13,
     id: 'S0',
@@ -166,27 +161,10 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
   }),
 ]);
 
-export const MAX_VISIBLE_WIDTH = 10000;
-export const MIN_VISIBLE_WIDTH = 16000;
-export const HYSTERESIS = 0.12;
-
-/** Самый глубокий секторный уровень лестницы: L12 (§17.15). */
-export const DEEPEST_SECTOR_LEVEL = 12;
-
-/**
- * Требование владельца (§17.15.1, §17.23): расстояние от цели до ближайшей границы кадра
- * равно 1 световому году (`1 000` единиц карты). Метрика — `edgeDistance`, а не ширина видимой области.
- */
-export const TARGET_EDGE_LY = 1;
-
-/**
- * Глубже 0,5 св.г. (`500` единиц карты) до границы начинается системный кадр: вход туда — только
- * действием (§6.1 п. 4), клампом зума он не достигается.
- */
-export const MIN_CLAMP_EDGE_LY = 0.5;
-
 export function levelSpec(level: number): LevelSpec {
-  const spec = LEVELS[level];
+  // Поиск по полю `level`, а не по индексу: секторная лестница кончается на
+  // L9, а системные S0…S2 сохраняют свои номера 13…15 (уровней 10…12 нет).
+  const spec = LEVELS.find((candidate) => candidate.level === level);
   if (spec === undefined) {
     throw new RangeError(`Уровень вне лестницы глубины: ${level}`);
   }
@@ -212,17 +190,19 @@ export function levelForWidth(visibleWidth: number, prev?: number): number {
     throw new RangeError('Ширина кадра должна быть числом');
   }
 
+  const deepestWidth = visibleWidthForLevel(DEEPEST_SECTOR_LEVEL);
+
   let rawLevel: number;
-  if (visibleWidth >= MAX_VISIBLE_WIDTH) {
-    rawLevel = 0;
-  } else if (visibleWidth <= visibleWidthForLevel(DEEPEST_SECTOR_LEVEL)) {
+  if (visibleWidth <= deepestWidth * (1 + 1e-9)) {
     rawLevel = DEEPEST_SECTOR_LEVEL;
+  } else if (visibleWidth >= MAX_VISIBLE_WIDTH) {
+    rawLevel = 0;
   } else {
     rawLevel = Math.max(
       0,
       Math.min(
         DEEPEST_SECTOR_LEVEL,
-        Math.floor(Math.log2(MAX_VISIBLE_WIDTH / visibleWidth) + 1e-9),
+        Math.floor(DEEPEST_SECTOR_LEVEL * Math.log10(MAX_VISIBLE_WIDTH / visibleWidth) + 1e-9),
       ),
     );
   }
@@ -238,7 +218,11 @@ export function levelForWidth(visibleWidth: number, prev?: number): number {
 
   if (rawLevel > prev) {
     const nextLevel = prev + 1;
-    const enterThreshold = visibleWidthForLevel(nextLevel) * (1 - HYSTERESIS);
+    // Предельный L9 — асимметрично: порог `0,88` к нему не применяется, вход
+    // по номинальной ширине с допуском округления (Z-4b §2).
+    const enterThreshold = nextLevel === DEEPEST_SECTOR_LEVEL
+      ? deepestWidth * (1 + 1e-9)
+      : visibleWidthForLevel(nextLevel) * (1 - HYSTERESIS);
     return visibleWidth <= enterThreshold ? nextLevel : prev;
   }
 
@@ -250,29 +234,37 @@ export function levelForWidth(visibleWidth: number, prev?: number): number {
   return rawLevel;
 }
 
+/**
+ * Показатель непрерывного диаметра маркера: `log10(34,3 / 2,5)` — оба конца
+ * визуального ряда §6.2. Пересчитан под размах зума `10×` лестницы L0…L9
+ * (Z-4b): на L9 формула даёт `34,3` px, а не `6,6` px старого показателя.
+ */
+export const MARKER_EXPONENT = 1.1374;
+
 export function markerDiameter(visibleWidth: number): number {
   if (Number.isNaN(visibleWidth) || visibleWidth < 0) {
     throw new RangeError('Ширина кадра для маркера не может быть отрицательной');
   }
 
-  const diameter = 2.5 * (MAX_VISIBLE_WIDTH / visibleWidth) ** 0.42;
+  const diameter = 2.5 * (MAX_VISIBLE_WIDTH / visibleWidth) ** MARKER_EXPONENT;
   return Math.max(2.5, Math.min(40, diameter));
 }
 
-/* --------------------------------------------------- метрика требования §17.15 / §17.23
+/* --------------------------------------------------- метрики кадра (Z-4b, §17.23)
  *
- * Единственная метрика глубины — `edgeDist`, расстояние от центра кадра (цели)
- * до ближайшей границы экрана в световых годах (`1 000` единиц карты = `1` св.г.):
+ * Уровень выбирается по полной видимой ширине кадра: `visibleWidth` уровней
+ * задаётся в единицах карты (`1000…10 000`) как протяжённость мира по
+ * горизонтали кадра (`viewport.w / scale`); в световых годах ей соответствует
+ * `visibleWidthLyForLevel(n) = visibleWidthForLevel(n) / 1000`.
+ *
+ * Отдельная метрика — `edgeDist`, расстояние от центра кадра (цели) до
+ * ближайшей границы экрана в световых годах:
  *
  *     edgeDist = min(viewport.w, viewport.h) / (2 · scale · UNITS_PER_LY)
  *
- * `visibleWidth` уровней задаётся в единицах карты (`0…10 000`) как протяжённость
- * мира по КОРОТКОЙ оси кадра; в световых годах ей соответствует
- * `visibleWidthLyForLevel(n) = visibleWidthForLevel(n) / 1000`, поэтому на номинале
- * уровня `edgeDist = visibleWidthLyForLevel(n) / 2`. Это та же короткая ось,
- * по которой масштабирует `fitScale()` в `canvas-renderer.ts`
- * (`min(w, h) / mapSize * fitInset`), — поэтому формула `fitScaleFor` совпадает
- * с рендерером до порядка операций.
+ * Пределом зума она больше не является (Z-4b §3): на упоре полной ширины
+ * `1` св.г. она даёт `0,28` св.г. на `1920×1080` и `0,50` св.г. на
+ * `390×844` — это ожидаемо, не баг.
  */
 
 /** Размер кадра, к которому применяется масштаб. */
@@ -327,36 +319,28 @@ export function fitScaleFor(viewport: FrameViewport, mapSize: number, fitInset: 
 }
 
 /**
- * Предел приближения по требованию (§17.17 п. 4, §17.23): масштаб точки
- * «1,00 св.г. до границы» (`1 000` единиц карты от центра до ближайшего края).
- *
- * Кламп стоит **ровно на требовании**, без запаса вниз —
- * `edgeDistance(viewport, maxScale) === 1,00` точно, то есть
- * `maxScale = min(w, h) / (2 · lyToUnits(1)) = min(w, h) / 2000` px/ед.
- *
- * Отношение к масштабу «вся карта» получается тождеством:
- *
- *     maxScale / fitScale = mapSize / (2 · UNITS_PER_LY · fitInset)
- *                         = 10 000 / 1 880 = 5,3191489… (532 %)
- *
- * (`5×` к номиналу L0 без inset `0,94`.) От viewport множитель не зависит:
- * обе величины пропорциональны `min(w, h)`. `mapSize` и `fitInset` входят
- * в контракт сигнатуры и проверяются на корректность.
- *
- * Предохранитель отдельный и только на ошибку: масштаб не глубже
- * `scaleForEdgeDistance(viewport, 0,5)` (`500` единиц до края) — ниже начинается
- * системный кадр, вход в него только действием (§6.1 п. 4).
+ * Предел приближения по полной ширине (Z-4b §3): на упоре полная ширина
+ * кадра равна `TARGET_WIDTH_LY` (`1` св.г. = `1000` единиц карты) на любом
+ * экране, то есть `maxScale = viewport.w / lyToUnits(1)` px/ед:
+ * `1920 → 1,92`, `1366 → 1,366`, `2560 → 2,56`, `390 → 0,39`.
+ * Высота кадра на упоре — из пропорций экрана, уровень выбирается по полной
+ * ширине, а не по короткой оси и не по расстоянию до границы.
+ * `mapSize` и `fitInset` входят в контракт сигнатуры и проверяются на
+ * корректность, как прежде.
  */
-export function maxScaleForTargetEdge(
+export function maxScaleForTargetWidth(
   viewport: FrameViewport,
   mapSize: number,
   fitInset: number,
 ): number {
   requirePositive(mapSize, 'Размер карты (mapSize)');
   requirePositive(fitInset, 'Отступ вписывания (fitInset)');
+  const frame: FrameViewport | null | undefined = viewport;
+  if (frame === null || frame === undefined) {
+    throw new RangeError('Кадр должен быть объектом { w, h }');
+  }
+  const width = requirePositive(frame.w, 'Ширина кадра (viewport.w)');
+  requirePositive(frame.h, 'Высота кадра (viewport.h)');
 
-  const atRequirement = shortSide(viewport) / (2 * lyToUnits(TARGET_EDGE_LY));
-  const systemFrameGuard = shortSide(viewport) / (2 * lyToUnits(MIN_CLAMP_EDGE_LY));
-
-  return Math.min(atRequirement, systemFrameGuard);
+  return width / lyToUnits(TARGET_WIDTH_LY);
 }

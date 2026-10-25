@@ -15,7 +15,7 @@
  *   — слияние ближе `1,6 · d` — §6.2 п. 3; хит-зона `d + 6 px` и `≥ 44 px`
  *     на сенсорном экране — §6.2 п. 5;
  *   — бюджет кадра уровня — `frameBudgetMs` из `LEVELS` (§6, §8.4);
- *   — территории `L2…L6`, сетка адресов `L1…L8`, апертура с `L8` — §8.1;
+ *   — территории `L2…L6`, сетка адресов `L1…L8`, апертура ровно на `L9` — §8.1, Z-4b §2;
  *   — подпись на уровне — колонка «Подпись» таблицы §6.2, приоритет
  *     «столица → фракция → плотность» — §8.1;
  *   — бюджет подписей `120` — `LABEL_BUDGET` из `label-layout.ts` (§6, §8.1).
@@ -34,11 +34,11 @@ import {
   visibleWidthForLevel,
 } from './level-ladder.ts';
 
-/** Камера сектора: центр в мировых координатах и видимая ширина по короткой оси. */
+/** Камера сектора: центр в мировых координатах и полная видимая ширина кадра. */
 export interface SceneCamera {
   readonly centerX: number;
   readonly centerY: number;
-  /** Видимая ширина мира по короткой оси кадра, св.г. */
+  /** Полная видимая ширина мира по горизонтали кадра (`viewport.w / scale`), единицы карты. */
   readonly visibleWidth: number;
 }
 
@@ -156,7 +156,7 @@ export interface SectorScene {
   readonly frame: LadderFrame;
   readonly visibleWidth: number;
   readonly pixelsPerLy: number;
-  /** Расстояние от центра кадра до границы, св.г. (§17.15: `visibleWidth / 2`). */
+  /** Расстояние от центра кадра до ближайшей границы, св.г. (короткая ось внутри `edgeDistance`). */
   readonly edgeDist: number;
   /** Бюджет кадра уровня из `LEVELS`, мс (§6, §8.4). */
   readonly budgetMs: number;
@@ -186,8 +186,8 @@ export const TOUCH_TARGET_PX = 44;
 /** Ниже этого размера сектор ничего не рисует (И-9). */
 export const MIN_DRAWABLE_PX = 0.25;
 
-/** Апертура системы появляется с `L8` (§8.1). Лестница продолжена до `L12` в §17.15. */
-export const APERTURE_FIRST_LEVEL = 8;
+/** Апертура системы активна ровно на предельном `L9` (Z-4b §2). */
+export const APERTURE_FIRST_LEVEL = 9;
 
 /** Территории фракций живут на `L2…L6` (§8.1). */
 export const TERRITORY_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6]);
@@ -211,7 +211,7 @@ export const MAX_GRID_LABELS = 64;
  * `L7` — ячейки `16`, `L8` — узлы `3,2`. На `L0` и глубже `L8` сетки нет (§8.1).
  */
 export const GRID_TIER_BY_LEVEL: readonly (number | null)[] = Object.freeze([
-  null, 1, 1, 2, 2, 3, 3, 4, 5, null, null, null, null,
+  null, 1, 1, 2, 2, 3, 3, 4, 5, null,
 ]);
 
 function requirePositive(value: number, what: string): number {
@@ -257,12 +257,12 @@ export function sceneLevel(visibleWidth: number): number {
   return levelForWidth(requirePositive(visibleWidth, 'Видимая ширина (visibleWidth)'));
 }
 
-/** Пикселей на световой год по короткой оси кадра. */
+/** Пикселей на единицу карты: масштаб по полной ширине кадра (`viewport.w / visibleWidth`). */
 export function pixelsPerLightYear(viewport: FrameViewport, camera: SceneCamera): number {
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
 
-  return Math.min(frame.w, frame.h) / cam.visibleWidth;
+  return frame.w / cam.visibleWidth;
 }
 
 /**
@@ -272,7 +272,7 @@ export function pixelsPerLightYear(viewport: FrameViewport, camera: SceneCamera)
 export function cameraEdgeDistance(viewport: FrameViewport, camera: SceneCamera): number {
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
 
   return edgeDistance(frame, scale);
 }
@@ -286,7 +286,7 @@ export function worldToScreen(
 ): { readonly x: number; readonly y: number } {
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
 
   return {
     x: frame.w / 2 + (x - cam.centerX) * scale,
@@ -303,7 +303,7 @@ export function screenToWorld(
 ): { readonly x: number; readonly y: number } {
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
 
   return {
     x: cam.centerX + (x - frame.w / 2) / scale,
@@ -432,7 +432,7 @@ export function territoriesFor(
   if (!TERRITORY_LEVELS.includes(level)) return [];
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
 
   const groups = new Map<string, SceneSystemInput[]>();
   for (const system of systems) {
@@ -477,7 +477,7 @@ function visibleWorldBounds(
 ): { readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number } {
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
   const halfW = frame.w / 2 / scale;
   const halfH = frame.h / 2 / scale;
 
@@ -551,7 +551,7 @@ export function gridFor(
   const labels: SceneGridLabel[] = [];
   const letters = spec.addressLetters;
   const probe = estimateLabelSize(`KP·${'X'.repeat(letters)}`);
-  const readable = cellSize * (Math.min(frame.w, frame.h) / cam.visibleWidth) >= probe.width + LABEL_GAP * 2;
+  const readable = cellSize * (frame.w / cam.visibleWidth) >= probe.width + LABEL_GAP * 2;
   if (letters > 0 && readable) {
     for (let row = firstRow; row <= lastRow && labels.length < MAX_GRID_LABELS; row += 1) {
       for (let col = firstCol; col <= lastCol && labels.length < MAX_GRID_LABELS; col += 1) {
@@ -604,7 +604,7 @@ export function labelTextFor(marker: SceneMarker, level: number): string | null 
   return base;
 }
 
-/** Кольцо-превью и приглашение войти: с `L8` в секторном кадре (§8.1). */
+/** Кольцо-превью и приглашение войти: ровно на предельном `L9` (Z-4b §2). */
 export function aperturesFor(
   markers: readonly SceneMarker[],
   level: number,
@@ -634,7 +634,7 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
   const cam = resolveCamera(input.camera);
   const level = sceneLevel(cam.visibleWidth);
   const spec = levelSpec(level);
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
   const diameter = markerDiameter(cam.visibleWidth);
   const systems = input.systems ?? [];
   const invalidSystems = systems.filter((system) => !isUsableSystem(system)).length;
