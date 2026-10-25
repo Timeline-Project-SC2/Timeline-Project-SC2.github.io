@@ -16,7 +16,7 @@ import type {
   PlaceRecord,
   SystemRecord,
 } from './config.ts';
-import { markerDiameter, maxScaleForTargetEdge } from './level-ladder.ts';
+import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
 import type { NetChannel, NetSystemInput } from './faction-net.ts';
@@ -98,7 +98,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
 
   function minScale(): number { return fitScale() * CONFIG.view.minFactor; }
   function maxScale(): number {
-    return maxScaleForTargetEdge(state.viewport, kernel.data.mapSize(), CONFIG.view.fitInset);
+    return maxScaleForTargetWidth(state.viewport, kernel.data.mapSize(), CONFIG.view.fitInset);
   }
 
   function fitView(): void {
@@ -441,11 +441,11 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     return coarsePointerQuery.matches;
   }
 
-  /** Видимая ширина по короткой оси — та же величина, что в `level-ladder` (§17.15). */
+  /** Уровень выбирается по полной ширине (Z-4b); короткая ось — только для edgeDistance. */
   function visibleWidth(): number {
     var scale = state.view.scale;
     if (!(scale > 0)) return Number.POSITIVE_INFINITY;
-    return Math.min(state.viewport.w, state.viewport.h) / scale;
+    return state.viewport.w / scale;
   }
 
   function sceneCamera(): SceneCamera {

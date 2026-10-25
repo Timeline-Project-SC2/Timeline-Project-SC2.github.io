@@ -6,7 +6,7 @@
  * 92 terrain-draw вместо 7), и оба воркера при этом сдали зелёные PR.
  * Здесь проверяется именно СТЫК модулей, а не каждый модуль по отдельности:
  *
- *   1. пороги лестницы — точная геометрия `10 000 / 2^n` (не округления);
+ *   1. пороги лестницы — точная геометрия `10 000 / 10^(n/9)` (не округления);
  *   2. `addressLetters` монотонно не убывает и не превышает `5`;
  *   3. `markerDiameter(visibleWidthForLevel(n))` совпадает с `markerPx` таблицы;
  *   4. контрольные векторы `levelForWidth` и гистерезис: шаг ровно один уровень,
@@ -38,6 +38,7 @@ import {
   MAX_VISIBLE_WIDTH,
   MIN_VISIBLE_WIDTH,
   levelForWidth,
+  levelSpec,
   markerDiameter,
   visibleWidthForLevel,
 } from '../src/atlas/level-ladder.ts';
@@ -87,8 +88,8 @@ for (let level = 0; level <= deepestSector; level += 1) {
   const spec = sectorLevels[level];
   if (spec === undefined) continue;
   check(
-    near(spec.visibleWidth, MAX_VISIBLE_WIDTH / 2 ** level, 1e-9),
-    `${spec.id}: порог ${spec.visibleWidth} не равен 10 000 / 2^${level}`,
+    near(spec.visibleWidth, MAX_VISIBLE_WIDTH / 10 ** (level / 9), 1e-9),
+    `${spec.id}: порог ${spec.visibleWidth} не равен 10 000 / 10^(${level}/9)`,
   );
 }
 
@@ -123,21 +124,22 @@ for (let level = 0; level <= deepestSector; level += 1) {
 // 4. Контрольные векторы и гистерезис.
 check(levelForWidth(19.53125) === 9, `levelForWidth(19,53125) = ${levelForWidth(19.53125)} вместо 9`);
 check(levelForWidth(19.53) === 9, `levelForWidth(19,53) = ${levelForWidth(19.53)} вместо 9`);
-check(levelForWidth(100) === 6, `levelForWidth(100) = ${levelForWidth(100)} вместо 6`);
+check(levelForWidth(100) === 9, `levelForWidth(100) = ${levelForWidth(100)} вместо 9`);
 check(levelForWidth(10000) === 0, `levelForWidth(10 000) = ${levelForWidth(10000)} вместо 0`);
 check(levelForWidth(20000) === 0, `levelForWidth(20 000) = ${levelForWidth(20000)} вместо 0`);
 check(MIN_VISIBLE_WIDTH === 16000, `MIN_VISIBLE_WIDTH = ${MIN_VISIBLE_WIDTH} вместо 16 000`);
 check(MAX_VISIBLE_WIDTH === 10000, `MAX_VISIBLE_WIDTH = ${MAX_VISIBLE_WIDTH} вместо 10 000`);
 check(near(HYSTERESIS, 0.12, 1e-12), `гистерезис ${HYSTERESIS} вместо 0,12`);
 
-// Вход в уровень n требует ширины W(n) · (1 − 0,12), иначе уровень недостижим.
-// Порог достижимости L9 — закреплённое число: 17,1875 св.г. (дефект приёмки SW-1, §16.9).
-const enterFloorWidth = visibleWidthForLevel(9) * (1 - HYSTERESIS);
+// Вход в L9 асимметричен: полная ширина 1000 единиц, без гистерезиса.
+const enterFloorWidth = visibleWidthForLevel(9);
 check(
-  near(enterFloorWidth, 17.1875, 1e-9),
-  `порог достижимости L9 ${enterFloorWidth} вместо 17,1875`,
+  near(enterFloorWidth, 1000, 1e-9),
+  `порог достижимости L9 ${enterFloorWidth} вместо 1000`,
 );
-const deepestFloorWidth = visibleWidthForLevel(deepestSector) * (1 - HYSTERESIS);
+check(near(visibleWidthForLevel(8) * (1 - HYSTERESIS), 1136.5637052130978, 1e-9),
+  'симметричный порог L8 должен быть 1136,563705…');
+const deepestFloorWidth = visibleWidthForLevel(deepestSector);
 let level = 0;
 let switchesIn = 0;
 for (let width = MAX_VISIBLE_WIDTH; width > deepestFloorWidth * 0.98; width *= 0.995) {
@@ -228,7 +230,7 @@ check(worstCenterOffset <= 2.27, `адрес грубее допуска 2,27 с
 
 // Префиксы уровней лестницы обязаны быть началом полного адреса.
 for (let level = 0; level < 10; level += 1) {
-  const spec = LEVELS[level];
+  const spec = levelSpec(level);
   if (spec === undefined) continue;
   const prefix = formatAddress(prefixOf(5720, 6257, spec.addressLetters));
   check('KP·REQHC'.startsWith(prefix), `${spec.id}: префикс ${prefix} не начало адреса Корхала KP·REQHC`);

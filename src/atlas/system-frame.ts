@@ -6,7 +6,7 @@
 
 import { PLANET_GLOBE } from './config.ts';
 import type { AtlasKernel, PlaceRecord, SystemRecord } from './config.ts';
-import { LEVELS } from './level-ladder.ts';
+import { levelSpec } from './level-ladder.ts';
 
 export type SystemFrameLevel = 13 | 14 | 15;
 export type SystemFrameLevelId = 'S0' | 'S1' | 'S2';
@@ -355,7 +355,7 @@ export function orbitScreenRadius(orbitAu: number, scaleA: number): number {
 }
 
 function systemLevel(level: number): { level: SystemFrameLevel; levelId: SystemFrameLevelId; widthAu: number } {
-  const spec = LEVELS[level];
+  const spec = levelSpec(level);
   if (!spec || spec.frame !== 'O' || (spec.id !== 'S0' && spec.id !== 'S1' && spec.id !== 'S2')) {
     throw new RangeError(`Системный уровень должен быть S0…S2 (уровни 13…15): ${String(level)}`);
   }
