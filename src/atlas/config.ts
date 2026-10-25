@@ -56,8 +56,10 @@ export const CONFIG = {
   maxSuggestions: 22,
 } as const;
 
-// Перечень совпадает с docs/ADMIN_GUIDE.md; для каждого типа есть метка, чтобы
-// в каталоге не показывалось сырое значение из таблицы.
+// Администраторские типы совпадают с docs/ADMIN_GUIDE.md; для каждого типа есть
+// метка, чтобы в каталоге не показывалось сырое значение из таблицы. Отдельно
+// объявлен `unknown` — его нельзя ввести в таблицу руками: так нормализуется
+// место, у которого тип не задан (пустая ячейка или легаси `none`).
 export interface PlaceTypeInfo {
   readonly label: string;
   readonly plural: string;
@@ -71,6 +73,9 @@ export const PLACE_TYPES: Readonly<Record<string, PlaceTypeInfo>> = {
   station: { label: 'Станция', plural: 'станции', glyph: 'С' },
   platform: { label: 'Платформа', plural: 'платформы', glyph: 'Ф' },
   other: { label: 'Иное место', plural: 'иные места', glyph: 'И' },
+  // Место без типа в таблице (пустая ячейка или легаси `none`) — «полка ожидания»
+  // по плану §9.2 п.5. Такому месту нельзя приписывать вид «планета».
+  unknown: { label: 'Без типа', plural: 'места без типа', glyph: '?' },
 };
 
 export type UnknownRecord = Record<string, unknown>;

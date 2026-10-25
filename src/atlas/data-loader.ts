@@ -55,6 +55,18 @@ interface SheetPlaceRecord extends PlaceRecord {
   mapCoord: MapPoint | null;
 }
 
+/* Тип места из таблицы. Пустая ячейка и легаси-токен `none` — это «место без
+ * типа» (полка ожидания, §9.2 п.5), а не планета: иначе такое место попадает в
+ * каталог планет и в системный кадр как тело. Легаси-фолбэк на `planet` остаётся
+ * только там, где типа нет вообще (`undefined`/`null`: нет колонки в таблице или
+ * у записи нет поля) — иначе поедет весь старый каталог. */
+export function normalizedPlaceType(value: unknown): string {
+  if (value == null) return 'planet';
+  var text = String(value).trim().toLowerCase();
+  if (!text || text === 'none') return 'unknown';
+  return text;
+}
+
 export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
   const state = kernel.state;
   const travelCore = kernel.runtime.travelCore;
@@ -131,10 +143,6 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     if (!type || type === 'standard' || type === 'system') return 'standard';
     if (type === 'unknown' || type === 'unknow') return 'unknown';
     return type;
-  }
-
-  function normalizedPlaceType(value: unknown): string {
-    return (sheetValue(value).toLowerCase() || 'planet');
   }
 
   function mapSystemRow(row: SheetRow): SystemRecord {
