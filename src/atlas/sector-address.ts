@@ -31,6 +31,9 @@ export function addressOf(x: number, y: number): SectorAddress {
 
 /** Возвращает адрес заданного уровня, перенося остаток координат между тирами. */
 export function prefixOf(x: number, y: number, letters: AddressLetters): SectorAddress {
+  if (!Number.isInteger(letters) || letters < 0 || letters > 5) {
+    throw new TypeError('Уровень адреса должен быть целым числом от 0 до 5.');
+  }
   if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= MAP_SIZE || y >= MAP_SIZE) {
     throw new TypeError('Координаты должны находиться в пределах поля [0, 10000).');
   }
@@ -99,7 +102,7 @@ export function parseAddress(text: string): SectorAddress | null {
 
   let sector = SECTOR_CODE;
   let lettersText = normalized;
-  const sectorMatch = /^([A-Z]{2})[·\\-\\s]+(.+)$/.exec(normalized);
+  const sectorMatch = /^([A-Z]{2})[·\-\s]+(.+)$/.exec(normalized);
   const candidateSector = sectorMatch?.[1];
   const remainder = sectorMatch?.[2];
   if (candidateSector !== undefined && remainder !== undefined) {
@@ -110,7 +113,7 @@ export function parseAddress(text: string): SectorAddress | null {
     lettersText = remainder;
   }
 
-  const letters = lettersText.replace(/[·\\-\\s]/g, '');
+  const letters = lettersText.replace(/[·\-\s]/g, '');
   if (letters.length !== 5 || !/^[A-Y]{5}$/.test(letters)) {
     return null;
   }
