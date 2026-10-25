@@ -57,6 +57,66 @@ export function prefixOf(x: number, y: number, letters: AddressLetters): SectorA
   return { sector: SECTOR_CODE, letters: result };
 }
 
+const RESERVED_SECTORS: readonly string[] = Object.freeze(['TS', 'UJ', 'CH', 'AY', 'SL', 'SH']);
+
+/** Возвращает левый верхний угол узла T5 и размер его ячейки. */
+export function rectOf(address: SectorAddress | string): { readonly x: number; readonly y: number; readonly size: number } {
+  const parsed = typeof address === 'string' ? parseAddress(address) : address;
+  if (parsed === null || !isValidFullAddress(parsed)) {
+    throw new TypeError('Для прямоугольника требуется полный адрес сектора.');
+  }
+
+  let x = 0;
+  let y = 0;
+  for (let index = 0; index < parsed.letters.length; index += 1) {
+    const letter = parsed.letters[index];
+    const tier = ADDRESS_TIERS[index + 1];
+    if (letter === undefined || tier === undefined) {
+      throw new TypeError('Адрес содержит некорректный уровень.');
+    }
+    const letterIndex = ALPHABET.indexOf(letter);
+    const col = letterIndex % 5;
+    const row = Math.floor(letterIndex / 5);
+    x += col * tier.cellSize;
+    y += row * tier.cellSize;
+  }
+
+  return { x, y, size: ADDRESS_TIERS[5]!.cellSize };
+}
+
+/** Возвращает центр узла T5. */
+export function centerOf(address: SectorAddress | string): { readonly x: number; readonly y: number } {
+  const rect = rectOf(address);
+  return { x: rect.x + rect.size / 2, y: rect.y + rect.size / 2 };
+}
+
+/** Разбирает компактную и расширенную запись полного адреса. */
+export function parseAddress(text: string): SectorAddress | null {
+  const normalized = text.trim().toUpperCase();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  let sector = SECTOR_CODE;
+  let lettersText = normalized;
+  const sectorMatch = /^([A-Z]{2})[·\\-\\s]+(.+)$/.exec(normalized);
+  const candidateSector = sectorMatch?.[1];
+  const remainder = sectorMatch?.[2];
+  if (candidateSector !== undefined && remainder !== undefined) {
+    if (candidateSector !== SECTOR_CODE && !RESERVED_SECTORS.includes(candidateSector)) {
+      return null;
+    }
+    sector = candidateSector;
+    lettersText = remainder;
+  }
+
+  const letters = lettersText.replace(/[·\\-\\s]/g, '');
+  if (letters.length !== 5 || !/^[A-Y]{5}$/.test(letters)) {
+    return null;
+  }
+  return { sector, letters };
+}
+
 /** Форматирует адрес компактно либо с разделителями между уровнями. */
 export function formatAddress(address: SectorAddress, style: 'compact' | 'expanded' = 'compact'): string {
   if (style === 'expanded') {
@@ -67,4 +127,10 @@ export function formatAddress(address: SectorAddress, style: 'compact' | 'expand
   return address.letters.length === 0
     ? address.sector
     : `${address.sector}·${address.letters}`;
+}
+
+function isValidFullAddress(address: SectorAddress): boolean {
+  return (address.sector === SECTOR_CODE || RESERVED_SECTORS.includes(address.sector))
+    && address.letters.length === 5
+    && /^[A-Y]{5}$/.test(address.letters);
 }
