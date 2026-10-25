@@ -320,27 +320,34 @@ export function fitScaleFor(viewport: FrameViewport, mapSize: number, fitInset: 
 /**
  * Предел приближения по требованию: масштаб точки «1 св.г. до границы».
  *
- * Множитель к `fitScale` выведен, а не взят из плана `600…1100×`:
+ * §17.17 п. 4 (решение Гайдлайнера): кламп стоит **ровно на требовании**, без
+ * запаса вниз — `edgeDistance(maxScale) === 1,00` точно, то есть
+ * `maxScale = min(w, h) / 2`. Не `0,95` и не `0,975`.
  *
- *     scale(edgeDist = 1) / fitScale = mapSize / (2 · fitInset)
- *                                    = 10 000 / 1,88 = 5 319,1×
+ * Множитель при этом выведен, а не взят из плана `600…1100×`, и получается
+ * тождеством, а не приближением:
+ *
+ *     maxScale / fitScale = mapSize / (2 · fitInset) = 10 000 / 1,88 = 5 319,1489…
  *
  * (`5 000×` к номиналу L0 — то же без inset `0,94`.) От viewport множитель
- * не зависит: обе величины пропорциональны `min(w, h)`.
+ * не зависит: обе величины пропорциональны `min(w, h)`. Поэтому `mapSize`
+ * и `fitInset` точку требования не сдвигают — они входят в контракт сигнатуры
+ * и проверяются на корректность, а тождество закреплено тестом.
  *
- * Потолок ограничен ещё и снизу — не глубже `MIN_CLAMP_EDGE_LY = 0,5` св.г.:
- * ниже начинается системный кадр, вход в него только действием.
+ * Предохранитель отдельный и только на ошибку: масштаб не глубже
+ * `scaleForEdgeDistance(viewport, 0,5)` — ниже начинается системный кадр,
+ * вход в него только действием (§6.1 п. 4).
  */
 export function maxScaleForTargetEdge(
   viewport: FrameViewport,
   mapSize: number,
   fitInset: number,
 ): number {
-  const fit = fitScaleFor(viewport, mapSize, fitInset);
-  const size = requirePositive(mapSize, 'Размер карты (mapSize)');
-  const inset = requirePositive(fitInset, 'Отступ вписывания (fitInset)');
-  const reachFactor = size / (2 * inset) / TARGET_EDGE_LY;
-  const systemFrameLimit = scaleForEdgeDistance(viewport, MIN_CLAMP_EDGE_LY);
+  requirePositive(mapSize, 'Размер карты (mapSize)');
+  requirePositive(fitInset, 'Отступ вписывания (fitInset)');
 
-  return Math.min(fit * reachFactor, systemFrameLimit);
+  const atRequirement = shortSide(viewport) / (2 * TARGET_EDGE_LY);
+  const systemFrameGuard = shortSide(viewport) / (2 * MIN_CLAMP_EDGE_LY);
+
+  return Math.min(atRequirement, systemFrameGuard);
 }

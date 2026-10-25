@@ -281,23 +281,41 @@ test('регрессия «метрику не подменили»: edgeDist н
   }
 });
 
-test('множитель до 1 св.г. — 5 000…5 319,5× к fit и не зависит от viewport', () => {
+test('кламп зума — ровно на требовании 1,00, множитель проверяется тождеством', () => {
+  assert.equal(ladder.TARGET_EDGE_LY, 1);
+
   for (const viewport of VIEWPORTS) {
+    const minSide = Math.min(viewport.w, viewport.h);
     const fitScale = ladder.fitScaleFor(viewport, MAP_SIZE, FIT_INSET);
     assert.ok(
-      near(fitScale, Math.min(viewport.w, viewport.h) / MAP_SIZE * FIT_INSET, EPS),
+      near(fitScale, minSide / MAP_SIZE * FIT_INSET, EPS),
       `fitScaleFor(${viewport.w}×${viewport.h}) = ${fitScale} не по формуле рендерера`,
     );
 
+    // §17.17 п. 4: упор стоит ровно в точке требования — scale = min(w, h) / 2.
     const maxScale = ladder.maxScaleForTargetEdge(viewport, MAP_SIZE, FIT_INSET);
-    const ratio = maxScale / fitScale;
-    assert.ok(ratio >= 5000, `множитель ${ratio} меньше 5 000× при ${viewport.w}×${viewport.h}`);
-    assert.ok(ratio <= 5319.5, `множитель ${ratio} больше 5 319,5× при ${viewport.w}×${viewport.h}`);
-
-    // Предел зума не глубже системного кадра 0,5 св.г. и держит требование 1,00.
+    assert.equal(maxScale, minSide / 2);
     const edgeAtMax = ladder.edgeDistance(viewport, maxScale);
-    assert.ok(edgeAtMax >= ladder.MIN_CLAMP_EDGE_LY - EPS, `край ${edgeAtMax} св.г. глубже 0,5`);
-    assert.ok(edgeAtMax <= 1 + EPS, `край ${edgeAtMax} св.г. мельче требования 1,00`);
+    assert.ok(
+      near(edgeAtMax, 1, EPS),
+      `edgeDistance на клампе ${edgeAtMax} ≠ 1 при ${viewport.w}×${viewport.h}`,
+    );
+
+    // Множитель — тождество, а не коридор: mapSize / (2 · fitInset) = 5 319,1489….
+    const ratio = maxScale / fitScale;
+    const identity = MAP_SIZE / (2 * FIT_INSET);
+    assert.ok(
+      near(ratio, identity, EPS),
+      `множитель ${ratio} ≠ ${identity} при ${viewport.w}×${viewport.h}`,
+    );
+    // Грубая страховка «не план 600…1100×» — не спецификация.
+    assert.ok(ratio >= 5000 && ratio <= 5320, `множитель ${ratio} вне 5 000…5 320`);
+
+    // Предохранитель: кламп не глубже системного кадра 0,5 св.г.
+    assert.ok(
+      maxScale <= ladder.scaleForEdgeDistance(viewport, ladder.MIN_CLAMP_EDGE_LY) + EPS,
+      `кламп глубже системного кадра при ${viewport.w}×${viewport.h}`,
+    );
 
     // Кламп зума обязан доставать до L12 — иначе глубина недостижима.
     assert.equal(ladder.levelForWidth(2 * edgeAtMax, 11), 12);
