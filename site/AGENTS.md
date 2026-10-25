@@ -18,6 +18,8 @@
     второй клик (переход в Копрулу) — `diveCenterMs`, `diveZoomDelay`, `diveZoomMs`, `diveZooms: [20]`.
 - `/sector/` (`site/sector/sector.html`, `sector.css`) и `/minimal/` (`site/minimal/minimal.html`, `minimal-skin.css`):
   - Тонкие входы вариантов атласа поверх `templates/atlas-shell.html`; индикатор координат X/Y (`0..mapSize`) в `.map-controls` и `Shift+клик` существуют **только** в `/sector/`.
+  - Подложка сектора — процедурное поле (`src/atlas/sector-field.ts`): WebGL2 с CPU-фолбэком, `nebula` по умолчанию и `tactical` по `?style=tactical`; генерация детерминирована seed-текстом `KP`.
+  - Растровый контур сектора выведен: тайлы, превью подложки и исходный JPG удалены. Не возвращать запросы тайлов и не добавлять растровую подложку; инвентарь и порядок — в [§17.3 и §17.13 матрицы SW-2](../docs/agents_task_orchestration/agents_task_orchestration.md), гейт — [`tools/verify_no_raster.mjs`](../tools/verify_no_raster.mjs).
   - Карточка наведения `#detailPanel.is-preview` обязана иметь `pointer-events: none` (`syncDetailPreview`), чтобы система у правого края не мигала; в `places` маркер POI строится только при пустом `system_id` и валидных `x, y`.
 - `/planet-globe/` (`site/planet-globe/index.html`, `planet-globe.ts`, `planet-globe-worker.ts`) — боевой WebGL2-глобус `planet-globe-v1` (`proxy -> final` через `uHide`/`uCenterGrow`, каскад `uBuild`, карточка `GlobePickInfo`, 2D-fallback).
 - `/planet-test/` (`site/planet-test/index.html`, `planet-test.ts`, `planet-test.css`) — стенд FX-режимов Шакураса и 10-сек телеметрии (`p50/p95/p99`, `>50ms`, `>100ms`, `worst5`) тонкой обёрткой над `site/shared/planet-globe.ts`, `planet-globe-worker.ts` и `src/planet/planet-globe-fx.ts` (И-5).
@@ -58,4 +60,6 @@
 - **CSP и бандлинг:** не использовать `eval`/`new Function` и ручные `?v=`; пути `new Worker(...)`
   и `importScripts(...)` автоматически переписываются сборщиком на контент-хэши из `build-manifest.json`.
 - **Вендорные и сгенерированные ассеты:** категорически запрещено вручную редактировать файлы
-  в `site/assets/vendor/*`, скомпилированные `.wasm` и сгенерированные тайлы `assets/tiles/*`.
+  в `site/assets/vendor/*` и скомпилированные `.wasm`. Секторная пирамида `assets/tiles/*`,
+  `assets/tiles.json`, превью `assets/map-preview.webp` и источник `assets/src/koprulu-sector.jpg`
+  выведены из эксплуатации и удалены в `SW-2B`; не восстанавливать их как контур подложки сектора.

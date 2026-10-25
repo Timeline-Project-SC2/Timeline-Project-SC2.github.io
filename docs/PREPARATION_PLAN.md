@@ -1629,7 +1629,7 @@ startup time сайта/каталога не более чем на 5% (и не
   только у `6` систем из `173`), с переходом в существующий `/planet-globe/`.
 - Матрица волн `SW-1…SW-6` (`≈ 72–108` агено-часов), инварианты `И-7…И-11` и гейты
   `G7.1…G7.9` зафиксированы в документе. Рантайм на этой стадии **не менялся**.
-- **Статус:** SW-1 (ядро: адрес, лестница, единицы) — готово 25.10.2026 (PR #244, #245, #248; факт волны и требование `MIN_REACHABLE_WIDTH = 17,1875` см. [`agents_task_orchestration/agents_task_orchestration.md`](agents_task_orchestration/agents_task_orchestration.md) §16.9).
+- **Статус:** SW-1 (ядро: адрес, лестница, единицы) — готово 25.10.2026 (PR #244, #245, #248; факт волны и `MIN_REACHABLE_WIDTH = 17,1875` — [§16.9 матрицы](agents_task_orchestration/agents_task_orchestration.md)); SW-2 (процедурное поле WebGL2 + CPU-фолбэк, пресеты `nebula`/`tactical` через `?style=`, seed `KP`, вывод растра, удаление тайлов/превью/JPG, `imageVersion` для кэш-бастинга галактики и `verify:no-raster` выше `npm test`) — черновик статуса, ожидает слияния SW-2B и сверки по фактическому diff; порядок и инвентарь — [§17.3 и §17.13](agents_task_orchestration/agents_task_orchestration.md), [гейт](../tools/verify_no_raster.mjs).
 
 ---
 

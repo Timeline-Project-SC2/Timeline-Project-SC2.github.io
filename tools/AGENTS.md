@@ -46,14 +46,20 @@
   - Проверяет присутствие всех 7 маршрутов в `.publish/`, целостность `.publish/build-manifest.json`,
     существование всех hashed-бандлов в HTML, `new Worker(...)` и `importScripts(...)`, отсутствие
     сырых `.ts` и `assets/src/` в публикации, а также паритет экспортов публичных модулей (И-6).
+- [`tools/verify_no_raster.mjs`](verify_no_raster.mjs) (`npm run verify:no-raster`) — гейт **G7.3**: проверяет, что секторный
+  растр выведен, тайлы и превью подложки удалены, а в `data/meta.json` сохранён `imageVersion`.
+  В CI этот гейт стоит **выше `npm test`**; назначение поля версии — кэш-бастинг изображений
+  галактики через `tools/vite/asset-utils.ts`. Матрица и порядок — [§17.3 и §17.13 SW-2](../docs/agents_task_orchestration/agents_task_orchestration.md).
 
 ---
 
 ## 3. Ассеты, Wasm, золотые фикстуры и модули сборки `tools/vite/*`
 
-- `tools/build_assets.py` (`--force`, `--check`, `--sync-only`) — строит из `assets/src/`
-  пирамиду WebP-тайлов `512×512` (`assets/tiles/`, `assets/tiles.json`, `assets/map-preview.webp`),
-  ресайзы карты галактики (`1200/2000/3000 px`) и записывает `imageVersion` в `data/meta.json`.
+- `tools/build_assets.py` строит ресайзы карты галактики (`1200/2000/3000 px`) из `assets/src/`;
+  пирамиду секторных WebP-тайлов `512×512` и превью подложки больше не собирает — растр сектора
+  выведен, тайлы удалены. `data/meta.json` по-прежнему содержит `assets.imageVersion`: это версия
+  источников для кэш-бастинга оставшихся изображений галактики в сборке, а не метаданные растра
+  сектора. См. [§17.3 и §17.13 SW-2](../docs/agents_task_orchestration/agents_task_orchestration.md).
 - `tools/build_planet_core.mjs` (`--check`) — компилирует AssemblyScript-ядра и сверяет байт-слепок
   `src/planet/planet-core-bytes.ts`. Скрипты `tools/bench_planet_stage{3,4,5,6}.mjs`,
   `bench_planet_ci.mjs`, `bench_planet_baseline.mjs` и `check_planet_spike.mjs` проверяют золотые
