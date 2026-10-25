@@ -101,8 +101,39 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     markerPx: 34.3,
     frameBudgetMs: 16,
   }),
+  // L10…L12 — та же геометрия 10 000 / 2^n, добавлены волной SW-3 под требование
+  // «1 св.г. от цели до границы кадра» (§17.15): на L8 edgeDist = 19,53 св.г.,
+  // на L9 — 9,77, поэтому 1,00 достигается только внутри L12.
+  // markerDiameter(2) = 89,5 px упирается в кламп 40 px, поэтому в таблице стоит 40.
   Object.freeze({
     level: 10,
+    id: 'L10',
+    frame: 'S',
+    visibleWidth: 9.765625,
+    addressLetters: 5,
+    markerPx: 40,
+    frameBudgetMs: 16,
+  }),
+  Object.freeze({
+    level: 11,
+    id: 'L11',
+    frame: 'S',
+    visibleWidth: 4.8828125,
+    addressLetters: 5,
+    markerPx: 40,
+    frameBudgetMs: 16,
+  }),
+  Object.freeze({
+    level: 12,
+    id: 'L12',
+    frame: 'S',
+    visibleWidth: 2.44140625,
+    addressLetters: 5,
+    markerPx: 40,
+    frameBudgetMs: 16,
+  }),
+  Object.freeze({
+    level: 13,
     id: 'S0',
     frame: 'O',
     visibleWidth: 100,
@@ -112,7 +143,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     frameBudgetMs: 16,
   }),
   Object.freeze({
-    level: 11,
+    level: 14,
     id: 'S1',
     frame: 'O',
     visibleWidth: 16,
@@ -122,7 +153,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
     frameBudgetMs: 16,
   }),
   Object.freeze({
-    level: 12,
+    level: 15,
     id: 'S2',
     frame: 'O',
     visibleWidth: 2,
@@ -136,6 +167,21 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
 export const MAX_VISIBLE_WIDTH = 10000;
 export const MIN_VISIBLE_WIDTH = 16000;
 export const HYSTERESIS = 0.12;
+
+/** Самый глубокий секторный уровень лестницы: L12 (§17.15). */
+export const DEEPEST_SECTOR_LEVEL = 12;
+
+/**
+ * Требование владельца (§17.15.1): расстояние от цели до ближайшей границы кадра
+ * равно 1 световому году. Метрика — `edgeDistance`, а не ширина видимой области.
+ */
+export const TARGET_EDGE_LY = 1;
+
+/**
+ * Глубже 0,5 св.г. до границы начинается системный кадр: вход туда — только
+ * действием (§6.1 п. 4), клампом зума он не достигается.
+ */
+export const MIN_CLAMP_EDGE_LY = 0.5;
 
 export function levelSpec(level: number): LevelSpec {
   const spec = LEVELS[level];
@@ -162,13 +208,13 @@ export function levelForWidth(visibleWidth: number, prev?: number): number {
   let rawLevel: number;
   if (visibleWidth >= MAX_VISIBLE_WIDTH) {
     rawLevel = 0;
-  } else if (visibleWidth <= visibleWidthForLevel(9)) {
-    rawLevel = 9;
+  } else if (visibleWidth <= visibleWidthForLevel(DEEPEST_SECTOR_LEVEL)) {
+    rawLevel = DEEPEST_SECTOR_LEVEL;
   } else {
     rawLevel = Math.max(
       0,
       Math.min(
-        9,
+        DEEPEST_SECTOR_LEVEL,
         Math.floor(Math.log2(MAX_VISIBLE_WIDTH / visibleWidth) + 1e-9),
       ),
     );
@@ -177,8 +223,10 @@ export function levelForWidth(visibleWidth: number, prev?: number): number {
   if (prev === undefined) {
     return rawLevel;
   }
-  if (!Number.isInteger(prev) || prev < 0 || prev > 9) {
-    throw new RangeError(`Секторный уровень вне диапазона 0…9: ${prev}`);
+  if (!Number.isInteger(prev) || prev < 0 || prev > DEEPEST_SECTOR_LEVEL) {
+    throw new RangeError(
+      `Секторный уровень вне диапазона 0…${DEEPEST_SECTOR_LEVEL}: ${prev}`,
+    );
   }
 
   if (rawLevel > prev) {
@@ -202,4 +250,104 @@ export function markerDiameter(visibleWidth: number): number {
 
   const diameter = 2.5 * (MAX_VISIBLE_WIDTH / visibleWidth) ** 0.42;
   return Math.max(2.5, Math.min(40, diameter));
+}
+
+/* --------------------------------------------------- метрика требования §17.15
+ *
+ * Единственная метрика глубины — `edgeDist`, расстояние от центра кадра (цели)
+ * до ближайшей границы экрана в световых годах:
+ *
+ *     edgeDist = min(viewport.w, viewport.h) / 2 / scale
+ *
+ * `visibleWidth` уровней — производная величина: она трактуется как протяжённость
+ * мира по КОРОТКОЙ оси кадра, поэтому `edgeDist = visibleWidth / 2`. Это та же
+ * ось, по которой масштабирует `fitScale()` в `canvas-renderer.ts`
+ * (`min(w, h) / mapSize * fitInset`), — поэтому формула `fitScaleFor` совпадает
+ * с рендерером до порядка операций.
+ */
+
+/** Размер кадра, к которому применяется масштаб. */
+export interface FrameViewport {
+  readonly w: number;
+  readonly h: number;
+}
+
+function requirePositive(value: number, what: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${what} должно быть положительным числом: ${String(value)}`);
+  }
+
+  return value;
+}
+
+/** Длина короткой оси кадра — та, по которой меряется глубина. */
+function shortSide(viewport: FrameViewport): number {
+  const frame: FrameViewport | null | undefined = viewport;
+  if (frame === null || frame === undefined) {
+    throw new RangeError('Кадр должен быть объектом { w, h }');
+  }
+  const w = requirePositive(frame.w, 'Ширина кадра (viewport.w)');
+  const h = requirePositive(frame.h, 'Высота кадра (viewport.h)');
+
+  return Math.min(w, h);
+}
+
+/** Расстояние от цели (центра кадра) до ближайшей границы экрана, в св.г. */
+export function edgeDistance(viewport: FrameViewport, scale: number): number {
+  const short = shortSide(viewport);
+  const pixelsPerLy = requirePositive(scale, 'Масштаб кадра (scale)');
+
+  return short / 2 / pixelsPerLy;
+}
+
+/** Масштаб, при котором до ближайшей границы ровно `edgeDist` св.г. */
+export function scaleForEdgeDistance(viewport: FrameViewport, edgeDist: number): number {
+  const short = shortSide(viewport);
+  const lightYears = requirePositive(edgeDist, 'Расстояние до границы кадра (edgeDist)');
+
+  return short / 2 / lightYears;
+}
+
+/** «Вся карта» по короткой оси — формула `fitScale()` из `canvas-renderer.ts`. */
+export function fitScaleFor(viewport: FrameViewport, mapSize: number, fitInset: number): number {
+  const short = shortSide(viewport);
+  const size = requirePositive(mapSize, 'Размер карты (mapSize)');
+  const inset = requirePositive(fitInset, 'Отступ вписывания (fitInset)');
+
+  return short / size * inset;
+}
+
+/**
+ * Предел приближения по требованию: масштаб точки «1 св.г. до границы».
+ *
+ * §17.17 п. 4 (решение Гайдлайнера): кламп стоит **ровно на требовании**, без
+ * запаса вниз — `edgeDistance(maxScale) === 1,00` точно, то есть
+ * `maxScale = min(w, h) / 2`. Не `0,95` и не `0,975`.
+ *
+ * Множитель при этом выведен, а не взят из плана `600…1100×`, и получается
+ * тождеством, а не приближением:
+ *
+ *     maxScale / fitScale = mapSize / (2 · fitInset) = 10 000 / 1,88 = 5 319,1489…
+ *
+ * (`5 000×` к номиналу L0 — то же без inset `0,94`.) От viewport множитель
+ * не зависит: обе величины пропорциональны `min(w, h)`. Поэтому `mapSize`
+ * и `fitInset` точку требования не сдвигают — они входят в контракт сигнатуры
+ * и проверяются на корректность, а тождество закреплено тестом.
+ *
+ * Предохранитель отдельный и только на ошибку: масштаб не глубже
+ * `scaleForEdgeDistance(viewport, 0,5)` — ниже начинается системный кадр,
+ * вход в него только действием (§6.1 п. 4).
+ */
+export function maxScaleForTargetEdge(
+  viewport: FrameViewport,
+  mapSize: number,
+  fitInset: number,
+): number {
+  requirePositive(mapSize, 'Размер карты (mapSize)');
+  requirePositive(fitInset, 'Отступ вписывания (fitInset)');
+
+  const atRequirement = shortSide(viewport) / (2 * TARGET_EDGE_LY);
+  const systemFrameGuard = shortSide(viewport) / (2 * MIN_CLAMP_EDGE_LY);
+
+  return Math.min(atRequirement, systemFrameGuard);
 }
