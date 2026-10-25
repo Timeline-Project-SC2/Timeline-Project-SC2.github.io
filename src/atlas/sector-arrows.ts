@@ -27,9 +27,8 @@ export interface ArrowSelection {
 const MAX_ARROWS = 5;
 const MIN_SEPARATION = 24 * Math.PI / 180;
 
-// Берём единый форматтер проекта; в подписи убираем только избыточный «,0».
 function distanceLabel(ly: number): string {
-  return formatDistanceLy(ly, 'short').replace(/,0(?=\u00a0св\.г\.$)/, '');
+  return formatDistanceLy(ly, 'label');
 }
 
 function angleDistance(a: number, b: number): number {
