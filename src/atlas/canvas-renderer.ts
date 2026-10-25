@@ -19,6 +19,8 @@ import type {
 import { markerDiameter, maxScaleForTargetEdge } from './level-ladder.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
+import type { NetChannel, NetSystemInput } from './faction-net.ts';
+import { CHANNEL_BRIGHTNESS, channelsFor, isNetLayerLevel } from './faction-net.ts';
 import type {
   SceneAperture,
   SceneCamera,
@@ -803,11 +805,135 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
+  /* ------------------------------------------------------------ каналы сетей (Z-3.8) */
+
+  /*
+   * Каналы между сетями (`net_confront_id`, карточка `Z-3.8`) — отдельный проход
+   * ПОСЛЕ баблов и «всполохов» слоя сетей: лента идёт поверх заливки баблов и
+   * сквозь них, поэтому проход не обрезается по контурам баблов и рисуется
+   * `source-over`. Мировая геометрия от камеры не зависит, поэтому каналы
+   * считаются один раз на набор данных, а в кадре пересчитываются только
+   * экранные точки. В генерацию баблов каналы не входят (`bubbleFor` колонку
+   * `net_confront_id` не читает).
+   *
+   * Колонки слоя сетей приходят из `data/systems.csv`. Загрузчик их пока не
+   * читает (решение `Z-3.3`: `net_id` живёт только в сыром CSV), поэтому до
+   * монтажа слоя сетей (`Z-3.4`) и до разметки владельца каналов ноль и кадр
+   * не меняется ни на одном уровне.
+   */
+  let netChannelSource: SystemRecord[] | null = null;
+  let netChannelList: readonly NetChannel[] = [];
+
+  /** Колонка слоя сетей из записи: `unknown` загрузчика приводится к тексту. */
+  function netColumn(value: unknown): string | null {
+    return value === null || value === undefined ? null : String(value);
+  }
+
+  function netChannelInputs(): NetSystemInput[] {
+    var list = state.systems;
+    var input: NetSystemInput[] = [];
+    for (var index = 0; index < list.length; index += 1) {
+      var system = list[index]!;
+      var coord = system.coord;
+      input.push({
+        id: system.id,
+        name: system.name,
+        x: coord ? coord[0] : null,
+        y: coord ? coord[1] : null,
+        faction: system.primaryFaction ?? null,
+        type: system.systemType ?? null,
+        net_id: netColumn(system.net_id),
+        net_confront_id: netColumn(system.net_confront_id),
+      });
+    }
+    return input;
+  }
+
+  function netChannels(): readonly NetChannel[] {
+    if (netChannelSource === state.systems) return netChannelList;
+    netChannelSource = state.systems;
+    try {
+      var result = channelsFor(netChannelInputs(), {
+        // Цвет — таблица `data/factions.csv`: оттенок из имени не вычисляется.
+        factionColor: function (faction) { return kernel.data.factionColor(faction); },
+      });
+      netChannelList = result.channels;
+      // Замкнутое кольцо каналов — не ошибка сборки: предупреждение видно в консоли.
+      for (var index = 0; index < result.warnings.length; index += 1) {
+        console.warn('Слой сетей: ' + result.warnings[index]!.message);
+      }
+    } catch (err) {
+      // Битая ячейка `net_confront_id`: карта остаётся живой, но ошибка не
+      // глотается — имя системы и причина печатаются из сообщения `RangeError`.
+      netChannelList = [];
+      console.error('Слой сетей: каналы не построены — '
+        + (err instanceof Error ? err.message : String(err)));
+    }
+    return netChannelList;
+  }
+
+  /** Одна лента канала: градиент табличных цветов фракций двух концов. */
+  function drawNetChannel(channel: NetChannel): void {
+    const ctx = kernel.ctx!;
+    var stops = channel.stops;
+    // Без резолвера табличного цвета градиента нет: лента не рисуется вовсе.
+    if (stops.length < 2) return;
+    var from = toScreen(channel.from.x, channel.from.y);
+    var to = toScreen(channel.to.x, channel.to.y);
+    var dx = to.x - from.x;
+    var dy = to.y - from.y;
+    var span = Math.hypot(dx, dy);
+    var half = channel.width * state.view.scale / 2;
+    if (!(span > 0.5) || !(half > 0)) return;
+    var normalX = -dy / span;
+    var normalY = dx / span;
+
+    ctx.save();
+    // Проход поверх баблов: без обрезки по контурам и без сложения света.
+    ctx.globalCompositeOperation = 'source-over';
+    // Яркость одна на все каналы: ни номер канала, ни расстояние на неё не влияют.
+    ctx.globalAlpha = CHANNEL_BRIGHTNESS;
+    try {
+      var gradient = ctx.createLinearGradient(from.x, from.y, to.x, to.y);
+      gradient.addColorStop(0, stops[0]!.color);
+      gradient.addColorStop(1, stops[stops.length - 1]!.color);
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(from.x + normalX * half, from.y + normalY * half);
+      ctx.lineTo(to.x + normalX * half, to.y + normalY * half);
+      ctx.lineTo(to.x - normalX * half, to.y - normalY * half);
+      ctx.lineTo(from.x - normalX * half, from.y - normalY * half);
+      ctx.closePath();
+      ctx.fill();
+    } catch (err) {
+      // Контекст-заглушка без градиентов (тесты): лента просто не рисуется.
+    } finally {
+      ctx.restore();
+    }
+  }
+
+  /** Каналы живут на уровнях слоя сетей (`L2…L6`) — тот же диапазон, что баблы. */
+  function drawNetChannels(level: number): void {
+    if (!isNetLayerLevel(level)) return;
+    var channels = netChannels();
+    for (var index = 0; index < channels.length; index += 1) {
+      drawNetChannel(channels[index]!);
+    }
+  }
+
   function renderScene(scene: SectorScene): void {
+    // Первый проход — заливка территорий; сюда же `Z-3.4` монтирует слой сетей
+    // (баблы, узлы и «всполохи»), поэтому порядок слоёв §8.1 не меняется.
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
       if (primitive.kind === 'territory') drawTerritory(primitive);
-      else if (primitive.kind === 'grid.line') drawGridLine(primitive);
+    }
+    // Отдельный проход каналов: ленты идут поверх заливки баблов, но под адресной
+    // сеткой и маркерами, поэтому стоят между двумя проходами примитивов сцены.
+    drawNetChannels(scene.level);
+    for (index = 0; index < scene.primitives.length; index += 1) {
+      primitive = scene.primitives[index]!;
+      if (primitive.kind === 'grid.line') drawGridLine(primitive);
       else if (primitive.kind === 'grid.label') drawGridLabel(primitive);
       else if (primitive.kind === 'marker') drawMarker(primitive);
     }

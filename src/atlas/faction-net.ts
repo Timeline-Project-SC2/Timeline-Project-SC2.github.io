@@ -21,6 +21,9 @@
  *      направление детерминированы данными сети, без случайности.
  *   7. Слой живёт только на уровнях территорий `L2…L6` (`NET_LAYER_LEVELS`,
  *      тот же диапазон, что `TERRITORY_LEVELS` сцены, §8.1).
+ *   8. `channelsFor` — каналы между сетями из колонки `net_confront_id`
+ *      (карточка `Z-3.8`): узкая лента «свой-чужой» между двумя системами,
+ *      идёт поверх баблов и сквозь них, в генерации баблов не участвует.
  *
  * Числа и их источник:
  *   — цвет фракции — данные таблицы `data/factions.csv` (карточка Z-3.7):
@@ -30,6 +33,10 @@
  *   — узел (белая окружность) — доля своего лепестка по типу системы:
  *     столица крупнее (`NODE_RADIUS_BY_TYPE`);
  *   — лента между сетями уже `BRIDGE_WIDTH_RATIO` от меньшего лепестка;
+ *   — канал между сетями (`Z-3.8`) вдвое уже ленты: `CHANNEL_WIDTH_RATIO =
+ *     BRIDGE_WIDTH_RATIO · 0,5` от меньшего лепестка, яркость одна на все
+ *     каналы (`CHANNEL_BRIGHTNESS`), а цвет — градиент табличных цветов фракций
+ *     двух концов: номер канала на цвет не влияет;
  *   — «всполохи» — не больше `MAX_FLARES_PER_NET` за кадр (защита бюджета).
  */
 
@@ -147,6 +154,9 @@ export interface NetSystemInput {
   readonly systemType?: string | null;
   readonly net_id?: number | string | null;
   readonly netId?: number | string | null;
+  /** Колонка `net_confront_id` из `systems.csv`: каналы «свой-чужой» (`Z-3.8`). */
+  readonly net_confront_id?: number | string | null;
+  readonly netConfrontId?: number | string | null;
 }
 
 /** Нормализованная система внутри сети. */
@@ -1327,4 +1337,542 @@ export function flaresFor(
   }
 
   return flares.sort((a, b) => a.targetNetId - b.targetNetId || a.angle - b.angle);
+}
+
+/* ------------------------------------------------ каналы между сетями (Z-3.8) */
+
+/**
+ * Канал — узкая лента между двумя системами разных сетей: пара «свой-чужой»
+ * из колонки `net_confront_id` (`N-M` или `N-M-K`, где первое число ВСЕГДА
+ * равно собственному `net_id` системы, а остальные — цели). Запись `«1-2-3»`
+ * даёт ДВА канала, `1↔2` и `1↔3`, а не цепочку; цепочки (`1 → 2 → 3`)
+ * возникают сами, когда система сети `2` объявит `«2-3»`.
+ *
+ * Правило партнёра (карточка `Z-3.8`) для системы `A` с `net_id = N` и целью `M`:
+ *   1. если в сети `M` есть система `B`, объявившая ту же пару (`M-N` или
+ *      `N-M`), связь ПРИНУДИТЕЛЬНАЯ именно с `B` — даже когда другая система
+ *      сети `M` ближе; таких `B` несколько — берётся ближайшая из них;
+ *   2. встречных объявлений нет — партнёр автоматический: ближайшая система
+ *      сети `M`;
+ *   3. одна пара систем — одна лента: `A-B` и `B-A` не дублируются;
+ *   4. системы с одинаковым `net_id` не соединяются никогда (это же запрещает
+ *      проверка ячейки: цель не может равняться своей сети).
+ *
+ * Каналы идут поверх баблов и сквозь них, но в генерацию баблов не входят:
+ * `bubbleFor`, `parseNetworks` и геометрия лепестков колонку `net_confront_id`
+ * не читают, поэтому JSON бабла с каналами и без них совпадает побайтово.
+ *
+ * Ошибки данных — `RangeError` с именем системы: ячейку заполняет владелец в
+ * таблице, и молча пропущенный канал выглядел бы как «сети не конфликтуют».
+ * Треугольник (`1-2`, `2-3`, `3-1`) разрешён: каналы строятся, а замкнутое
+ * кольцо возвращается предупреждением (`warnings`), а не исключением, поэтому
+ * сборка карты проходит и на кольце.
+ */
+
+/** Номер сети в `net_confront_id`: целое `1…3` (карточка `Z-3.8`, проверка 6). */
+export const NET_CONFRONT_MIN_ID = 1;
+export const NET_CONFRONT_MAX_ID = 3;
+
+/** Чисел в ячейке: от пары `N-M` до `N-M-K-L` (своя сеть и три цели). */
+export const NET_CONFRONT_MIN_PARTS = 2;
+export const NET_CONFRONT_MAX_PARTS = 4;
+
+/** Разделитель чисел в ячейке `net_confront_id`; пробелы по краям допускаются. */
+export const NET_CONFRONT_SEPARATOR = '-';
+
+/**
+ * Ширина ленты канала: вдвое уже ленты между баблами — `BRIDGE_WIDTH_RATIO · 0,5`
+ * от меньшего лепестка двух концов. База та же, что у `bridgesBetween`, поэтому
+ * каналы масштабируются вместе с баблами и остаются «узкой лентой».
+ */
+export const CHANNEL_WIDTH_RATIO = BRIDGE_WIDTH_RATIO * 0.5;
+
+/** Яркость канала: одна на все каналы, от номера канала и расстояния не зависит. */
+export const CHANNEL_BRIGHTNESS = 1;
+
+/** Конец канала: система сети в мировых координатах. */
+export interface ChannelEnd {
+  readonly netId: number;
+  readonly systemId: string;
+  readonly name: string;
+  readonly faction: string | null;
+  readonly systemType: string;
+  readonly x: number;
+  readonly y: number;
+  /** Радиус лепестка этой системы в своём бабле: из него ширина ленты. */
+  readonly radius: number;
+}
+
+/** Канал между двумя системами разных сетей. */
+export interface NetChannel {
+  /** Каноническая пара сетей: меньший номер первым, например `«1-2»`. */
+  readonly pair: string;
+  /** Конец с меньшим номером сети: порядок не зависит от порядка строк CSV. */
+  readonly from: ChannelEnd;
+  readonly to: ChannelEnd;
+  /** Расстояние между системами, мировые единицы. */
+  readonly gap: number;
+  /** Длина ленты: канал идёт от системы до системы, без обрезки по баблам. */
+  readonly length: number;
+  readonly width: number;
+  /** Четыре угла ленты в мировых координатах: A+, B+, B−, A−. */
+  readonly quad: readonly [NetPoint, NetPoint, NetPoint, NetPoint];
+  /** Градиент табличных цветов фракций двух концов (`data/factions.csv`). */
+  readonly stops: readonly ColorStop[];
+  /** `true` — партнёр объявил ту же пару встречно, связь принудительная. */
+  readonly forced: boolean;
+  /** Идентификаторы систем, объявивших эту пару сетей (отсортированы). */
+  readonly declaredBy: readonly string[];
+}
+
+/** Предупреждение слоя каналов: сборка проходит, владелец видит причину. */
+export interface NetChannelWarning {
+  /** `'ring'` — замкнутое кольцо каналов (треугольник `1-2`, `2-3`, `3-1`). */
+  readonly kind: 'ring';
+  /** Сети кольца по порядку обхода, начиная с меньшего номера. */
+  readonly netIds: readonly number[];
+  readonly message: string;
+}
+
+/** Результат `channelsFor`: ленты и предупреждения, без исключений на кольцах. */
+export interface NetChannelResult {
+  readonly channels: readonly NetChannel[];
+  readonly warnings: readonly NetChannelWarning[];
+}
+
+/**
+ * Настройки каналов: те же ручки, что у баблов (геометрия лепестка нужна для
+ * ширины ленты, `factionColor` — для градиента концов).
+ */
+export type ChannelOptions = BubbleOptions;
+
+/** Текст ячейки `net_confront_id`: `null`/`undefined` и пустая строка — пусто. */
+function confrontText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+/** Значение колонки `net_confront_id`: имя из CSV важнее camelCase-записи. */
+function confrontValueOf(raw: NetSystemInput): unknown {
+  return raw.net_confront_id !== undefined && raw.net_confront_id !== null
+    ? raw.net_confront_id
+    : raw.netConfrontId;
+}
+
+/** Имя системы для текста ошибки: имя, иначе идентификатор, иначе номер строки. */
+function systemLabelOf(raw: NetSystemInput, index: number): string {
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (name !== '') return name;
+  const id = idOf(raw);
+  return id !== '' ? id : `#${index + 1}`;
+}
+
+/**
+ * Разбор ячейки `net_confront_id`: цели системы (без первого числа — оно равно
+ * собственному `net_id`). Пустая ячейка или отсутствие колонки — `null`: система
+ * каналов не объявляет. Любая ошибка — `RangeError` с именем системы.
+ *
+ * Проверки карточки `Z-3.8` (1, 2, 3, 5, 6): первое число равно своему `net_id`;
+ * ни одна цель не равна первому числу; внутри ячейки нет повторов; `net_id` не
+ * пуст и не `0`; числа целые, в диапазоне `1…3`, от `2` до `4` штук.
+ * Проверка 4 (сеть-цель существует в данных) — в `channelsFor`: ей нужен весь
+ * набор систем, а не одна ячейка.
+ */
+export function netConfrontTargets(
+  value: unknown,
+  systemLabel: string,
+  ownNetId: number | null,
+): readonly number[] | null {
+  const text = confrontText(value);
+  if (text === '') return null;
+  const where = `net_confront_id «${text}» системы «${systemLabel}»`;
+
+  if (ownNetId === null) {
+    throw new RangeError(
+      `${where}: канал объявила система вне сети — net_id пуст или равен 0`,
+    );
+  }
+
+  const parts = text.split(NET_CONFRONT_SEPARATOR);
+  if (parts.length < NET_CONFRONT_MIN_PARTS || parts.length > NET_CONFRONT_MAX_PARTS) {
+    throw new RangeError(
+      `${where}: нужно от ${NET_CONFRONT_MIN_PARTS} до ${NET_CONFRONT_MAX_PARTS} чисел `
+      + `через «${NET_CONFRONT_SEPARATOR}», получено ${parts.length}`,
+    );
+  }
+
+  const numbers: number[] = [];
+  for (const part of parts) {
+    const digits = part.trim();
+    if (!/^\d+$/.test(digits)) {
+      throw new RangeError(`${where}: «${part}» не является целым числом`);
+    }
+    const number = Number(digits);
+    if (
+      !Number.isInteger(number)
+      || number < NET_CONFRONT_MIN_ID
+      || number > NET_CONFRONT_MAX_ID
+    ) {
+      throw new RangeError(
+        `${where}: число ${digits} вне диапазона `
+        + `${NET_CONFRONT_MIN_ID}…${NET_CONFRONT_MAX_ID}`,
+      );
+    }
+    numbers.push(number);
+  }
+
+  const own = numbers[0]!;
+  if (own !== ownNetId) {
+    throw new RangeError(
+      `${where}: первое число должно быть равно собственному net_id системы (${ownNetId})`,
+    );
+  }
+
+  const targets = numbers.slice(1);
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index]!;
+    if (target === own) {
+      throw new RangeError(
+        `${where}: цель ${target} равна собственной сети — система не соединяется сама с собой`,
+      );
+    }
+    if (targets.indexOf(target) !== index) {
+      throw new RangeError(`${where}: число ${target} повторяется внутри ячейки`);
+    }
+  }
+
+  return targets;
+}
+
+/** Нормализованная строка данных для слоя каналов. */
+interface ChannelEntry {
+  readonly label: string;
+  readonly netId: number | null;
+  readonly targets: readonly number[];
+  /** `null` — у строки нет координат или идентификатора: в геометрию не идёт. */
+  readonly system: ChannelSystem | null;
+}
+
+/** Система канала: координаты и радиус лепестка известны. */
+interface ChannelSystem {
+  readonly id: string;
+  readonly name: string;
+  readonly faction: string | null;
+  readonly systemType: string;
+  readonly netId: number;
+  readonly targets: readonly number[];
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+}
+
+/** Ключ пары сетей: меньший номер первым, чтобы `1-2` и `2-1` были одной парой. */
+function netPairKey(netA: number, netB: number): string {
+  return netA <= netB ? `${netA}|${netB}` : `${netB}|${netA}`;
+}
+
+/** Ключ пары систем: `A-B` и `B-A` — одна лента (правило 3). */
+function systemPairKey(idA: string, idB: string): string {
+  return compareIds(idA, idB) <= 0 ? `${idA}|${idB}` : `${idB}|${idA}`;
+}
+
+/** Ближайшая система из пула: при равных расстояниях побеждает меньший `id`. */
+function nearestOf(
+  from: ChannelSystem,
+  pool: readonly ChannelSystem[],
+): ChannelSystem | null {
+  let best: ChannelSystem | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of pool) {
+    if (candidate.id === from.id) continue;
+    const distance = Math.hypot(candidate.x - from.x, candidate.y - from.y);
+    if (distance < bestDistance - 1e-9) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/** Кольцо в графе сетей: каноническая запись — от меньшего номера, в меньшую сторону. */
+function canonicalRing(ring: readonly number[]): readonly number[] {
+  if (ring.length === 0) return ring;
+  let start = 0;
+  for (let index = 1; index < ring.length; index += 1) {
+    if (ring[index]! < ring[start]!) start = index;
+  }
+  const rotated: number[] = [];
+  for (let index = 0; index < ring.length; index += 1) {
+    rotated.push(ring[(start + index) % ring.length]!);
+  }
+  const second = rotated[1]!;
+  const last = rotated[rotated.length - 1]!;
+  if (second <= last) return rotated;
+  const reversed: number[] = [rotated[0]!];
+  for (let index = rotated.length - 1; index >= 1; index -= 1) {
+    reversed.push(rotated[index]!);
+  }
+  return reversed;
+}
+
+/**
+ * Замкнутые кольца в графе сетей канала: обход в глубину по рёбрам пар сетей.
+ * Рёбра между одной парой сетей считаются один раз, поэтому две ленты `1↔2`
+ * (две системы сети `1` объявили одну цель) кольцом не признаются.
+ */
+function ringsOf(
+  nodes: readonly number[],
+  edges: ReadonlySet<string>,
+): readonly (readonly number[])[] {
+  const adjacency = new Map<number, number[]>();
+  for (const node of nodes) adjacency.set(node, []);
+  for (const edge of edges) {
+    const [leftText, rightText] = edge.split('|');
+    const left = Number(leftText);
+    const right = Number(rightText);
+    adjacency.get(left)?.push(right);
+    adjacency.get(right)?.push(left);
+  }
+  for (const list of adjacency.values()) list.sort((a, b) => a - b);
+
+  const rings: (readonly number[])[] = [];
+  const seen = new Set<string>();
+  const state = new Map<number, number>();
+  const stack: number[] = [];
+
+  const visit = (node: number): void => {
+    state.set(node, 1);
+    stack.push(node);
+    for (const next of adjacency.get(node) ?? []) {
+      const mark = state.get(next) ?? 0;
+      if (mark === 1) {
+        const ring = canonicalRing(stack.slice(stack.indexOf(next)));
+        if (ring.length < 3) continue;
+        const key = ring.join(NET_CONFRONT_SEPARATOR);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rings.push(ring);
+      } else if (mark === 0) {
+        visit(next);
+      }
+    }
+    stack.pop();
+    state.set(node, 2);
+  };
+
+  for (const node of nodes) {
+    if ((state.get(node) ?? 0) === 0) visit(node);
+  }
+  return rings;
+}
+
+/** Связь двух систем, найденная по правилу партнёра. */
+interface ChannelLink {
+  readonly own: ChannelSystem;
+  readonly partner: ChannelSystem;
+  readonly forced: boolean;
+}
+
+/**
+ * Каналы между сетями по колонке `net_confront_id` (`Z-3.8`).
+ *
+ * Вход — те же строки, что у `parseNetworks` (сырой CSV или записи загрузчика).
+ * Порядок каналов детерминирован: пары сетей по возрастанию, внутри пары —
+ * идентификаторы систем, поэтому перестановка строк CSV результат не меняет.
+ * Битая ячейка — `RangeError` с именем системы; замкнутое кольцо — не ошибка,
+ * а предупреждение в `warnings`.
+ */
+export function channelsFor(
+  systems: readonly NetSystemInput[],
+  options: ChannelOptions = {},
+): NetChannelResult {
+  const resolved = resolveBubbleOptions(options);
+  const list = systems ?? [];
+
+  /* 1. Разбор и проверки ячеек: падаем с именем системы, а не молчим. */
+  const entries: ChannelEntry[] = [];
+  const knownNetIds = new Set<number>();
+  for (let index = 0; index < list.length; index += 1) {
+    const raw = list[index]!;
+    const label = systemLabelOf(raw, index);
+    const netId = parseNetId(raw.net_id) ?? parseNetId(raw.netId);
+    if (netId !== null) knownNetIds.add(netId);
+    const targets = netConfrontTargets(confrontValueOf(raw), label, netId) ?? [];
+
+    const x = finiteNumber(raw.x);
+    const y = finiteNumber(raw.y);
+    const id = idOf(raw);
+    const system: ChannelSystem | null = x === null || y === null || id === '' || netId === null
+      ? null
+      : {
+        id,
+        name: label,
+        faction: typeof raw.faction === 'string' && raw.faction.trim() !== ''
+          ? raw.faction.trim()
+          : null,
+        systemType: normalizedSystemType(raw.type ?? raw.systemType),
+        netId,
+        targets,
+        x,
+        y,
+        radius: 0,
+      };
+    entries.push({ label, netId, targets, system });
+  }
+
+  /* 2. Проверка 4: каждая сеть-цель существует в данных. */
+  for (const entry of entries) {
+    for (const target of entry.targets) {
+      if (knownNetIds.has(target)) continue;
+      throw new RangeError(
+        `net_confront_id системы «${entry.label}»: сеть-цель ${target} не существует в данных`,
+      );
+    }
+  }
+
+  /* 3. Сети и радиусы лепестков: геометрия баблов используется как есть. */
+  const nets = new Map<number, ChannelSystem[]>();
+  for (const entry of entries) {
+    const system = entry.system;
+    if (system === null) continue;
+    const bucket = nets.get(system.netId);
+    if (bucket === undefined) nets.set(system.netId, [system]);
+    else bucket.push(system);
+  }
+  const placed: ChannelSystem[] = [];
+  for (const [netId, bucket] of nets) {
+    bucket.sort((a, b) => compareIds(a.id, b.id));
+    const points: BubblePoint[] = bucket.map((member) => ({
+      id: member.id,
+      name: member.name,
+      faction: member.faction,
+      systemType: member.systemType,
+      x: member.x,
+      y: member.y,
+    }));
+    const radii = petalRadii(points, resolved);
+    for (let index = 0; index < bucket.length; index += 1) {
+      const member = bucket[index]!;
+      const withRadius: ChannelSystem = { ...member, radius: radii[index]! };
+      bucket[index] = withRadius;
+      placed.push(withRadius);
+    }
+    nets.set(netId, bucket);
+  }
+
+  /* 4. Кто объявил пару сетей: нужно для принудительной связи (правило 1). */
+  const declaredPairs = new Map<string, string[]>();
+  for (const system of placed) {
+    for (const target of system.targets) {
+      const key = netPairKey(system.netId, target);
+      const declarers = declaredPairs.get(key);
+      if (declarers === undefined) declaredPairs.set(key, [system.id]);
+      else if (!declarers.includes(system.id)) declarers.push(system.id);
+    }
+  }
+
+  /* 5. Правило партнёра и сборка лент: одна пара систем — одна лента. */
+  const links = new Map<string, ChannelLink>();
+  for (const system of placed) {
+    for (const target of system.targets) {
+      const bucket = nets.get(target);
+      if (bucket === undefined || bucket.length === 0) {
+        throw new RangeError(
+          `net_confront_id системы «${system.name}»: у сети-цели ${target} `
+          + 'нет ни одной системы с координатами',
+        );
+      }
+      const mutual = bucket.filter((candidate) => candidate.targets.includes(system.netId));
+      const partner = nearestOf(system, mutual.length > 0 ? mutual : bucket);
+      if (partner === null) continue;
+      const key = systemPairKey(system.id, partner.id);
+      if (links.has(key)) continue;
+      links.set(key, { own: system, partner, forced: mutual.length > 0 });
+    }
+  }
+
+  const channels: NetChannel[] = [];
+  for (const link of links.values()) {
+    const ordered: readonly [ChannelSystem, ChannelSystem] = link.own.netId <= link.partner.netId
+      ? [link.own, link.partner]
+      : [link.partner, link.own];
+    const first = ordered[0];
+    const second = ordered[1];
+    const gap = Math.hypot(second.x - first.x, second.y - first.y);
+    // Лента идёт от системы до системы сквозь баблы: концы не обрезаются.
+    const distance = Math.max(gap, 1e-9);
+    const ux = (second.x - first.x) / distance;
+    const uy = (second.y - first.y) / distance;
+    const width = CHANNEL_WIDTH_RATIO * Math.min(first.radius, second.radius);
+    const half = width / 2;
+    const normalX = -uy;
+    const normalY = ux;
+    const pair = netPairKey(first.netId, second.netId);
+    const declarers = (declaredPairs.get(pair) ?? []).slice().sort(compareIds);
+
+    const endOf = (system: ChannelSystem): ChannelEnd => ({
+      netId: system.netId,
+      systemId: system.id,
+      name: system.name,
+      faction: system.faction,
+      systemType: system.systemType,
+      x: system.x,
+      y: system.y,
+      radius: system.radius,
+    });
+    const colorPointOf = (system: ChannelSystem): ColorPoint => ({
+      id: system.id,
+      faction: system.faction ?? NEUTRAL_FACTION_LABEL,
+      x: system.x,
+      y: system.y,
+    });
+
+    channels.push({
+      pair: `${first.netId}${NET_CONFRONT_SEPARATOR}${second.netId}`,
+      from: endOf(first),
+      to: endOf(second),
+      gap,
+      length: gap,
+      width,
+      quad: [
+        { x: first.x + normalX * half, y: first.y + normalY * half },
+        { x: second.x + normalX * half, y: second.y + normalY * half },
+        { x: second.x - normalX * half, y: second.y - normalY * half },
+        { x: first.x - normalX * half, y: first.y - normalY * half },
+      ],
+      stops: options.factionColor
+        ? [
+          colorStopAt(0, colorPointOf(first), options.factionColor),
+          colorStopAt(1, colorPointOf(second), options.factionColor),
+        ]
+        : [],
+      forced: link.forced,
+      declaredBy: declarers,
+    });
+  }
+
+  channels.sort((a, b) => a.from.netId - b.from.netId
+    || a.to.netId - b.to.netId
+    || compareIds(a.from.systemId, b.from.systemId)
+    || compareIds(a.to.systemId, b.to.systemId));
+
+  /* 6. Замкнутое кольцо — предупреждение, а не ошибка: сборка карты проходит. */
+  const nodes: number[] = [];
+  const edges = new Set<string>();
+  for (const channel of channels) {
+    for (const netId of [channel.from.netId, channel.to.netId]) {
+      if (!nodes.includes(netId)) nodes.push(netId);
+    }
+    edges.add(netPairKey(channel.from.netId, channel.to.netId));
+  }
+  nodes.sort((a, b) => a - b);
+
+  const warnings: NetChannelWarning[] = ringsOf(nodes, edges).map((ring) => ({
+    kind: 'ring',
+    netIds: ring,
+    message: 'Замкнутое кольцо каналов: сети '
+      + [...ring, ring[0]!].join(' → '),
+  }));
+
+  return { channels, warnings };
 }
