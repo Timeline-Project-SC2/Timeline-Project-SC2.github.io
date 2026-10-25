@@ -23,14 +23,18 @@
  *      тот же диапазон, что `TERRITORY_LEVELS` сцены, §8.1).
  *
  * Числа и их источник:
- *   — цвет фракции — та же устойчивая формула оттенка, что в `canvas-renderer.ts`
- *     (`§6.2 п. 4`): `hue = (hue * 31 + код символа) % 360`, поэтому бабл и
- *     территория одной фракции совпадают по цвету;
+ *   — цвет фракции — данные таблицы `data/factions.csv` (карточка Z-3.7):
+ *     модуль получает резолвер цвета снаружи (загрузчик данных) и сам оттенки
+ *     из имени не вычисляет, поэтому бабл и территория одной фракции
+ *     совпадают по табличному цвету;
  *   — узел (белая окружность) — доля своего лепестка по типу системы:
  *     столица крупнее (`NODE_RADIUS_BY_TYPE`);
  *   — лента между сетями уже `BRIDGE_WIDTH_RATIO` от меньшего лепестка;
  *   — «всполохи» — не больше `MAX_FLARES_PER_NET` за кадр (защита бюджета).
  */
+
+import { NEUTRAL_FACTION_LABEL, parseHexColor } from './config.ts';
+import type { FactionColor } from './config.ts';
 
 /* --------------------------------------------------------------- уровни слоя */
 
@@ -122,8 +126,11 @@ export const FLARE_SPREAD = 0.5;
 export const MIN_FLARE_LENGTH = 24;
 export const MAX_FLARE_LENGTH = 260;
 
-/** Подпись фракции по умолчанию — та же, что в загрузчике данных. */
-const NEUTRAL_FACTION = 'Фракции нет';
+/**
+ * Резолвер табличного цвета фракции: имя → `#rrggbb` из `data/factions.csv`.
+ * В рантайме это `factionColor` загрузчика данных; модуль сам цвет не вычисляет.
+ */
+export type FactionColorResolver = (faction: string) => FactionColor;
 
 /* --------------------------------------------------------------- типы записей */
 
@@ -231,6 +238,11 @@ export interface BubbleOptions {
   readonly fieldPower?: number;
   /** Сглаживание контура (по умолчанию включено). */
   readonly smooth?: boolean;
+  /**
+   * Табличный цвет фракции. Без резолвера градиент не строится (`stops: []`):
+   * цвет из имени фракции не вычисляется.
+   */
+  readonly factionColor?: FactionColorResolver;
 }
 
 /** Камера сектора: структурно совпадает с `SceneCamera` из `sector-scene.ts`. */
@@ -332,7 +344,7 @@ function idOf(raw: NetSystemInput): string {
 
 function factionNameOf(value: unknown): string {
   const text = typeof value === 'string' ? value.trim() : '';
-  return text === '' ? NEUTRAL_FACTION : text;
+  return text === '' ? NEUTRAL_FACTION_LABEL : text;
 }
 
 /** Идентификаторы сравниваются как числа, если оба числовые: `2` раньше `11`. */
@@ -430,45 +442,16 @@ export function parseNetworks(systems: readonly NetSystemInput[]): readonly Fact
 /* ------------------------------------------------------------------- цвета */
 
 /**
- * Устойчивый оттенок фракции: та же формула, что `factionHue` в
- * `canvas-renderer.ts` (`§6.2 п. 4`) — цвет не зависит от глубины и запуска.
+ * Проверка резолвера цвета: без таблицы фракций градиент строить не из чего —
+ * оттенок из имени не вычисляется, поэтому отсутствие резолвера — ошибка входа.
  */
-export function factionHue(faction: string): number {
-  let hash = 0;
-  for (let index = 0; index < faction.length; index += 1) {
-    hash = (hash * 31 + faction.charCodeAt(index)) % 360;
+function requireFactionColorResolver(
+  resolveFactionColor: FactionColorResolver,
+): FactionColorResolver {
+  if (typeof resolveFactionColor !== 'function') {
+    throw new RangeError('Нужен резолвер цвета фракции из таблицы factions.csv');
   }
-  return hash;
-}
-
-function channelToByte(value: number): number {
-  return Math.round(clamp(value, 0, 1) * 255);
-}
-
-function hueToChannel(p: number, q: number, t: number): number {
-  let hue = t;
-  if (hue < 0) hue += 1;
-  if (hue > 1) hue -= 1;
-  if (hue < 1 / 6) return p + (q - p) * 6 * hue;
-  if (hue < 1 / 2) return q;
-  if (hue < 2 / 3) return p + (q - p) * (2 / 3 - hue) * 6;
-  return p;
-}
-
-/** Цвет фракции в RGB: `hsl(hue, 68 %, 62 %)`, как заливка территории. */
-export function factionRgb(faction: string): readonly [number, number, number] {
-  const hue = ((factionHue(faction) % 360) + 360) % 360 / 360;
-  const saturation = 0.68;
-  const lightness = 0.62;
-  const q = lightness < 0.5
-    ? lightness * (1 + saturation)
-    : lightness + saturation - lightness * saturation;
-  const p = 2 * lightness - q;
-  return [
-    channelToByte(hueToChannel(p, q, hue + 1 / 3)),
-    channelToByte(hueToChannel(p, q, hue)),
-    channelToByte(hueToChannel(p, q, hue - 1 / 3)),
-  ];
+  return resolveFactionColor;
 }
 
 interface ColorPoint {
@@ -493,8 +476,18 @@ function toColorPoints(members: readonly NetSystemInput[]): ColorPoint[] {
   return points;
 }
 
-function colorStopAt(offset: number, point: ColorPoint): ColorStop {
-  const rgb = factionRgb(point.faction);
+function colorStopAt(
+  offset: number,
+  point: ColorPoint,
+  resolveFactionColor: FactionColorResolver,
+): ColorStop {
+  const hex = resolveFactionColor(point.faction);
+  const rgb = parseHexColor(hex);
+  if (rgb === null) {
+    throw new RangeError(
+      `Цвет фракции «${point.faction}» не является #rrggbb: ${String(hex)}`,
+    );
+  }
   return {
     offset,
     faction: point.faction,
@@ -532,6 +525,7 @@ function nearestDistinctPair(points: readonly ColorPoint[]): readonly [ColorPoin
 
 /**
  * Градиент сети: ровно два стопа на границах диапазонов (`0` и `1`).
+ * Цвета стопов — табличные (`data/factions.csv`) и приходят через резолвер.
  *
  * Правило одно для любого числа фракций: берётся ближайшая пара систем с
  * разными фракциями — при двух фракциях это и есть их цвета, при трёх и более
@@ -542,7 +536,11 @@ function nearestDistinctPair(points: readonly ColorPoint[]): readonly [ColorPoin
  * Стоп `0` — участник пары с меньшим `id`, поэтому градиент не зависит от
  * порядка строк CSV; направление вдоль бабла выбирает рендерер (`Z-3.4`).
  */
-export function colorStops(members: readonly NetSystemInput[]): readonly ColorStop[] {
+export function colorStops(
+  members: readonly NetSystemInput[],
+  resolveFactionColor: FactionColorResolver,
+): readonly ColorStop[] {
+  const resolve = requireFactionColorResolver(resolveFactionColor);
   const points = toColorPoints(members).sort((a, b) => compareIds(a.id, b.id));
   if (points.length === 0) return [];
 
@@ -552,14 +550,14 @@ export function colorStops(members: readonly NetSystemInput[]): readonly ColorSt
   }
   if (factions.length === 1) {
     const only = points[0]!;
-    return [colorStopAt(0, only), colorStopAt(1, only)];
+    return [colorStopAt(0, only, resolve), colorStopAt(1, only, resolve)];
   }
 
   const [nearestA, nearestB] = nearestDistinctPair(points);
   const [first, second] = compareIds(nearestA.id, nearestB.id) <= 0
     ? [nearestA, nearestB]
     : [nearestB, nearestA];
-  return [colorStopAt(0, first), colorStopAt(1, second)];
+  return [colorStopAt(0, first, resolve), colorStopAt(1, second, resolve)];
 }
 
 /** Линейная интерполяция между стопами: канал меняется монотонно. */
@@ -1054,7 +1052,7 @@ export function bubbleFor(
     centerY: mean(points.map((point) => point.y)),
     rings,
     bounds,
-    stops: colorStops(points),
+    stops: options.factionColor ? colorStops(points, options.factionColor) : [],
   };
 }
 
@@ -1165,7 +1163,7 @@ function primaryColorPoint(net: FactionNet): ColorPoint {
   const first = net.members[0];
   return {
     id: first?.id ?? `net-${net.netId}`,
-    faction: NEUTRAL_FACTION,
+    faction: NEUTRAL_FACTION_LABEL,
     x: first?.x ?? net.centerX,
     y: first?.y ?? net.centerY,
   };
@@ -1242,7 +1240,12 @@ export function bridgesBetween(
       { x: toX - normalX * half, y: toY - normalY * half },
       { x: fromX - normalX * half, y: fromY - normalY * half },
     ],
-    stops: [colorStopAt(0, primaryColorPoint(netA)), colorStopAt(1, primaryColorPoint(netB))],
+    stops: options.factionColor
+      ? [
+        colorStopAt(0, primaryColorPoint(netA), options.factionColor),
+        colorStopAt(1, primaryColorPoint(netB), options.factionColor),
+      ]
+      : [],
   };
 }
 

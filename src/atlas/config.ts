@@ -99,6 +99,19 @@ export type MapCoord = [number, number];
  * `draft` — черновик администратора, `review` — профиль на проверке. */
 export type PlanetProfileStatus = 'draft' | 'review' | 'frozen';
 
+/* Фракции: цвета — данные таблицы `data/factions.csv` (лист `faction_details`),
+ * а не вычисляемый оттенок от имени. Строка с ключом «—» (U+2014) в этой таблице
+ * зарезервирована и означает «фракции нет»; у неё обязателен только цвет. */
+export const NEUTRAL_FACTION_LABEL = 'Без фракции';
+export const NO_FACTION_KEY = '\u2014';
+export type FactionColor = string;
+
+export interface FactionDetails {
+  readonly color: FactionColor;
+  readonly short: string;
+  readonly order: number | null;
+}
+
 /* Маршрут боевого WebGL2-глобуса и подпись пресета по умолчанию.
  * Ссылка перехода из Атласа сектора собирается только через `planetGlobeUrl`,
  * чтобы формат `?place=<id>&system=<systemId>` оставался единым. */
@@ -436,6 +449,10 @@ export interface DataLoaderApi {
   placeTypeGlyph(place: PlaceRecord): string;
   factionsOf(place: PlaceRecord): string[];
   systemFactions(system: SystemRecord): string[];
+  /* Цвета фракций из `data/factions.csv`: пустое имя — цвет строки «—»,
+   * известное — цвет её строки, неизвестное — цвет «—» и предупреждение. */
+  factionColor(name: string | null | undefined): FactionColor;
+  factionsByName(): ReadonlyMap<string, FactionDetails>;
   search(query: string): SearchEntry[];
 }
 
@@ -585,6 +602,19 @@ export function plural(count: number, forms: readonly [string, string, string]):
 
 export function formatNumber(value: number | string): string {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, '\u2009');
+}
+
+/* Разбор табличного цвета `#rrggbb` в каналы RGB. Цвет не вычисляется из
+ * имени и не изменяется: вызывающий только накладывает на него альфу. */
+export function parseHexColor(color: FactionColor): readonly [number, number, number] | null {
+  const match = /^#([0-9a-f]{6})$/i.exec(String(color || '').trim());
+  if (!match) return null;
+  const hex = match[1]!;
+  return [
+    parseInt(hex.slice(0, 2), 16),
+    parseInt(hex.slice(2, 4), 16),
+    parseInt(hex.slice(4, 6), 16),
+  ];
 }
 
 export function cssVar(name: string, fallback: string): string {

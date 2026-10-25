@@ -2,6 +2,8 @@
 
 import {
   CONFIG,
+  NEUTRAL_FACTION_LABEL,
+  NO_FACTION_KEY,
   PLACE_TYPES,
   assetVersion,
   normalize,
@@ -15,6 +17,8 @@ import type {
   AtlasOverrides,
   CatalogSearchEntry,
   DataLoaderApi,
+  FactionColor,
+  FactionDetails,
   MapCoord,
   MapLabel,
   MapPoint,
@@ -311,14 +315,62 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     });
   }
 
+  /* Цвета фракций — снимок листа `faction_details` (`data/factions.csv`).
+   * Строки читаются по заголовку, поэтому порядок колонок листа не важен.
+   * Строка «—» — «фракции нет»: её цвет получают пустая и неизвестная фракции.
+   * Неизвестное имя — это ошибка данных листа, а не рантайма: предупреждаем
+   * один раз на имя и красим нейтральным цветом, но не падаем. */
+  var factionDetailsByName = new Map<string, FactionDetails>();
+  var warnedUnknownFactions = new Set<string>();
+
+  function setFactionRows(rows: SheetRow[]): void {
+    var byName = new Map<string, FactionDetails>();
+    (rows || []).forEach(function (row) {
+      var name = sheetCell(row, 'faction');
+      if (!name) return;
+      byName.set(name, {
+        color: sheetCell(row, 'color').toLowerCase(),
+        short: sheetCell(row, 'short'),
+        order: explicitMapNumber(sheetCell(row, 'order'))
+      });
+    });
+    factionDetailsByName = byName;
+    warnedUnknownFactions = new Set<string>();
+  }
+
+  function neutralFactionColor(): FactionColor {
+    var neutral = factionDetailsByName.get(NO_FACTION_KEY);
+    return neutral ? neutral.color : '';
+  }
+
+  function factionColor(name: string | null | undefined): FactionColor {
+    var key = sheetValue(name);
+    if (!key || key === NO_FACTION_KEY || key === NEUTRAL_FACTION_LABEL) {
+      return neutralFactionColor();
+    }
+    var details = factionDetailsByName.get(key);
+    if (details) return details.color;
+    if (!warnedUnknownFactions.has(key)) {
+      warnedUnknownFactions.add(key);
+      console.warn('Фракция «' + key + '» отсутствует в data/factions.csv: использован нейтральный цвет.');
+    }
+    return neutralFactionColor();
+  }
+
+  function factionsByName(): ReadonlyMap<string, FactionDetails> {
+    return factionDetailsByName;
+  }
+
   function loadDataset(): Promise<AtlasDataset> {
     const inline = window.__MAP_DATA__;
     if (inline && inline.systems) {
       return Promise.all([
         fetchCSV('/data/systems.csv'),
         fetchCSV('/data/places.csv'),
-        fetchCSV(CONFIG.data.dir + CONFIG.data.generation)
+        fetchCSV(CONFIG.data.dir + CONFIG.data.generation),
+        fetchCSV('/data/factions.csv')
       ]).then(function (rows) {
+        setFactionRows(rows[3]!);
         var planets = inline.planets || [];
         planets = planets.length
           ? mergeStandalonePoiRows(planets, rows[1])
@@ -348,8 +400,10 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         fetchJSON<MapLabel[]>(dir + CONFIG.data.labels + suffix, []),
         fetchCSV('/data/systems.csv' + suffix),
         fetchCSV('/data/places.csv' + suffix),
-        fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix)
-      ]).then(function ([systemsJson, planetsJson, overrides, labels, systemRows, placeRows, generationRows]) {
+        fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix),
+        fetchCSV('/data/factions.csv' + suffix)
+      ]).then(function ([systemsJson, planetsJson, overrides, labels, systemRows, placeRows, generationRows, factionRows]) {
+        setFactionRows(factionRows);
         var systems = systemsJson;
         var planets = planetsJson;
         if ((!systems || !systems.length) && systemRows && systemRows.length) {
@@ -683,6 +737,8 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     placeTypeGlyph,
     factionsOf,
     systemFactions,
+    factionColor,
+    factionsByName,
     search,
   };
 }
