@@ -67,3 +67,16 @@ test('углы нормализуются в интервал (-180°, 180°] с
   assert.equal(units.formatAngleDeg(136.4 * Math.PI / 180), '136,4°');
   assert.throws(() => units.formatAngleDeg(Number.NaN), RangeError);
 });
+
+test('режим label следует правилам подписи §6.5.1 и не меняет short/full', () => {
+  assert.equal(units.formatDistanceLy(88.4, 'label'), `88,4${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(90.79, 'label'), `90,8${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(108.07, 'label'), `108${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(116.76, 'label'), `117${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(1302.6, 'label'), `1${NBSP}303${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(1303, 'label'), `1${NBSP}303${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(10000, 'label'), `≥ 10${NBSP}000${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(1, 'full'), `1,00${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(108.07, 'short'), `108,1${NBSP}св.г.`);
+  assert.throws(() => units.formatDistanceLy(88.4, 'unknown'), RangeError);
+});

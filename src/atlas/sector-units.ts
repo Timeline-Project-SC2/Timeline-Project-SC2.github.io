@@ -1,19 +1,23 @@
 export const NBSP = '\u00A0';
 
-export type DistanceMode = 'full' | 'short';
+export type DistanceMode = 'full' | 'short' | 'label';
 
 export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): string {
   if (Number.isNaN(ly) || ly < 0) {
     throw new RangeError('Расстояние не может быть отрицательным или неопределённым');
   }
+  if (mode !== 'short' && mode !== 'full' && mode !== 'label') {
+    throw new RangeError(`Неизвестный режим форматирования расстояния: ${mode}`);
+  }
   if (ly >= 10000) {
     return `≥ 10${NBSP}000${NBSP}св.г.`;
   }
-  if (mode !== 'short' && mode !== 'full') {
-    throw new RangeError(`Неизвестный режим форматирования расстояния: ${mode}`);
+  if (mode === 'label' && ly >= 100) {
+    const groupedInteger = Math.round(ly).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+    return `${groupedInteger}${NBSP}св.г.`;
   }
 
-  const decimals = mode === 'short' ? 1 : 2;
+  const decimals = mode === 'full' ? 2 : 1;
   const rounded = ly.toFixed(decimals);
   const decimalIndex = rounded.indexOf('.');
   const integerPart = rounded.slice(0, decimalIndex);
