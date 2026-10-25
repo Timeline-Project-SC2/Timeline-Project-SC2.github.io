@@ -5,7 +5,17 @@ import { createHash } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
 const fieldModule = require('../src/atlas/sector-field.ts');
-const { FIELD_SEED_TEXT, FIELD_PALETTES, createSectorField, hashSeed } = fieldModule;
+const {
+  FIELD_SEED_TEXT,
+  FIELD_PALETTES,
+  LOCAL_FADE_FROM,
+  LOCAL_FADE_TO,
+  createSectorField,
+  hashSeed,
+} = fieldModule;
+const { lyToUnits, unitsToLy } = require('../src/atlas/sector-units.ts');
+const { edgeDistance, fitScaleFor, maxScaleForTargetEdge } = require('../src/atlas/level-ladder.ts');
+const { CONFIG } = require('../src/atlas/config.ts');
 
 const MAP_SIZE = 10000;
 /** Ширины кадра для проверок: вся карта и глубокая апертура `L9`. */
@@ -294,42 +304,126 @@ function cloudWithoutStars(field, base, palette) {
 }
 
 /**
- * Один и тот же кадр (видимая ширина `20` св.г.), в котором меняется только
- * `edgeDist`. Так гашение проверяется на одной сцене: разница кадров — это
- * ровно гашение, а не другой зум.
+ * Один и тот же кадр (видимая ширина `20` ед. карты), в котором меняется
+ * только `edgeDist`. Так гашение проверяется на одной сцене: разница кадров —
+ * это ровно гашение, а не другой зум. Сигнатура прежняя: `edgeDist` —
+ * единицы карты, вызывающие переводят св.г. через `lyToUnits` (§17.23).
  */
 function deepFrame(edgeDist, size = PROXY_SIZE) {
   return { ...stateForWidth(20, size), edgeDist };
 }
 
-test('глубокий пресет: при edgeDist = 1 облака нет, при edgeDist = 10 — есть', () => {
+test('глубокий пресет: при edgeDist = 1 св.г. облака нет, при edgeDist = 10 св.г. — есть', () => {
   for (const palette of FIELD_PALETTES) {
     const field = createSectorField(null, { style: palette.id });
-    const deep = cloudWithoutStars(field, deepFrame(1), palette);
+    const deep = cloudWithoutStars(field, deepFrame(lyToUnits(1)), palette);
     let above = 0;
     let peak = 0;
     for (const value of deep) {
       if (value > 0.02) above++;
       if (value > peak) peak = value;
     }
-    assert.equal(above, 0, `${palette.id}: при edgeDist = 1 плотность выше 0,02 у ${above} пикселей (пик ${peak.toFixed(3)})`);
+    assert.equal(above, 0, `${palette.id}: при edgeDist = 1 св.г. плотность выше 0,02 у ${above} пикселей (пик ${peak.toFixed(3)})`);
 
-    const far = cloudWithoutStars(field, deepFrame(10), palette);
+    const far = cloudWithoutStars(field, deepFrame(lyToUnits(10)), palette);
     let clouded = 0;
     for (const value of far) if (value > 0.02) clouded++;
     const share = clouded / far.length;
-    assert.ok(share > 0.3, `${palette.id}: при edgeDist = 10 облако занимает лишь ${(share * 100).toFixed(1)} % кадра`);
+    assert.ok(share > 0.3, `${palette.id}: при edgeDist = 10 св.г. облако занимает лишь ${(share * 100).toFixed(1)} % кадра`);
 
     // Гашение монотонное: доля облака не убывает с ростом edgeDist, ступеньки нет.
     let previous = -1;
-    for (const edgeDist of [1, 1.5, 2, 3, 4, 10]) {
+    for (const edgeDist of [1, 1.5, 2, 3, 4, 10].map(lyToUnits)) {
       const density = cloudWithoutStars(field, deepFrame(edgeDist), palette);
       let seen = 0;
       for (const value of density) if (value > 0.02) seen++;
-      assert.ok(seen >= previous, `${palette.id}: гашение немонотонно на edgeDist = ${edgeDist}`);
+      assert.ok(seen >= previous, `${palette.id}: гашение немонотонно на edgeDist = ${unitsToLy(edgeDist)} св.г.`);
       previous = seen;
     }
     field.dispose();
+  }
+});
+
+/**
+ * Гашение по тому же `smoothstep`, что считает поле (`t² · (3 − 2t)` от
+ * клампнутого `t`), но пороги берутся из экспортированных констант поля —
+ * числа `1000`/`4000` в формуле не хардкодятся. Вход — единицы карты.
+ */
+function localFadeFor(edgeDistUnits) {
+  const t = Math.max(
+    0,
+    Math.min(1, (edgeDistUnits - LOCAL_FADE_FROM) / (LOCAL_FADE_TO - LOCAL_FADE_FROM)),
+  );
+  return t * t * (3 - 2 * t);
+}
+
+test('контракт единиц гашения: пороги 1 и 4 св.г. заданы в единицах карты', () => {
+  assert.equal(LOCAL_FADE_FROM, lyToUnits(1));
+  assert.equal(LOCAL_FADE_FROM, 1000);
+  assert.equal(LOCAL_FADE_TO, lyToUnits(4));
+  assert.equal(LOCAL_FADE_TO, 4000);
+
+  const expected = [
+    [1, 0],
+    [1.25, 0.020],
+    [2.5, 0.5],
+    [3, 0.741],
+    [4, 1],
+    [5.3191, 1],
+  ];
+  for (const [edgeLy, fade] of expected) {
+    const actual = localFadeFor(lyToUnits(edgeLy));
+    assert.ok(
+      Math.abs(actual - fade) <= 1e-3,
+      `fade(${edgeLy} св.г.) = ${actual}, ожидалось ${fade} ± 1e-3`,
+    );
+  }
+});
+
+test('реальные edgeDist из сцены: на упоре fade = 0, на «вся карта» fade = 1', () => {
+  // Сцена отдаёт edgeDist в св.г. (`edgeDistance` лестницы, §17.23), поле
+  // сравнивает его в единицах карты — мост между ними один: `lyToUnits`.
+  // Если константы поля снова окажутся в других единицах, этот тест упадёт,
+  // даже если литеральные проверки выше формально переписать под них.
+  const viewports = [
+    { w: 1920, h: 1080, expectedMaxScale: 0.54, expectedFitScale: 0.10152 },
+    { w: 390, h: 844, expectedMaxScale: 0.195, expectedFitScale: 0.03666 },
+  ];
+  for (const spec of viewports) {
+    const viewport = { w: spec.w, h: spec.h };
+    const label = `${spec.w}×${spec.h}`;
+
+    const maxScale = maxScaleForTargetEdge(viewport, MAP_SIZE, CONFIG.view.fitInset);
+    assert.ok(
+      Math.abs(maxScale - spec.expectedMaxScale) <= 1e-9,
+      `${label}: maxScaleForTargetEdge = ${maxScale} px/ед, ожидалось ${spec.expectedMaxScale} px/ед`,
+    );
+    const edgeAtMaxLy = edgeDistance(viewport, maxScale);
+    assert.ok(
+      Math.abs(edgeAtMaxLy - 1) <= 1e-9,
+      `${label}: edgeDistance на упоре = ${edgeAtMaxLy} св.г., ожидалось 1,00 св.г.`,
+    );
+    assert.equal(
+      localFadeFor(lyToUnits(edgeAtMaxLy)),
+      0,
+      `${label}: fade на упоре не 0 — глубокий пресет на упоре не гасится полностью`,
+    );
+
+    const fitScale = fitScaleFor(viewport, MAP_SIZE, CONFIG.view.fitInset);
+    assert.ok(
+      Math.abs(fitScale - spec.expectedFitScale) <= 1e-9,
+      `${label}: fitScaleFor = ${fitScale} px/ед, ожидалось ${spec.expectedFitScale} px/ед`,
+    );
+    const edgeAtFitLy = edgeDistance(viewport, fitScale);
+    assert.ok(
+      Math.abs(edgeAtFitLy - 5.319148936170213) <= 1e-9,
+      `${label}: edgeDistance на «вся карта» = ${edgeAtFitLy} св.г., ожидалось 5,32 св.г.`,
+    );
+    assert.equal(
+      localFadeFor(lyToUnits(edgeAtFitLy)),
+      1,
+      `${label}: fade на «вся карта» не 1 — обычное поле там приглушено`,
+    );
   }
 });
 
@@ -414,12 +508,12 @@ test('кэш renderField учитывает edgeDist: смена глубины 
   const field = createSectorField(canvas);
   const base = { ...stateForWidth(20, 96) };
 
-  field.renderField({ ...base, edgeDist: 1 });
+  field.renderField({ ...base, edgeDist: lyToUnits(1) });
   const deep = painted.image;
   assert.ok(deep !== null, 'кадр не попал на холст');
 
   // Та же камера, другая глубина: из кэша вернулся бы предыдущий кадр.
-  field.renderField({ ...base, edgeDist: 10 });
+  field.renderField({ ...base, edgeDist: lyToUnits(10) });
   const far = painted.image;
   assert.notEqual(far, deep, 'кадр не пересчитан при смене edgeDist');
 
@@ -429,7 +523,7 @@ test('кэш renderField учитывает edgeDist: смена глубины 
 
   // Повтор с тем же состоянием — из кэша, новый кадр не считается.
   const before = painted.count;
-  field.renderField({ ...base, edgeDist: 10 });
+  field.renderField({ ...base, edgeDist: lyToUnits(10) });
   assert.equal(painted.count, before + 1, 'повторный кадр должен браться из кэша без пересчёта');
   assert.equal(painted.image, far, 'из кэша вернулся другой кадр');
   field.dispose();
