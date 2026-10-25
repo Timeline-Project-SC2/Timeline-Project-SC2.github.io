@@ -262,7 +262,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var step = 1000;
     if (scale * step < 46) step = 2000;
     if (scale * step < 46) step = 5000;
-    ctx.strokeStyle = 'rgba(150,180,215,.14)';
+    ctx.strokeStyle = 'rgba(150,180,215,.08)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (var x = 0; x <= size; x += step) {
@@ -277,10 +277,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     }
     ctx.stroke();
 
-    // рамка сектора и угловые метки
-    ctx.strokeStyle = 'rgba(190,212,240,.42)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(offset.x + 0.5, offset.y + 0.5, span, span);
+    // координатные отметки
     ctx.fillStyle = 'rgba(190,212,240,.55)';
     ctx.font = '9px ' + theme.mono;
     if (scale > 0.09) {
@@ -722,12 +719,29 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
     ctx.clearRect(0, 0, state.viewport.w, state.viewport.h);
 
-    if (state.rasterMode === 'tiles' || (state.rasterMode === 'preview' && kernel.tiles.hasPreviewImage())) {
-      ctx.fillStyle = '#03060c';
-      ctx.fillRect(0, 0, state.viewport.w, state.viewport.h);
-      ctx.imageSmoothingEnabled = true;
-      if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
-      kernel.tiles.drawRaster();
+    const field = kernel.field;
+    const fieldCanvas = kernel.fieldCanvas;
+    if (
+      state.meta !== null &&
+      field !== null &&
+      fieldCanvas !== null &&
+      !runtime.fieldContextLost &&
+      state.viewport.w > 0 &&
+      state.viewport.h > 0
+    ) {
+      field.renderField({
+        view: state.view,
+        viewport: state.viewport,
+        dpr: state.dpr,
+        mapSize: kernel.data.mapSize(),
+      });
+      if (fieldCanvas.width > 0 && fieldCanvas.height > 0) {
+        ctx.imageSmoothingEnabled = true;
+        if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(fieldCanvas, 0, 0, state.viewport.w, state.viewport.h);
+      } else {
+        drawSchematic();
+      }
     } else {
       drawSchematic();
     }

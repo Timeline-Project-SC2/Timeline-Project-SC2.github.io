@@ -47,6 +47,7 @@ jobs:
           npm ci
           npm run build
           npm run verify:publish
+          npm run verify:no-raster
           npm run verify:contract
           test ! -e .publish/assets/src
           du -sh .publish/* | sort -h
@@ -54,7 +55,7 @@ jobs:
           # tools/verify_feature_parity.mjs по build-manifest.json.
           for f in index.html sector/sector.html minimal/minimal.html cursor-test/index.html \
                    spiral-test/index.html planet-test/index.html planet-globe/index.html build-manifest.json \
-                   assets/tiles.json assets/galaxy-map-3000.webp data/systems.csv data/places.csv \
+                   assets/galaxy-map-3000.webp data/systems.csv data/places.csv \
                    data/planet-generation.csv; do
             test -s ".publish/$f" || { echo "нет файла: $f"; exit 1; }
           done
@@ -85,6 +86,7 @@ jobs:
           # блок, из-за чего стоявшие ниже шаги не выполнялись вообще.
           npm run verify:address
           npm run verify:sector-core
+          npm run verify:no-raster
           npm test
           # Wasm-ядра planet-core (CR-01 PR 4): закоммиченные байты в
           # src/planet/planet-core-bytes.ts обязаны совпадать с пересборкой

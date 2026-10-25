@@ -13,6 +13,7 @@
     "verify:contract": "node tools/verify_planet_contract_cross.mjs",
     "verify:address": "node tools/verify_sector_address.mjs",
     "verify:sector-core": "node tools/verify_sector_core.mjs",
+    "verify:no-raster": "node tools/verify_no_raster.mjs",
     "sector-field:preview": "node tools/sector_field_preview.mjs",
     "verify:publish": "node tools/verify_feature_parity.mjs",
     "verify:hashes": "node tools/verify_planet_hashes.mjs",
