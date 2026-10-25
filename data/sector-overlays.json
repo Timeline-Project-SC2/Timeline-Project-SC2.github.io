@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "card": "Z-3.2",
+  "source": "эталон KopruluSectorData2513 (2).jpg, §17.22.1 матрицы оркестрации",
+  "placeholder": true,
+  "note": "Все блоки — плейсхолдеры волны Z-3.2: тексты взяты с эталона и остаются заготовками, содержимое слотов пустое (value: null) до наполнения вложениями. Координаты world-якорей приблизительные (сверка с эталоном — в волне монтажа Z-3.4). На эталоне четыре одинаковые метки HIGH DANGER ZONE; в JSON две — по числу различных наборов слотов, остальные добавляются данными без правки кода отрисовки. Карточка требует ровно восемь блоков: legend, statistics, inset, watermark, zone.1, zone.2, callout.1, callout.2.",
+  "blocks": [
+    {
+      "id": "legend",
+      "title": "MAP LEGEND",
+      "anchor": { "kind": "corner", "corner": "top-left" },
+      "size": { "w": 0.135, "h": 0.24, "unit": "frame" },
+      "phoneSize": { "w": 0.36, "h": 0.04, "unit": "frame" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "toggle", "target": "legend.factions" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "scale",
+          "kind": "text",
+          "value": "1 Квадрат = 150 св.г.",
+          "placeholder": "масштаб с эталона; по §17.22.3 вариант A даёт 322,58 св.г. на клетку — значение ждёт решения владельца"
+        },
+        {
+          "id": "factions",
+          "kind": "list",
+          "value": null,
+          "placeholder": "список фракций цветными плашками: цвет и подпись из данных систем"
+        }
+      ]
+    },
+    {
+      "id": "statistics",
+      "title": "STATISTICS",
+      "anchor": { "kind": "corner", "corner": "bottom-left" },
+      "size": { "w": 0.135, "h": 0.2, "unit": "frame" },
+      "phoneSize": { "w": 0.36, "h": 0.04, "unit": "frame" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "toggle", "target": "statistics.counters" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "systems",
+          "kind": "counter",
+          "value": null,
+          "placeholder": "число систем — из data/systems.csv"
+        },
+        {
+          "id": "colonies",
+          "kind": "counter",
+          "value": null,
+          "placeholder": "колонии: на эталоне «over 250 colonies», число — из данных"
+        },
+        {
+          "id": "fleets",
+          "kind": "counter",
+          "value": null,
+          "placeholder": "число флотов — из данных"
+        },
+        {
+          "id": "military",
+          "kind": "number",
+          "value": null,
+          "placeholder": "военные силы: строка с эталона без числа, значение — из данных"
+        }
+      ]
+    },
+    {
+      "id": "inset",
+      "title": "MINI MAP",
+      "anchor": { "kind": "corner", "corner": "top-right" },
+      "size": { "w": 0.11, "h": 0.18, "unit": "frame" },
+      "phoneSize": { "w": 0.22, "h": 0.14, "unit": "frame" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "link", "target": "#sector-inset-fullscreen" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "map",
+          "kind": "media",
+          "value": null,
+          "placeholder": "врезка-мини-карта: слой карты в рамке, вложение media"
+        },
+        {
+          "id": "caption",
+          "kind": "text",
+          "value": null,
+          "placeholder": "подпись перехода к полному кадру — текст из данных"
+        },
+        {
+          "id": "open",
+          "kind": "link",
+          "value": null,
+          "placeholder": "ссылка на полный кадр карты"
+        }
+      ]
+    },
+    {
+      "id": "watermark",
+      "title": "SECTOR WATERMARK",
+      "anchor": { "kind": "world", "x": 5000, "y": 4600 },
+      "size": { "w": 0.5, "h": 0.12, "unit": "frame" },
+      "state": "expanded",
+      "interactive": false,
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "galactic-gala",
+          "kind": "text",
+          "value": "Galactic Gala",
+          "placeholder": "полупрозрачная надпись с эталона, первая из двух"
+        },
+        {
+          "id": "protoss-sector",
+          "kind": "text",
+          "value": "PROTOSS SECTOR",
+          "placeholder": "полупрозрачная надпись с эталона, вторая из двух"
+        }
+      ]
+    },
+    {
+      "id": "zone.1",
+      "title": "HIGH DANGER ZONE",
+      "anchor": { "kind": "world", "x": 2200, "y": 2600 },
+      "size": { "w": 190, "h": 54, "unit": "px" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "focusSystem", "target": "zone.1" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "icon",
+          "kind": "media",
+          "value": null,
+          "placeholder": "иконка предупреждения с эталона"
+        },
+        {
+          "id": "label",
+          "kind": "text",
+          "value": "/// HIGH DANGER ZONE ///",
+          "placeholder": "надпись метки с эталона"
+        },
+        {
+          "id": "note",
+          "kind": "text",
+          "value": "Zerg swarm fleet detected",
+          "placeholder": "подпись метки с эталона"
+        }
+      ]
+    },
+    {
+      "id": "zone.2",
+      "title": "HIGH DANGER ZONE",
+      "anchor": { "kind": "world", "x": 7800, "y": 6800 },
+      "size": { "w": 190, "h": 54, "unit": "px" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "focusSystem", "target": "zone.2" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "icon",
+          "kind": "media",
+          "value": null,
+          "placeholder": "иконка предупреждения с эталона"
+        },
+        {
+          "id": "label",
+          "kind": "text",
+          "value": "/// HIGH DANGER ZONE ///",
+          "placeholder": "надпись метки с эталона"
+        },
+        {
+          "id": "note",
+          "kind": "text",
+          "value": "Zerg swarm fleet detected",
+          "placeholder": "подпись метки с эталона"
+        }
+      ]
+    },
+    {
+      "id": "callout.1",
+      "title": "ZONE OF LOST SIGNALS",
+      "anchor": { "kind": "world", "x": 3000, "y": 3800 },
+      "size": { "w": 220, "h": 60, "unit": "px" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "link", "target": "#nebula-zone-of-lost-signals" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "title",
+          "kind": "text",
+          "value": "Zone of Lost Signals",
+          "placeholder": "подпись туманности с эталона"
+        },
+        {
+          "id": "class",
+          "kind": "text",
+          "value": "Nebula class B",
+          "placeholder": "класс туманности с эталона"
+        },
+        {
+          "id": "leader",
+          "kind": "link",
+          "value": null,
+          "placeholder": "линия выноски к контуру туманности из sector-bounds"
+        }
+      ]
+    },
+    {
+      "id": "callout.2",
+      "title": "FOG OF ECHOS",
+      "anchor": { "kind": "world", "x": 7100, "y": 3200 },
+      "size": { "w": 220, "h": 60, "unit": "px" },
+      "state": "expanded",
+      "interactive": true,
+      "action": { "kind": "link", "target": "#nebula-fog-of-echos" },
+      "placeholder": true,
+      "slots": [
+        {
+          "id": "title",
+          "kind": "text",
+          "value": "Fog of Echos",
+          "placeholder": "подпись туманности с эталона"
+        },
+        {
+          "id": "class",
+          "kind": "text",
+          "value": "Nebula class A",
+          "placeholder": "класс туманности с эталона"
+        },
+        {
+          "id": "leader",
+          "kind": "link",
+          "value": null,
+          "placeholder": "линия выноски к контуру туманности из sector-bounds"
+        }
+      ]
+    }
+  ]
+}
