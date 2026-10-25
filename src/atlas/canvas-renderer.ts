@@ -16,6 +16,7 @@ import type {
   PlaceRecord,
   SystemRecord,
 } from './config.ts';
+import { maxScaleForTargetEdge } from './level-ladder.ts';
 
 interface ViewAnimation {
   from: AtlasView;
@@ -107,7 +108,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   function minScale(): number { return fitScale() * CONFIG.view.minFactor; }
-  function maxScale(): number { return fitScale() * CONFIG.view.maxFactor; }
+  function maxScale(): number {
+    return maxScaleForTargetEdge(state.viewport, kernel.data.mapSize(), CONFIG.view.fitInset);
+  }
 
   function fitView(): void {
     var size = kernel.data.mapSize();
@@ -185,7 +188,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   function centerOn(worldX: number, worldY: number, scale?: number): void {
-    var target = scale || Math.max(state.view.scale, fitScale() * 2.6);
+    var rawTarget = scale || Math.max(state.view.scale, fitScale() * 2.6);
+    var target = clamp(rawTarget, minScale(), maxScale());
     var tx = state.viewport.w / 2 - worldX * target;
     var ty = state.viewport.h / 2 - worldY * target;
     var size = kernel.data.mapSize();
@@ -1009,6 +1013,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
   return {
     fitScale,
+    minScale,
+    maxScale,
     fitView,
     clampView,
     toScreen,
