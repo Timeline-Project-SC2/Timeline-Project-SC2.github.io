@@ -305,7 +305,7 @@ draw-вызовы: **2 + число колец** (batch на кольцо), по
 
 ## 16. Матрица волны SW-1 (Ядро под-уровня Этапов 9–12: буквенный адрес, лестница глубины, единицы)
 
-Дата постановки: **25 октября 2026 года**. Статус: **волна открыта**, кодовые PR не слиты.
+Дата постановки: **25 октября 2026 года**. Статус: **волна слита 25.10.2026** (Воркер 1 — PR #244 `c9c36b4`, Воркер 2 — PR #245 `86ded61`, сквозной гейт Гайдлайнера — PR #248 `dd1f2ea`, документация волны — PR #249; факт и требование к `SW-3` — §16.9).
 Режим — параллельный (`Tri-Agent Wave`), контур — секториальный под-уровень Этапов 9–12.
 
 Источник чисел — гайдлайнер [`../stages/stage-9-12-sector-deep-render-plan.md`](../stages/stage-9-12-sector-deep-render-plan.md)
@@ -329,9 +329,9 @@ draw-вызовы: **2 + число колец** (batch на кольцо), по
 
 | Воркер | Поток работ | Эксклюзивные файлы (`OWNED_FILES`) | Запрещено трогать (`FORBIDDEN_FILES`) |
 |---|---|---|---|
-| **Воркер 1**<br>*(Кодек адресов, golden vectors, верификатор)* | `src/atlas/sector-address.ts`: тиры `T0…T5` (`10 000 / 2 000 / 400 / 80 / 16 / 3,2`), алфавит `A…Y` построчно, ось `y` вниз (`flipY = false`), `addressOf`, `prefixOf`, `rectOf`, `centerOf`, `parseAddress`, `formatAddress`; `tools/verify_sector_address.mjs` (CLI без зависимостей: `mapSize`, `173` уникальных адреса, round-trip `≤ 1e-9`, golden vectors, `--regen`); `tests/sector-address.test.mjs`. | - `src/atlas/sector-address.ts`<br>- `tools/verify_sector_address.mjs`<br>- `tests/sector-address.test.mjs` | Все остальные файлы, включая `src/atlas/level-ladder.ts`, `src/atlas/sector-units.ts`, `tests/sector-ladder.test.mjs`, `tests/sector-units.test.mjs`, `package.json`, `.github/workflows/check.yml`, `docs/HANDOFF.md`, `CHANGELOG.md` |
-| **Воркер 2**<br>*(Лестница 13 уровней, единицы и подключение проверок в CI)* | `src/atlas/level-ladder.ts`: `LEVELS` (13 записей), `levelForWidth` с гистерезисом `±12 %`, `levelSpec`, `frameOf`, `visibleWidthForLevel`, `markerDiameter`, `MIN_VISIBLE_WIDTH`/`MAX_VISIBLE_WIDTH`; `src/atlas/sector-units.ts`: `formatDistanceLy`, `pluralYears`, `formatAngleDeg`, `NBSP`; `tests/sector-ladder.test.mjs`, `tests/sector-units.test.mjs`; подключение трёх новых тестов в `npm test` и шага `npm run verify:address` в job `scripts` файла `.github/workflows/check.yml`. | - `src/atlas/level-ladder.ts`<br>- `src/atlas/sector-units.ts`<br>- `tests/sector-ladder.test.mjs`<br>- `tests/sector-units.test.mjs`<br>- `package.json`<br>- `.github/workflows/check.yml` | Все остальные файлы, включая `src/atlas/sector-address.ts`, `tools/verify_sector_address.mjs`, `tests/sector-address.test.mjs`, `docs/HANDOFF.md`, `CHANGELOG.md` |
-| **Воркер 3**<br>*(Документация волны; запускается последним, после слияния PR 1–2)* | Сводные записи: `CHANGELOG.md` (новая запись сверху), `docs/HANDOFF.md` (§1 «Статус»: новая строка «Последняя работа», прежняя — в «Предыдущую», по §15.3 гайдлайнера), `docs/stages/stage_patches.md` (запись `2026-10-2X` в конец журнала), простановка фактических номеров PR в §16.2 и снятие статуса «волна открыта» в шапке §16; в `docs/PREPARATION_PLAN.md` — только строка статуса под-уровня, без перезаписи прежних абзацев. | - `CHANGELOG.md`<br>- `docs/HANDOFF.md`<br>- `docs/stages/stage_patches.md`<br>- `docs/agents_task_orchestration/agents_task_orchestration.md`<br>- `docs/PREPARATION_PLAN.md` | Любые файлы кода и тестов (`site/*`, `src/*`, `tools/*`, `tests/*`), `package.json`, `.github/*`, `data/*` |
+| **Воркер 1**<br>*(Кодек адресов, golden vectors, верификатор; слитый PR #244)* | `src/atlas/sector-address.ts`: тиры `T0…T5` (`10 000 / 2 000 / 400 / 80 / 16 / 3,2`), алфавит `A…Y` построчно, ось `y` вниз (`flipY = false`), `addressOf`, `prefixOf`, `rectOf`, `centerOf`, `parseAddress`, `formatAddress`; `tools/verify_sector_address.mjs` (CLI без зависимостей: `mapSize`, `173` уникальных адреса, round-trip `≤ 1e-9`, golden vectors, `--regen`); `tests/sector-address.test.mjs`. | - `src/atlas/sector-address.ts`<br>- `tools/verify_sector_address.mjs`<br>- `tests/sector-address.test.mjs` | Все остальные файлы, включая `src/atlas/level-ladder.ts`, `src/atlas/sector-units.ts`, `tests/sector-ladder.test.mjs`, `tests/sector-units.test.mjs`, `package.json`, `.github/workflows/check.yml`, `docs/HANDOFF.md`, `CHANGELOG.md` |
+| **Воркер 2**<br>*(Лестница 13 уровней, единицы и подключение проверок в CI; слитый PR #245)* | `src/atlas/level-ladder.ts`: `LEVELS` (13 записей), `levelForWidth` с гистерезисом `±12 %`, `levelSpec`, `frameOf`, `visibleWidthForLevel`, `markerDiameter`, `MIN_VISIBLE_WIDTH`/`MAX_VISIBLE_WIDTH`; `src/atlas/sector-units.ts`: `formatDistanceLy`, `pluralYears`, `formatAngleDeg`, `NBSP`; `tests/sector-ladder.test.mjs`, `tests/sector-units.test.mjs`; подключение трёх новых тестов в `npm test` и шага `npm run verify:address` в job `scripts` файла `.github/workflows/check.yml`. | - `src/atlas/level-ladder.ts`<br>- `src/atlas/sector-units.ts`<br>- `tests/sector-ladder.test.mjs`<br>- `tests/sector-units.test.mjs`<br>- `package.json`<br>- `.github/workflows/check.yml` | Все остальные файлы, включая `src/atlas/sector-address.ts`, `tools/verify_sector_address.mjs`, `tests/sector-address.test.mjs`, `docs/HANDOFF.md`, `CHANGELOG.md` |
+| **Воркер 3**<br>*(Документация волны; запускается последним, после слияния PR 1–2; PR #249, статус «слитый» — после merge)* | Сводные записи: `CHANGELOG.md` (новая запись сверху), `docs/HANDOFF.md` (§1 «Статус»: новая строка «Последняя работа», прежняя — в «Предыдущую», по §15.3 гайдлайнера), `docs/stages/stage_patches.md` (запись `2026-10-2X` в конец журнала), простановка фактических номеров PR в §16.2 и снятие статуса «волна открыта» в шапке §16; в `docs/PREPARATION_PLAN.md` — только строка статуса под-уровня, без перезаписи прежних абзацев. | - `CHANGELOG.md`<br>- `docs/HANDOFF.md`<br>- `docs/stages/stage_patches.md`<br>- `docs/agents_task_orchestration/agents_task_orchestration.md`<br>- `docs/PREPARATION_PLAN.md` | Любые файлы кода и тестов (`site/*`, `src/*`, `tools/*`, `tests/*`), `package.json`, `.github/*`, `data/*` |
 
 **Стык `package.json` и `check.yml` (правило О-1).** Оба общих файла отданы ровно **Воркеру 2**.
 Воркер 1 не добавляет себя в `npm test` и не правит CI: его тест подключается Воркером 2 по
@@ -637,3 +637,45 @@ export function formatAngleDeg(rad: number): string;
 `G0.4` — `CHANGELOG`/`HANDOFF`/`src/AGENTS.md` описывают `c100-soft-v3`; `check.yml` `4/4`;
 `G0.5` — после зелёного прогона владелец решает, включать ли job «Скрипты сайта» в обязательные
 статус-чеки (сейчас в ruleset `BotsOverwrite` обязательных чеков нет — см. `docs/HANDOFF.md`).
+
+### 16.9. Факт волны `SW-1` и требование к `SW-3`
+
+Волна слита **25.10.2026**: Воркер 1 — PR #244 `c9c36b4` (кодек адреса
+`src/atlas/sector-address.ts`, верификатор `tools/verify_sector_address.mjs`,
+тест `tests/sector-address.test.mjs`); Воркер 2 — PR #245 `86ded61` (лестница
+`src/atlas/level-ladder.ts`, единицы `src/atlas/sector-units.ts`, тесты
+`tests/sector-ladder.test.mjs` и `tests/sector-units.test.mjs`, `package.json`,
+`.github/workflows/check.yml`); Гайдлайнер — PR #248 `dd1f2ea` (сквозной гейт
+`tools/verify_sector_core.mjs` и перенос верификаторов выше `npm test`).
+Документация волны — Воркер 3, PR #249.
+
+| Проверка (прогон на `main` после слияния) | Факт |
+|---|---|
+| `npm test` | **195 тестов, 187 pass, 8 fail** — все 8 падений — известная планетарная база Stage-8 (см. §16.8), вне задачи сектора; новых падений нет |
+| `npm run verify:address` | **173 системы, 173 уникальных адреса, golden vectors 11/11, максимум round-trip 0 св.г.** |
+| `npm run verify:sector-core` | **3 032 проверки, 0 провалов**; максимум расхождения `markerDiameter` с таблицей `LEVELS` — `0,0448 px` (L1); отклонение центра узла `≤ 2,263` св.г. |
+| `npx tsc --noEmit`, `npx eslint site src`, `npm run build`, `npm run verify:publish`, `git diff --check` | зелёные |
+
+Закреплённые числа ядра: пороги уровней — точная геометрия `10 000 / 2ⁿ`
+(`10 000 / 5 000 / 2 500 / 1 250 / 625 / 312,5 / 156,25 / 78,125 / 39,0625 /
+19,53125` св.г.); `addressLetters` по уровням `L0…L9` — `0,1,2,2,3,3,4,4,5,5`;
+адреса различны уже на тире `16` св.г. (минимальная пара систем —
+Зеф ↔ Орна `50,01` св.г.).
+
+**Дефект приёмки 1 — верификатор не запускался ни разу (исправлен в PR #248).**
+`npm run verify:address` стоял после `npm test` в одном shell-блоке `check.yml`;
+красный `npm test` обрывал выполнение блока, и верификатор адресов не доходил до
+запуска. Исправление: верификаторы подняты выше `npm test`, в workflow оставлен
+объясняющий комментарий. Урок для следующих волн: гейт, чьё выполнение зависит от
+красной базовой линии, ставится **выше** неё, а не ниже.
+
+**Дефект приёмки 2 — `L9` недостижим при пределе зума `19,53125` св.г.** Гистерезис
+`±12 %` в `levelForWidth` означает, что уровень с номинальной шириной `W(n)`
+активируется при входе только на `W(n) · 0,88`, а удерживается при отходе до
+`W(n) · 1,12`. Для `L9` (`W = 19,53125` св.г.) вход требует `17,1875` св.г., выход
+допускает до `21,875` св.г. Если кламп зума в `SW-3` ограничить номиналом
+`19,53125`, уровень `L9` не активируется никогда и апертура системы не показывается.
+Это **не дефект `levelForWidth`**, а обязательное требование к постановке `SW-3`:
+кламп зума обязан доходить до **`MIN_REACHABLE_WIDTH = 17,1875` св.г.** При этой
+ширине `markerDiameter = 36,24 px`, что укладывается в кламп диаметра `40 px`,
+поэтому таблица `LEVELS` и формула диаметра правок не требуют.
