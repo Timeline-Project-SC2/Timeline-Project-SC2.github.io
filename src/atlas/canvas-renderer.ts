@@ -11,12 +11,28 @@ import type {
   AtlasKernel,
   AtlasView,
   CanvasRendererApi,
-  MapLabel,
   MapPoint,
   PlaceRecord,
   SystemRecord,
 } from './config.ts';
-import { maxScaleForTargetEdge } from './level-ladder.ts';
+import { markerDiameter, maxScaleForTargetEdge } from './level-ladder.ts';
+import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
+import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
+import type {
+  SceneAperture,
+  SceneCamera,
+  SceneGridLabel,
+  SceneGridLine,
+  SceneMarker,
+  SceneSystemInput,
+  SceneTerritory,
+  SectorScene,
+} from './sector-scene.ts';
+import {
+  buildSectorScene,
+  hitRadiusFor,
+  labelTextFor,
+} from './sector-scene.ts';
 
 interface ViewAnimation {
   from: AtlasView;
@@ -29,36 +45,6 @@ interface SchematicStar {
   y: number;
   r: number;
   a: number;
-}
-
-interface LabelCandidate {
-  label: MapLabel;
-  point: MapPoint;
-  rank: number;
-  distance: number;
-}
-
-interface MarkerMetrics {
-  radius: number;
-  fontSize: number;
-  stroke: number;
-  dot: number;
-  gap: number;
-  crossGap: number;
-  crossLength: number;
-  reviewDot: number;
-  hitRadius: number;
-}
-
-interface MarkerLabelCandidate {
-  system: SystemRecord;
-  point: MapPoint;
-  radius: number;
-  color: string;
-  hover: boolean;
-  active: boolean;
-  verified: boolean;
-  fromLabel: boolean;
 }
 
 interface DragState {
@@ -245,9 +231,6 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       ctx.fillRect(center.x - radius, center.y - radius, radius * 2, radius * 2);
     });
 
-    var offset = toScreen(0, 0);
-    var span = size * scale;
-
     // звёздное поле
     var list = stars();
     for (var i = 0; i < list.length; i++) {
@@ -262,141 +245,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     }
     ctx.globalAlpha = 1;
 
-    // сетка навигации
-    var step = 1000;
-    if (scale * step < 46) step = 2000;
-    if (scale * step < 46) step = 5000;
-    ctx.strokeStyle = 'rgba(150,180,215,.08)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (var x = 0; x <= size; x += step) {
-      var sx = Math.round(offset.x + x * scale) + 0.5;
-      ctx.moveTo(sx, offset.y);
-      ctx.lineTo(sx, offset.y + span);
-    }
-    for (var y = 0; y <= size; y += step) {
-      var sy = Math.round(offset.y + y * scale) + 0.5;
-      ctx.moveTo(offset.x, sy);
-      ctx.lineTo(offset.x + span, sy);
-    }
-    ctx.stroke();
-
-    // координатные отметки
-    ctx.fillStyle = 'rgba(190,212,240,.55)';
-    ctx.font = '9px ' + theme.mono;
-    if (scale > 0.09) {
-      for (var gx = 0; gx <= size; gx += 2000) {
-        var px = offset.x + gx * scale;
-        ctx.fillText(String(gx), px + 3, offset.y + span - 4);
-        ctx.fillText(String(gx), offset.x + 3, offset.y + gx * scale + 10);
-      }
-    }
+    // Сетку и координатные отметки рисует только слой сцены (`gridFor`):
+    // собственных шагов сетки в рендерере нет.
     ctx.restore();
-  }
-
-  /* ------------------------------------------------------------------ слой подписей карты */
-
-  function drawMapLabels(): number | undefined {
-    const ctx = kernel.ctx!;
-    var labels = state.labels;
-    if (!state.labelsOn || !labels || !labels.length) return;
-    var scale = state.view.scale;
-    if (scale < CONFIG.layers.labelScale) return;
-    var fontSize = clamp(28 * scale, 8.5, 38);
-    var glyph = clamp(11 * scale, 3, 13);
-    var textGap = clamp(18 * scale, 6, 20);
-    var collisionRadius = clamp(30 * scale, 9, 34);
-
-    // Точки, где уже стоит маркер системы: он подписан своим именем, поэтому
-    // одноимённая подпись из слоя карты была бы дублем.
-    var markerPoints: Record<string, boolean> = {};
-    visibleSystems().forEach(function (system) {
-      markerPoints[Math.round(system.coord![0] / 8) + ':' + Math.round(system.coord![1] / 8)] = true;
-    });
-    visiblePointsOfInterest().forEach(function (place) {
-      markerPoints[Math.round(place.mapCoord!.x / 8) + ':' + Math.round(place.mapCoord!.y / 8)] = true;
-    });
-
-    var budget = CONFIG.layers.labelBudget;
-    var drawn = 0;
-    var seen: Record<string, boolean> = {};
-    var centerX = state.viewport.w / 2;
-    var centerY = state.viewport.h / 2;
-    var placed: MapPoint[] = [];
-
-    // отбираем видимые подписи; приоритет — записи со связью в каталоге,
-    // затем близость к центру экрана, чтобы бюджет доставался главному
-    function labelRank(label: MapLabel): number {
-      if (label.linkedSystemId) return 0;
-      if (label.linkedPlanetId) return 1;
-      if (label.kind === 'system') return 2;
-      if (label.kind === 'planet') return 3;
-      return 4;
-    }
-
-    var candidates: LabelCandidate[] = [];
-    for (var c = 0; c < labels.length; c++) {
-      var candidate = labels[c]!;
-      if (candidate.noisy && scale < CONFIG.layers.noisyLabelScale) continue;
-      var candidatePoint = toScreen(candidate.x, candidate.y);
-      if (candidatePoint.x < -60 || candidatePoint.y < -20 ||
-          candidatePoint.x > state.viewport.w + 60 || candidatePoint.y > state.viewport.h + 20) continue;
-      if (candidate.kind !== 'object' &&
-          markerPoints[Math.round(candidate.x / 8) + ':' + Math.round(candidate.y / 8)]) continue;
-      candidates.push({
-        label: candidate,
-        point: candidatePoint,
-        rank: labelRank(candidate),
-        distance: Math.hypot(candidatePoint.x - centerX, candidatePoint.y - centerY)
-      });
-    }
-    candidates.sort(function (a, b) {
-      return a.rank - b.rank || a.distance - b.distance;
-    });
-
-    ctx.save();
-    ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
-    ctx.textBaseline = 'middle';
-
-    for (var i = 0; i < candidates.length && drawn < budget; i++) {
-      var label = candidates[i]!.label;
-      var key = normalize(label.name);
-      if (seen[key]) continue;
-      var point = candidates[i]!.point;
-      // система и её планета стоят в одной точке: вторую подпись не дублируем
-      var tooClose = false;
-      for (var p = 0; p < placed.length; p++) {
-        if (Math.abs(placed[p]!.x - point.x) < collisionRadius && Math.abs(placed[p]!.y - point.y) < collisionRadius) { tooClose = true; break; }
-      }
-      if (tooClose) continue;
-      placed.push(point);
-      seen[key] = true;
-      drawn++;
-
-      var linked = label.linkedSystemId && state.systemsById[label.linkedSystemId];
-      var isSystem = label.kind === 'system' && !linked;
-      ctx.strokeStyle = label.kind === 'system'
-        ? 'rgba(214,178,110,.5)'
-        : (label.kind === 'planet' ? 'rgba(190,205,225,.34)' : 'rgba(150,170,195,.26)');
-      ctx.beginPath();
-      ctx.moveTo(point.x - glyph, point.y);
-      ctx.lineTo(point.x + glyph, point.y);
-      ctx.moveTo(point.x, point.y - glyph);
-      ctx.lineTo(point.x, point.y + glyph);
-      ctx.stroke();
-
-      if (isSystem) {
-        ctx.fillStyle = 'rgba(226,196,130,.72)';
-      } else {
-        ctx.fillStyle = 'rgba(200,214,232,.5)';
-      }
-      ctx.lineWidth = clamp(fontSize * 0.28, 2.5, 7);
-      ctx.strokeStyle = 'rgba(2,5,10,.75)';
-      ctx.strokeText(label.name, point.x + textGap, point.y - textGap);
-      ctx.fillText(label.name, point.x + textGap, point.y - textGap);
-    }
-    ctx.restore();
-    return drawn;
   }
 
   /* ------------------------------------------------------------------ маркеры систем */
@@ -495,128 +346,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
-  function markerMetrics(scale: number): MarkerMetrics {
-    var lod = CONFIG.markerLod;
-    var radius = clamp(lod.worldRadius * scale, lod.minRadius, lod.maxRadius);
-    var fontSize = clamp(lod.worldFont * scale, lod.minFont, lod.maxFont);
-    return {
-      radius: radius,
-      fontSize: fontSize,
-      stroke: clamp(4.8 * scale, 1.25, 4.5),
-      dot: clamp(7 * scale, 2.2, 10),
-      gap: clamp(16 * scale, 5, 18),
-      crossGap: clamp(6 * scale, 2, 7),
-      crossLength: clamp(12 * scale, 3, 14),
-      reviewDot: clamp(8 * scale, 3, 9),
-      hitRadius: Math.max(CONFIG.hitRadius, radius + clamp(12 * scale, 5, 14))
-    };
-  }
-
-  function drawMarkers(): void {
-    const ctx = kernel.ctx!;
-    var scale = state.view.scale;
-    var list = visibleSystems();
-    var metrics = markerMetrics(scale);
-    var labelCandidates: MarkerLabelCandidate[] = [];
-
-    ctx.save();
-    ctx.textBaseline = 'middle';
-
-    // Сначала рисуются все круги. Размер в координатах мира умножается на
-    // масштаб карты, а clamp удерживает маркеры читаемыми на обоих краях LOD.
-    list.forEach(function (system) {
-      var point = toScreen(system.coord![0], system.coord![1]);
-      if (point.x < -80 || point.y < -80 || point.x > state.viewport.w + 80 || point.y > state.viewport.h + 80) return;
-
-      var isHover = state.hoverId === system.id;
-      var isActive = state.activeSystemId === system.id;
-      var verified = system.coordSource === 'map';
-      var fromLabel = verified && !system.fromSheet;
-      var highlighted = isHover || isActive;
-      var emphasis = (isHover ? clamp(5 * scale, 1.5, 4.5) : 0) +
-        (isActive ? clamp(8 * scale, 1.6, 7) : 0);
-      var radius = metrics.radius + emphasis;
-      var color = highlighted ? theme.accent : 'rgba(36,234,219,.38)';
-      var entry = {
-        system: system, point: point, radius: radius, color: color,
-        hover: isHover, active: isActive, verified: verified,
-        fromLabel: fromLabel
-      };
-      ctx.save();
-      if (highlighted) {
-        ctx.shadowColor = theme.accent;
-        ctx.shadowBlur = clamp(32 * scale, 12, 30);
-      }
-      ctx.globalAlpha = highlighted || verified ? 1 : 0.66;
-
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-      ctx.lineWidth = metrics.stroke * (highlighted ? 1.35 : 1);
-      ctx.strokeStyle = color;
-      if (!verified) {
-        var dash = clamp(9 * scale, 3, 8);
-        ctx.setLineDash([dash, dash]);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      if (verified) {
-        ctx.fillStyle = 'rgba(36,234,219,.08)';
-        ctx.fill();
-      }
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, metrics.dot, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-
-      // У систем с подписью на карте — масштабируемая крестовина точки.
-      if (fromLabel) {
-        var inner = radius + metrics.crossGap;
-        var outer = inner + metrics.crossLength;
-        ctx.beginPath();
-        ctx.moveTo(point.x - outer, point.y); ctx.lineTo(point.x - inner, point.y);
-        ctx.moveTo(point.x + inner, point.y); ctx.lineTo(point.x + outer, point.y);
-        ctx.moveTo(point.x, point.y - outer); ctx.lineTo(point.x, point.y - inner);
-        ctx.moveTo(point.x, point.y + inner); ctx.lineTo(point.x, point.y + outer);
-        ctx.lineWidth = clamp(metrics.stroke * 0.72, 1, 3.2);
-        ctx.strokeStyle = color;
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      if (system.needsReview) {
-        ctx.beginPath();
-        ctx.arc(point.x + radius * 0.72, point.y - radius * 0.72, metrics.reviewDot, 0, Math.PI * 2);
-        ctx.fillStyle = '#e8a35c';
-        ctx.fill();
-      }
-
-      if (state.labelsOn || highlighted) labelCandidates.push(entry);
-    });
-
-    // Включённый режим рисует каждое имя без лимита, LOD или устранения перекрытий.
-    for (var i = 0; i < labelCandidates.length; i++) {
-      var e = labelCandidates[i]!;
-      var text = e.system.name.replace(/^Система\s+/, '');
-      var fontSize = metrics.fontSize * (e.active || e.hover ? 1.08 : 1);
-      var x = e.point.x + e.radius + metrics.gap;
-      var y = e.point.y + e.radius * 0.56;
-      ctx.save();
-      ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
-      ctx.textAlign = 'left';
-      ctx.lineWidth = clamp(fontSize * 0.24, 2.6, 9);
-      ctx.strokeStyle = 'rgba(2,5,10,.80)';
-      ctx.fillStyle = e.hover || e.active ? theme.accent : 'rgba(36,234,219,.38)';
-      if (e.hover || e.active) {
-        ctx.shadowColor = theme.accent;
-        ctx.shadowBlur = clamp(24 * scale, 8, 22);
-      }
-      ctx.strokeText(text, x, y);
-      ctx.fillText(text, x, y);
-      ctx.restore();
-    }
-
-    ctx.restore();
+  /** Радиус ромба точки интереса: экранный, с клампом 4…9 px. */
+  function poiRadius(): number {
+    return clamp(9 * state.view.scale, 4, 9);
   }
 
   function drawPointsOfInterest(): void {
@@ -633,7 +365,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
 
       var hovered = state.hoverPoiId === place.id;
       var active = state.activePlanetId === place.id;
-      var radius = clamp(9 * scale, 4, 9) + (hovered || active ? clamp(3 * scale, 1, 3) : 0);
+      var radius = poiRadius() + (hovered || active ? clamp(3 * scale, 1, 3) : 0);
       var color = hovered || active ? theme.text : theme.accent2;
 
       ctx.save();
@@ -653,17 +385,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       ctx.fill();
       ctx.stroke();
       ctx.restore();
-
-      if (state.labelsOn) {
-        var fontSize = clamp(25 * scale, 8, 18);
-        ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
-        ctx.textAlign = 'left';
-        ctx.lineWidth = clamp(fontSize * 0.24, 2.5, 5);
-        ctx.strokeStyle = 'rgba(2,5,10,.84)';
-        ctx.fillStyle = color;
-        ctx.strokeText(place.name, point.x + radius + 8, point.y - radius - 5);
-        ctx.fillText(place.name, point.x + radius + 8, point.y - radius - 5);
-      }
+      // Имя точки интереса рисует единый слой подписей (drawSceneLabels),
+      // поэтому здесь остаётся только ромб-маркер без собственного текста.
     });
 
     ctx.restore();
@@ -679,8 +402,6 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var radius = clamp(38 * scale, 11, 56);
     var armGap = clamp(12 * scale, 7, 18);
     var armLength = clamp(28 * scale, 12, 38);
-    var fontSize = clamp(36 * scale, 10, 54);
-    var labelGap = clamp(18 * scale, 7, 22);
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = clamp(4.5 * scale, 1.2, 4.2);
@@ -693,16 +414,426 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.moveTo(point.x, point.y - radius - armLength); ctx.lineTo(point.x, point.y - radius - armGap);
     ctx.moveTo(point.x, point.y + radius + armGap); ctx.lineTo(point.x, point.y + radius + armLength);
     ctx.stroke();
-    if (state.labelsOn) {
-      ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = theme.text;
-      ctx.lineWidth = clamp(fontSize * 0.25, 3, 9);
-      ctx.strokeStyle = 'rgba(2,5,10,.82)';
-      ctx.strokeText(planet.name, point.x + radius + labelGap, point.y - radius - labelGap);
-      ctx.fillText(planet.name, point.x + radius + labelGap, point.y - radius - labelGap);
+    // Имя выбранной планеты тоже идёт через единый слой подписей.
+    ctx.restore();
+  }
+
+  /* --------------------------------------------------------------- сцена сектора (§8.1) */
+
+  // Примитивы собирает `sector-scene.ts`: уровень по камере, территории фракций,
+  // сетка адресов, маркеры по `markerDiameter` и апертура. Рендерер только рисует
+  // готовое и раскладывает подписи по фактическим метрикам шрифта — собственных
+  // размеров маркера и шагов сетки здесь нет (И-8).
+
+  let coarsePointerQuery: MediaQueryList | null = null;
+
+  /**
+   * Грубый указатель (сенсор) расширяет хит-зону до 44 px (§6.2 п. 5).
+   * `MediaQueryList` создаётся один раз и только читается: слушателей нет,
+   * поэтому нечему протекать, а значение не устаревает при смене устройства ввода.
+   */
+  function coarsePointer(): boolean {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    if (coarsePointerQuery === null) coarsePointerQuery = window.matchMedia('(pointer: coarse)');
+    return coarsePointerQuery.matches;
+  }
+
+  /** Видимая ширина по короткой оси — та же величина, что в `level-ladder` (§17.15). */
+  function visibleWidth(): number {
+    var scale = state.view.scale;
+    if (!(scale > 0)) return Number.POSITIVE_INFINITY;
+    return Math.min(state.viewport.w, state.viewport.h) / scale;
+  }
+
+  function sceneCamera(): SceneCamera {
+    var center = toWorld(state.viewport.w / 2, state.viewport.h / 2);
+    return { centerX: center.x, centerY: center.y, visibleWidth: visibleWidth() };
+  }
+
+  /** Вход сцены: системы с координатами карты и тем же фильтром фракции, что и раньше. */
+  function sceneSystems(): SceneSystemInput[] {
+    var list = state.systems;
+    var input: SceneSystemInput[] = [];
+    for (var index = 0; index < list.length; index += 1) {
+      var system = list[index]!;
+      if (!system.coord || !markerVisible(system)) continue;
+      var faction = system.primaryFaction ?? (system.factions && system.factions[0]) ?? null;
+      input.push({
+        id: system.id,
+        name: system.name,
+        x: system.coord[0],
+        y: system.coord[1],
+        faction: faction,
+        type: system.systemType ?? null,
+      });
+    }
+    return input;
+  }
+
+  function buildScene(): SectorScene | null {
+    if (!(state.viewport.w > 0) || !(state.viewport.h > 0) || !(state.view.scale > 0)) return null;
+    return buildSectorScene({
+      systems: sceneSystems(),
+      viewport: state.viewport,
+      camera: sceneCamera(),
+      hitTarget: coarsePointer() ? 'touch' : 'mouse',
+      // Подписи раскладывает рендерер: только он знает фактические метрики шрифта.
+      labels: false,
+    });
+  }
+
+  /** Метрики подписи из фактического замера шрифта, а не из «средней ширины». */
+  function labelMetrics(fontSize: number): LabelMetrics {
+    var ctx = kernel.ctx;
+    var fallback = fontSize * 0.6;
+    var charWidth = fallback;
+    var lineHeight = Math.round(fontSize * 1.25);
+    if (ctx) {
+      try {
+        ctx.save();
+        ctx.font = fontSize.toFixed(1) + 'px ' + theme.mono;
+        var sample = 'ЖЖЖЖЖЖЖЖЖЖ';
+        var measured = ctx.measureText(sample);
+        var width = measured && typeof measured.width === 'number' ? measured.width : 0;
+        if (width > 0) charWidth = width / sample.length;
+        ctx.restore();
+      } catch (err) {
+        // Контекст-заглушка без measureText (тесты): остаются метрики по умолчанию.
+        charWidth = fallback;
+      }
+    }
+    return {
+      fontSize: fontSize,
+      charWidth: charWidth,
+      lineHeight: lineHeight,
+      paddingX: CONFIG.scene.labelPaddingX,
+      paddingY: CONFIG.scene.labelPaddingY,
+    };
+  }
+
+  /** Устойчивый оттенок фракции: цвет не зависит от глубины и от запуска (§6.2 п. 4). */
+  function factionHue(faction: string): number {
+    var hash = 0;
+    for (var index = 0; index < faction.length; index += 1) {
+      hash = (hash * 31 + faction.charCodeAt(index)) % 360;
+    }
+    return hash;
+  }
+
+  function drawTerritory(territory: SceneTerritory): void {
+    const ctx = kernel.ctx!;
+    var radius = territory.screenRadius;
+    if (!(radius > 2)) return;
+    var hue = factionHue(territory.faction);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    try {
+      var gradient = ctx.createRadialGradient(
+        territory.x, territory.y, Math.min(radius * 0.12, 18),
+        territory.x, territory.y, radius,
+      );
+      gradient.addColorStop(0, 'hsla(' + hue + ', 68%, 62%, .16)');
+      gradient.addColorStop(0.65, 'hsla(' + hue + ', 64%, 52%, .07)');
+      gradient.addColorStop(1, 'hsla(' + hue + ', 60%, 45%, 0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(territory.x, territory.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } catch (err) {
+      // Контекст-заглушка без градиентов: мягкое поле просто не рисуется.
     }
     ctx.restore();
+  }
+
+  function drawGridLine(line: SceneGridLine): void {
+    const ctx = kernel.ctx!;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(150,180,215,.10)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(line.x1) + 0.5, Math.round(line.y1) + 0.5);
+    ctx.lineTo(Math.round(line.x2) + 0.5, Math.round(line.y2) + 0.5);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawGridLabel(label: SceneGridLabel): void {
+    const ctx = kernel.ctx!;
+    ctx.save();
+    ctx.font = '9px ' + theme.mono;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(160,186,216,.42)';
+    ctx.fillText(label.text, label.x + 3, label.y + 3);
+    ctx.restore();
+  }
+
+  function drawMarker(marker: SceneMarker): void {
+    const ctx = kernel.ctx!;
+    var system = state.systemsById[marker.id];
+    var isHover = state.hoverId === marker.id;
+    var isActive = state.activeSystemId === marker.id;
+    var highlighted = isHover || isActive;
+    var verified = system ? system.coordSource === 'map' : true;
+    var fromLabel = !!system && verified && !system.fromSheet;
+    // Подсветка добавляет не больше 2 px и упирается в тот же кламп 40 px:
+    // на глубоком зуме маркер не раздувается (§6.2 п. 2).
+    var radius = Math.min(20, marker.diameter / 2 + (highlighted ? 2 : 0));
+    var dot = Math.min(clamp(marker.diameter * 0.2, 1.1, 3.6), radius * 0.8);
+    var stroke = clamp(marker.diameter * 0.12, 1, 2.4);
+    var color = highlighted ? theme.accent : 'rgba(36,234,219,.38)';
+
+    ctx.save();
+    if (highlighted) {
+      ctx.shadowColor = theme.accent;
+      ctx.shadowBlur = 18;
+    }
+    ctx.globalAlpha = highlighted || verified ? 1 : 0.66;
+    ctx.beginPath();
+    ctx.arc(marker.x, marker.y, radius, 0, Math.PI * 2);
+    ctx.lineWidth = stroke * (highlighted ? 1.35 : 1);
+    ctx.strokeStyle = color;
+    if (!verified) {
+      var dash = clamp(marker.diameter * 0.35, 3, 8);
+      ctx.setLineDash([dash, dash]);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (verified) {
+      ctx.fillStyle = 'rgba(36,234,219,.08)';
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.arc(marker.x, marker.y, dot, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // У систем с подписью на карте — крестовина точки, как было до сцены.
+    if (fromLabel) {
+      var inner = radius + clamp(marker.diameter * 0.25, 2, 7);
+      var outer = inner + clamp(marker.diameter * 0.5, 3, 14);
+      ctx.beginPath();
+      ctx.moveTo(marker.x - outer, marker.y); ctx.lineTo(marker.x - inner, marker.y);
+      ctx.moveTo(marker.x + inner, marker.y); ctx.lineTo(marker.x + outer, marker.y);
+      ctx.moveTo(marker.x, marker.y - outer); ctx.lineTo(marker.x, marker.y - inner);
+      ctx.moveTo(marker.x, marker.y + inner); ctx.lineTo(marker.x, marker.y + outer);
+      ctx.lineWidth = clamp(stroke * 0.72, 1, 3.2);
+      ctx.strokeStyle = color;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    if (system && system.needsReview) {
+      ctx.beginPath();
+      ctx.arc(
+        marker.x + radius * 0.72, marker.y - radius * 0.72,
+        clamp(marker.diameter * 0.3, 3, 9), 0, Math.PI * 2,
+      );
+      ctx.fillStyle = '#e8a35c';
+      ctx.fill();
+    }
+  }
+
+  function drawAperture(aperture: SceneAperture): void {
+    const ctx = kernel.ctx!;
+    var radius = Math.min(20, aperture.ringDiameter / 2) + 6;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(214,178,110,.55)';
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.arc(aperture.x, aperture.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '10px ' + theme.mono;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(226,196,130,.75)';
+    ctx.fillText(aperture.hint, aperture.x, Math.min(state.viewport.h - 16, aperture.y + radius + 6));
+    ctx.restore();
+  }
+
+  /** Подписи систем: текст и приоритет берутся из сцены (§6.2, §8.1). */
+  function collectSystemLabels(scene: SectorScene, items: LabelItem[]): void {
+    for (var index = 0; index < scene.primitives.length; index += 1) {
+      var primitive = scene.primitives[index]!;
+      if (primitive.kind !== 'marker') continue;
+      var text = labelTextFor(primitive, scene.level);
+      if (text === null) continue;
+      var highlighted = state.hoverId === primitive.id || state.activeSystemId === primitive.id;
+      if (!state.labelsOn && !highlighted) continue;
+      items.push({
+        id: 'system:' + primitive.id,
+        text: text,
+        x: primitive.x,
+        y: primitive.y,
+        priority: primitive.labelPriority,
+        radius: primitive.diameter / 2,
+      });
+    }
+  }
+
+  /** Картографические подписи из `map-labels.json` — тот же слой, приоритет ниже систем. */
+  function collectMapLabels(items: LabelItem[]): void {
+    if (!state.labelsOn) return;
+    var labels = state.labels;
+    if (!labels || !labels.length) return;
+    var scale = state.view.scale;
+    if (scale < CONFIG.layers.labelScale) return;
+
+    // Точки, где уже стоит маркер, подписаны своим именем: дубль не нужен.
+    var occupied: Record<string, boolean> = {};
+    visibleSystems().forEach(function (system) {
+      occupied[Math.round(system.coord![0] / 8) + ':' + Math.round(system.coord![1] / 8)] = true;
+    });
+    visiblePointsOfInterest().forEach(function (place) {
+      occupied[Math.round(place.mapCoord!.x / 8) + ':' + Math.round(place.mapCoord!.y / 8)] = true;
+    });
+
+    var seen: Record<string, boolean> = {};
+    for (var index = 0; index < labels.length; index += 1) {
+      var label = labels[index]!;
+      if (label.noisy && scale < CONFIG.layers.noisyLabelScale) continue;
+      var key = normalize(label.name);
+      if (seen[key]) continue;
+      if (label.kind !== 'object' && occupied[Math.round(label.x / 8) + ':' + Math.round(label.y / 8)]) continue;
+      var point = toScreen(label.x, label.y);
+      if (point.x < -40 || point.y < -20 || point.x > state.viewport.w + 40 || point.y > state.viewport.h + 20) continue;
+      seen[key] = true;
+      items.push({
+        id: 'map:' + index,
+        text: label.name,
+        x: point.x,
+        y: point.y,
+        priority: label.linkedSystemId ? 40 : (label.linkedPlanetId ? 35 : (label.kind === 'system' ? 30 : 20)),
+      });
+    }
+  }
+
+  function collectPoiLabels(items: LabelItem[]): void {
+    if (!state.labelsOn) return;
+    var list = visiblePointsOfInterest();
+    var markerRadius = poiRadius();
+    for (var index = 0; index < list.length; index += 1) {
+      var place = list[index]!;
+      var point = toScreen(place.mapCoord!.x, place.mapCoord!.y);
+      if (point.x < -40 || point.y < -40 || point.x > state.viewport.w + 40 || point.y > state.viewport.h + 40) continue;
+      items.push({
+        id: 'poi:' + place.id,
+        text: place.name,
+        x: point.x,
+        y: point.y,
+        priority: 45,
+        radius: markerRadius,
+      });
+    }
+  }
+
+  function collectFocusLabel(items: LabelItem[]): void {
+    if (!state.labelsOn) return;
+    var planet = state.activePlanetId ? state.planetsById[state.activePlanetId] : null;
+    if (!planet || !planet.mapCoord) return;
+    var point = toScreen(planet.mapCoord.x, planet.mapCoord.y);
+    items.push({
+      id: 'focus:' + planet.id,
+      text: planet.name,
+      x: point.x,
+      y: point.y,
+      priority: 120,
+      radius: clamp(38 * state.view.scale, 11, 56),
+    });
+  }
+
+  function drawLabels(layer: LabelLayoutResult, metrics: LabelMetrics): void {
+    const ctx = kernel.ctx!;
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (var index = 0; index < layer.placed.length; index += 1) {
+      var box = layer.placed[index]!;
+      // Подписи карты сохраняют свой якорь-крестик: без него мелкие объекты
+      // «висят» в пустоте, а сетка адресов их не заменяет.
+      if (box.id.indexOf('map:') === 0) {
+        var source = state.labels[Number(box.id.slice(4))];
+        if (source) {
+          var anchor = toScreen(source.x, source.y);
+          var glyph = clamp(box.fontSize * 0.5, 3, 6);
+          ctx.save();
+          ctx.strokeStyle = source.kind === 'system' ? 'rgba(214,178,110,.5)' : 'rgba(150,170,195,.28)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(anchor.x - glyph, anchor.y);
+          ctx.lineTo(anchor.x + glyph, anchor.y);
+          ctx.moveTo(anchor.x, anchor.y - glyph);
+          ctx.lineTo(anchor.x, anchor.y + glyph);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      var focused = box.priority >= 100;
+      ctx.font = box.fontSize.toFixed(1) + 'px ' + theme.mono;
+      ctx.lineWidth = clamp(box.fontSize * 0.24, 2.4, 6);
+      ctx.strokeStyle = 'rgba(2,5,10,.82)';
+      ctx.fillStyle = focused ? theme.accent : 'rgba(206,220,238,.76)';
+      ctx.strokeText(box.text, box.x + metrics.paddingX, box.y + box.height / 2);
+      ctx.fillText(box.text, box.x + metrics.paddingX, box.y + box.height / 2);
+    }
+    ctx.restore();
+  }
+
+  function renderScene(scene: SectorScene): void {
+    for (var index = 0; index < scene.primitives.length; index += 1) {
+      var primitive = scene.primitives[index]!;
+      if (primitive.kind === 'territory') drawTerritory(primitive);
+      else if (primitive.kind === 'grid.line') drawGridLine(primitive);
+      else if (primitive.kind === 'grid.label') drawGridLabel(primitive);
+      else if (primitive.kind === 'marker') drawMarker(primitive);
+    }
+  }
+
+  /** Апертуры — последним слоем кадра §8.1 (после подписей), с `L8`. */
+  function drawApertures(scene: SectorScene): void {
+    for (var index = 0; index < scene.primitives.length; index += 1) {
+      var primitive = scene.primitives[index]!;
+      if (primitive.kind === 'aperture') drawAperture(primitive);
+    }
+  }
+
+  /**
+   * Единый слой подписей: системы, карта, точки интереса и фокус — один бюджет
+   * `LABEL_BUDGET` (120). Маркеры передаются препятствиями, поэтому подпись
+   * не садится ни на свой, ни на чужой маркер.
+   */
+  function drawSceneLabels(scene: SectorScene): void {
+    var items: LabelItem[] = [];
+    var obstacles: LabelRect[] = [];
+    for (var index = 0; index < scene.primitives.length; index += 1) {
+      var primitive = scene.primitives[index]!;
+      if (primitive.kind !== 'marker') continue;
+      obstacles.push({
+        x: primitive.x - primitive.diameter / 2,
+        y: primitive.y - primitive.diameter / 2,
+        width: primitive.diameter,
+        height: primitive.diameter,
+      });
+    }
+    collectSystemLabels(scene, items);
+    collectMapLabels(items);
+    collectPoiLabels(items);
+    collectFocusLabel(items);
+    if (!items.length) return;
+    var metrics = labelMetrics(CONFIG.scene.labelFontPx);
+    var layer = layoutLabels(items, state.viewport, {
+      budget: LABEL_BUDGET,
+      metrics: metrics,
+      obstacles: obstacles,
+    });
+    drawLabels(layer, metrics);
+  }
+
+  /** Хит-зона маркера: `d + 6 px`, на грубом указателе не меньше 44 px (§6.2 п. 5). */
+  function markerHitRadius(): number {
+    return hitRadiusFor(markerDiameter(visibleWidth()), coarsePointer() ? 'touch' : 'mouse');
   }
 
   /* ------------------------------------------------------------------ цикл рендера */
@@ -750,11 +881,20 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       drawSchematic();
     }
 
-    drawMapLabels();
+    // Порядок слоёв §8.1: поле → территории → сетка адресов → маркеры →
+    // подписи → апертуры. Сцена пересобирается в каждом кадре, поэтому зум, пан,
+    // ресайз и смена фильтра подхватываются через `requestRender()` без
+    // отдельного кеша и без новых слушателей.
+    const scene = buildScene();
+    if (scene) renderScene(scene);
+
     drawTravelRoute(frameTime);
-    drawMarkers();
     drawPointsOfInterest();
     drawPlanetFocus();
+    if (scene) {
+      drawSceneLabels(scene);
+      drawApertures(scene);
+    }
 
     kernel.coords.updateZoomReadout();
     kernel.coords.updateCoordinateReadout();
@@ -775,7 +915,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var list = visiblePointsOfInterest();
     var best: PlaceRecord | null = null;
     var bestDistance = Infinity;
-    var radius = clamp(16 * state.view.scale, 10, 18);
+    // Хит-зона по тому же правилу, что у маркеров систем: `d + 6 px`,
+    // на грубом указателе не меньше 44 px (§6.2 п. 5).
+    var radius = hitRadiusFor(poiRadius() * 2, coarsePointer() ? 'touch' : 'mouse');
     for (var i = 0; i < list.length; i++) {
       var place = list[i]!; var point = toScreen(place.mapCoord!.x, place.mapCoord!.y);
       var dx = point.x - screenX;
@@ -793,9 +935,10 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var best: SystemRecord | null = null;
     var bestDistance = Infinity;
     var list = state.systems;
-    // метрики от масштаба, а не от системы: считаем один раз на вызов
-    var metrics = markerMetrics(state.view.scale);
-    var hoverBonus = clamp(5 * state.view.scale, 2, 7);
+    // Хит-зона считается от диаметра маркера на текущей глубине (d + 6 px,
+    // на грубом указателе ≥ 44 px), а не от «мирового радиуса» (§6.2 п. 5).
+    var baseRadius = markerHitRadius();
+    var hoverBonus = 4;
     for (var i = 0; i < list.length; i++) {
       var system = list[i]!;
       if (!system.coord) continue;
@@ -803,7 +946,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       var dx = point.x - screenX;
       var dy = point.y - screenY;
       var distance = dx * dx + dy * dy; // сравниваем квадраты, корень — только для ответа
-      var radius = metrics.hitRadius + (state.hoverId === system.id ? hoverBonus : 0);
+      var radius = baseRadius + (state.hoverId === system.id ? hoverBonus : 0);
       if (distance <= radius * radius && distance < bestDistance) {
         best = system;
         bestDistance = distance;

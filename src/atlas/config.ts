@@ -41,21 +41,18 @@ export const CONFIG = {
     animate: 340,
   },
   layers: {
-    labelScale: 0.11, // подписи объектов карты
+    labelScale: 0.11, // подписи объектов карты (мировой масштаб, не подписи систем)
     noisyLabelScale: 0.5, // «шумные» подписи OCR — только крупно
-    labelBudget: 120,
+    // Бюджет подписей кадра (§8.1) живёт в одном месте — `LABEL_BUDGET`
+    // в `label-layout.ts`; в конфиге дубликата нет.
   },
-  markerLod: {
-    // Базовые размеры заданы в координатах 10k-карты: при приближении они
-    // растут вместе с растром. min/max оставляют обзор читаемым и безопасным.
-    worldRadius: 30,
-    minRadius: 7,
-    maxRadius: 46,
-    worldFont: 38,
-    minFont: 9.5,
-    maxFont: 56,
+  scene: {
+    // Подписи сцены заданы в пикселях, а не в мировых единицах: при приближении
+    // кегль не растёт, поэтому подпись не «раздувается» на глубоком зуме.
+    labelFontPx: 11,
+    labelPaddingX: 3,
+    labelPaddingY: 2,
   },
-  hitRadius: 15,
   maxSuggestions: 22,
 } as const;
 
