@@ -37,6 +37,9 @@ interface SheetSystemData {
   primaryFaction: string;
   note: string;
   sourceUrl: string;
+  /** Колонки слоя сетей (`Z-3.8`): текст ячейки, пустая ячейка — ''. */
+  netId: string;
+  netConfrontId: string;
 }
 
 interface SheetSystemUpdate {
@@ -48,6 +51,8 @@ interface SheetSystemUpdate {
   factions?: string[];
   note?: string;
   sourceUrl?: string;
+  net_id?: number | null;
+  net_confront_id?: string | null;
 }
 
 interface SheetPlaceRecord extends PlaceRecord {
@@ -149,6 +154,29 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     return type;
   }
 
+  /**
+   * Колонка `net_id` слоя сетей: целое число от 1, пустая ячейка — `null`
+   * (система не принадлежит ни одной сети). Нечисловой текст тоже даёт `null`:
+   * принадлежность сети — не повод ронять загрузку карты, а канал с такой
+   * строкой не построится и назовёт систему в `channelsFor`.
+   */
+  function netIdValue(value: unknown): number | null {
+    var text = sheetValue(value);
+    if (!text) return null;
+    var parsed = Number(text);
+    return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+  }
+
+  /**
+   * Колонка `net_confront_id` слоя сетей (`Z-3.8`): текст ячейки как есть,
+   * пустая ячейка — `null`. Формат `«N-M»` разбирает `faction-net.ts`: сюда
+   * проверки не дублируются, чтобы ошибка данных называлась в одном месте.
+   */
+  function netConfrontValue(value: unknown): string | null {
+    var text = sheetValue(value);
+    return text === '' ? null : text;
+  }
+
   function mapSystemRow(row: SheetRow): SystemRecord {
     var x = explicitMapNumber(sheetCell(row, 'x'));
     var y = explicitMapNumber(sheetCell(row, 'y'));
@@ -167,6 +195,8 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
       factions: faction ? [faction] : [],
       note: sheetCell(row, 'description'),
       sourceUrl: sheetCell(row, 'source_url'),
+      net_id: netIdValue(row.net_id),
+      net_confront_id: netConfrontValue(row.net_confront_id),
       worlds: [],
       planetIds: []
     };
@@ -184,7 +214,9 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         coord: x !== null && y !== null ? [x, y] as MapCoord : null,
         primaryFaction: faction,
         note: sheetCell(row, 'description'),
-        sourceUrl: sheetCell(row, 'source_url')
+        sourceUrl: sheetCell(row, 'source_url'),
+        netId: sheetCell(row, 'net_id'),
+        netConfrontId: sheetCell(row, 'net_confront_id')
       };
       [sheetCell(row, 'system_id') || sheetCell(row, 'id'), sheetCell(row, 'name')].forEach(function (key) {
         var normalized = normalize(key);
@@ -209,6 +241,10 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           }
           if (sheetData.note) update.note = sheetData.note;
           if (sheetData.sourceUrl) update.sourceUrl = sheetData.sourceUrl;
+          // Колонки слоя сетей: пустая ячейка таблицы не затирает значение,
+          // которое пришло из данных записи, — как и у `note`/`sourceUrl` выше.
+          if (sheetData.netId) update.net_id = netIdValue(sheetData.netId);
+          if (sheetData.netConfrontId) update.net_confront_id = sheetData.netConfrontId;
           return Object.assign({}, system, update);
         }
       }
@@ -441,6 +477,11 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     normalized.factions = stringList(system.factions);
     normalized.note = sheetValue(system.note);
     normalized.sourceUrl = sheetValue(system.sourceUrl);
+    // Колонки слоя сетей есть у каждой записи: пустая ячейка (или отсутствие
+    // колонки) даёт `null`, поэтому слой каналов не угадывает «нет колонки» и
+    // «система вне сети» — оба случая выглядят одинаково.
+    normalized.net_id = netIdValue(system.net_id);
+    normalized.net_confront_id = netConfrontValue(system.net_confront_id);
     return normalized;
   }
 

@@ -20,7 +20,7 @@ import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
 import type { NetChannel, NetSystemInput } from './faction-net.ts';
-import { CHANNEL_BRIGHTNESS, channelsFor, isNetLayerLevel } from './faction-net.ts';
+import { CHANNEL_BRIGHTNESS, MAX_CHANNELS_PER_FRAME, channelsFor, isNetLayerLevel } from './faction-net.ts';
 import type {
   SceneAperture,
   SceneCamera,
@@ -816,13 +816,17 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
    * экранные точки. В генерацию баблов каналы не входят (`bubbleFor` колонку
    * `net_confront_id` не читает).
    *
-   * Колонки слоя сетей приходят из `data/systems.csv`. Загрузчик их пока не
-   * читает (решение `Z-3.3`: `net_id` живёт только в сыром CSV), поэтому до
-   * монтажа слоя сетей (`Z-3.4`) и до разметки владельца каналов ноль и кадр
-   * не меняется ни на одном уровне.
+   * Колонки слоя сетей приходят из `data/systems.csv` через загрузчик: у каждой
+   * записи есть `net_id` (`number | null`) и `net_confront_id` (`string | null`),
+   * пустая ячейка — `null`. Поэтому каналы строятся сразу, как только владелец
+   * разметил пары в таблице; пока ячейки пусты, лент ноль и кадр не меняется ни
+   * на одном уровне.
    */
   let netChannelSource: SystemRecord[] | null = null;
   let netChannelList: readonly NetChannel[] = [];
+  // Сколько лент было в последний раз, когда бюджет кадра не вместил их все:
+  // предупреждение печатается один раз на количество, а не каждый кадр.
+  let netChannelOverflow = 0;
 
   /** Колонка слоя сетей из записи: `unknown` загрузчика приводится к тексту. */
   function netColumn(value: unknown): string | null {
@@ -916,7 +920,15 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   function drawNetChannels(level: number): void {
     if (!isNetLayerLevel(level)) return;
     var channels = netChannels();
-    for (var index = 0; index < channels.length; index += 1) {
+    // Бюджет кадра: геометрия считается целиком, а рисуется не больше
+    // `MAX_CHANNELS_PER_FRAME` лент — кадр не должен стоить дороже разметки.
+    var drawn = channels.length < MAX_CHANNELS_PER_FRAME ? channels.length : MAX_CHANNELS_PER_FRAME;
+    if (channels.length > drawn && netChannelOverflow !== channels.length) {
+      netChannelOverflow = channels.length;
+      console.warn('Слой сетей: каналов ' + channels.length + ' — в кадр рисуется не больше '
+        + MAX_CHANNELS_PER_FRAME + ', остальные ленты пропущены.');
+    }
+    for (var index = 0; index < drawn; index += 1) {
       drawNetChannel(channels[index]!);
     }
   }

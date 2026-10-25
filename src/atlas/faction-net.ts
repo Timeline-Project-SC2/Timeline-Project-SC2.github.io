@@ -1369,13 +1369,24 @@ export function flaresFor(
  * сборка карты проходит и на кольце.
  */
 
-/** Номер сети в `net_confront_id`: целое `1…3` (карточка `Z-3.8`, проверка 6). */
+/** Номер сети в `net_confront_id`: целое, начинается с `1` (карточка `Z-3.8`). */
 export const NET_CONFRONT_MIN_ID = 1;
-export const NET_CONFRONT_MAX_ID = 3;
 
-/** Чисел в ячейке: от пары `N-M` до `N-M-K-L` (своя сеть и три цели). */
+/**
+ * Чисел в ячейке: минимум пара `N-M` — своя сеть и одна цель. Верхней границы
+ * нет: сколько целей владелец впишет в ячейку, столько и проверяется, а
+ * существует ли сеть с таким номером — решают данные, а не константа.
+ */
 export const NET_CONFRONT_MIN_PARTS = 2;
-export const NET_CONFRONT_MAX_PARTS = 4;
+
+/**
+ * Бюджет кадра: сколько лент каналов рисуется за один кадр. Канал — градиентный
+ * проход поверх баблов, поэтому после разметки владельца лент может стать
+ * больше, чем кадр готов нарисовать: сверх бюджета ленты не рисуются, а в
+ * консоли один раз печатается предупреждение. На `channelsFor` бюджет не
+ * влияет — геометрия считается целиком, режется только отрисовка.
+ */
+export const MAX_CHANNELS_PER_FRAME = 24;
 
 /** Разделитель чисел в ячейке `net_confront_id`; пробелы по краям допускаются. */
 export const NET_CONFRONT_SEPARATOR = '-';
@@ -1474,9 +1485,9 @@ function systemLabelOf(raw: NetSystemInput, index: number): string {
  *
  * Проверки карточки `Z-3.8` (1, 2, 3, 5, 6): первое число равно своему `net_id`;
  * ни одна цель не равна первому числу; внутри ячейки нет повторов; `net_id` не
- * пуст и не `0`; числа целые, в диапазоне `1…3`, от `2` до `4` штук.
- * Проверка 4 (сеть-цель существует в данных) — в `channelsFor`: ей нужен весь
- * набор систем, а не одна ячейка.
+ * пуст и не `0`; числа целые и не меньше `1`, их минимум `2`. Верхней границы
+ * номера нет: проверка 4 (сеть с таким номером существует в данных) — в
+ * `channelsFor`, ей нужен весь набор систем, а не одна ячейка.
  */
 export function netConfrontTargets(
   value: unknown,
@@ -1494,9 +1505,9 @@ export function netConfrontTargets(
   }
 
   const parts = text.split(NET_CONFRONT_SEPARATOR);
-  if (parts.length < NET_CONFRONT_MIN_PARTS || parts.length > NET_CONFRONT_MAX_PARTS) {
+  if (parts.length < NET_CONFRONT_MIN_PARTS) {
     throw new RangeError(
-      `${where}: нужно от ${NET_CONFRONT_MIN_PARTS} до ${NET_CONFRONT_MAX_PARTS} чисел `
+      `${where}: нужно не меньше ${NET_CONFRONT_MIN_PARTS} чисел `
       + `через «${NET_CONFRONT_SEPARATOR}», получено ${parts.length}`,
     );
   }
@@ -1508,14 +1519,10 @@ export function netConfrontTargets(
       throw new RangeError(`${where}: «${part}» не является целым числом`);
     }
     const number = Number(digits);
-    if (
-      !Number.isInteger(number)
-      || number < NET_CONFRONT_MIN_ID
-      || number > NET_CONFRONT_MAX_ID
-    ) {
+    if (!Number.isInteger(number) || number < NET_CONFRONT_MIN_ID) {
       throw new RangeError(
-        `${where}: число ${digits} вне диапазона `
-        + `${NET_CONFRONT_MIN_ID}…${NET_CONFRONT_MAX_ID}`,
+        `${where}: номер сети ${digits} должен быть целым `
+        + `и не меньше ${NET_CONFRONT_MIN_ID}`,
       );
     }
     numbers.push(number);
@@ -1720,7 +1727,9 @@ export function channelsFor(
     entries.push({ label, netId, targets, system });
   }
 
-  /* 2. Проверка 4: каждая сеть-цель существует в данных. */
+  /* 2. Проверка 4: каждое число-цель — сеть, которая реально есть в данных
+   *    (`net_id` хотя бы одной системы). Допустимый диапазон номеров задаёт сам
+   *    CSV, константами он не ограничен: сеть `7` законна, если она есть. */
   for (const entry of entries) {
     for (const target of entry.targets) {
       if (knownNetIds.has(target)) continue;

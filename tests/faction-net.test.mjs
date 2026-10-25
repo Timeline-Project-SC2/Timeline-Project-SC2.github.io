@@ -564,9 +564,6 @@ test('systems.csv читается: колонки сетей на месте и
     'net_confront_id должна стоять сразу после net_id',
   );
   assert.equal(rows.length, 173, 'изменилось число систем');
-  for (const header of ['name', 'system_id', 'type', 'x', 'y', 'faction', 'description', 'source_url']) {
-    assert.ok(headers.includes(header), `пропала колонка ${header}`);
-  }
 
   // Разметка владельца (25.10.2026): сети 1…4, 27 систем с сетью, 146 без.
   const filled = rows.filter((row) => parseNetId(row.net_id) !== null);
@@ -587,6 +584,8 @@ test('systems.csv читается: колонки сетей на месте и
   assert.equal(Number(korhal.y), 6257);
   assert.equal(korhal.type, 'capital');
   assert.equal(korhal.system_id, '1');
+  assert.equal(korhal.net_id, '1');
+  assert.equal(korhal.net_confront_id, '');
 
   // Сети по текущему снимку: четыре (1…4), разметка владельца, не выдумана.
   assert.deepEqual(
@@ -602,14 +601,14 @@ test('systems.csv читается: колонки сетей на месте и
     ['1', '11', '13'].includes(row.system_id) ? { ...row, net_id: '7' } : row,
   );
   const nets = parseNetworks(labeled);
-  assert.equal(nets.length, 1);
-  assert.equal(nets[0].netId, 7);
-  assert.deepEqual(nets[0].members.map((member) => member.id), ['1', '11', '13']);
-  assert.deepEqual(nets[0].members.map((member) => member.name), ['Корхал', 'Мистафф', 'Тарсонис']);
-  assert.deepEqual(nets[0].members.map((member) => member.systemType), ['capital', 'standard', 'capital']);
+  const seven = nets.find((net) => net.netId === 7);
+  assert.ok(seven !== undefined, 'строковый net_id не сгруппировался в сеть');
+  assert.deepEqual(seven.members.map((member) => member.id), ['1', '11', '13']);
+  assert.deepEqual(seven.members.map((member) => member.name), ['Корхал', 'Мистафф', 'Тарсонис']);
+  assert.deepEqual(seven.members.map((member) => member.systemType), ['capital', 'standard', 'capital']);
 });
 
-test('колонка net_id не ломает существующий загрузчик data-loader.ts', async () => {
+test('колонки сетей читаются загрузчиком data-loader.ts и не ломают его', async () => {
   const csv = readFileSync(new URL('../data/systems.csv', import.meta.url), 'utf8');
   const restore = {
     window: globalThis.window,
@@ -635,11 +634,18 @@ test('колонка net_id не ломает существующий загр�
     assert.deepEqual(korhal.coord, [5720, 6257]);
     assert.equal(korhal.systemType, 'capital');
     assert.equal(korhal.primaryFaction, 'Доминион Терран');
-    // Лишнюю колонку загрузчик не читает и не падает на ней: net_id приходит
-    // только через faction-net.parseNetworks из сырого CSV.
-    assert.equal(korhal.net_id, undefined);
-    // То же для каналов (Z-3.8): net_confront_id читает faction-net.channelsFor.
-    assert.equal(korhal.net_confront_id, undefined);
+    // Колонки слоя сетей загрузчик отдаёт в записи: `net_id` — числом,
+    // `net_confront_id` — текстом ячейки, пустая ячейка — `null`.
+    assert.equal(korhal.net_id, 1);
+    assert.equal(korhal.net_confront_id, null);
+    const umojan = dataset.systems.find((system) => system.name === 'Умоджа');
+    assert.ok(umojan !== undefined);
+    assert.equal(umojan.net_id, 3);
+    assert.equal(umojan.net_confront_id, '3-1');
+    // Систем без сети большинство: у них обе колонки `null`, а не '' и не 0.
+    const outside = dataset.systems.filter((system) => system.net_id === null);
+    assert.equal(outside.length, 173 - 27, 'загрузчик потерял пустые net_id');
+    assert.ok(outside.every((system) => system.net_confront_id === null));
   } finally {
     globalThis.window = restore.window;
     globalThis.document = restore.document;

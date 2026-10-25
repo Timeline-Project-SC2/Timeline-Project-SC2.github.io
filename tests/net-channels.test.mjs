@@ -3,10 +3,14 @@
  * Проверки C1…C13 карточки — по одной на тест, плюс стыки, которые карточка
  * требует явно: ширина и яркость ленты, детерминизм порядка строк CSV,
  * отдельный проход отрисовки в `canvas-renderer.ts` и неизменность баблов.
+ * Блок «D» — колонки сетей в загрузчике (`data-loader.ts` отдаёт `net_id` и
+ * `net_confront_id`, пустая ячейка — `null`), блок «бюджет кадра» —
+ * `MAX_CHANNELS_PER_FRAME` режет отрисовку, а не геометрию.
  *
  * Смысл данных: `net_id` — сеть системы, `net_confront_id` — пара «свой-чужой»,
  * где первое число ВСЕГДА равно собственному `net_id` системы, а остальные —
- * цели. Запись «1-2-3» даёт два канала (1↔2 и 1↔3), а не цепочку.
+ * цели. Запись «1-2-3» даёт два канала (1↔2 и 1↔3), а не цепочку. Допустимые
+ * номера целей задаёт фактический набор сетей в данных, а не константа.
  */
 
 import test from 'node:test';
@@ -21,8 +25,7 @@ const {
   BRIDGE_WIDTH_RATIO,
   CHANNEL_BRIGHTNESS,
   CHANNEL_WIDTH_RATIO,
-  NET_CONFRONT_MAX_ID,
-  NET_CONFRONT_MAX_PARTS,
+  MAX_CHANNELS_PER_FRAME,
   NET_CONFRONT_MIN_ID,
   NET_CONFRONT_MIN_PARTS,
   NET_LAYER_LEVELS,
@@ -224,14 +227,16 @@ test('C5 — «1-2» у системы сети 2: первое число не 
 test('C6 — «abc», «1», «1-», «1-4-5-6-7»: RangeError', () => {
   const rival = sys('2', 'Бета', 5400, 5000, KMS, 2, '');
   const third = sys('3', 'Гамма', 5600, 5000, DAELAAM, 3, '');
+  // В этих данных есть сети 1…3: любое другое число — цель в несуществующую сеть.
   const cases = [
     ['abc', 'не число'],
     ['1', 'одно число'],
     ['1-', 'пустая цель'],
     ['1-2-', 'пустой хвост'],
-    ['1-4', 'сеть вне диапазона'],
-    ['1-2-3-4-5', 'пять чисел'],
-    ['1-4-5-6-7', 'много чисел вне диапазона'],
+    ['1-4', 'сети 4 в данных нет'],
+    ['1-0', 'номер сети меньше 1'],
+    ['1-2-3-4-5', 'пять чисел: сетей 4 и 5 в данных нет'],
+    ['1-4-5-6-7', 'все цели вне фактического набора сетей'],
     ['1.5-2', 'дробное число'],
   ];
   for (const [cell, what] of cases) {
@@ -251,11 +256,24 @@ test('C6 — «abc», «1», «1-», «1-4-5-6-7»: RangeError', () => {
     );
   }
 
-  // Диапазон и число частей — константы слоя, а не магия внутри проверки.
+  // Диапазон номеров задают данные, а не константа: сеть 4 законна, если она есть.
+  const wide = channelsFor([
+    sys('1', 'Альфа', 5000, 5000, DOMINION, 1, '1-2-4-7'),
+    rival,
+    third,
+    sys('4', 'Дельта', 5800, 5000, KMS, 4, ''),
+    sys('5', 'Эпсилон', 6000, 5000, DAELAAM, 7, ''),
+  ], { factionColor: tableColor });
+  assert.deepEqual(wide.channels.map((channel) => channel.pair), ['1-2', '1-4', '1-7']);
+  // Много целей в одной ячейке — тоже не ошибка: границы числа частей нет.
+  assert.equal(netConfrontTargets('1-2-3-4-5-6', 'Альфа', 1).length, 5);
+
+  // Константы слоя: нижние границы и бюджет кадра. Верхних границ номеров нет.
   assert.equal(NET_CONFRONT_MIN_ID, 1);
-  assert.equal(NET_CONFRONT_MAX_ID, 3);
   assert.equal(NET_CONFRONT_MIN_PARTS, 2);
-  assert.equal(NET_CONFRONT_MAX_PARTS, 4);
+  assert.equal(MAX_CHANNELS_PER_FRAME, 24);
+  assert.ok(!('NET_CONFRONT_MAX_ID' in net), 'NET_CONFRONT_MAX_ID должна быть удалена');
+  assert.ok(!('NET_CONFRONT_MAX_PARTS' in net), 'NET_CONFRONT_MAX_PARTS должна быть удалена');
 });
 
 test('C7 — «1-2-3»: ровно два канала, цели разные, дублей нет', () => {
@@ -457,43 +475,54 @@ test('C12 — цвета концов из factions.csv, хеш имени не 
   assert.ok(!/Math\s*\.\s*random\s*\(/.test(channelSource), 'каналы используют случайность');
 });
 
-test('C13 — колонка читается по заголовку, пустая разметка даёт ноль каналов', () => {
+test('C13 — снимок data/systems.csv: разметка владельца даёт ровно один канал', () => {
   const { headers, rows } = SYSTEMS_CSV;
-  // Позиция колонки задаётся листом владельца (`net_id`, `net_confront_id`,
-  // `description`, `source_url`), а код читает её по имени — «последней» она
-  // быть не обязана.
+  // Позицию колонки задаёт лист владельца, код читает её по заголовку: важно,
+  // что `net_confront_id` стоит сразу за `net_id`, а не «последней» вообще.
   assert.ok(headers.includes('net_confront_id'), 'в systems.csv нет колонки net_confront_id');
   assert.ok(
     headers.indexOf('net_confront_id') === headers.indexOf('net_id') + 1,
     'net_confront_id должна стоять сразу после net_id',
   );
   assert.equal(rows.length, 173, 'изменилось число систем');
-
-  // Пустая разметка каналов: сети есть, связей нет — каналов ноль.
-  const cleared = rows.map((row) => ({ ...row, net_confront_id: '' }));
-  const result = channelsFor(cleared, { factionColor: tableColor });
-  assert.deepEqual(result.channels, [], 'на пустой разметке каналов нет');
-  assert.deepEqual(result.warnings, [], 'предупреждений на пустой разметке нет');
-
-  // Текущий снимок: владелец разметил Тарсонис `1-3` и Умоджу `3-1` взаимно.
-  const live = channelsFor(rows, { factionColor: tableColor });
-  assert.equal(live.channels.length, 1, 'на текущей разметке должен быть ровно один канал');
-  assert.equal(live.channels[0].pair, '1-3');
-  assert.deepEqual(live.warnings, [], 'на текущей разметке предупреждений быть не должно');
   assert.equal(parseNetworks(rows).length, 4, 'на снимке четыре сети: 1, 2, 3, 4');
 
-  // Разметка владельца включает слой без правки кода: та же таблица, одна ячейка.
-  const labeled = cleared.map((row) => (row.name === 'Корхал'
-    ? { ...row, net_id: '1', net_confront_id: '1-2' }
-    : row));
-  const marked = labeled.map((row) => (row.name === 'Мория' ? { ...row, net_id: '2' } : row));
-  const filled = channelsFor(marked, { factionColor: tableColor });
-  assert.equal(filled.channels.length, 1, 'одна ячейка — один канал');
-  assert.equal(filled.channels[0].pair, '1-2');
-  assert.equal(filled.channels[0].from.name, 'Корхал');
-  assert.equal(filled.channels[0].to.name, 'Мория');
+  const result = channelsFor(rows, { factionColor: tableColor });
+  assert.deepEqual(result.warnings, [], 'на снимке нет замкнутых колец');
+  assert.equal(result.channels.length, 1, 'две встречные ячейки дают одну ленту');
+
+  const channel = result.channels[0];
+  assert.equal(channel.pair, '1-3');
+  assert.equal(channel.from.name, 'Тарсонис', 'первый конец — система сети с меньшим номером');
+  assert.equal(channel.to.name, 'Умоджа');
+  assert.equal(channel.forced, true, '«1-3» и «3-1» — взаимное объявление, пара принудительная');
+  assert.deepEqual(channel.declaredBy, ['3', '13'], 'пару объявили Умоджа (id 3) и Тарсонис (id 13)');
   assert.deepEqual(
-    filled.channels[0].stops.map((stop) => stop.color),
+    channel.stops.map((stop) => stop.color),
+    [tableRgb(DOMINION), tableRgb('Умоджанский Протекторат')],
+  );
+  assert.equal(channel.width, CHANNEL_WIDTH_RATIO * Math.min(channel.from.radius, channel.to.radius));
+
+  // Пустая разметка — каналов ноль: так карта выглядит без ячеек владельца.
+  const blank = rows.map((row) => ({ ...row, net_confront_id: '' }));
+  const empty = channelsFor(blank, { factionColor: tableColor });
+  assert.deepEqual(empty.channels, [], 'на пустой разметке каналов нет');
+  assert.deepEqual(empty.warnings, [], 'предупреждений на пустой разметке нет');
+
+  // Одна новая ячейка добавляет один канал без правки кода: сеть 2 (Мория) уже
+  // размечена, достаточно объявить пару от имени системы сети 1.
+  const labeled = rows.map((row) => (row.name === 'Корхал'
+    ? { ...row, net_confront_id: '1-2' }
+    : row));
+  const filled = channelsFor(labeled, { factionColor: tableColor });
+  assert.equal(filled.channels.length, 2, 'одна ячейка — один новый канал');
+  const added = filled.channels.find((item) => item.pair === '1-2');
+  assert.ok(added !== undefined, 'канал к сети 2 не построился');
+  assert.equal(added.from.name, 'Корхал');
+  assert.equal(added.to.name, 'Мория');
+  assert.equal(added.forced, false, 'Мория встречного объявления не делала');
+  assert.deepEqual(
+    added.stops.map((stop) => stop.color),
     [tableRgb(DOMINION), tableRgb(KMS)],
   );
 });
@@ -626,4 +655,203 @@ test('отрисовка: отдельный проход после бабло�
   assert.ok(/isNetLayerLevel\(level\)/.test(source), 'каналы не ограничены уровнями слоя сетей');
   assert.ok(/channelsFor\(/.test(source), 'рендерер не использует channelsFor из faction-net.ts');
   assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6]);
+});
+
+/* ------------------------------- колонки сетей в загрузчике (дельта Z-3.8) */
+
+/** Штатная загрузка CSV загрузчиком: те же подмены, что в `tests/faction-net.test.mjs`. */
+async function loadDataset(csvText) {
+  const text = csvText ?? readFileSync(new URL('../data/systems.csv', import.meta.url), 'utf8');
+  const restore = {
+    window: globalThis.window,
+    document: globalThis.document,
+    fetch: globalThis.fetch,
+  };
+  try {
+    globalThis.window = { __MAP_DATA__: null };
+    globalThis.document = { currentScript: null };
+    globalThis.fetch = async (url) => ({
+      ok: true,
+      status: 200,
+      text: async () => (String(url).includes('systems.csv') ? text : ''),
+      json: async () => [],
+    });
+    const loader = require('../src/atlas/data-loader.ts');
+    const api = loader.createDataLoader({ state: {}, runtime: { travelCore: null } });
+    return await api.loadDataset();
+  } finally {
+    globalThis.window = restore.window;
+    globalThis.document = restore.document;
+    globalThis.fetch = restore.fetch;
+  }
+}
+
+/** Запись загрузчика → вход слоя каналов: тот же путь, что в `canvas-renderer.ts`. */
+function channelInputs(systems) {
+  return systems.map((system) => ({
+    id: system.id,
+    name: system.name,
+    x: system.coord ? system.coord[0] : null,
+    y: system.coord ? system.coord[1] : null,
+    faction: system.primaryFaction ?? null,
+    type: system.systemType ?? null,
+    net_id: system.net_id,
+    net_confront_id: system.net_confront_id,
+  }));
+}
+
+const SYSTEMS_HEADER = 'name,system_id,type,x,y,faction,net_id,net_confront_id,description,source_url';
+
+test('D — загрузчик отдаёт net_id и net_confront_id, пустая ячейка даёт null', async () => {
+  const dataset = await loadDataset();
+  const { rows } = SYSTEMS_CSV;
+  assert.equal(dataset.systems.length, 173, 'загрузчик потерял системы');
+
+  // Колонки есть у каждой записи: `undefined` («нет колонки») больше не встречается,
+  // поэтому слой каналов не различает «таблица без сетей» и «система вне сети».
+  assert.ok(
+    dataset.systems.every((system) => 'net_id' in system && 'net_confront_id' in system),
+    'у части записей нет колонок слоя сетей',
+  );
+  assert.ok(
+    dataset.systems.every((system) => system.net_id !== undefined
+      && system.net_confront_id !== undefined),
+    'колонка слоя сетей осталась undefined',
+  );
+
+  // Типы: `net_id` — целое число от 1 или null, `net_confront_id` — текст или null.
+  for (const system of dataset.systems) {
+    assert.ok(
+      system.net_id === null || (Number.isInteger(system.net_id) && system.net_id >= 1),
+      `net_id системы «${system.name}» = ${JSON.stringify(system.net_id)}`,
+    );
+    assert.ok(
+      system.net_confront_id === null || typeof system.net_confront_id === 'string',
+      `net_confront_id системы «${system.name}» = ${JSON.stringify(system.net_confront_id)}`,
+    );
+  }
+
+  // Значения совпадают с CSV построчно: 146 систем вне сетей, 27 в сетях 1…4.
+  const byId = new Map(dataset.systems.map((system) => [system.id, system]));
+  for (const row of rows) {
+    const system = byId.get(row.system_id);
+    assert.ok(system !== undefined, `загрузчик потерял систему «${row.name}»`);
+    assert.equal(
+      system.net_id,
+      row.net_id === '' ? null : Number(row.net_id),
+      `net_id системы «${row.name}»`,
+    );
+    assert.equal(
+      system.net_confront_id,
+      row.net_confront_id === '' ? null : row.net_confront_id,
+      `net_confront_id системы «${row.name}»`,
+    );
+  }
+  assert.equal(dataset.systems.filter((system) => system.net_id === null).length, 146);
+
+  // Точечно: размеченные и пустые ячейки.
+  const korhal = dataset.systems.find((system) => system.name === 'Корхал');
+  const umojan = dataset.systems.find((system) => system.name === 'Умоджа');
+  const tarsonis = dataset.systems.find((system) => system.name === 'Тарсонис');
+  assert.deepEqual([korhal.net_id, korhal.net_confront_id], [1, null]);
+  assert.deepEqual([umojan.net_id, umojan.net_confront_id], [3, '3-1']);
+  assert.deepEqual([tarsonis.net_id, tarsonis.net_confront_id], [1, '1-3']);
+
+  // Остальные поля записи не изменились: колонки сетей ничего не затёрли.
+  assert.deepEqual(korhal.coord, [5720, 6257]);
+  assert.equal(korhal.systemType, 'capital');
+  assert.equal(korhal.primaryFaction, DOMINION);
+
+  // Записи загрузчика дают тот же канал, что и сырой CSV: слой не зависит от пути.
+  const fromLoader = channelsFor(channelInputs(dataset.systems), { factionColor: tableColor });
+  const fromCsv = channelsFor(rows, { factionColor: tableColor });
+  assert.equal(fromLoader.channels.length, fromCsv.channels.length);
+  assert.deepEqual(
+    fromLoader.channels.map((channel) => [channel.pair, channel.from.name, channel.to.name, channel.forced]),
+    fromCsv.channels.map((channel) => [channel.pair, channel.from.name, channel.to.name, channel.forced]),
+  );
+});
+
+test('D — кривой net_id не роняет загрузку, а ячейка каналов сохраняется как есть', async () => {
+  const csv = [
+    SYSTEMS_HEADER,
+    'Целая,1,standard,5000,5000,Доминион Терран,7,7-11,описание,http://example.test/1',
+    'Пустая,2,standard,5100,5000,Кел-Морийский Синдикат,,,пусто,',
+    'Пробелы,3,standard,5200,5000,Дэлаамы, 9 ,  9-7  ,пробелы по краям,',
+    'Ноль,4,standard,5300,5000,Доминион Терран,0,,ноль — не сеть,',
+    'Дробь,5,standard,5400,5000,Доминион Терран,2.5,,дробный номер не сеть,',
+    'Текст,6,standard,5500,5000,Доминион Терран,abc,,нечисловой номер не сеть,',
+  ].join('\n');
+  const dataset = await loadDataset(csv);
+  const byName = new Map(dataset.systems.map((system) => [system.name, system]));
+
+  assert.equal(byName.get('Целая').net_id, 7, 'целый номер сети читается числом');
+  assert.deepEqual(
+    [byName.get('Пустая').net_id, byName.get('Пустая').net_confront_id],
+    [null, null],
+    'пустые ячейки — null',
+  );
+  assert.deepEqual(
+    [byName.get('Пробелы').net_id, byName.get('Пробелы').net_confront_id],
+    [9, '9-7'],
+    'пробелы по краям ячеек обрезаются',
+  );
+  for (const name of ['Ноль', 'Дробь', 'Текст']) {
+    assert.equal(byName.get(name).net_id, null, `${name}: некорректный net_id должен дать null`);
+  }
+
+  // Ячейка каналов не разбирается в загрузчике: текст доходит до слоя как есть,
+  // и ошибку формата называет `channelsFor` — с именем системы.
+  const declared = byName.get('Целая');
+  assert.equal(declared.net_confront_id, '7-11');
+  const inputs = channelInputs(dataset.systems);
+  assert.throws(
+    () => channelsFor(inputs, { factionColor: tableColor }),
+    (error) => error instanceof RangeError
+      && error.message.includes('Целая')
+      && error.message.includes('сеть-цель 11 не существует в данных'),
+    'битая цель должна назвать систему и причину',
+  );
+  // Та же ячейка с сетью 11 в данных — уже законный канал; рядом живёт пара 7↔9
+  // из строки «Пробелы» (`9-7`), поэтому лент две.
+  const withEleven = inputs.concat([
+    { id: '11', name: 'Одиннадцатая', x: 5600, y: 5000, faction: KMS, type: 'standard', net_id: 11, net_confront_id: null },
+  ]);
+  const built = channelsFor(withEleven, { factionColor: tableColor });
+  assert.deepEqual(
+    [...built.channels.map((channel) => channel.pair)].sort(),
+    ['7-11', '7-9'],
+  );
+});
+
+/* ------------------------------------------------------- бюджет кадра */
+
+test('бюджет кадра: MAX_CHANNELS_PER_FRAME = 24 режет отрисовку, а не геометрию', () => {
+  assert.equal(MAX_CHANNELS_PER_FRAME, 24);
+
+  // Тридцать сетей в цепочке с замыканием: геометрия считает все 30 лент.
+  const systems = [];
+  for (let netId = 1; netId <= 30; netId += 1) {
+    const target = netId === 30 ? 1 : netId + 1;
+    systems.push(sys(String(netId), `Сеть ${netId}`, 5000 + netId * 100, 5000, DOMINION, netId, `${netId}-${target}`));
+  }
+  const result = channelsFor(systems, { factionColor: tableColor });
+  assert.equal(result.channels.length, 30, 'channelsFor обязан считать ленты сверх бюджета');
+  assert.ok(result.channels.length > MAX_CHANNELS_PER_FRAME, 'бюджет не проверяется на малом наборе');
+
+  // Рендерер рисует не больше бюджета и предупреждает один раз на количество.
+  const source = readFileSync(new URL('../src/atlas/canvas-renderer.ts', import.meta.url), 'utf8');
+  assert.ok(
+    /import\s*\{[^}]*MAX_CHANNELS_PER_FRAME[^}]*\}\s*from\s*'\.\/faction-net\.ts'/.test(source),
+    'бюджет кадра не импортирован из faction-net.ts',
+  );
+  const start = source.indexOf('function drawNetChannels(');
+  assert.ok(start > 0, 'в рендерере нет прохода каналов');
+  const pass = source.slice(start, source.indexOf('function renderScene(', start));
+  assert.ok(/MAX_CHANNELS_PER_FRAME/.test(pass), 'проход каналов не учитывает бюджет кадра');
+  assert.ok(/console\.warn/.test(pass), 'переполнение бюджета не видно в консоли');
+  assert.ok(
+    /netChannelOverflow !== channels\.length/.test(pass),
+    'предупреждение о переполнении печатается каждый кадр',
+  );
 });
