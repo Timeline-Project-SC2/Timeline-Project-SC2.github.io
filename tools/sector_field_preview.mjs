@@ -214,7 +214,74 @@ function main() {
     );
   }
 
+  measurePeriodicity();
+  measureLocalPreset();
   measureScreenPath();
+}
+
+/**
+ * Периодичность поля (§17.15.6 п. 1): соседний сектор — продолжение того же поля.
+ * Проверяются четыре сдвига камеры ровно на `mapSize`; приёмка — ноль
+ * несовпавших байт. Гейт `node tools/verify_field_seamless.mjs` делает то же
+ * независимо, здесь число печатается, чтобы попасть в отчёт.
+ */
+function measurePeriodicity() {
+  const size = 96;
+  const scale = 20;
+  const probe = 200;
+  const frame = (cx, cy) => ({
+    view: { scale, tx: size / 2 - cx * scale, ty: size / 2 - cy * scale },
+    viewport: { w: size, h: size },
+    dpr: 1,
+    mapSize: MAP_SIZE,
+  });
+  console.log('Периодичность поля по карте (сдвиг камеры на mapSize, кадр 96×96):');
+  for (const style of STYLES) {
+    const field = createSectorField(null, { style });
+    const base = field.renderToImageData(frame(probe, probe)).data;
+    const shifts = [
+      ['x', probe + MAP_SIZE, probe],
+      ['y', probe, probe + MAP_SIZE],
+      ['x+y', probe + MAP_SIZE, probe + MAP_SIZE],
+      ['−x−y', probe - MAP_SIZE, probe - MAP_SIZE],
+    ];
+    const differing = shifts.map(([, x, y]) => {
+      const probeData = field.renderToImageData(frame(x, y)).data;
+      let count = 0;
+      for (let index = 0; index < base.length; index++) if (base[index] !== probeData[index]) count++;
+      return `${count}`;
+    });
+    field.dispose();
+    console.log(`  ${style.padEnd(8)} несовпавших байт из ${base.length}: ${shifts.map(([title], i) => `${title} — ${differing[i]}`).join(', ')}`);
+  }
+}
+
+/**
+ * Глубокий пресет (§17.15.5): при `edgeDist ≤ 1` туманность погашена, к `4`
+ * возвращается. Печатается средняя яркость кадра — по ней видно, что гашение
+ * монотонное и без ступеньки.
+ */
+function measureLocalPreset() {
+  const size = 256;
+  const visibleWidth = 20;
+  console.log('Глубокий пресет field.local (кадр 256×256, видимая ширина 20 св.г.):');
+  for (const style of STYLES) {
+    const field = createSectorField(null, { style });
+    const rows = [0.5, 1, 2, 3, 4, 10].map((edgeDist) => {
+      const scale = size / visibleWidth;
+      const image = field.renderToImageData({
+        view: { scale, tx: size / 2 - (MAP_SIZE / 2) * scale, ty: size / 2 - (MAP_SIZE / 2) * scale },
+        viewport: { w: size, h: size },
+        dpr: 1,
+        mapSize: MAP_SIZE,
+        edgeDist,
+      });
+      const metrics = frameMetrics(image.data, image.width, image.height);
+      return { edgeDist, meanL: metrics.meanL, uniq: metrics.uniq };
+    });
+    field.dispose();
+    console.log(`  ${style.padEnd(8)} meanL: ${rows.map((row) => `${row.edgeDist} → ${row.meanL.toFixed(1)}`).join(', ')}`);
+  }
 }
 
 /**
@@ -291,20 +358,26 @@ function measureScreenPath() {
   started = process.hrtime.bigint();
   for (let index = 0; index < repeats; index++) fallbackField.renderField(state);
   cachedTotal = Number(process.hrtime.bigint() - started) / 1e6 / repeats;
-  // Промах кэша: сдвиг камеры на единицу — это новый кадр.
-  started = process.hrtime.bigint();
-  fallbackField.renderField({
-    ...state,
-    view: { scale: state.view.scale, tx: state.view.tx + 1, ty: state.view.ty },
-  });
-  const fallbackMoved = Number(process.hrtime.bigint() - started) / 1e6;
+  // Промах кэша: сдвиг камеры на единицу — это новый кадр. Медиана из трёх,
+  // потому что коллекция мусора после шести PNG даёт одиночные выбросы.
+  const moved = [];
+  for (let step = 0; step < 3; step++) {
+    started = process.hrtime.bigint();
+    fallbackField.renderField({
+      ...state,
+      view: { scale: state.view.scale, tx: state.view.tx + 1 + step, ty: state.view.ty },
+    });
+    moved.push(Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  moved.sort((left, right) => left - right);
+  const fallbackMoved = moved[1];
   fallbackField.dispose();
 
   console.log('Экранный путь renderField (CPU, кадр 1920×1080, L0, критерий V-7):');
   console.log(`  браузерный путь (холст растягивает сам), первый кадр — ${browserFirst.toFixed(1)} мс (норма ≤ 50 мс)`);
   console.log(`  браузерный путь, повторный кадр из кэша — ${browserCached.toFixed(2)} мс (норма ≤ 5 мс), нативных блитов ${browser.draws()}`);
   console.log(`  Node-фолбэк (растяжение в JS), первый кадр — ${fallbackFirst.toFixed(1)} мс`);
-  console.log(`  Node-фолбэк, промах кэша (сдвиг камеры) — ${fallbackMoved.toFixed(1)} мс`);
+  console.log(`  Node-фолбэк, промах кэша (сдвиг камеры, медиана из 3) — ${fallbackMoved.toFixed(1)} мс`);
   console.log(`  Node-фолбэк, повторный кадр из кэша (${repeats} повторов) — ${cachedTotal.toFixed(2)} мс, блитов ${fallback.draws()}`);
 }
 

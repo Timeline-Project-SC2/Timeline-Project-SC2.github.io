@@ -8,6 +8,7 @@
  * Контракт — §17.5 `docs/agents_task_orchestration/agents_task_orchestration.md`
  * (в редакции от 25.10.2026: центр кадра `(viewport.w / 2 − tx) / scale`,
  * бюджет `renderField` разделён с `renderToImageData`).
+ * Периодичность по карте и глубокий пресет — §17.15.5 и §17.15.6.
  * Публичные имена, порядок и модификаторы `readonly` не менять: шаг `SW-2B`
  * импортирует именно их.
  *
@@ -27,9 +28,17 @@
  *     внутренней фабрикой; DOM-обращения — только внутри функций и только
  *     после проверки наличия холста.
  *  6. Экранный путь `renderField` на CPU считается в буфере пониженного
- *     разрешения (`SCREEN_DIVISOR` ≤ 1/3 линейно) и растягивается билинейно,
- *     готовый кадр кэшируется по состоянию вида (§17.5 п. 5). Полноразмерный
- *     и точный путь — только `renderToImageData` (предпросмотр и тесты).
+ *     разрешения (не выше `1/3` линейно от `viewport · dpr`) и растягивается
+ *     билинейно, готовый кадр кэшируется по состоянию вида (§17.5 п. 5).
+ *     Полноразмерный и точный путь — только `renderToImageData`.
+ *  7. Периодичность по карте (§17.15.6 п. 1). Все частоты шума — целое число
+ *     ячеек на карту, решётка заворачивается по модулю этого числа, а центр
+ *     кадра приводится по модулю `mapSize`. Поэтому `field(x, y)` побитово равен
+ *     `field(x ± mapSize, y ± mapSize)`: соседний сектор — продолжение поля.
+ *  8. Глубина (§17.15.5). Необязательное `edgeDist` гасит туманность и пыль
+ *     монотонно: при `edgeDist ≤ 1` остаются только звёздная пыль и мягкий фон
+ *     плотностью ≤ `0,02`, при `edgeDist ≥ 4` поле обычное. Без `edgeDist` —
+ *     прежнее полное поле.
  */
 
 export type FieldStyle = 'nebula' | 'tactical';
@@ -48,6 +57,13 @@ export interface SectorFieldState {
   readonly viewport: { readonly w: number; readonly h: number };
   readonly dpr: number;
   readonly mapSize: number;
+  /**
+   * Расстояние от цели до ближайшей границы кадра в св.г. (§17.15.1).
+   * Если задано, работает глубина: при `edgeDist ≤ 1` туманность и пыль
+   * погашены полностью, остаются звёздная пыль и мягкий фон (§17.15.5).
+   * Поле необязательное: без него пресет прежний, полное поле.
+   */
+  readonly edgeDist?: number;
 }
 
 export interface SectorField {
@@ -211,6 +227,9 @@ const CHANNEL_WARP_SMALL_Y = 3;
 const CHANNEL_OCTAVE_BASE = 4;
 const CHANNEL_RIDGE_MID = 16;
 const CHANNEL_RIDGE_FINE = 18;
+const CHANNEL_RIDGE_FINE_2 = 24;
+const CHANNEL_RIDGE_FINE_3 = 25;
+const CHANNEL_DUST_2 = 26;
 const CHANNEL_ENVELOPE = 14;
 const CHANNEL_DETAIL_WARP_X = 12;
 const CHANNEL_DETAIL_WARP_Y = 13;
@@ -220,10 +239,15 @@ const CHANNEL_STAR_X = 20;
 const CHANNEL_STAR_Y = 21;
 const CHANNEL_STAR_BRIGHTNESS = 22;
 const CHANNEL_DITHER = 23;
-const CHANNEL_LIMIT = 24;
+const CHANNEL_LIMIT = 27;
 
-/** Домен-варп двух частот: крупные изгибы облака и мелкая «рябь» филаментов. */
-const WARP_FREQ_BIG = 3.2;
+/**
+ * Домен-варп двух частот: крупные изгибы облака и мелкая «рябь» филаментов.
+ * Обе частоты — **целые ячейки на карту**: только тогда заворот решётки по
+ * модулю числа ячеек даёт периодичное поле (§17.15.6 п. 1). `3,2` из первой
+ * редакции давало шов на стыке секторов, поэтому частота округлена до `3`.
+ */
+const WARP_FREQ_BIG = 3;
 const WARP_FREQ_SMALL = 11;
 /**
  * Амплитуда варпа задаётся в ячейках самой мелкой активной октавы кадра, а не
@@ -272,14 +296,43 @@ const THREAD_CELL_PX = 2.8;
 const THREAD_GAIN_SHALLOW = 0.5;
 const THREAD_GAIN_DEEP = 1.65;
 const THREAD_ZOOM_FROM = 3;
-const THREAD_ZOOM_TO = 30;
-/** Оболочка: крупные пустоты и сгустки, частота в ячейках на поле. */
-const ENVELOPE_FREQ = 2.6;
+const THREAD_ZOOM_TO = 12;
+/** Оболочка: крупные пустоты и сгустки, частота в целых ячейках на карту. */
+const ENVELOPE_FREQ = 3;
 /** Мелкий варп детальной полосы: ячейка и амплитуда в этих же ячейках. */
 const DETAIL_WARP_CELL_PX = 26;
 const DETAIL_WARP_CELLS = 0.85;
 /** Пылевые полосы (§8.1, слой `field.dust`, анизотропия 1:4), ячейка в пикселях. */
 const DUST_CELL_PX = 90;
+/** Анизотропия пыли по осям: вдоль `x` вчетверо реже, отсюда полосы. */
+const DUST_ANISOTROPY = 4;
+
+/* ------------------------------------------------------- глубина и стилевой долг */
+
+/**
+ * Гашение туманности на глубине (§17.15.5): при `edgeDist ≤ 1` облако и пыль
+ * погашены полностью, при `edgeDist ≥ 4` поле обычное. Между ними — `smoothstep`,
+ * то есть гашение монотонное, без ступеньки на границе уровня.
+ */
+const LOCAL_FADE_FROM = 1;
+const LOCAL_FADE_TO = 4;
+/**
+ * Мягкий фон глубокого пресета: плотность фона не выше `0,02` (требование
+ * §17.15.5 п. 3), поэтому берём `0,012` — заметно как градиент, но не как облако.
+ */
+const LOCAL_BACKGROUND_DENSITY = 0.012;
+/**
+ * Тонкие нити — три октавы `f, 2f, 4f` с весами `1 / 0,5 / 0,25` (§17.14,
+ * стилевой долг `SW-2A-style`). Одиночная октава value-noise давала «отпечаток
+ * пальца»: множества уровня одной октавы — вложенные кольца вокруг узлов решётки.
+ * Веса берутся как есть, без деления на их сумму (`1,75`): иначе среднее нити
+ * падает почти втрое и деталь на `L4/L9` проседает ниже нормы `V-2`.
+ */
+const RIDGE_FINE_WEIGHTS: readonly number[] = Object.freeze([1, 0.5, 0.25]);
+/** Амплитуда нитей: вдвое ниже прежней — три октавы в сумме дают больше плотности. */
+const THREAD_AMPLITUDE = 0.5;
+/** Пыль из двух октав: полосы перестают быть одинаково «гладкими» вдоль края. */
+const DUST_OCTAVE_WEIGHTS: readonly number[] = Object.freeze([0.72, 0.28]);
 
 /** Параметры композиции, различающие два пресета (код один и тот же). */
 interface FieldTuning {
@@ -355,16 +408,38 @@ function smoothCurve(t: number): number {
   return t * t * (3 - 2 * t);
 }
 
-/** Value-noise с билинейной интерполяцией; вход — в ячейках решётки. */
-function valueNoise(px: number, py: number, seed: number): number {
-  const fx = Math.floor(px);
-  const fy = Math.floor(py);
-  const wx = smoothCurve(px - fx);
-  const wy = smoothCurve(py - fy);
-  const v00 = latticeValue(fx, fy, seed);
-  const v10 = latticeValue(fx + 1, fy, seed);
-  const v01 = latticeValue(fx, fy + 1, seed);
-  const v11 = latticeValue(fx + 1, fy + 1, seed);
+/**
+ * Заворот индекса решётки по модулю числа ячеек карты (§17.15.6 п. 1).
+ * Решётка становится кольцом: `field(x, y) === field(x ± mapSize, y ± mapSize)`.
+ * Заворот делается на **целых** индексах, а не на координатах: `mod` по float
+ * сдвигал бы узлы и рвал интерполяцию на самом стыке.
+ */
+function wrapIndex(index: number, period: number): number {
+  if (!(period > 0)) return index;
+  // Быстрый путь: почти все индексы уже лежат в одном периоде — `%` не нужен.
+  if (index >= 0 && index < period) return index;
+  const wrapped = index % period;
+  return wrapped < 0 ? wrapped + period : wrapped;
+}
+
+/**
+ * Value-noise с билинейной интерполяцией; вход — в ячейках решётки.
+ * `periodX`/`periodY` — число ячеек на карту по каждой оси: индексы решётки
+ * заворачиваются по модулю этих чисел, поэтому поле периодично по карте.
+ */
+function valueNoise(px: number, py: number, seed: number, periodX: number, periodY: number): number {
+  const baseX = Math.floor(px);
+  const baseY = Math.floor(py);
+  const wx = smoothCurve(px - baseX);
+  const wy = smoothCurve(py - baseY);
+  const ix0 = wrapIndex(baseX, periodX);
+  const iy0 = wrapIndex(baseY, periodY);
+  const ix1 = ix0 + 1 >= periodX ? ix0 + 1 - periodX : ix0 + 1;
+  const iy1 = iy0 + 1 >= periodY ? iy0 + 1 - periodY : iy0 + 1;
+  const v00 = latticeValue(ix0, iy0, seed);
+  const v10 = latticeValue(ix1, iy0, seed);
+  const v01 = latticeValue(ix0, iy1, seed);
+  const v11 = latticeValue(ix1, iy1, seed);
   const top = v00 + (v10 - v00) * wx;
   const bottom = v01 + (v11 - v01) * wx;
   return top + (bottom - top) * wy;
@@ -404,15 +479,16 @@ const STATS_GAIN_MAX = 4;
  * из буфера ≈ `SCREEN_PIXEL_BUDGET` пикселей визуально не отличимо, зато кадр
  * укладывается в бюджет `G7.4` (замер — в `npm run sector-field:preview`).
  */
-const SCREEN_PIXEL_BUDGET_NATIVE = 40000;
-const SCREEN_PIXEL_BUDGET_FALLBACK = 12000;
+const SCREEN_PIXEL_BUDGET_NATIVE = 30000;
+const SCREEN_PIXEL_BUDGET_FALLBACK = 5000;
 const SCREEN_MIN_DIVISOR = 3;
 
 /**
  * Делитель экранного буфера: не меньше `3` и не больше, чем нужно для бюджета.
  * Бюджет зависит от того, кто растягивает картинку: холст (`drawImage` на GPU,
- * почти бесплатно) или JS-фолбэк (≈ 12 мс на мегапиксель), поэтому в окружении
- * без `<canvas>`/`document` буфер заметно мельче.
+ * почти бесплатно) или JS-фолбэк (≈ 12 мс на мегапиксель кадра), поэтому
+ * в окружении без `document` буфер заметно мельче — этот путь живёт только
+ * в Node (тесты, предпросмотр), в браузере растягивает холст.
  */
 function screenDivisor(state: SectorFieldState, nativeUpscale: boolean): number {
   const rawsW = Math.max(1, finiteOr(state.viewport?.w, FALLBACK_VIEWPORT));
@@ -427,9 +503,14 @@ function screenDivisor(state: SectorFieldState, nativeUpscale: boolean): number 
 interface FrameMath {
   readonly width: number;
   readonly height: number;
-  /** Мировой центр кадра, `float64`. */
-  readonly centreX: number;
-  readonly centreY: number;
+  /**
+   * Мировой центр кадра, приведённый по модулю `mapSize`. Поле периодично по
+   * карте (§17.15.6 п. 1), поэтому кадр от этого не меняется, зато все координаты
+   * остаются в пределах одной карты: и заворот решётки, и `float32` в шейдере
+   * работают на малых числах (`R-3`).
+   */
+  readonly originX: number;
+  readonly originY: number;
   /** Пикселей буфера на мировую единицу. */
   readonly deviceScale: number;
   readonly mapSize: number;
@@ -439,24 +520,36 @@ interface FrameMath {
   readonly octavePeak: number;
   /** Амплитуда домен-варпа в долях нормированного поля. */
   readonly warpAmp: number;
-  /** Частоты гребневых слоёв: средние филаменты и тонкие нити. */
-  readonly ridgeFreqMid: number;
-  readonly ridgeFreqFine: number;
-  readonly envelopeFreq: number;
   /**
-   * Мелкий домен-варп для детальной полосы. Без него мелкие октавы не
-   * размываются крупным варпом и остаются выровненными по осям решётки —
-   * на `L4…L9` это читается как «лего» из прямоугольников.
+   * Частоты слоёв в **целых ячейках на карту** — по паре на ось. Целочисленность
+   * обязательна: только тогда заворот решётки по модулю даёт бесшовный стык.
+   * Анизотропия выражается отношением частот по осям, а не делением координаты.
    */
-  readonly detailWarpFreq: number;
+  readonly octaveCellsY: readonly number[];
+  readonly octaveCellsCloudX: readonly number[];
+  readonly octaveCellsFineX: readonly number[];
+  readonly ridgeMidX: number;
+  readonly ridgeMidY: number;
+  /** Базовая частота тонкой нити: октавы `f, 2f, 4f` считаются от неё. */
+  readonly ridgeFineX: number;
+  readonly ridgeFineY: number;
+  readonly envelopeCells: number;
+  readonly detailWarpCells: number;
   readonly detailWarpAmp: number;
   /** Усиление нитей с зумом: на глубоких уровнях кадр обрастает волокнами. */
   readonly threadGain: number;
-  readonly dustFreqX: number;
-  readonly dustFreqY: number;
+  readonly dustX: number;
+  readonly dustY: number;
+  /** Ячейка звёздной пыли в мировых единицах и их число на карту (целое). */
   readonly starCell: number;
+  readonly starCells: number;
   /** Пылевые полосы живут на `L0…L6` (§8.1) и плавно гаснут до `L9`. */
   readonly dustFade: number;
+  /**
+   * Гашение туманности на глубине (§17.15.5): `0` — облако и пыль погашены
+   * полностью (в кадре звезда и мягкий фон), `1` — обычное поле.
+   */
+  readonly localFade: number;
   /**
    * Нормировка плотности по кадру (§17.12 `V-3`): средняя плотность кадра
    * приводится к `TARGET_MEAN_DENSITY`, поэтому `meanL` не уезжает от уровня
@@ -480,6 +573,18 @@ function finiteOr(value: number | undefined, fallback: number): number {
 function frameCenter(axis: number, translate: number, scale: number, fallbackAxis: number): number {
   const span = axis > 0 ? axis : fallbackAxis;
   return (span / 2 - translate) / scale;
+}
+
+/**
+ * Приведение мировой координаты к одной карте. Соседний сектор отличается от
+ * текущего ровно на `mapSize`, и поле периодично, поэтому кадр можно считать
+ * от свёрнутого центра — картинка та же, числа меньше.
+ */
+function reduceToMap(value: number, mapSize: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const wrapped = value - Math.floor(value / mapSize) * mapSize;
+  if (!Number.isFinite(wrapped) || wrapped >= mapSize || wrapped < 0) return 0;
+  return wrapped;
 }
 
 interface OctaveField {
@@ -522,6 +627,16 @@ function buildOctaveField(width: number, height: number, zoom: number): OctaveFi
   return { weights, normalizer: sum > 0 ? sum : 1, cloudPeak, detailPeak };
 }
 
+/** Целое число ячеек на карту: заворот решётки возможен только по целому. */
+function cellsPerMap(frequency: number): number {
+  return Math.max(1, Math.round(frequency));
+}
+
+/** Пара частот по осям: анизотропия задаётся отношением, обе частоты целые. */
+function cellsForLayer(frequency: number, anisotropy: number): [number, number] {
+  return [cellsPerMap(frequency / anisotropy), cellsPerMap(frequency)];
+}
+
 function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
   const mapSize = Math.max(1, finiteOr(state.mapSize, FALLBACK_MAP_SIZE));
   const rawW = Math.max(1, finiteOr(state.viewport?.w, FALLBACK_VIEWPORT));
@@ -555,11 +670,32 @@ function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
   // Частоты в ячейках на нормированное поле: ячейка ≈ N пикселей буфера.
   const cellFreq = (cellPx: number): number => (width * zoom) / cellPx;
 
+  const octaveCellsY: number[] = [];
+  const octaveCellsCloudX: number[] = [];
+  const octaveCellsFineX: number[] = [];
+  for (let index = 0; index < MAX_OCTAVES; index++) {
+    const frequency = OCTAVE_BASE_FREQ * 2 ** index;
+    octaveCellsY.push(cellsPerMap(frequency));
+    octaveCellsCloudX.push(cellsPerMap(frequency / CLOUD_ANISOTROPY));
+    octaveCellsFineX.push(cellsPerMap(frequency / THREAD_ANISOTROPY));
+  }
+
+  const ridgeMid = cellsForLayer(OCTAVE_BASE_FREQ * 2 ** (octaves.cloudPeak - 1), CLOUD_ANISOTROPY);
+  const ridgeFine = cellsForLayer(cellFreq(THREAD_CELL_PX), THREAD_ANISOTROPY);
+  const dustCells = cellsForLayer(cellFreq(DUST_CELL_PX), DUST_ANISOTROPY);
+  const detailWarpCells = cellsPerMap(cellFreq(DETAIL_WARP_CELL_PX));
+  const starCellRaw = STAR_CELL_PX / deviceScale;
+  const starCells = cellsPerMap(mapSize / starCellRaw);
+  const edgeDist = state.edgeDist;
+  const localFade = typeof edgeDist === 'number' && Number.isFinite(edgeDist)
+    ? smoothstep(LOCAL_FADE_FROM, LOCAL_FADE_TO, edgeDist)
+    : 1;
+
   return {
     width,
     height,
-    centreX,
-    centreY,
+    originX: reduceToMap(centreX, mapSize),
+    originY: reduceToMap(centreY, mapSize),
     deviceScale,
     mapSize,
     octaveWeights: Array.from(octaves.weights),
@@ -567,17 +703,24 @@ function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
     octavePeak: octaves.cloudPeak,
     // Варп двигает точку на несколько ячеек облачной октавы.
     warpAmp: WARP_CELLS / OCTAVE_BASE_FREQ / 2 ** octaves.cloudPeak,
-    ridgeFreqMid: OCTAVE_BASE_FREQ * 2 ** (octaves.cloudPeak - 1),
-    ridgeFreqFine: cellFreq(THREAD_CELL_PX),
-    envelopeFreq: ENVELOPE_FREQ,
-    detailWarpFreq: cellFreq(DETAIL_WARP_CELL_PX),
-    detailWarpAmp: DETAIL_WARP_CELLS / (cellFreq(DETAIL_WARP_CELL_PX)),
+    octaveCellsY,
+    octaveCellsCloudX,
+    octaveCellsFineX,
+    ridgeMidX: ridgeMid[0],
+    ridgeMidY: ridgeMid[1],
+    ridgeFineX: ridgeFine[0],
+    ridgeFineY: ridgeFine[1],
+    envelopeCells: cellsPerMap(ENVELOPE_FREQ),
+    detailWarpCells,
+    detailWarpAmp: DETAIL_WARP_CELLS / detailWarpCells,
     threadGain: THREAD_GAIN_SHALLOW
       + (THREAD_GAIN_DEEP - THREAD_GAIN_SHALLOW) * smoothstep(THREAD_ZOOM_FROM, THREAD_ZOOM_TO, zoom),
-    dustFreqX: cellFreq(DUST_CELL_PX) / 4,
-    dustFreqY: cellFreq(DUST_CELL_PX),
-    starCell: STAR_CELL_PX / deviceScale,
+    dustX: dustCells[0],
+    dustY: dustCells[1],
+    starCell: mapSize / starCells,
+    starCells,
     dustFade: 1 - smoothstep(40, 150, zoom),
+    localFade,
     densityGain: 1,
     zoom,
   };
@@ -640,6 +783,21 @@ function sampleRampInto(ramp: ColorRamp, density: number, out: Float64Array): vo
 
 /* ------------------------------------------------------------------ CPU-композитор */
 
+/** Одна активная октава облака с уже разрешёнными частотами и seed. */
+interface OctaveLayer {
+  readonly cellsX: number;
+  readonly cellsY: number;
+  readonly seed: number;
+  readonly amplitude: number;
+  /** Облачные координаты (`true`) или детальные, с мелким варпом (`false`). */
+  readonly coarse: boolean;
+}
+
+/**
+ * Предвычисленные параметры прохода. Всё, что не зависит от пикселя, считается
+ * один раз: на кадр 1920×1080 это два миллиона вызовов `computeDensity`, и любая
+ * работа с массивами внутри стоила дороже самого шума.
+ */
 interface CpuPass {
   readonly frame: FrameMath;
   readonly ramp: ColorRamp;
@@ -648,55 +806,130 @@ interface CpuPass {
   readonly peak: number;
   /** Буфер цвета текущего пикселя; переиспользуется, чтобы не аллоцировать на пиксель. */
   readonly out: Float64Array;
+  readonly octaveLayers: readonly OctaveLayer[];
+  readonly warpCellsBig: readonly [number, number];
+  readonly warpCellsSmall: readonly [number, number];
+  readonly warpCellsDetail: readonly [number, number];
+  readonly warpBigX: number;
+  readonly warpBigY: number;
+  readonly warpSmallX: number;
+  readonly warpSmallY: number;
+  readonly detailWarpX: number;
+  readonly detailWarpY: number;
+  readonly ridgeMidSeed: number;
+  readonly ridgeFineSeeds: readonly number[];
+  readonly envelopeSeed: number;
+  readonly dust: readonly [number, number, number, number];
+  readonly dustSeeds: readonly [number, number];
+}
+
+/** Сборка предвычисленных параметров прохода из кадра. */
+function buildPass(
+  frame: FrameMath,
+  ramp: ColorRamp,
+  tuning: FieldTuning,
+  out: Float64Array,
+): CpuPass {
+  const layers: OctaveLayer[] = [];
+  // Граница полос — целое, чтобы шейдер (`u_cloudPeak`, int) и CPU брали одну
+  // и ту же октаву: `floor` совпадает со сравнением `index <= octavePeak`.
+  const peak = Math.floor(frame.octavePeak);
+  for (let index = 0; index < frame.octaveWeights.length; index++) {
+    const amplitude = frame.octaveWeights[index] ?? 0;
+    if (amplitude <= 0) continue;
+    const coarse = index <= peak;
+    layers.push({
+      cellsX: (coarse ? frame.octaveCellsCloudX[index] : frame.octaveCellsFineX[index]) ?? 1,
+      cellsY: frame.octaveCellsY[index] ?? 1,
+      seed: CHANNEL_SEEDS[CHANNEL_OCTAVE_BASE + (index % 12)] ?? 0,
+      amplitude,
+      coarse,
+    });
+  }
+  return {
+    frame,
+    ramp,
+    tuning,
+    peak,
+    out,
+    octaveLayers: layers,
+    warpCellsBig: [WARP_FREQ_BIG, WARP_FREQ_BIG],
+    warpCellsSmall: [WARP_FREQ_SMALL, WARP_FREQ_SMALL],
+    warpCellsDetail: [frame.detailWarpCells, frame.detailWarpCells],
+    warpBigX: CHANNEL_SEEDS[CHANNEL_WARP_BIG_X] ?? 0,
+    warpBigY: CHANNEL_SEEDS[CHANNEL_WARP_BIG_Y] ?? 0,
+    warpSmallX: CHANNEL_SEEDS[CHANNEL_WARP_SMALL_X] ?? 0,
+    warpSmallY: CHANNEL_SEEDS[CHANNEL_WARP_SMALL_Y] ?? 0,
+    detailWarpX: CHANNEL_SEEDS[CHANNEL_DETAIL_WARP_X] ?? 0,
+    detailWarpY: CHANNEL_SEEDS[CHANNEL_DETAIL_WARP_Y] ?? 0,
+    ridgeMidSeed: CHANNEL_SEEDS[CHANNEL_RIDGE_MID] ?? 0,
+    ridgeFineSeeds: [
+      CHANNEL_SEEDS[CHANNEL_RIDGE_FINE] ?? 0,
+      CHANNEL_SEEDS[CHANNEL_RIDGE_FINE_2] ?? 0,
+      CHANNEL_SEEDS[CHANNEL_RIDGE_FINE_3] ?? 0,
+    ],
+    envelopeSeed: CHANNEL_SEEDS[CHANNEL_ENVELOPE] ?? 0,
+    dust: [frame.dustX, frame.dustY, frame.dustX * 2, frame.dustY * 2],
+    dustSeeds: [CHANNEL_SEEDS[CHANNEL_DUST] ?? 0, CHANNEL_SEEDS[CHANNEL_DUST_2] ?? 0],
+  };
 }
 
 /**
  * Плотность поля в точке мира. Порядок операций совпадает с фрагментным
  * шейдером, чтобы обе ветки давали одну композицию.
+ *
+ * Все координаты шума нормированы на карту (`point ∈ [0, 1]`) и умножены на
+ * **целые** частоты; решётка каждого слоя завёрнута по модулю своей частоты,
+ * поэтому поле периодично по карте (§17.15.6 п. 1) — стык секторов невидим.
  */
 function computeDensity(pass: CpuPass, worldX: number, worldY: number): number {
   const { frame, tuning } = pass;
   const nx = worldX / frame.mapSize;
   const ny = worldY / frame.mapSize;
+  const warpCellsBig = pass.warpCellsBig;
+  const warpCellsSmall = pass.warpCellsSmall;
 
-  // Домен-варп двух частот: крупные изгибы плюс мелкая рябь. Он превращает
-  // гладкие пятна облака в волокна — без него `fBm` даёт «пузыри».
-  const warpBigX = valueNoise(nx * WARP_FREQ_BIG, ny * WARP_FREQ_BIG, CHANNEL_SEEDS[CHANNEL_WARP_BIG_X] ?? 0) - 0.5;
-  const warpBigY = valueNoise(nx * WARP_FREQ_BIG, ny * WARP_FREQ_BIG, CHANNEL_SEEDS[CHANNEL_WARP_BIG_Y] ?? 0) - 0.5;
-  const warpSmallX = valueNoise(nx * WARP_FREQ_SMALL, ny * WARP_FREQ_SMALL, CHANNEL_SEEDS[CHANNEL_WARP_SMALL_X] ?? 0) - 0.5;
-  const warpSmallY = valueNoise(nx * WARP_FREQ_SMALL, ny * WARP_FREQ_SMALL, CHANNEL_SEEDS[CHANNEL_WARP_SMALL_Y] ?? 0) - 0.5;
+  // Домен-варп двух частот: крупные изгибы плюс мелкая рябь. Обе частоты целые.
+  const warpBigX = valueNoise(
+    nx * warpCellsBig[0], ny * warpCellsBig[1], pass.warpBigX, warpCellsBig[0], warpCellsBig[1],
+  ) - 0.5;
+  const warpBigY = valueNoise(
+    nx * warpCellsBig[0], ny * warpCellsBig[1], pass.warpBigY, warpCellsBig[0], warpCellsBig[1],
+  ) - 0.5;
+  const warpSmallX = valueNoise(
+    nx * warpCellsSmall[0], ny * warpCellsSmall[1], pass.warpSmallX, warpCellsSmall[0], warpCellsSmall[1],
+  ) - 0.5;
+  const warpSmallY = valueNoise(
+    nx * warpCellsSmall[0], ny * warpCellsSmall[1], pass.warpSmallY, warpCellsSmall[0], warpCellsSmall[1],
+  ) - 0.5;
   const shiftedX = nx + (warpBigX + 0.6 * warpSmallX) * frame.warpAmp;
   const shiftedY = ny + (warpBigY + 0.6 * warpSmallY) * frame.warpAmp;
-  // Облако вытянуто вдоль `x` слабо, нити — сильно (анизотропия).
-  const cloudX = shiftedX / CLOUD_ANISOTROPY;
-  const threadX = shiftedX / THREAD_ANISOTROPY;
 
   // Мелкий варп: размывает выравнивание мелких октав по осям решётки.
+  const warpCellsDetail = pass.warpCellsDetail;
   const detailWarpX = (valueNoise(
-    nx * frame.detailWarpFreq,
-    ny * frame.detailWarpFreq,
-    CHANNEL_SEEDS[CHANNEL_DETAIL_WARP_X] ?? 0,
+    nx * warpCellsDetail[0], ny * warpCellsDetail[1], pass.detailWarpX,
+    warpCellsDetail[0], warpCellsDetail[1],
   ) - 0.5) * frame.detailWarpAmp;
   const detailWarpY = (valueNoise(
-    nx * frame.detailWarpFreq,
-    ny * frame.detailWarpFreq,
-    CHANNEL_SEEDS[CHANNEL_DETAIL_WARP_Y] ?? 0,
+    nx * warpCellsDetail[0], ny * warpCellsDetail[1], pass.detailWarpY,
+    warpCellsDetail[0], warpCellsDetail[1],
   ) - 0.5) * frame.detailWarpAmp;
-  const fineX = threadX + detailWarpX;
+  const fineX = shiftedX + detailWarpX;
   const fineY = shiftedY + detailWarpY;
 
-  // Облако: fBm по облачному и детальному окнам октав.
+  // Облако: fBm по облачному и детальному окнам октав. Анизотропия — отношение
+  // частот по осям (у облака `1,45`, у нитей `2`), обе частоты целые.
   let sum = 0;
-  const weights = frame.octaveWeights;
-  for (let index = 0; index < weights.length; index++) {
-    const amplitude = weights[index] ?? 0;
-    if (amplitude <= 0) continue;
-    const freq = OCTAVE_BASE_FREQ * 2 ** index;
-    const coarse = index <= frame.octavePeak;
-    sum += amplitude * valueNoise(
-      (coarse ? cloudX : fineX) * freq,
-      (coarse ? shiftedY : fineY) * freq,
-      CHANNEL_SEEDS[CHANNEL_OCTAVE_BASE + (index % 12)] ?? 0,
+  const layers = pass.octaveLayers;
+  for (let index = 0; index < layers.length; index++) {
+    const layer = layers[index]!;
+    sum += layer.amplitude * valueNoise(
+      (layer.coarse ? shiftedX : fineX) * layer.cellsX,
+      (layer.coarse ? shiftedY : fineY) * layer.cellsY,
+      layer.seed,
+      layer.cellsX,
+      layer.cellsY,
     );
   }
   const base = sum / frame.octaveNormalizer;
@@ -704,24 +937,47 @@ function computeDensity(pass: CpuPass, worldX: number, worldY: number): number {
   // Гребневые слои: средний филамент модулирует плотность облака, тонкая нить
   // добавляется только внутри плотных участков (иначе кадр «сереет» от соли).
   const ridgeMid = ridged(valueNoise(
-    cloudX * frame.ridgeFreqMid,
-    shiftedY * frame.ridgeFreqMid,
-    CHANNEL_SEEDS[CHANNEL_RIDGE_MID] ?? 0,
+    shiftedX * frame.ridgeMidX,
+    shiftedY * frame.ridgeMidY,
+    pass.ridgeMidSeed,
+    frame.ridgeMidX,
+    frame.ridgeMidY,
   ));
   const filament = ridgeMid * ridgeMid * (3 - 2 * ridgeMid);
-  const ridgeFine = ridged(valueNoise(
-    fineX * frame.ridgeFreqFine,
-    fineY * frame.ridgeFreqFine,
-    CHANNEL_SEEDS[CHANNEL_RIDGE_FINE] ?? 0,
-  ));
+
+  // Тонкая нить — три октавы `f, 2f, 4f`. Множества уровня суммы октав уже не
+  // дают вложенных колец, которые читались как «отпечаток пальца» на `L4/L9`.
+  let ridgeFine = 0;
+  for (let octave = 0; octave < 3; octave++) {
+    const scale = 1 << octave;
+    const cellsX = frame.ridgeFineX * scale;
+    const cellsY = frame.ridgeFineY * scale;
+    ridgeFine += (RIDGE_FINE_WEIGHTS[octave] ?? 0) * ridged(valueNoise(
+      fineX * cellsX,
+      fineY * cellsY,
+      pass.ridgeFineSeeds[octave] ?? 0,
+      cellsX,
+      cellsY,
+    ));
+  }
 
   // Оболочка: крупные пустоты и сгустки поверх всей карты.
-  const envelope = valueNoise(nx * frame.envelopeFreq, ny * frame.envelopeFreq, CHANNEL_SEEDS[CHANNEL_ENVELOPE] ?? 0);
+  const envelope = valueNoise(
+    nx * frame.envelopeCells, ny * frame.envelopeCells,
+    pass.envelopeSeed, frame.envelopeCells, frame.envelopeCells,
+  );
   const envelopeGain = 0.4 + 1.05 * smoothstep(0.18, 0.82, envelope);
 
-  // Пылевые полосы (§8.1 `field.dust`, анизотропия 1:4) вычитаются из облака.
-  const dust = valueNoise(shiftedX * frame.dustFreqX, shiftedY * frame.dustFreqY, CHANNEL_SEEDS[CHANNEL_DUST] ?? 0);
-  const dustBand = smoothstep(0.52, 0.88, dust) * tuning.dustStrength * frame.dustFade;
+  // Пылевые полосы (§8.1 `field.dust`, анизотропия 1:4), две октавы.
+  const dust = pass.dust;
+  const dustLow = valueNoise(
+    shiftedX * dust[0], shiftedY * dust[1], pass.dustSeeds[0] ?? 0, dust[0], dust[1],
+  );
+  const dustHigh = valueNoise(
+    shiftedX * dust[2], shiftedY * dust[3], pass.dustSeeds[1] ?? 0, dust[2], dust[3],
+  );
+  const dustValue = DUST_OCTAVE_WEIGHTS[0]! * dustLow + DUST_OCTAVE_WEIGHTS[1]! * dustHigh;
+  const dustBand = smoothstep(0.52, 0.88, dustValue) * tuning.dustStrength * frame.dustFade;
 
   // Контраст облака: сдвиг к середине и S-кривая (только умножения).
   const shaped = clamp01(
@@ -732,7 +988,7 @@ function computeDensity(pass: CpuPass, worldX: number, worldY: number): number {
   // Волокна: модуляция облака гребнем плюс тонкие нити внутри плотных участков.
   const weaved = cloud * (1 - tuning.ridgeStrength + tuning.ridgeStrength * filament);
   const fine = ridgeFine * ridgeFine;
-  const thread = fine * tuning.fineStrength * frame.threadGain
+  const thread = fine * tuning.fineStrength * THREAD_AMPLITUDE * frame.threadGain
     * weaved * (0.25 + 0.75 * (1 - weaved));
 
   return clamp01((weaved + thread - dustBand * 0.85) * tuning.densityScale);
@@ -740,10 +996,28 @@ function computeDensity(pass: CpuPass, worldX: number, worldY: number): number {
 
 /**
  * Один пиксель растра. Результат — в `pass.out` (значения в шкале `0…255`).
+ *
+ * Гашение на глубине применяется здесь, а не в `computeDensity`: нормировка
+ * `V-3` считает среднюю плотность облака по кадру и не должна «разгонять»
+ * пустой кадр глубокого пресета (§17.15.5 п. 3 — фон не выше `0,02`).
  */
 function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
   const { ramp, tuning, out, frame } = pass;
-  const density = clamp01(computeDensity(pass, worldX, worldY) * frame.densityGain);
+  const fade = frame.localFade;
+  const cloud = computeDensity(pass, worldX, worldY) * frame.densityGain * fade;
+  // Мягкий градиент фона глубокого пресета: плотность ≤ `LOCAL_BACKGROUND_DENSITY`.
+  // Оболочку для него считаем только когда гашение реально включено.
+  let background = 0;
+  if (fade < 1) {
+    const nx = worldX / frame.mapSize;
+    const ny = worldY / frame.mapSize;
+    const envelope = valueNoise(
+      nx * frame.envelopeCells, ny * frame.envelopeCells,
+      CHANNEL_SEEDS[CHANNEL_ENVELOPE] ?? 0, frame.envelopeCells, frame.envelopeCells,
+    );
+    background = (1 - fade) * LOCAL_BACKGROUND_DENSITY * (0.35 + 0.65 * envelope);
+  }
+  const density = clamp01(cloud + background);
 
   sampleRampInto(ramp, density, out);
   let r = out[0] ?? 0;
@@ -751,10 +1025,14 @@ function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
   let b = out[2] ?? 0;
 
   // Звёздная пыль: power-law яркость, одна звезда на ячейку 3 device-пикселя.
+  // Решётка звёзд тоже завёрнута по модулю их числа на карту: иначе звёзды
+  // выдавали бы стык секторов даже при периодичном облаке.
   const starX = worldX / frame.starCell;
   const starY = worldY / frame.starCell;
-  const cellX = Math.floor(starX);
-  const cellY = Math.floor(starY);
+  const cellX = wrapIndex(Math.floor(starX), frame.starCells);
+  const cellY = wrapIndex(Math.floor(starY), frame.starCells);
+  const insideX = starX - Math.floor(starX);
+  const insideY = starY - Math.floor(starY);
   const presence = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_PRESENCE] ?? 0);
   if (presence < tuning.starPresence) {
     const starPosX = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_X] ?? 0);
@@ -762,8 +1040,8 @@ function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
     const spread = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_BRIGHTNESS] ?? 0);
     // Показатель степени 4 через умножения: без `pow`, побитово одинаково везде.
     const power = spread * spread * spread * spread;
-    const dx = (starX - cellX) - starPosX;
-    const dy = (starY - cellY) - starPosY;
+    const dx = insideX - starPosX;
+    const dy = insideY - starPosY;
     const distance = Math.sqrt(dx * dx + dy * dy);
     if (distance < 0.34) {
       const falloff = 1 - distance / 0.34;
@@ -795,10 +1073,10 @@ function frameDensityGain(base: CpuPass): number {
   let count = 0;
   for (let row = 0; row < STATS_GRID; row++) {
     const y = ((row + 0.5) / STATS_GRID) * frame.height;
-    const worldY = frame.centreY + (y - halfHeight) * invDevice;
+    const worldY = frame.originY + (y - halfHeight) * invDevice;
     for (let column = 0; column < STATS_GRID; column++) {
       const x = ((column + 0.5) / STATS_GRID) * frame.width;
-      const worldX = frame.centreX + (x - halfWidth) * invDevice;
+      const worldX = frame.originX + (x - halfWidth) * invDevice;
       sum += computeDensity(base, worldX, worldY);
       count++;
     }
@@ -810,16 +1088,10 @@ function frameDensityGain(base: CpuPass): number {
 
 function composeCpuData(state: SectorFieldState, palette: FieldPalette, divisor = 1): ImageData {
   const baseFrame = buildFrame(state, divisor);
-  const probe: CpuPass = {
-    frame: baseFrame,
-    ramp: buildRamp(palette),
-    tuning: FIELD_TUNING[palette.id],
-    peak: Math.ceil(baseFrame.octavePeak),
-    out: new Float64Array(3),
-  };
+  const probe = buildPass(baseFrame, buildRamp(palette), FIELD_TUNING[palette.id], new Float64Array(3));
   const frame: FrameMath = { ...baseFrame, densityGain: frameDensityGain(probe) };
-  const pass: CpuPass = { ...probe, frame };
-  const { width, height, centreX, centreY, deviceScale } = frame;
+  const pass = buildPass(frame, probe.ramp, probe.tuning, probe.out);
+  const { width, height, originX, originY, deviceScale } = frame;
   const data = new Uint8ClampedArray(width * height * 4);
   const halfWidth = width / 2;
   const halfHeight = height / 2;
@@ -827,10 +1099,10 @@ function composeCpuData(state: SectorFieldState, palette: FieldPalette, divisor 
   const invDevice = 1 / deviceScale;
 
   for (let y = 0; y < height; y++) {
-    const worldY = centreY + (y + 0.5 - halfHeight) * invDevice;
+    const worldY = originY + (y + 0.5 - halfHeight) * invDevice;
     let offset = y * width * 4;
     for (let x = 0; x < width; x++) {
-      const worldX = centreX + (x + 0.5 - halfWidth) * invDevice;
+      const worldX = originX + (x + 0.5 - halfWidth) * invDevice;
       composePixel(pass, worldX, worldY);
       // Дизеринг ±0,5/255 (§8.3): иначе на тёмном фоне видны полосы квантования.
       const dither = (latticeValue(x, y, ditherSeed) - 0.5) / 255;
@@ -951,10 +1223,18 @@ function unitTriplet(color: Rgb): string {
 
 /** GLSL-источник собирается из тех же таблиц, что и CPU-путь: числа не дублируются. */
 function buildFragmentShader(palette: FieldPalette, tuning: FieldTuning): string {
-  const octaveFreq = Array.from(
+  const octaveCellsY = Array.from(
     { length: MAX_OCTAVES },
-    (_unused, index) => (OCTAVE_BASE_FREQ * 2 ** index).toFixed(6),
-  ).join(', ');
+    (_unused, index) => cellsPerMap(OCTAVE_BASE_FREQ * 2 ** index),
+  );
+  const octaveCellsCloudX = Array.from(
+    { length: MAX_OCTAVES },
+    (_unused, index) => cellsPerMap((OCTAVE_BASE_FREQ * 2 ** index) / CLOUD_ANISOTROPY),
+  );
+  const octaveCellsFineX = Array.from(
+    { length: MAX_OCTAVES },
+    (_unused, index) => cellsPerMap((OCTAVE_BASE_FREQ * 2 ** index) / THREAD_ANISOTROPY),
+  );
   const ramp = buildRamp(palette);
   const stops = ramp.stops.map((stop) => stop.toFixed(6));
 
@@ -963,21 +1243,23 @@ precision highp float;
 precision highp int;
 
 uniform vec2 u_resolution;    // размер растра в device-пикселях
-uniform vec2 u_offsetHi;      // старшая часть мирового центра кадра
-uniform vec2 u_offsetLo;      // младшая часть мирового центра кадра
+uniform vec2 u_offsetHi;      // старшая часть центра кадра, свёрнутого по карте
+uniform vec2 u_offsetLo;      // младшая часть того же центра
 uniform float u_deviceScale;  // device-пикселей на мировую единицу
 uniform float u_mapSize;
 uniform float u_starCell;     // ячейка звёздной пыли в мировых единицах
 uniform float u_dustFade;     // затухание пылевых полос на глубоких уровнях
 uniform float u_warpAmp;      // амплитуда домен-варпа (в долях поля)
-uniform float u_envelopeFreq;
-uniform float u_detailWarpFreq;
+uniform int u_envelopeCells;
+uniform int u_detailWarpCells;
 uniform float u_detailWarpAmp;
-uniform vec2 u_dustFreq;
+uniform ivec2 u_dustCells;
 uniform float u_densityGain;
 uniform float u_threadGain;
-uniform float u_ridgeFreqMid;
-uniform float u_ridgeFreqFine;
+uniform ivec2 u_ridgeMidCells;
+uniform ivec2 u_ridgeFineCells;
+uniform int u_starCells;
+uniform float u_localFade;
 uniform float u_octaveWeight[${MAX_OCTAVES}];
 uniform float u_octaveNormalizer;
 uniform int u_cloudPeak;
@@ -985,11 +1267,13 @@ uniform uint u_seed;
 
 out vec4 fragColor;
 
-const float OCTAVE_FREQ[${MAX_OCTAVES}] = float[${MAX_OCTAVES}](${octaveFreq});
-const float WARP_FREQ_BIG = ${WARP_FREQ_BIG.toFixed(6)};
-const float WARP_FREQ_SMALL = ${WARP_FREQ_SMALL.toFixed(6)};
-const float CLOUD_ANISOTROPY = ${CLOUD_ANISOTROPY.toFixed(6)};
-const float THREAD_ANISOTROPY = ${THREAD_ANISOTROPY.toFixed(6)};
+// Частоты слоёв — целое число ячеек на карту. Обе таблицы собраны из тех же
+// констант, что CPU-путь: заворот решётки возможен только по целому модулю.
+const int OCTAVE_CELLS_Y[${MAX_OCTAVES}] = int[${MAX_OCTAVES}](${octaveCellsY.join(', ')});
+const int OCTAVE_CELLS_CLOUD_X[${MAX_OCTAVES}] = int[${MAX_OCTAVES}](${octaveCellsCloudX.join(', ')});
+const int OCTAVE_CELLS_FINE_X[${MAX_OCTAVES}] = int[${MAX_OCTAVES}](${octaveCellsFineX.join(', ')});
+const int WARP_CELLS_BIG = ${WARP_FREQ_BIG};
+const int WARP_CELLS_SMALL = ${WARP_FREQ_SMALL};
 const float CLOUD_CONTRAST = ${tuning.cloudContrast.toFixed(6)};
 const float DENSITY_BIAS = ${tuning.densityBias.toFixed(6)};
 const float DENSITY_SCALE = ${tuning.densityScale.toFixed(6)};
@@ -999,6 +1283,11 @@ const float DUST_STRENGTH = ${tuning.dustStrength.toFixed(6)};
 const float DUST_TINT = ${tuning.dustTint.toFixed(6)};
 const float STAR_PRESENCE = ${tuning.starPresence.toFixed(6)};
 const float STAR_GAIN = ${tuning.starGain.toFixed(6)};
+const float THREAD_AMPLITUDE = ${THREAD_AMPLITUDE.toFixed(6)};
+const float LOCAL_BACKGROUND_DENSITY = ${LOCAL_BACKGROUND_DENSITY.toFixed(6)};
+const float RIDGE_FINE_WEIGHTS[3] = float[3](${RIDGE_FINE_WEIGHTS.map((w) => w.toFixed(6)).join(', ')});
+const uint RIDGE_FINE_CHANNELS[3] = uint[3](${[CHANNEL_RIDGE_FINE, CHANNEL_RIDGE_FINE_2, CHANNEL_RIDGE_FINE_3].join(', ')}u);
+const float DUST_WEIGHTS[2] = float[2](${DUST_OCTAVE_WEIGHTS.map((w) => w.toFixed(6)).join(', ')});
 
 const vec3 RAMP0 = vec3(${unitTriplet(ramp.colors[0])});
 const vec3 RAMP1 = vec3(${unitTriplet(ramp.colors[1])});
@@ -1011,9 +1300,19 @@ const float STOP2 = ${stops[2]};
 const float STOP3 = ${stops[3]};
 const float STOP4 = ${stops[4]};
 
+// Заворот индекса решётки по модулю числа ячеек карты (§17.15.6 п. 1).
+// Целые индексы, а не float-координаты: иначе на стыке рвётся интерполяция.
+int wrapIndex(int index, int period) {
+  int wrapped = index % period;
+  return wrapped < 0 ? wrapped + period : wrapped;
+}
+
+ivec2 wrapCell(ivec2 cell, ivec2 period) {
+  return ivec2(wrapIndex(cell.x, period.x), wrapIndex(cell.y, period.y));
+}
+
 // Та же решётка, что latticeValue на CPU: только умножения, сдвиги и xor.
-uint latticeHash(vec2 cell, uint channel) {
-  ivec2 index = ivec2(cell);
+uint latticeHash(ivec2 index, uint channel) {
   uint hash = (uint(index.x) * 0x9e3779b1u) ^ (uint(index.y) * 0x85ebca6bu) ^ (u_seed ^ (channel * 0x2545f491u));
   hash ^= hash >> 15u;
   hash *= 0x2c1b3c6du;
@@ -1023,18 +1322,19 @@ uint latticeHash(vec2 cell, uint channel) {
   return hash;
 }
 
-float latticeValue(vec2 cell, uint channel) {
-  return float(latticeHash(cell, channel)) / 4294967296.0;
+float latticeValue(ivec2 index, uint channel) {
+  return float(latticeHash(index, channel)) / 4294967296.0;
 }
 
-float valueNoise(vec2 point, uint channel) {
-  vec2 cell = floor(point);
-  vec2 local = point - cell;
+float valueNoise(vec2 point, uint channel, ivec2 period) {
+  vec2 base = floor(point);
+  vec2 local = point - base;
   vec2 curve = local * local * (3.0 - 2.0 * local);
+  ivec2 cell = wrapCell(ivec2(base), period);
   float v00 = latticeValue(cell, channel);
-  float v10 = latticeValue(cell + vec2(1.0, 0.0), channel);
-  float v01 = latticeValue(cell + vec2(0.0, 1.0), channel);
-  float v11 = latticeValue(cell + vec2(1.0, 1.0), channel);
+  float v10 = latticeValue(wrapCell(ivec2(base) + ivec2(1, 0), period), channel);
+  float v01 = latticeValue(wrapCell(ivec2(base) + ivec2(0, 1), period), channel);
+  float v11 = latticeValue(wrapCell(ivec2(base) + ivec2(1, 1), period), channel);
   return mix(mix(v00, v10, curve.x), mix(v01, v11, curve.x), curve.y);
 }
 
@@ -1055,51 +1355,79 @@ vec3 rampColor(float density) {
   return mix(RAMP3, RAMP4, clamp((d - STOP3) / max(STOP4 - STOP3, 1e-6), 0.0, 1.0));
 }
 
+float envelopeAt(vec2 point) {
+  return valueNoise(point * float(u_envelopeCells), ${CHANNEL_ENVELOPE}u,
+    ivec2(u_envelopeCells, u_envelopeCells));
+}
+
 float computeDensity(vec2 point) {
   vec2 warpBig = vec2(
-    valueNoise(point * WARP_FREQ_BIG, ${CHANNEL_WARP_BIG_X}u),
-    valueNoise(point * WARP_FREQ_BIG, ${CHANNEL_WARP_BIG_Y}u)
+    valueNoise(point * float(WARP_CELLS_BIG), ${CHANNEL_WARP_BIG_X}u, ivec2(WARP_CELLS_BIG)),
+    valueNoise(point * float(WARP_CELLS_BIG), ${CHANNEL_WARP_BIG_Y}u, ivec2(WARP_CELLS_BIG))
   ) - 0.5;
   vec2 warpSmall = vec2(
-    valueNoise(point * WARP_FREQ_SMALL, ${CHANNEL_WARP_SMALL_X}u),
-    valueNoise(point * WARP_FREQ_SMALL, ${CHANNEL_WARP_SMALL_Y}u)
+    valueNoise(point * float(WARP_CELLS_SMALL), ${CHANNEL_WARP_SMALL_X}u, ivec2(WARP_CELLS_SMALL)),
+    valueNoise(point * float(WARP_CELLS_SMALL), ${CHANNEL_WARP_SMALL_Y}u, ivec2(WARP_CELLS_SMALL))
   ) - 0.5;
   vec2 shifted = point + (warpBig + 0.6 * warpSmall) * u_warpAmp;
-  float cloudAxisX = shifted.x / CLOUD_ANISOTROPY;
-  float threadAxisX = shifted.x / THREAD_ANISOTROPY;
+
+  ivec2 detailPeriod = ivec2(u_detailWarpCells, u_detailWarpCells);
   vec2 detailWarp = vec2(
-    valueNoise(point * u_detailWarpFreq, ${CHANNEL_DETAIL_WARP_X}u),
-    valueNoise(point * u_detailWarpFreq, ${CHANNEL_DETAIL_WARP_Y}u)
+    valueNoise(point * float(u_detailWarpCells), ${CHANNEL_DETAIL_WARP_X}u, detailPeriod),
+    valueNoise(point * float(u_detailWarpCells), ${CHANNEL_DETAIL_WARP_Y}u, detailPeriod)
   ) - 0.5;
-  vec2 fineWarped = vec2(threadAxisX, shifted.y) + detailWarp * u_detailWarpAmp;
+  vec2 fine = shifted + detailWarp * u_detailWarpAmp;
 
   float sum = 0.0;
   for (int index = 0; index < ${MAX_OCTAVES}; index++) {
     float amplitude = u_octaveWeight[index];
     if (amplitude <= 0.0) continue;
-    vec2 octavePoint = index <= u_cloudPeak
-      ? vec2(cloudAxisX, shifted.y)
-      : fineWarped;
-    sum += amplitude * valueNoise(octavePoint * OCTAVE_FREQ[index], ${CHANNEL_OCTAVE_BASE}u + uint(index % 12));
+    bool coarse = index <= u_cloudPeak;
+    int cellsY = OCTAVE_CELLS_Y[index];
+    int cellsX = coarse ? OCTAVE_CELLS_CLOUD_X[index] : OCTAVE_CELLS_FINE_X[index];
+    vec2 coordinate = coarse ? shifted : fine;
+    ivec2 period = ivec2(cellsX, cellsY);
+    sum += amplitude * valueNoise(vec2(coordinate.x * float(cellsX), coordinate.y * float(cellsY)),
+      ${CHANNEL_OCTAVE_BASE}u + uint(index % 12), period);
   }
   float base = sum / u_octaveNormalizer;
 
-  float ridgeMid = ridged(valueNoise(vec2(cloudAxisX, shifted.y) * u_ridgeFreqMid, ${CHANNEL_RIDGE_MID}u));
+  float ridgeMid = ridged(valueNoise(
+    vec2(shifted.x * float(u_ridgeMidCells.x), shifted.y * float(u_ridgeMidCells.y)),
+    ${CHANNEL_RIDGE_MID}u, u_ridgeMidCells));
   float filament = ridgeMid * ridgeMid * (3.0 - 2.0 * ridgeMid);
-  float ridgeFine = ridged(valueNoise(fineWarped * u_ridgeFreqFine, ${CHANNEL_RIDGE_FINE}u));
 
-  float envelope = valueNoise(point * u_envelopeFreq, ${CHANNEL_ENVELOPE}u);
+  // Тонкая нить — три октавы f, 2f, 4f: сумма октав не даёт вложенных колец.
+  float ridgeFine = 0.0;
+  for (int octave = 0; octave < 3; octave++) {
+    int scale = 1 << octave;
+    ivec2 period = u_ridgeFineCells * scale;
+    ridgeFine += RIDGE_FINE_WEIGHTS[octave] * ridged(valueNoise(
+      vec2(fine.x * float(period.x), fine.y * float(period.y)),
+      RIDGE_FINE_CHANNELS[octave], period));
+  }
+
+  float envelope = envelopeAt(point);
   float envelopeGain = 0.4 + 1.05 * smoothBand(0.18, 0.82, envelope);
 
-  float dust = valueNoise(shifted * u_dustFreq, ${CHANNEL_DUST}u);
+  ivec2 dustPeriod = u_dustCells;
+  ivec2 dustPeriodHigh = u_dustCells * 2;
+  float dustLow = valueNoise(
+    vec2(shifted.x * float(dustPeriod.x), shifted.y * float(dustPeriod.y)),
+    ${CHANNEL_DUST}u, dustPeriod);
+  float dustHigh = valueNoise(
+    vec2(shifted.x * float(dustPeriodHigh.x), shifted.y * float(dustPeriodHigh.y)),
+    ${CHANNEL_DUST_2}u, dustPeriodHigh);
+  float dust = DUST_WEIGHTS[0] * dustLow + DUST_WEIGHTS[1] * dustHigh;
   float dustBand = smoothBand(0.52, 0.88, dust) * DUST_STRENGTH * u_dustFade;
 
   float shaped = clamp((base - 0.5) * CLOUD_CONTRAST + 0.5 + DENSITY_BIAS, 0.0, 1.0) * envelopeGain;
   float cloud = shaped * shaped * (3.0 - 2.0 * shaped);
 
   float weaved = cloud * (1.0 - RIDGE_STRENGTH + RIDGE_STRENGTH * filament);
-  float fine = ridgeFine * ridgeFine;
-  float thread = fine * FINE_STRENGTH * u_threadGain * weaved * (0.25 + 0.75 * (1.0 - weaved));
+  float fineMask = ridgeFine * ridgeFine;
+  float thread = fineMask * FINE_STRENGTH * THREAD_AMPLITUDE * u_threadGain
+    * weaved * (0.25 + 0.75 * (1.0 - weaved));
 
   return clamp((weaved + thread - dustBand * 0.85) * DENSITY_SCALE, 0.0, 1.0);
 }
@@ -1111,13 +1439,19 @@ void main() {
   vec2 world = u_offsetHi + (u_offsetLo + delta);
   vec2 point = world / u_mapSize;
 
-  float density = clamp(computeDensity(point) * u_densityGain, 0.0, 1.0);
+  float cloud = computeDensity(point) * u_densityGain * u_localFade;
+  // Мягкий градиент фона глубокого пресета (§17.15.5 п. 1): плотность ≤ 0,02.
+  float background = u_localFade < 1.0
+    ? (1.0 - u_localFade) * LOCAL_BACKGROUND_DENSITY * (0.35 + 0.65 * envelopeAt(point))
+    : 0.0;
+  float density = clamp(cloud + background, 0.0, 1.0);
   vec3 color = rampColor(density);
 
-  // Звёздная пыль: power-law яркость, одна звезда на ячейку.
+  // Звёздная пыль: power-law яркость, одна звезда на ячейку. Решётка звёзд тоже
+  // завёрнута по числу ячеек на карту — иначе звёзды выдают стык секторов.
   vec2 starPoint = world / u_starCell;
-  vec2 starCell = floor(starPoint);
-  vec2 inside = starPoint - starCell;
+  ivec2 starCell = wrapCell(ivec2(floor(starPoint)), ivec2(u_starCells, u_starCells));
+  vec2 inside = starPoint - floor(starPoint);
   if (latticeValue(starCell, ${CHANNEL_STAR_PRESENCE}u) < STAR_PRESENCE) {
     vec2 starPos = vec2(
       latticeValue(starCell, ${CHANNEL_STAR_X}u),
@@ -1136,7 +1470,7 @@ void main() {
   // Дизеринг ±0,5/255 на выходе. Это шум, а не сигнал: его узор между CPU и GPU
   // намеренно не совпадает (разные порядки обхода), вклад в канал ≤ 0,5/255 —
   // в допуске G7.6 между ветками.
-  float dither = (latticeValue(floor(frag), ${CHANNEL_DITHER}u) - 0.5) / 255.0;
+  float dither = (latticeValue(ivec2(floor(frag)), ${CHANNEL_DITHER}u) - 0.5) / 255.0;
   fragColor = vec4(clamp(color + dither, 0.0, 1.0), 1.0);
 }
 `;
@@ -1154,13 +1488,15 @@ interface GlRuntime {
     readonly starCell: WebGLUniformLocation | null;
     readonly dustFade: WebGLUniformLocation | null;
     readonly warpAmp: WebGLUniformLocation | null;
-    readonly envelopeFreq: WebGLUniformLocation | null;
-    readonly detailWarpFreq: WebGLUniformLocation | null;
+    readonly envelopeCells: WebGLUniformLocation | null;
+    readonly detailWarpCells: WebGLUniformLocation | null;
     readonly detailWarpAmp: WebGLUniformLocation | null;
     readonly threadGain: WebGLUniformLocation | null;
-    readonly ridgeFreqMid: WebGLUniformLocation | null;
-    readonly ridgeFreqFine: WebGLUniformLocation | null;
-    readonly dustFreq: WebGLUniformLocation | null;
+    readonly ridgeMidCells: WebGLUniformLocation | null;
+    readonly ridgeFineCells: WebGLUniformLocation | null;
+    readonly dustCells: WebGLUniformLocation | null;
+    readonly starCells: WebGLUniformLocation | null;
+    readonly localFade: WebGLUniformLocation | null;
     readonly densityGain: WebGLUniformLocation | null;
     readonly octaveWeight: WebGLUniformLocation | null;
     readonly octaveNormalizer: WebGLUniformLocation | null;
@@ -1218,13 +1554,15 @@ function createGlRuntime(gl: WebGL2RenderingContext, style: FieldStyle): GlRunti
       starCell: gl.getUniformLocation(program, 'u_starCell'),
       dustFade: gl.getUniformLocation(program, 'u_dustFade'),
       warpAmp: gl.getUniformLocation(program, 'u_warpAmp'),
-      envelopeFreq: gl.getUniformLocation(program, 'u_envelopeFreq'),
-      detailWarpFreq: gl.getUniformLocation(program, 'u_detailWarpFreq'),
+      envelopeCells: gl.getUniformLocation(program, 'u_envelopeCells'),
+      detailWarpCells: gl.getUniformLocation(program, 'u_detailWarpCells'),
       detailWarpAmp: gl.getUniformLocation(program, 'u_detailWarpAmp'),
       threadGain: gl.getUniformLocation(program, 'u_threadGain'),
-      ridgeFreqMid: gl.getUniformLocation(program, 'u_ridgeFreqMid'),
-      ridgeFreqFine: gl.getUniformLocation(program, 'u_ridgeFreqFine'),
-      dustFreq: gl.getUniformLocation(program, 'u_dustFreq'),
+      ridgeMidCells: gl.getUniformLocation(program, 'u_ridgeMidCells'),
+      ridgeFineCells: gl.getUniformLocation(program, 'u_ridgeFineCells'),
+      dustCells: gl.getUniformLocation(program, 'u_dustCells'),
+      starCells: gl.getUniformLocation(program, 'u_starCells'),
+      localFade: gl.getUniformLocation(program, 'u_localFade'),
       densityGain: gl.getUniformLocation(program, 'u_densityGain'),
       octaveWeight: gl.getUniformLocation(program, 'u_octaveWeight[0]'),
       octaveNormalizer: gl.getUniformLocation(program, 'u_octaveNormalizer'),
@@ -1332,13 +1670,7 @@ export function createSectorField(
     if (!current || lost || disposed || canvas === null) return false;
 
     const baseFrame = buildFrame(state);
-      const probe: CpuPass = {
-      frame: baseFrame,
-      ramp: buildRamp(palette),
-      tuning: FIELD_TUNING[style],
-      peak: Math.ceil(baseFrame.octavePeak),
-      out: new Float64Array(3),
-    };
+    const probe = buildPass(baseFrame, buildRamp(palette), FIELD_TUNING[style], new Float64Array(3));
     const gain = frameDensityGain(probe);
     const glFrame: FrameMath = { ...baseFrame, densityGain: gain };
     const frame = glFrame;
@@ -1348,11 +1680,13 @@ export function createSectorField(
     if (canvas.width !== frame.width) canvas.width = frame.width;
     if (canvas.height !== frame.height) canvas.height = frame.height;
 
-    // Мировой центр кадра разложен на старшую и младшую части (§17.5 п. 1).
-    const hiX = Math.fround(frame.centreX);
-    const hiY = Math.fround(frame.centreY);
-    const loX = frame.centreX - hiX;
-    const loY = frame.centreY - hiY;
+    // Центр кадра, свёрнутый по карте, разложен на старшую и младшую части
+    // (§17.5 п. 1). Свёрнутый — потому что поле периодично: так и координаты
+    // остаются в пределах карты, и точность `float32` на `L9` выше (`R-3`).
+    const hiX = Math.fround(frame.originX);
+    const hiY = Math.fround(frame.originY);
+    const loX = frame.originX - hiX;
+    const loY = frame.originY - hiY;
 
     try {
       // Сбрасываем старые ошибки, чтобы не принять чужую за сбой кадра.
@@ -1374,13 +1708,15 @@ export function createSectorField(
       gl.uniform1f(uniforms.dustFade, frame.dustFade);
       gl.uniform1f(uniforms.densityGain, glFrame.densityGain);
       gl.uniform1f(uniforms.warpAmp, frame.warpAmp);
-      gl.uniform1f(uniforms.envelopeFreq, frame.envelopeFreq);
-      gl.uniform1f(uniforms.detailWarpFreq, frame.detailWarpFreq);
+      gl.uniform1i(uniforms.envelopeCells, frame.envelopeCells);
+      gl.uniform1i(uniforms.detailWarpCells, frame.detailWarpCells);
       gl.uniform1f(uniforms.detailWarpAmp, frame.detailWarpAmp);
       gl.uniform1f(uniforms.threadGain, frame.threadGain);
-      gl.uniform1f(uniforms.ridgeFreqMid, frame.ridgeFreqMid);
-      gl.uniform1f(uniforms.ridgeFreqFine, frame.ridgeFreqFine);
-      gl.uniform2f(uniforms.dustFreq, frame.dustFreqX, frame.dustFreqY);
+      gl.uniform2i(uniforms.ridgeMidCells, frame.ridgeMidX, frame.ridgeMidY);
+      gl.uniform2i(uniforms.ridgeFineCells, frame.ridgeFineX, frame.ridgeFineY);
+      gl.uniform2i(uniforms.dustCells, frame.dustX, frame.dustY);
+      gl.uniform1i(uniforms.starCells, frame.starCells);
+      gl.uniform1f(uniforms.localFade, frame.localFade);
       gl.uniform1f(uniforms.octaveNormalizer, frame.octaveNormalizer);
       gl.uniform1i(uniforms.cloudPeak, probe.peak);
       gl.uniform1ui(uniforms.seed, BASE_SEED >>> 0);
