@@ -56,16 +56,35 @@ function check(condition, message) {
 }
 
 const near = (a, b, tolerance) => Math.abs(a - b) <= tolerance;
+// Адресные буквы секторных уровней: L0…L9 закреплены таблицей, глубже L9 — всегда 5.
 const sectorLetterCounts = [0, 1, 2, 2, 3, 3, 4, 4, 5, 5];
 
-// 1. Лестница: 13 записей, порядок и точная геометрия порогов.
-check(LEVELS.length === 13, `в лестнице ${LEVELS.length} записей вместо 13`);
+// Лестница разбирается по кадрам, а не по «ровно 13 записей»: глубина может расти
+// (SW-3 добавляет L10…L12 по требованию «1 св.г. от цели до границы», §17.15), и гейт
+// не должен требовать правки при каждом новом уровне. Проверяются структура и числа ядра.
+const sectorLevels = LEVELS.filter((spec) => spec.frame === 'S');
+const systemLevels = LEVELS.filter((spec) => spec.frame === 'O');
+const deepestSector = sectorLevels.length - 1;
+
+// 1. Лестница: порядок, три системных уровня в конце, точная геометрия порогов.
 check(
-  LEVELS.map((spec) => spec.id).join(',') === 'L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,S0,S1,S2',
-  'порядок уровней нарушен',
+  sectorLevels.length >= 10,
+  `секторных уровней ${sectorLevels.length}, ожидалось не меньше 10 (L0…L9)`,
 );
-for (let level = 0; level < 10; level += 1) {
-  const spec = LEVELS[level];
+check(
+  sectorLevels.map((spec) => spec.id).join(',') === sectorLevels.map((_spec, index) => `L${index}`).join(','),
+  `порядок секторных уровней нарушен: ${sectorLevels.map((spec) => spec.id).join(',')}`,
+);
+check(
+  systemLevels.map((spec) => spec.id).join(',') === 'S0,S1,S2',
+  `системные уровни: ${systemLevels.map((spec) => spec.id).join(',')} вместо S0,S1,S2`,
+);
+check(
+  LEVELS.length === sectorLevels.length + 3 && LEVELS.slice(-3).every((spec) => spec.frame === 'O'),
+  'системные уровни должны стоять в конце лестницы, ровно три записи',
+);
+for (let level = 0; level <= deepestSector; level += 1) {
+  const spec = sectorLevels[level];
   if (spec === undefined) continue;
   check(
     near(spec.visibleWidth, MAX_VISIBLE_WIDTH / 2 ** level, 1e-9),
@@ -74,12 +93,13 @@ for (let level = 0; level < 10; level += 1) {
 }
 
 // 2. Адресные префиксы уровней: монотонность и предел 5.
-for (let index = 0; index < 10; index += 1) {
-  const spec = LEVELS[index];
+for (let index = 0; index <= deepestSector; index += 1) {
+  const spec = sectorLevels[index];
   if (spec === undefined) continue;
+  const expected = sectorLetterCounts[index] ?? 5;
   check(
-    spec.addressLetters === sectorLetterCounts[index],
-    `${spec.id}: addressLetters ${spec.addressLetters} вместо ${sectorLetterCounts[index]}`,
+    spec.addressLetters === expected,
+    `${spec.id}: addressLetters ${spec.addressLetters} вместо ${expected}`,
   );
 }
 for (let index = 1; index < LEVELS.length; index += 1) {
@@ -92,8 +112,8 @@ for (let index = 1; index < LEVELS.length; index += 1) {
 
 // 3. Стык «таблица ↔ формула размера маркера» — то, что разъехалось в Stage-8.7.
 let worstMarkerDelta = { delta: 0, id: '' };
-for (let level = 0; level < 10; level += 1) {
-  const spec = LEVELS[level];
+for (let level = 0; level <= deepestSector; level += 1) {
+  const spec = sectorLevels[level];
   if (spec === undefined) continue;
   const delta = Math.abs(markerDiameter(visibleWidthForLevel(level)) - spec.markerPx);
   if (delta > worstMarkerDelta.delta) worstMarkerDelta = { delta, id: spec.id };
@@ -111,10 +131,16 @@ check(MAX_VISIBLE_WIDTH === 10000, `MAX_VISIBLE_WIDTH = ${MAX_VISIBLE_WIDTH} в�
 check(near(HYSTERESIS, 0.12, 1e-12), `гистерезис ${HYSTERESIS} вместо 0,12`);
 
 // Вход в уровень n требует ширины W(n) · (1 − 0,12), иначе уровень недостижим.
+// Порог достижимости L9 — закреплённое число: 17,1875 св.г. (дефект приёмки SW-1, §16.9).
 const enterFloorWidth = visibleWidthForLevel(9) * (1 - HYSTERESIS);
+check(
+  near(enterFloorWidth, 17.1875, 1e-9),
+  `порог достижимости L9 ${enterFloorWidth} вместо 17,1875`,
+);
+const deepestFloorWidth = visibleWidthForLevel(deepestSector) * (1 - HYSTERESIS);
 let level = 0;
 let switchesIn = 0;
-for (let width = MAX_VISIBLE_WIDTH; width > enterFloorWidth * 0.98; width *= 0.995) {
+for (let width = MAX_VISIBLE_WIDTH; width > deepestFloorWidth * 0.98; width *= 0.995) {
   const next = levelForWidth(width, level);
   check(Math.abs(next - level) <= 1, `перескок через уровень: ${level} → ${next} при ширине ${width.toFixed(2)}`);
   if (next !== level) {
@@ -122,16 +148,12 @@ for (let width = MAX_VISIBLE_WIDTH; width > enterFloorWidth * 0.98; width *= 0.9
     level = next;
   }
 }
-check(level === 9, `зум вглубь остановился на уровне ${level} вместо 9`);
-check(switchesIn === 9, `смен уровня при зуме вглубь ${switchesIn} вместо 9`);
-check(
-  near(enterFloorWidth, 17.1875, 1e-9),
-  `порог достижимости L9 ${enterFloorWidth} вместо 17,1875`,
-);
+check(level === deepestSector, `зум вглубь остановился на уровне ${level} вместо ${deepestSector}`);
+check(switchesIn === deepestSector, `смен уровня при зуме вглубь ${switchesIn} вместо ${deepestSector}`);
 
-let backLevel = 9;
+let backLevel = deepestSector;
 let switchesOut = 0;
-for (let width = enterFloorWidth; width < MAX_VISIBLE_WIDTH; width *= 1.005) {
+for (let width = deepestFloorWidth; width < MAX_VISIBLE_WIDTH; width *= 1.005) {
   const next = levelForWidth(width, backLevel);
   check(Math.abs(next - backLevel) <= 1, `перескок при отъезде: ${backLevel} → ${next}`);
   if (next !== backLevel) {
@@ -140,7 +162,7 @@ for (let width = enterFloorWidth; width < MAX_VISIBLE_WIDTH; width *= 1.005) {
   }
 }
 check(backLevel === 0, `отъезд остановился на уровне ${backLevel} вместо 0`);
-check(switchesOut === 9, `смен уровня при отъезде ${switchesOut} вместо 9`);
+check(switchesOut === deepestSector, `смен уровня при отъезде ${switchesOut} вместо ${deepestSector}`);
 
 // 5. Тиры адреса.
 check(ADDRESS_TIERS.length === 6, `тиров ${ADDRESS_TIERS.length} вместо 6`);
