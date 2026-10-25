@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { parseBounds, polygonAt, pointInPolygon, distanceToRing, clipPolylineToViewport } from '../src/atlas/sector-bounds.ts';
+const bounds = parseBounds(await readFile(new URL('../data/sector-bounds.json', import.meta.url), 'utf8'));
+test('bounds JSON is valid and closed where required', () => { assert.equal(bounds.bounds.length, 4); for (const p of bounds.bounds.filter((x) => x.kind !== 'halo')) { assert.deepEqual(p.points[0], p.points.at(-1)); } });
+test('point inclusion for Korhal and outside point', () => { const p = polygonAt(bounds, 'sector.outline'); assert.ok(p); assert.equal(pointInPolygon(p, 5720, 6257), true); assert.equal(pointInPolygon(p, 100, 100), false); });
+test('distance to ring is zero on boundary and grows away', () => { const p = polygonAt(bounds, 'sector.outline'); assert.ok(p); const d0 = distanceToRing(p, p[0][0], p[0][1]); const d1 = distanceToRing(p, p[0][0] - 10, p[0][1] - 10); const d2 = distanceToRing(p, p[0][0] - 20, p[0][1] - 20); assert.equal(d0, 0); assert.ok(d1 > d0 && d2 > d1); });
+test('viewport clipping retains visible vertices', () => { assert.deepEqual(clipPolylineToViewport([[2,2],[20,20],[200,200]], {x:0,y:0,scale:1}, {width:100,height:100}), [[2,2],[20,20]]); });
+test('malformed geometry throws Russian RangeError', () => { assert.throws(() => parseBounds('{"version":1,"mapSize":10000,"source":"x","bounds":[{"id":"x","kind":"sector","style":{"strokeWidth":1,"dash":[],"color":"nebula"},"label":"x","points":[[1,1],[2,2],[1,1]]}]}'), (e) => e instanceof RangeError && /Некорректные/.test(e.message)); });
