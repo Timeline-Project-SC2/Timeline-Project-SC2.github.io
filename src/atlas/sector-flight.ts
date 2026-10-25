@@ -127,9 +127,14 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
       const stageEnd = reduced.matches ? duration : duration - FLIGHT_TIMING.settle;
       const stageP = Math.max(0, Math.min(1, (elapsed - stageStart) / Math.max(1, stageEnd - stageStart)));
       const k = ease(stageP);
-      const cx = beginCenter.x + (plan.to.x - beginCenter.x) * k;
-      const cy = beginCenter.y + (plan.to.y - beginCenter.y) * k;
-      const scale = beginScale * Math.pow(endScale / beginScale, k);
+      const reducedHalf = duration / 2;
+      const reducedFade = 1 - Math.abs(elapsed - reducedHalf) / reducedHalf;
+      const cx = reduced.matches ? (elapsed < reducedHalf ? beginCenter.x : plan.to.x)
+        : beginCenter.x + (plan.to.x - beginCenter.x) * k;
+      const cy = reduced.matches ? (elapsed < reducedHalf ? beginCenter.y : plan.to.y)
+        : beginCenter.y + (plan.to.y - beginCenter.y) * k;
+      const scale = reduced.matches ? (elapsed < reducedHalf ? beginScale : endScale)
+        : beginScale * Math.pow(endScale / beginScale, k);
       // Кадр прицела вспыхивает, сжимается, затем раскрывается на доводке.
       if (!reduced.matches) {
         overlay.style.opacity = elapsed < FLIGHT_TIMING.anticipation ? String(0.55 + 0.45 * Math.sin(elapsed / 140 * Math.PI)) : '1';
@@ -139,7 +144,9 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
         overlay.style.setProperty('--flight-progress', String(Math.max(0, Math.min(1, frameProgress))));
         overlay.classList.toggle('is-settling', elapsed >= duration - FLIGHT_TIMING.settle);
       } else {
-        kernel.el.mapCanvas.style.opacity = String(1 - p * 0.35);
+        // За 120 мс старый кадр гаснет, камера под ним переключается в середине,
+        // затем новый кадр проявляется; движения и прицела нет.
+        kernel.el.mapCanvas.style.opacity = String(Math.max(0, reducedFade));
       }
       kernel.renderer.centerOn(cx, cy, scale);
       kernel.renderer.requestRender();
