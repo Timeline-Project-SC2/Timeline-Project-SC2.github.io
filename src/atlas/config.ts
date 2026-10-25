@@ -437,6 +437,13 @@ export interface CanvasRendererApi {
   visiblePointsOfInterest(): PlaceRecord[];
   hasActivePointers(): boolean;
   bindMapEvents(): void;
+  /**
+   * Приглушение маркеров на время `anticipation` (`§6.4`, долг `SW-3F`): цель
+   * полёта остаётся яркой, остальные получают `alpha`. `setFlightDim(null, 1)`
+   * возвращает штатное поведение. Внутренний метод рендерера — его вызывает
+   * только `app.ts` по подписке на фазы полёта.
+   */
+  setFlightDim(targetId: string | null, alpha: number): void;
 }
 
 export interface CatalogPanelApi {

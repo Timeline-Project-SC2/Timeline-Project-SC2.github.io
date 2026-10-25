@@ -32,7 +32,13 @@ import { createCoordsReadout, parseMapLink, scaleForVisibleWidth } from './coord
 import { createDataLoader } from './data-loader.ts';
 import { createDossierCard, requestedSystemFrame } from './dossier-card.ts';
 import { createSectorField } from './sector-field.ts';
-import { createFlight, currentFlightPoint, planArrowTrip, planClickFlight } from './sector-flight.ts';
+import {
+  FLIGHT_MARKER_DIM,
+  createFlight,
+  currentFlightPoint,
+  planArrowTrip,
+  planClickFlight,
+} from './sector-flight.ts';
 import { createSectorArrows } from './sector-arrows.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
 
@@ -133,6 +139,14 @@ kernel.coords = createCoordsReadout(kernel);
 kernel.app = { toast, layoutMapControls, resize, dismissTimelineLoader };
 const flight = createFlight(kernel);
 let sectorArrows: ReturnType<typeof createSectorArrows> | null = null;
+
+// Приглушение маркеров (`§6.4`, долг SW-3F): в `anticipation` цель полёта
+// остаётся яркой, остальные гаснут до 0,35. Любая другая фаза — включая
+// `idle` после прибытия и после `cancel()` — возвращает штатные 1 / 0,66.
+flight.onPhaseChange(function (phase, targetId): void {
+  if (phase === 'anticipation') kernel.renderer.setFlightDim(targetId, FLIGHT_MARKER_DIM);
+  else kernel.renderer.setFlightDim(null, 1);
+});
 
 function startFlightTo(systemId: string, arrowTrip = false): void {
   const target = state.systemsById[systemId];
