@@ -385,3 +385,52 @@ test('критерии V-2…V-4: деталь не гаснет с зумом, 
     field.dispose();
   }
 });
+
+/* ------------------------------------------------- кэш экранного пути и глубина */
+
+/** Холст-заглушка: запоминает последний кадр, который в него положили. */
+function stubCanvas() {
+  const painted = { image: null, count: 0 };
+  const context = {
+    drawImage: () => {},
+    clearRect: () => {},
+    putImageData: (image) => {
+      painted.image = image;
+      painted.count += 1;
+    },
+    imageSmoothingEnabled: false,
+    imageSmoothingQuality: 'low',
+  };
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: (kind) => (kind === '2d' ? context : null),
+  };
+  return { canvas, painted };
+}
+
+test('кэш renderField учитывает edgeDist: смена глубины при той же камере даёт новый кадр', () => {
+  const { canvas, painted } = stubCanvas();
+  const field = createSectorField(canvas);
+  const base = { ...stateForWidth(20, 96) };
+
+  field.renderField({ ...base, edgeDist: 1 });
+  const deep = painted.image;
+  assert.ok(deep !== null, 'кадр не попал на холст');
+
+  // Та же камера, другая глубина: из кэша вернулся бы предыдущий кадр.
+  field.renderField({ ...base, edgeDist: 10 });
+  const far = painted.image;
+  assert.notEqual(far, deep, 'кадр не пересчитан при смене edgeDist');
+
+  let differing = 0;
+  for (let index = 0; index < deep.data.length; index++) if (deep.data[index] !== far.data[index]) differing++;
+  assert.ok(differing > 0, 'кадры глубокого и обычного пресета совпали побайтово');
+
+  // Повтор с тем же состоянием — из кэша, новый кадр не считается.
+  const before = painted.count;
+  field.renderField({ ...base, edgeDist: 10 });
+  assert.equal(painted.count, before + 1, 'повторный кадр должен браться из кэша без пересчёта');
+  assert.equal(painted.image, far, 'из кэша вернулся другой кадр');
+  field.dispose();
+});

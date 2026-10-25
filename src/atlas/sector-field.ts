@@ -1587,7 +1587,11 @@ function paletteOf(style: FieldStyle): FieldPalette {
   return FIELD_PALETTES.find((item) => item.id === style) ?? (FIELD_PALETTES[0] as FieldPalette);
 }
 
-/** Ключ кэша экранного кадра (§17.5 п. 5): всё, от чего зависит картинка. */
+/**
+ * Ключ кэша экранного кадра (§17.5 п. 5): всё, от чего зависит картинка.
+ * `edgeDist` — потому что глубина гасит туманность: без неё смена глубины при
+ * той же камере вернула бы старый кадр из кэша.
+ */
 function cacheKey(style: FieldStyle, state: SectorFieldState, width: number, height: number): string {
   return [
     style,
@@ -1598,6 +1602,7 @@ function cacheKey(style: FieldStyle, state: SectorFieldState, width: number, hei
     finiteOr(state.viewport?.h, 0),
     finiteOr(state.dpr, 1),
     finiteOr(state.mapSize, 0),
+    finiteOr(state.edgeDist, -1),
     width,
     height,
   ].join('|');
