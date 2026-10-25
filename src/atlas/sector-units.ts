@@ -1,11 +1,30 @@
 export const NBSP = '\u00A0';
 
+/** Единица длины карты (§17.23): `1000` единиц = `1` световой год. */
+export const UNITS_PER_LY = 1000;
+
 export type DistanceMode = 'full' | 'short' | 'label';
 
-export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): string {
-  if (Number.isNaN(ly) || ly < 0) {
+function validateDistance(value: number): void {
+  if (!Number.isFinite(value) || value < 0) {
     throw new RangeError('Расстояние не может быть отрицательным или неопределённым');
   }
+}
+
+/** Переводит единицы карты в световые годы (`u / 1000`). */
+export function unitsToLy(u: number): number {
+  validateDistance(u);
+  return u / UNITS_PER_LY;
+}
+
+/** Переводит световые годы в единицы карты (`ly * 1000`). */
+export function lyToUnits(ly: number): number {
+  validateDistance(ly);
+  return ly * UNITS_PER_LY;
+}
+
+export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): string {
+  validateDistance(ly);
   if (mode !== 'short' && mode !== 'full' && mode !== 'label') {
     throw new RangeError(`Неизвестный режим форматирования расстояния: ${mode}`);
   }
@@ -17,7 +36,7 @@ export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): stri
     return `${groupedInteger}${NBSP}св.г.`;
   }
 
-  const decimals = mode === 'full' ? 2 : 1;
+  const decimals = mode === 'full' ? 2 : (mode === 'label' && ly < 1 ? 3 : 1);
   const rounded = ly.toFixed(decimals);
   const decimalIndex = rounded.indexOf('.');
   const integerPart = rounded.slice(0, decimalIndex);
