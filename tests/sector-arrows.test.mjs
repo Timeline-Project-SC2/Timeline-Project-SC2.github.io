@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { selectSectorArrows } = require('../src/atlas/sector-arrows.ts');
+const { unitsToLy, formatDistanceLy, NBSP } = require('../src/atlas/sector-units.ts');
 
 function point(id, name, distance, deg) {
   const angle = deg * Math.PI / 180;
@@ -11,7 +12,6 @@ function point(id, name, distance, deg) {
 }
 function worldPoint(id, name, x, y) { return { id, name, x, y }; }
 
-// Координаты data/systems.csv относительно Корхала (5720, 6257).
 const golden = [
   worldPoint('raidin', 'Райдин', -64, 61),
   worldPoint('mistaff', 'Мистафф', 29, -86),
@@ -27,6 +27,24 @@ test('golden для Корхала L4: пять систем ранжируют�
   const angles = result.arrows.map((item) => Math.round(item.angle * 1800 / Math.PI) / 10);
   assert.deepEqual(angles, [136.4, -71.4, 92.7, 11.4, -150.8]);
   assert.equal(result.omitted, 0);
+});
+
+test('подписи стрелок для Корхала: 0,088 / 0,091 / 0,108 / 0,116 / 0,117 св.г. (§17.23.3)', () => {
+  const result = selectSectorArrows(golden, 0, 0);
+  const distances = result.arrows.map((item) => item.distance);
+  assert.deepEqual(
+    distances.map((d) => Math.round(d * 10) / 10),
+    [88.4, 90.8, 108.1, 116.3, 116.8],
+    'расстояния в единицах карты'
+  );
+  const labels = distances.map((d) => formatDistanceLy(unitsToLy(d), 'label'));
+  assert.deepEqual(labels, [
+    `0,088${NBSP}св.г.`,
+    `0,091${NBSP}св.г.`,
+    `0,108${NBSP}св.г.`,
+    `0,116${NBSP}св.г.`,
+    `0,117${NBSP}св.г.`,
+  ]);
 });
 
 test('расстояния до 0,5 px отсекаются; подавленные углы учитываются в счётчике', () => {

@@ -87,7 +87,11 @@ test('контрольные точки форматирования label дл�
   assert.equal(units.formatDistanceLy(unitsToLy(116.76), 'label'), `0,117${NBSP}св.г.`);
 });
 
+<<<<<<< HEAD
 test('UNITS_PER_LY = 1000 и функции конверсии единиц', () => {
+=======
+test(' UNITS_PER_LY = 1000 и функции конверсии единиц', () => {
+>>>>>>> 20716f2 (wip(Z-4): единицы 1000 ед = 1 св.г.)
   assert.equal(UNITS_PER_LY, 1000);
 
   // unitsToLy

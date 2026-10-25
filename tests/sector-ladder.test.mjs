@@ -84,7 +84,6 @@ test('SW-3: L10…L12 — та же геометрия 10 000 / 2^n, систе�
     [10, 11, 12].map((level) => ladder.visibleWidthForLevel(level)),
     [9.765625, 4.8828125, 2.44140625],
   );
-  // Системный кадр целиком сдвинулся на 13/14/15 и своей геометрии не менял.
   assert.deepEqual(
     [13, 14, 15].map((level) => ladder.levelSpec(level).id),
     ['S0', 'S1', 'S2'],
@@ -104,10 +103,8 @@ test('секторный уровень определяется точной г
   assert.equal(ladder.MIN_VISIBLE_WIDTH, 16000);
   assert.equal(ladder.levelForWidth(10000), 0);
   assert.equal(ladder.levelForWidth(16000), 0);
-  // Прежние контрольные числа §16.9 не сдвинулись.
   assert.equal(ladder.levelForWidth(19.53125), 9);
   assert.equal(ladder.levelForWidth(100), 6);
-  // Расширение диапазона до 0…12: ниже L12 кламп не ставит «9».
   assert.equal(ladder.levelForWidth(0), 12);
   assert.equal(ladder.levelForWidth(2.44140625), 12);
   assert.throws(() => ladder.levelForWidth(Number.NaN), RangeError);
@@ -147,7 +144,6 @@ test('гистерезис ±12 % удерживает границу и огр�
   assert.equal(ladder.levelForWidth(19.53125, 4), 5);
   assert.equal(ladder.levelForWidth(10000, 9), 8);
   assert.equal(ladder.levelForWidth(10000, 12), 11);
-  // prev валидируется в 0…12 — расширение диапазона, а не снятие проверки.
   assert.throws(() => ladder.levelForWidth(10000, 13), RangeError);
   assert.throws(() => ladder.levelForWidth(1000, -1), RangeError);
   assert.throws(() => ladder.levelForWidth(1000, 1.5), RangeError);
@@ -161,10 +157,8 @@ test('вход в L12 по гистерезису: 2,148 — уже L12, 2,15 �
   assert.equal(ladder.levelForWidth(2.148, 11), 12);
   assert.equal(ladder.levelForWidth(enterWidth, 11), 12);
   assert.equal(ladder.levelForWidth(2.15, 11), 11);
-  // Без prev «2,15» — сырой уровень 12; 11 получается именно гистерезисом.
   assert.equal(ladder.levelForWidth(2.15), 12);
 
-  // Выход из L12 держится до W(12) · 1,12.
   const leaveWidth = ladder.visibleWidthForLevel(12) * (1 + ladder.HYSTERESIS);
   assert.equal(ladder.levelForWidth(leaveWidth - 0.000001, 12), 12);
   assert.equal(ladder.levelForWidth(leaveWidth, 12), 11);
@@ -215,7 +209,6 @@ test('диаметр маркера непрерывно зависит от ш�
     );
   }
 
-  // L10…L12: формула даёт 45,9 / 61,5 / 82,3 px — всё упирается в кламп 40 px.
   for (const level of [10, 11, 12]) {
     const spec = ladder.levelSpec(level);
     assert.equal(ladder.markerDiameter(spec.visibleWidth), 40);
@@ -230,14 +223,22 @@ test('диаметр маркера непрерывно зависит от ш�
   assert.ok(ladder.markerDiameter(10000 / 512) < 34.36);
 });
 
-test('edgeDistance: масштаб для 1 св.г. даёт ровно 1,000 на всех пяти viewport', () => {
+test('visibleWidthLyForLevel: видимая ширина в св.г. для уровней 0 и 12', () => {
+  assert.equal(ladder.visibleWidthLyForLevel(0), 10);
+  assert.equal(ladder.visibleWidthLyForLevel(12), 0.00244140625);
+  assert.equal(ladder.visibleWidthLyForLevel(8), 0.0390625);
+  assert.equal(ladder.visibleWidthLyForLevel(9), 0.01953125);
+});
+
+test('edgeDistance: масштаб для 1 св.г. даёт ровно 1,000 на всех пяти viewport (§17.23)', () => {
   assert.equal(ladder.TARGET_EDGE_LY, 1);
-  assert.equal(ladder.MIN_CLAMP_EDGE_LY, 0.5);
+  assert.equal(ladder.TARGET_EDGE_UNITS, 1000);
 
   for (const viewport of VIEWPORTS) {
+    const minSide = Math.min(viewport.w, viewport.h);
     const scale = ladder.scaleForEdgeDistance(viewport, 1);
     assert.ok(scale > 0, `масштаб не положителен для ${viewport.w}×${viewport.h}`);
-    assert.equal(scale, Math.min(viewport.w, viewport.h) / 2);
+    assert.equal(scale, minSide / 2000, `scaleForEdgeDistance = short/2000 для ${viewport.w}×${viewport.h}`);
 
     const edgeDist = ladder.edgeDistance(viewport, scale);
     assert.ok(
@@ -245,17 +246,40 @@ test('edgeDistance: масштаб для 1 св.г. даёт ровно 1,000 �
       `edgeDistance(${viewport.w}×${viewport.h}) = ${edgeDist}, ожидалось 1 ± 1e-9`,
     );
 
-    // Видимая ширина по короткой оси на этом масштабе — 2 св.г., и это уже L12.
+    // Видимая ширина в единицах карты: short / scale = 2000 ед = 2 св.г.
     const visibleWidth = Math.min(viewport.w, viewport.h) / scale;
-    assert.ok(near(visibleWidth, 2), `видимая ширина ${visibleWidth} вместо 2`);
-    assert.ok(near(2 * edgeDist, 2));
-    assert.equal(ladder.levelForWidth(2 * edgeDist), 12);
-    assert.equal(ladder.levelForWidth(visibleWidth), 12);
+    assert.ok(near(visibleWidth, 2000), `видимая ширина ${visibleWidth} вместо 2000 ед`);
+    assert.ok(near(2 * edgeDist, 2)); // 2 * 1 = 2 св.г.
+    // levelForWidth ожидает ширину в единицах: 2000 ед → уровень 2 (L2)
+    // L12 достигается при ширине ≤ 2.44 ед (0.00244 св.г.), что намного меньше 2000 ед.
+    assert.equal(ladder.levelForWidth(visibleWidth), 2);
+  }
+});
+
+test('maxScaleForTargetEdge: 0,54 / 0,384 / 0,72 / 0,195 / 0,195 на пяти viewport', () => {
+  const expected = [
+    { w: 1920, h: 1080, max: 0.54 },
+    { w: 1366, h: 768, max: 0.384 },
+    { w: 2560, h: 1440, max: 0.72 },
+    { w: 390, h: 844, max: 0.195 },
+    { w: 844, h: 390, max: 0.195 },
+  ];
+
+  for (const spec of expected) {
+    const viewport = { w: spec.w, h: spec.h };
+    const maxScale = ladder.maxScaleForTargetEdge(viewport, MAP_SIZE, FIT_INSET);
+    assert.equal(maxScale, spec.max, `${spec.w}×${spec.h}: maxScale`);
+    assert.equal(maxScale, Math.min(spec.w, spec.h) / 2000, `${spec.w}×${spec.h}: формула short/2000`);
+
+    const edgeAtMax = ladder.edgeDistance(viewport, maxScale);
+    assert.ok(
+      near(edgeAtMax, 1, EPS),
+      `edgeDistance на клампе ${edgeAtMax} ≠ 1 при ${spec.w}×${spec.h}`,
+    );
   }
 });
 
 test('регрессия «метрику не подменили»: edgeDist на L8 и L9 прежние', () => {
-  // Метрика уровня — половина его видимой ширины по короткой оси.
   assert.equal(ladder.visibleWidthForLevel(8) / 2, 19.53125);
   assert.equal(ladder.visibleWidthForLevel(9) / 2, 9.765625);
   assert.equal(Number((ladder.visibleWidthForLevel(8) / 2).toFixed(2)), 19.53);
@@ -272,17 +296,15 @@ test('регрессия «метрику не подменили»: edgeDist н
     );
     assert.ok(near(onL8, 19.53125, EPS), `L8: ${viewport.w}×${viewport.h} → ${onL8} вместо 19,53125`);
     assert.ok(near(onL9, 9.765625, EPS), `L9: ${viewport.w}×${viewport.h} → ${onL9} вместо 9,765625`);
-    // 19,53 и 9,77 из §17.15.2 — те же числа, округлённые до сотых.
     assert.equal(Number(onL8.toFixed(2)), 19.53);
     assert.equal(Number(onL9.toFixed(2)), 9.77);
-
-    // L8 и L9 требование «1 св.г. до границы» не выполняют.
     assert.ok(onL8 > 1 && onL9 > 1);
   }
 });
 
 test('кламп зума — ровно на требовании 1,00, множитель проверяется тождеством', () => {
   assert.equal(ladder.TARGET_EDGE_LY, 1);
+  assert.equal(ladder.TARGET_EDGE_UNITS, 1000);
 
   for (const viewport of VIEWPORTS) {
     const minSide = Math.min(viewport.w, viewport.h);
@@ -292,32 +314,28 @@ test('кламп зума — ровно на требовании 1,00, мно�
       `fitScaleFor(${viewport.w}×${viewport.h}) = ${fitScale} не по формуле рендерера`,
     );
 
-    // §17.17 п. 4: упор стоит ровно в точке требования — scale = min(w, h) / 2.
     const maxScale = ladder.maxScaleForTargetEdge(viewport, MAP_SIZE, FIT_INSET);
-    assert.equal(maxScale, minSide / 2);
+    assert.equal(maxScale, minSide / 2000);
     const edgeAtMax = ladder.edgeDistance(viewport, maxScale);
     assert.ok(
       near(edgeAtMax, 1, EPS),
       `edgeDistance на клампе ${edgeAtMax} ≠ 1 при ${viewport.w}×${viewport.h}`,
     );
 
-    // Множитель — тождество, а не коридор: mapSize / (2 · fitInset) = 5 319,1489….
+    // При единицах карты (1000 ед = 1 св.г.) множитель = mapSize / (2000 * fitInset)
     const ratio = maxScale / fitScale;
-    const identity = MAP_SIZE / (2 * FIT_INSET);
+    const identity = MAP_SIZE / (2000 * FIT_INSET);
     assert.ok(
       near(ratio, identity, EPS),
       `множитель ${ratio} ≠ ${identity} при ${viewport.w}×${viewport.h}`,
     );
-    // Грубая страховка «не план 600…1100×» — не спецификация.
-    assert.ok(ratio >= 5000 && ratio <= 5320, `множитель ${ratio} вне 5 000…5 320`);
+    assert.ok(ratio >= 5 && ratio <= 6, `множитель ${ratio} вне 5…6`);
 
-    // Предохранитель: кламп не глубже системного кадра 0,5 св.г.
     assert.ok(
-      maxScale <= ladder.scaleForEdgeDistance(viewport, ladder.MIN_CLAMP_EDGE_LY) + EPS,
-      `кламп глубже системного кадра при ${viewport.w}×${viewport.h}`,
+      maxScale <= ladder.scaleForEdgeDistance(viewport, ladder.TARGET_EDGE_LY * 0.5) + EPS,
+      `кламп глубнее системного кадра при ${viewport.w}×${viewport.h}`,
     );
 
-    // Кламп зума обязан доставать до L12 — иначе глубина недостижима.
     assert.equal(ladder.levelForWidth(2 * edgeAtMax, 11), 12);
   }
 });

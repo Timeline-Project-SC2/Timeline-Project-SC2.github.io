@@ -28,7 +28,11 @@ export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): stri
     return `${groupedInteger}${NBSP}св.г.`;
   }
 
+<<<<<<< HEAD
   const decimals = mode === 'full' ? 2 : 1;
+=======
+  const decimals = mode === 'short' ? 1 : 2;
+>>>>>>> 20716f2 (wip(Z-4): единицы 1000 ед = 1 св.г.)
   const rounded = ly.toFixed(decimals);
   const decimalIndex = rounded.indexOf('.');
   const integerPart = rounded.slice(0, decimalIndex);

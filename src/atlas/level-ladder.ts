@@ -1,7 +1,6 @@
 import { unitsToLy, lyToUnits } from './sector-units.ts';
 
 export type LadderFrame = 'S' | 'O';
-
 export interface LevelSpec {
   readonly level: number;
   readonly id: string;
@@ -311,7 +310,12 @@ function shortSide(viewport: FrameViewport): number {
   return Math.min(w, h);
 }
 
+<<<<<<< HEAD
 /** Расстояние от цели (центра кадра) до ближайшей границы экрана, в световых годах.
+=======
+/**
+ * Расстояние от цели (центра кадра) до ближайшей границы экрана, в световых годах.
+>>>>>>> 20716f2 (wip(Z-4): единицы 1000 ед = 1 св.г.)
  *
  * Формула: `shortSide(viewport) / 2 / scale / 1000`, где scale — в единицах карты
  * на пиксель, а делитель 1000 переводит единицы в световые годы.
@@ -323,7 +327,12 @@ export function edgeDistance(viewport: FrameViewport, scale: number): number {
   return short / 2 / pixelsPerUnit / 1000;
 }
 
+<<<<<<< HEAD
 /** Масштаб, при котором до ближайшей границы ровно `edgeDist` световых лет.
+=======
+/**
+ * Масштаб, при котором до ближайшей границы ровно `edgeDist` световых лет.
+>>>>>>> 20716f2 (wip(Z-4): единицы 1000 ед = 1 св.г.)
  *
  * Принимает `edgeDist` в световых годах, возвращает масштаб в единицах карты
  * на пиксель: `shortSide(viewport) / 2 / (edgeDist * 1000)`.

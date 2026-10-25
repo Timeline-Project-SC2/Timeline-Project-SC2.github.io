@@ -16,13 +16,13 @@ const {
 const MAP_SIZE = 10000;
 const EPS = 1e-9;
 
-/** Пять viewport из плана SW-3 / SW-3-wire с точными значениями maxScale = min(w, h) / 2. */
+/** Пять viewport из плана SW-3 / SW-3-wire с точными значениями maxScale = min(w, h) / 2000. */
 const PLAN_VIEWPORTS = [
-  { label: '1920×1080', w: 1920, h: 1080, expectedMaxScale: 540 },
-  { label: '1366×768', w: 1366, h: 768, expectedMaxScale: 384 },
-  { label: '2560×1440', w: 2560, h: 1440, expectedMaxScale: 720 },
-  { label: '390×844', w: 390, h: 844, expectedMaxScale: 195 },
-  { label: '844×390', w: 844, h: 390, expectedMaxScale: 195 },
+  { label: '1920×1080', w: 1920, h: 1080, expectedMaxScale: 0.54 },
+  { label: '1366×768', w: 1366, h: 768, expectedMaxScale: 0.384 },
+  { label: '2560×1440', w: 2560, h: 1440, expectedMaxScale: 0.72 },
+  { label: '390×844', w: 390, h: 844, expectedMaxScale: 0.195 },
+  { label: '844×390', w: 844, h: 390, expectedMaxScale: 0.195 },
 ];
 
 /** Целевые точки внутри сектора: геометрический центр и реальная столица (Тарсонис). */
@@ -210,7 +210,7 @@ test('CONFIG.view.maxFactor удалён из конфигурации и не �
   }
 });
 
-test('maxScale и minScale на пяти плановых viewport: 540 / 384 / 720 / 195 / 195 и ровно 1,00 св.г. до границы', () => {
+test('maxScale и minScale на пяти плановых viewport: 0,54 / 0,384 / 0,72 / 0,195 / 0,195 и ровно 1,00 св.г. до границы', () => {
   assert.equal(TARGET_EDGE_LY, 1);
 
   for (const spec of PLAN_VIEWPORTS) {
@@ -220,7 +220,7 @@ test('maxScale и minScale на пяти плановых viewport: 540 / 384 / 
       const min = h.renderer.minScale();
       const max = h.renderer.maxScale();
 
-      // 1. Точное совпадение с планом: maxScale = min(w, h) / 2 (540 / 384 / 720 / 195 / 195).
+      // 1. Точное совпадение с планом: maxScale = min(w, h) / 2000 (0,54 / 0,384 / 0,72 / 0,195 / 0,195).
       assert.equal(max, spec.expectedMaxScale, `${spec.label}: maxScale`);
       assert.equal(
         max,
@@ -274,14 +274,16 @@ test('clampView, zoomAt и centerOn упираются ровно в 1,00 св.�
         );
 
         const afterCenter = targetToEdgeDistances(h.renderer, spec, target);
+        // afterCenter.nearest в единицах карты; для св.г. делим на 1000
+        const nearestLy = afterCenter.nearest / 1000;
         assert.ok(
-          Math.abs(afterCenter.nearest - 1) <= EPS,
-          `${spec.label} (${target.name}): расстояние от цели до ближайшей границы = ${afterCenter.nearest}`,
+          Math.abs(nearestLy - 1) <= EPS,
+          `${spec.label} (${target.name}): расстояние от цели до ближайшей границы = ${nearestLy} св.г.`,
         );
         // На неквадратных экранах проверяем, что измеряется именно ближайшая граница (1,00 св.г.),
         // а по длинной стороне расстояние строго больше 1,00 св.г.
         assert.ok(
-          afterCenter.farthest > 1 + 0.5,
+          afterCenter.farthest / 1000 > 1 + 0.5,
           `${spec.label} (${target.name}): по длинной оси до края > 1,5 св.г., но кламп держит ближайший край на 1,00 св.г.`,
         );
 
@@ -293,9 +295,10 @@ test('clampView, zoomAt и centerOn упираются ровно в 1,00 св.�
           `${spec.label} (${target.name}): zoomAt не пускает выше maxScale`,
         );
         const afterZoomAt = targetToEdgeDistances(h.renderer, spec, target);
+        const nearestLyZoom = afterZoomAt.nearest / 1000;
         assert.ok(
-          Math.abs(afterZoomAt.nearest - 1) <= EPS,
-          `${spec.label} (${target.name}): после zoomAt расстояние от цели до границы = ${afterZoomAt.nearest}`,
+          Math.abs(nearestLyZoom - 1) <= EPS,
+          `${spec.label} (${target.name}): после zoomAt расстояние от цели до границы = ${nearestLyZoom} св.г.`,
         );
 
         // В) Прямой перелёт масштаба и clampView(): масштаб возвращается ровно к maxScale.
@@ -309,9 +312,10 @@ test('clampView, zoomAt и centerOn упираются ровно в 1,00 св.�
           `${spec.label} (${target.name}): clampView зажимает scale в ${spec.expectedMaxScale}`,
         );
         const afterClamp = targetToEdgeDistances(h.renderer, spec, target);
+        const nearestLyClamp = afterClamp.nearest / 1000;
         assert.ok(
-          Math.abs(afterClamp.nearest - 1) <= EPS,
-          `${spec.label} (${target.name}): после clampView расстояние от цели до границы = ${afterClamp.nearest}`,
+          Math.abs(nearestLyClamp - 1) <= EPS,
+          `${spec.label} (${target.name}): после clampView расстояние от цели до границы = ${nearestLyClamp} св.г.`,
         );
       } finally {
         h.restoreGlobals();
@@ -329,44 +333,45 @@ test('нижний упор minScale и пересчёт потолка при �
     assert.equal(h.state.view.scale, expectedMin);
     assert.ok(h.state.view.scale < h.renderer.maxScale());
 
-    // 2. Выход на потолок 2560×1440 (maxScale = 720), затем ресайз в 1366×768 (maxScale = 384).
+    // 2. Выход на потолок 2560×1440 (maxScale = 0,72), затем ресайз в 1366×768 (maxScale = 0,384).
     const target = { x: 5000, y: 5000 };
     h.renderer.centerOn(target.x, target.y, 1e6);
     h.flushAnimationFrame(performance.now() + CONFIG.view.animate + 50);
-    assert.equal(h.state.view.scale, 720);
+    assert.equal(h.state.view.scale, 0.72);
 
     h.state.viewport = { w: 1366, h: 768 };
-    h.state.view.tx = 1366 / 2 - target.x * 384;
-    h.state.view.ty = 768 / 2 - target.y * 384;
+    h.state.view.tx = 1366 / 2 - target.x * 0.384;
+    h.state.view.ty = 768 / 2 - target.y * 0.384;
     h.renderer.clampView();
-    assert.equal(h.state.view.scale, 384);
+    assert.equal(h.state.view.scale, 0.384);
     assert.ok(Math.abs(edgeDistance(h.state.viewport, h.state.view.scale) - 1) <= EPS);
 
-    // 3. Поворот экрана 390×844 ↔ 844×390 сохраняет потолок 195 и 1,00 св.г. до ближайшего края.
+    // 3. Поворот экрана 390×844 ↔ 844×390 сохраняет потолок 0,195 и 1,00 св.г. до ближайшего края.
     for (const rotated of [
       { w: 390, h: 844 },
       { w: 844, h: 390 },
     ]) {
       h.state.viewport = rotated;
       h.state.view.scale = 10000;
-      h.state.view.tx = rotated.w / 2 - target.x * 195;
-      h.state.view.ty = rotated.h / 2 - target.y * 195;
+      h.state.view.tx = rotated.w / 2 - target.x * 0.195;
+      h.state.view.ty = rotated.h / 2 - target.y * 0.195;
       h.renderer.clampView();
-      assert.equal(h.renderer.maxScale(), 195);
-      assert.equal(h.state.view.scale, 195);
+      assert.equal(h.renderer.maxScale(), 0.195);
+      assert.equal(h.state.view.scale, 0.195);
 
       const distances = targetToEdgeDistances(h.renderer, rotated, target);
-      assert.ok(Math.abs(distances.nearest - 1) <= EPS);
+      // distances в единицах карты; для св.г. делим на 1000
+      assert.ok(Math.abs(distances.nearest / 1000 - 1) <= EPS);
       if (rotated.w < rotated.h) {
         // Портрет 390×844: ближайшие границы — левая и правая (ровно 1,00 св.г.).
-        assert.ok(Math.abs(distances.left - 1) <= EPS);
-        assert.ok(Math.abs(distances.right - 1) <= EPS);
-        assert.ok(distances.top > 2 && distances.bottom > 2);
+        assert.ok(Math.abs(distances.left / 1000 - 1) <= EPS);
+        assert.ok(Math.abs(distances.right / 1000 - 1) <= EPS);
+        assert.ok(distances.top / 1000 > 2 && distances.bottom / 1000 > 2);
       } else {
         // Альбом 844×390: ближайшие границы — верхняя и нижняя (ровно 1,00 св.г.).
-        assert.ok(Math.abs(distances.top - 1) <= EPS);
-        assert.ok(Math.abs(distances.bottom - 1) <= EPS);
-        assert.ok(distances.left > 2 && distances.right > 2);
+        assert.ok(Math.abs(distances.top / 1000 - 1) <= EPS);
+        assert.ok(Math.abs(distances.bottom / 1000 - 1) <= EPS);
+        assert.ok(distances.left / 1000 > 2 && distances.right / 1000 > 2);
       }
     }
   } finally {
