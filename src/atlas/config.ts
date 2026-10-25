@@ -78,6 +78,19 @@ export const PLACE_TYPES: Readonly<Record<string, PlaceTypeInfo>> = {
   unknown: { label: 'Без типа', plural: 'места без типа', glyph: '?' },
 };
 
+/* Виды вкладки «Места»: какие типы места видны в каждом виде. Таблица — единый
+ * источник и для матчинга (`matchesCatalogView`), и для стартовых фильтров
+ * (`setCatalogView`), и для списка чипов (`renderFilters`). Каждый тип из
+ * PLACE_TYPES обязан попасть хотя бы в один вид, иначе запись есть в данных, но
+ * не видна ни в одном виде и не считается в счётчиках. Поэтому `unknown` (место
+ * без типа, см. data-loader.ts) отнесён к «Иному месту», а не выброшен. */
+export const CATALOG_VIEW_TYPES: Readonly<Record<string, readonly string[]>> = {
+  planet: ['planet'],
+  station: ['station'],
+  platform: ['platform', 'station'],
+  other: ['moon', 'asteroid', 'other', 'unknown'],
+};
+
 export type UnknownRecord = Record<string, unknown>;
 export type MapCoord = [number, number];
 

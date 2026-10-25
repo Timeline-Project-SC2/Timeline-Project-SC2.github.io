@@ -1,6 +1,8 @@
 /* Карточка C: места без типа (`none` / пустая ячейка) — не планеты.
  *
- * Проверяем ровно контракт нормализации типа места и меток/глифов каталога.
+ * Проверяем ровно контракт нормализации типа места, меток/глифов каталога и
+ * видимости вида «Иное место» (`CATALOG_VIEW_TYPES` + реальный
+ * `matchesCatalogView`): место из таблицы не должно пропадать из каталога.
  * Источник данных — `data/places.csv` (читается с диска, без хардкода имён).
  */
 
@@ -11,7 +13,11 @@ import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const { normalizedPlaceType, createDataLoader } = require('../src/atlas/data-loader.ts');
-const { PLACE_TYPES } = require('../src/atlas/config.ts');
+const { CATALOG_VIEW_TYPES, PLACE_TYPES } = require('../src/atlas/config.ts');
+const { createCatalogPanel } = require('../src/atlas/catalog-panel.ts');
+
+// Виды вкладки «Места» (вкладка «Системы» мест не фильтрует).
+const CATALOG_VIEWS = ['planet', 'station', 'platform', 'other'];
 
 function parseCsvLine(line) {
   const cells = [];
@@ -57,6 +63,24 @@ const placesCsv = readCsv('../data/places.csv');
 // Минимальное ядро: `createDataLoader` в момент создания читает только state/runtime.
 function makeKernel() {
   return { state: {}, runtime: { travelCore: null } };
+}
+
+// Минимальное ядро каталога: при создании `createCatalogPanel` только сохраняет
+// ссылки на doc/state/el/skin, а `matchesCatalogView` читает данные через лоадер.
+function makeCatalog() {
+  return createCatalogPanel({
+    doc: null,
+    state: {},
+    el: {},
+    skin: {},
+    data: createDataLoader(makeKernel()),
+  });
+}
+
+// Запись места ровно в том виде, в каком её отдаёт лоадер для строки places.csv
+// (`mapPlaceRow`: `placeTypes: [normalizedPlaceType(row.type)]`).
+function placeFromRow(row) {
+  return { id: row.ID, name: row.name, placeTypes: [normalizedPlaceType(row.type)] };
 }
 
 test('C1: пустая ячейка и легаси `none` дают `unknown`, а не `planet`', function () {
@@ -123,4 +147,83 @@ test('C7: placeTypeLabel/placeTypeGlyph не бросают на `unknown`', fun
   const custom = { id: 'custom', name: 'Кастом', placeTypes: ['artifact'] };
   assert.equal(data.placeTypeLabel(custom), 'artifact');
   assert.equal(data.placeTypeGlyph(custom), 'М');
+});
+
+test('C8: вид «Иное место» включает `unknown`', function () {
+  assert.equal(CATALOG_VIEW_TYPES.other.includes('unknown'), true);
+  ['moon', 'asteroid', 'other'].forEach(function (type) {
+    assert.equal(CATALOG_VIEW_TYPES.other.includes(type), true, 'вид other потерял ' + type);
+  });
+});
+
+test('C9: `planet` не попал в вид «Иное место»', function () {
+  assert.equal(CATALOG_VIEW_TYPES.other.includes('planet'), false);
+  // Ни один тип из PLACE_TYPES не должен выпасть из всех видов: иначе место
+  // такого типа не видно ни в одной вкладке и не считается в счётчиках.
+  const views = Object.keys(CATALOG_VIEW_TYPES);
+  assert.deepEqual(views.slice().sort(), CATALOG_VIEWS.slice().sort());
+  Object.keys(PLACE_TYPES).forEach(function (type) {
+    const inViews = CATALOG_VIEWS.filter(function (view) {
+      return CATALOG_VIEW_TYPES[view].includes(type);
+    });
+    assert.ok(inViews.length > 0, 'тип ' + type + ' не виден ни в одном виде');
+  });
+});
+
+test('C10: каждая строка places.csv с типом none видна в «Ином месте» и считается в счётчике', function () {
+  const catalog = makeCatalog();
+  const places = placesCsv.map(placeFromRow);
+  const withoutType = places.filter(function (place) { return place.placeTypes[0] === 'unknown'; });
+  assert.equal(withoutType.length, 2);
+
+  // Счётчик секции «Иные места» — тот же фильтр, что в renderSectionCounts.
+  const otherCounted = places.filter(function (place) { return catalog.matchesCatalogView(place, 'other'); });
+  // Пул чипов типа — как в currentTypePool для вкладки «Места».
+  const pool = {};
+  otherCounted.forEach(function (place) {
+    place.placeTypes.forEach(function (type) { pool[type] = (pool[type] || 0) + 1; });
+  });
+
+  withoutType.forEach(function (place) {
+    assert.equal(catalog.matchesCatalogView(place, 'other'), true, 'не видно в «Ином месте»: ' + place.name);
+    assert.ok(otherCounted.indexOf(place) > -1, 'не посчитано в счётчике: ' + place.name);
+    assert.equal(catalog.catalogViewForPlace(place), 'other', 'досье ведёт не в «Иное место»: ' + place.name);
+    // Ровно один вид: иначе место задваивает счётчики вкладок.
+    const views = CATALOG_VIEWS.filter(function (view) { return catalog.matchesCatalogView(place, view); });
+    assert.deepEqual(views, ['other'], 'должно быть ровно в одном виде: ' + place.name);
+  });
+  // Без чипа `unknown` фильтр по таким местам не выбрать.
+  assert.equal(pool.unknown, withoutType.length);
+});
+
+test('C11: каждая строка places.csv попадает ровно в один вид «Мест»', function () {
+  const catalog = makeCatalog();
+  placesCsv.map(placeFromRow).forEach(function (place) {
+    const views = CATALOG_VIEWS.filter(function (view) { return catalog.matchesCatalogView(place, view); });
+    assert.equal(views.length, 1, 'строка ' + place.id + ' (' + place.name + ') в видах: ' + JSON.stringify(views));
+  });
+});
+
+test('C12: станция и платформа по-прежнему не пересекаются видами', function () {
+  const catalog = makeCatalog();
+  const station = { id: 'probe-station', name: 'Станция Проба', placeTypes: ['station'] };
+  const platform = {
+    id: 'probe-platform',
+    name: 'Platform Probe',
+    placeTypes: ['station'],
+    wikiCategories: ['Space platforms'],
+  };
+  assert.deepEqual(
+    CATALOG_VIEWS.filter(function (view) { return catalog.matchesCatalogView(station, view); }),
+    ['station']
+  );
+  assert.deepEqual(
+    CATALOG_VIEWS.filter(function (view) { return catalog.matchesCatalogView(platform, view); }),
+    ['platform']
+  );
+  const explicit = { id: 'probe-explicit', name: 'Платформа Проба', placeTypes: ['platform'] };
+  assert.deepEqual(
+    CATALOG_VIEWS.filter(function (view) { return catalog.matchesCatalogView(explicit, view); }),
+    ['platform']
+  );
 });
