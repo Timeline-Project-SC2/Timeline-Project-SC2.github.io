@@ -215,8 +215,22 @@ export const GRID_TIER_BY_LEVEL: readonly (number | null)[] = Object.freeze([
   null, 1, 1, 2, 2, 2, 2, 2, 2, null,
 ]);
 
-/** Режим осмотра (Z-4c §2): мельче этого размера ячейки на экране подпись нечитаема. */
-export const LOUPE_MIN_CELL_PX = 18;
+/**
+ * Режим осмотра (Z-4c §2): мельче этого размера ячейки на экране не строим тир.
+ * 22 px — чтобы ячейка вмещала подпись из четырёх букв (2 + 4 · 5,4 = 23,6 px).
+ */
+export const LOUPE_MIN_CELL_PX = 22;
+
+/** Отступ подписи лупы от левого верхнего угла ячейки, px (Z-4c §2, A3). */
+export const LOUPE_LABEL_PAD_PX = 2;
+
+/** Ширина знака подписи лупы: шрифт 9 px моно, px на знак (A4). */
+export const LOUPE_CHAR_PX = 5.4;
+
+/** Подпись влезает в ячейку, если `2 + 5,4 · длина ≤ cellPx` (никаких наложений). */
+export function loupeLabelFits(text: string, cellPx: number): boolean {
+  return LOUPE_LABEL_PAD_PX + LOUPE_CHAR_PX * text.length <= cellPx;
+}
 
 /** Окно лупы: 12 × 12 ячеек вокруг точки осмотра (радиус 6). */
 export const LOUPE_WINDOW_CELLS = 12;
@@ -619,7 +633,7 @@ export interface LoupeGrid {
 }
 
 export interface LoupeOptions {
-  /** Порог читаемости ячейки, px. По умолчанию `LOUPE_MIN_CELL_PX`; меняется только тестами. */
+  /** Порог читаемости ячейки, px. По умолчанию `LOUPE_MIN_CELL_PX` (22); меняется только тестами. */
   readonly minCellPx?: number;
 }
 
@@ -737,7 +751,10 @@ function buildLoupe(
     lines.push({ kind: 'grid.line', tier: tier.id, cellSize, x1: left, y1: y, x2: right, y2: y });
   }
 
-  // Подписи: 3 × 3 ячейки вокруг ячейки точки; адрес — префикс до тира лупы.
+  // Подписи: 3 × 3 ячейки вокруг ячейки точки. Текст — только буквы адреса до тира
+  // лупы (без «KP·»); якорь — левый верхний угол ячейки. Подпись, не влезшая в ячейку,
+  // пропускается; центральная ячейка (точка осмотра) рисуется всегда — при нехватке
+  // месте одной последней буквой.
   const labels: SceneGridLabel[] = [];
   const letters = tierIndex as AddressLetters;
   for (let dr = -1; dr <= 1; dr += 1) {
@@ -748,15 +765,18 @@ function buildLoupe(
       if (labels.length >= MAX_LOUPE_LABELS) continue;
       const centerX = (c + 0.5) * cellSize;
       const centerY = (r + 0.5) * cellSize;
-      const p = worldToScreen(frame, cam, centerX, centerY);
-      if (p.x < left || p.x > right || p.y < top || p.y > bottom) continue;
-      labels.push({
-        kind: 'grid.label',
-        tier: tier.id,
-        text: formatAddress(prefixOf(centerX, centerY, letters)),
-        x: p.x,
-        y: p.y,
-      });
+      const isCentre = dc === 0 && dr === 0;
+      if (!isCentre) {
+        const p = worldToScreen(frame, cam, centerX, centerY);
+        if (p.x < left || p.x > right || p.y < top || p.y > bottom) continue;
+      }
+      const full = prefixOf(centerX, centerY, letters).letters;
+      let text: string;
+      if (loupeLabelFits(full, cellPx)) text = full;
+      else if (isCentre) text = full.slice(-1);
+      else continue;
+      const corner = worldToScreen(frame, cam, c * cellSize, r * cellSize);
+      labels.push({ kind: 'grid.label', tier: tier.id, text, x: corner.x, y: corner.y });
     }
   }
 

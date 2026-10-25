@@ -32,6 +32,7 @@ import type {
   SectorScene,
 } from './sector-scene.ts';
 import {
+  LOUPE_LABEL_PAD_PX,
   buildSectorScene,
   hitRadiusFor,
   inspectOf,
@@ -949,8 +950,23 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /**
+   * Подпись лупы (A3): буквы адреса ячейки от левого верхнего угла с отступом
+   * `LOUPE_LABEL_PAD_PX`, шрифт 9 px моно. Для обычной сетки — `drawGridLabel`, он не меняется.
+   */
+  function drawLoupeLabel(label: SceneGridLabel): void {
+    const ctx = kernel.ctx!;
+    ctx.save();
+    ctx.font = '9px ' + theme.mono;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(160,186,216,.42)';
+    ctx.fillText(label.text, label.x + LOUPE_LABEL_PAD_PX, label.y + LOUPE_LABEL_PAD_PX);
+    ctx.restore();
+  }
+
+  /**
    * Лупа режима осмотра: линии окна — пунктиром 1 px тем же цветом, что сетка;
-   * подписи — короткий адрес ячейки. Заливки нет. Вне наведения (`hovering: false`)
+   * подписи — буквы адреса ячейки (см. `drawLoupeLabel`). Заливки нет. Вне наведения (`hovering: false`)
    * окно рисуется с alpha `0,85`, чтобы не мигало. Команд столько же, сколько
    * построено линий и подписей (`loupeCommandCount`), и это не зависит от площади кадра.
    */
@@ -973,13 +989,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     }
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.font = '9px ' + theme.mono;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(160,186,216,.42)';
+    // Подписи — внутри того же save/restore: наследуют alpha окна (0,85 вне наведения).
     for (index = 0; index < loupe.labels.length; index += 1) {
-      var label = loupe.labels[index]!;
-      ctx.fillText(label.text, label.x, label.y);
+      drawLoupeLabel(loupe.labels[index]!);
     }
     ctx.restore();
   }

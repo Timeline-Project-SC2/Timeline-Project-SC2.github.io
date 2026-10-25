@@ -14,6 +14,8 @@ const {
   GRID_LAST_LEVEL,
   GRID_TIER_BY_LEVEL,
   LABEL_PRIORITY,
+  LOUPE_CHAR_PX,
+  LOUPE_LABEL_PAD_PX,
   LOUPE_MIN_CELL_PX,
   MAX_GRID_LABELS,
   MAX_GRID_LINES,
@@ -33,6 +35,7 @@ const {
   labelTextFor,
   loupeCommandCount,
   loupeGridFor,
+  loupeLabelFits,
   pixelsPerLightYear,
   screenToWorld,
   sceneLevel,
@@ -234,8 +237,8 @@ test('G5: лупа на L8 при 1920×1080: T4, ячейка 23,8 px, 26 ли�
   const { x0, y0, x1, y1 } = loupe.bounds;
   assert.ok(x0 >= 0 && y0 >= 0 && x1 <= DESKTOP.w && y1 <= DESKTOP.h, 'окно лупы вышло за кадр');
   assert.ok(x1 > x0 && y1 > y0);
-  // Подпись лупы — префикс до её тира (4 буквы), не пятибуквенный адрес.
-  for (const label of loupe.labels) assert.equal(label.text.length, 'KP·'.length + 4);
+  // Подпись лупы — только буквы до её тира (4 буквы, без «KP·»), не пятибуквенный адрес.
+  for (const label of loupe.labels) assert.equal(label.text.length, 4);
 });
 
 test('G6: окно у края карты (точка 10;10) не выходит за [0, MAP_SIZE]', () => {
@@ -254,7 +257,7 @@ test('G6: окно у края карты (точка 10;10) не выходит
 });
 
 test('G7: при LOUPE_MIN_CELL_PX = 200 глубина падает до базового тира, линий меньше, кадр не пуст', () => {
-  assert.equal(LOUPE_MIN_CELL_PX, 18);
+  assert.equal(LOUPE_MIN_CELL_PX, 22);
   const camera = cameraForLevel(8, 5000, 5000);
   const point = { x: 960, y: 540 };
   const normal = loupeGridFor(DESKTOP, camera, 8, point);
@@ -301,6 +304,106 @@ test('G8: точка осмотра — центр кадра для сенсо�
   Object.assign(mouse, inspectOnPointer(mouse, { kind: 'leave' }));
   assert.equal(mouse.hovering, false);
   assert.deepEqual(inspectPointFor(DESKTOP, mouse), { x: 300, y: 200 });
+});
+
+test('H1: на L8 при 1920×1080 тир T4, ячейка 23,8 px, подписи — 4 буквы и каждая влезает: 2 + 5,4·4 ≤ cellPx', () => {
+  const loupe = loupeGridFor(DESKTOP, cameraForLevel(8, 5000, 5000), 8, { x: 960, y: 540 });
+  assert.equal(loupe.tierIndex, 4);
+  assert.ok(Math.abs(loupe.cellPx - 23.8) <= 0.1, `cellPx ${loupe.cellPx}`);
+  assert.equal(loupe.labels.length, 9);
+  for (const label of loupe.labels) {
+    assert.equal(label.text.length, 4, `подпись «${label.text}» не из 4 букв`);
+    assert.ok(2 + 5.4 * label.text.length <= loupe.cellPx, `подпись «${label.text}» не влезает в ячейку`);
+    assert.ok(loupeLabelFits(label.text, loupe.cellPx));
+  }
+});
+
+test('H2: подписи лупы не пересекаются ни на одном уровне, размере кадра и пороге (допуск 0)', () => {
+  const viewports = [DESKTOP, PHONE, { w: 2560, h: 1440 }, { w: 1800, h: 1000 }];
+  const thresholds = [undefined, { minCellPx: 200 }];
+  for (const viewport of viewports) {
+    for (let level = 1; level <= GRID_LAST_LEVEL; level++) {
+      for (const options of thresholds) {
+        const loupe = loupeGridFor(viewport, cameraForLevel(level, 5000, 5000), level, {
+          x: viewport.w / 2,
+          y: viewport.h / 2,
+        }, options);
+        const boxes = loupe.labels.map((label) => ({
+          x0: label.x,
+          y0: label.y,
+          x1: label.x + LOUPE_CHAR_PX * label.text.length,
+          y1: label.y + 9,
+        }));
+        for (let i = 0; i < boxes.length; i++) {
+          for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i];
+            const b = boxes[j];
+            const overlap = a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+            assert.ok(!overlap, `L${level} ${viewport.w}×${viewport.h}: подписи ${i} и ${j} пересеклись`);
+          }
+        }
+      }
+    }
+  }
+});
+
+test('H3: центральная ячейка всегда имеет ровно одну непустую подпись — и при 200 px (базовый тир), и при нехватке места', () => {
+  const centreLabel = (viewport, level, options) => {
+    const camera = cameraForLevel(level, 5000, 5000);
+    const point = { x: viewport.w / 2, y: viewport.h / 2 };
+    const loupe = loupeGridFor(viewport, camera, level, point, options);
+    const world = screenToWorld(viewport, camera, point.x, point.y);
+    const cellSize = loupe.cellSize;
+    const corner = worldToScreen(viewport, camera, Math.floor(world.x / cellSize) * cellSize, Math.floor(world.y / cellSize) * cellSize);
+    const atCentre = loupe.labels.filter((label) => Math.abs(label.x - corner.x) < 1e-6 && Math.abs(label.y - corner.y) < 1e-6);
+    return { loupe, atCentre };
+  };
+
+  // Порог 200 px: тир упирается в базовый (T2), подпись центра одна и непустая.
+  const strict = centreLabel(DESKTOP, 8, { minCellPx: 200 });
+  assert.equal(strict.loupe.tierIndex, 2);
+  assert.equal(strict.atCentre.length, 1);
+  assert.ok(strict.atCentre[0].text.length > 0);
+
+  // Ширина 1800 px: ячейка 23,8 → 22…23,6 px, полный текст не влезает — центр берёт одну букву.
+  const narrow = centreLabel({ w: 1800, h: 1000 }, 8);
+  assert.equal(narrow.loupe.tierIndex, 4);
+  assert.equal(narrow.atCentre.length, 1, 'у центра нет подписи');
+  assert.equal(narrow.atCentre[0].text.length, 1);
+  // Соседи, которым полный текст не влез, пропущены: наложений нет.
+  for (const label of narrow.loupe.labels) {
+    if (label === narrow.atCentre[0]) continue;
+    assert.ok(loupeLabelFits(label.text, narrow.loupe.cellPx));
+  }
+
+  // Обычный кадр: центр — полные 4 буквы.
+  const normal = centreLabel(DESKTOP, 8);
+  assert.equal(normal.atCentre.length, 1);
+  assert.equal(normal.atCentre[0].text.length, 4);
+});
+
+test('H4: тиры лупы по уровням при 1920×1080 — L1 2, L3 3, L5 3, L7 3, L8 4 (L2, L4, L6 — 3)', () => {
+  const expected = { 1: 2, 2: 3, 3: 3, 4: 3, 5: 3, 6: 3, 7: 3, 8: 4 };
+  for (const level of Object.keys(expected).map(Number)) {
+    const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
+    assert.equal(loupe.tierIndex, expected[level], `L${level}: тир T${loupe.tierIndex}, ждали T${expected[level]}`);
+  }
+});
+
+test('H5: в подписях лупы нет префикса сектора «KP·» на всех уровнях и размерах кадра', () => {
+  for (const viewport of [DESKTOP, PHONE, { w: 2560, h: 1440 }]) {
+    for (let level = 1; level <= GRID_LAST_LEVEL; level++) {
+      const loupe = loupeGridFor(viewport, cameraForLevel(level, 5000, 5000), level, {
+        x: viewport.w / 2,
+        y: viewport.h / 2,
+      });
+      for (const label of loupe.labels) {
+        assert.ok(!label.text.includes('KP·'), `L${level}: подпись «${label.text}» содержит префикс сектора`);
+      }
+    }
+  }
+  assert.equal(LOUPE_LABEL_PAD_PX, 2);
+  assert.equal(LOUPE_CHAR_PX, 5.4);
 });
 
 test('лупа: команд отрисовки не больше 26 + 9·3 на L8 при 1920×1080, 390×844 и 2560×1440', () => {

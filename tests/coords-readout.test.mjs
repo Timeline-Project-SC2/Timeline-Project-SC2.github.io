@@ -157,6 +157,17 @@ test('G9: полный адрес точки осмотра — formatAddress(ad
   assert.equal(readout.inspectReadoutText(true, 8, { x: -5, y: 10 }, 16), 'осмотр L8 · вне карты');
 });
 
+test('H6: полный адрес в панели координат — formatAddress(addressOf(x, y)) и содержит «KP·»', () => {
+  const x = 5720;
+  const y = 6257;
+  const full = address.formatAddress(address.addressOf(x, y));
+  assert.ok(full.startsWith('KP·'), `полный адрес «${full}» без префикса сектора`);
+
+  const text = readout.inspectReadoutText(true, 8, { x, y }, 16);
+  assert.ok(text.includes(full));
+  assert.ok(text.includes('KP·'));
+});
+
 test('G10: при выключенном режиме строка осмотра отсутствует', () => {
   assert.equal(readout.inspectReadoutText(false, 8, { x: 5720, y: 6257 }, 16), null);
   assert.equal(readout.inspectReadoutText(false, 9, { x: 5720, y: 6257 }, null), null);
