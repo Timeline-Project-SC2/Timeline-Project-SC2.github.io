@@ -1,6 +1,7 @@
 /* Map Atlas — поиск, фильтры, счётчики и левая панель каталога. */
 
 import {
+  CONFIG,
   PLACE_TYPES,
   escapeHtml,
   formatNumber,
@@ -9,6 +10,7 @@ import {
   qs,
   searchKey,
 } from './config.ts';
+import { centerOf, formatAddress, parseAddress } from './sector-address.ts';
 import type {
   AtlasKernel,
   CatalogPanelApi,
@@ -49,7 +51,13 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
       return;
     }
 
+    var addressEntry = addressSuggestion(value);
     var results = kernel.data.search(value);
+    if (addressEntry) {
+      // Адрес идёт первым и заменяет «координаты» из числового разбора: буквенная
+      // запись — это тоже переход к точке, дублировать его в списке незачем.
+      results = [addressEntry].concat(results.filter(function (entry) { return entry.kind !== 'coordinate'; }));
+    }
     if (!results.length) {
       el.suggestions.hidden = false;
       el.suggestions.innerHTML = '<div class="suggestions-empty">Ничего не найдено. Попробуйте часть названия места, системы или фракции.</div>';
@@ -79,11 +87,39 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
     renderCatalog();
   }
 
+  /**
+   * Адрес сектора (`KP·REQHC`, `REQHC`, `KP-R-E-Q-H-C`) как переход к точке.
+   *
+   * Разбор — только через `sector-address.ts`: второй парсер адресов запрещён,
+   * иначе появится второй источник истины. Пять латинских букв `A…Y` могут
+   * совпасть с именем, поэтому подсказка адреса идёт отдельной группой «Адрес»,
+   * а совпадения по имени остаются в списке ниже.
+   */
+  function addressSuggestion(value: string): SearchEntry | null {
+    var address = parseAddress(value);
+    if (!address) return null;
+    var center = centerOf(address);
+    return {
+      kind: 'coordinate',
+      kindLabel: 'Адрес',
+      glyph: '⌖',
+      id: 'address:' + formatAddress(address),
+      title: formatAddress(address),
+      subtitle: 'Перейти к узлу · x ' + formatNumber(Math.round(center.x)) + ' · y ' + formatNumber(Math.round(center.y)),
+      x: center.x,
+      y: center.y
+    };
+  }
+
   function openSuggestion(entry: SearchEntry | undefined): void {
     if (!entry) return;
     if (entry.kind === 'coordinate') {
       kernel.dossier.clearDetail();
-      kernel.renderer.centerOn(entry.x, entry.y, Math.max(state.view.scale, kernel.renderer.fitScale() * 2.6));
+      // Адрес — это узел сетки: ведём к нему на предельное приближение, иначе
+      // переход на «×2,6 от обзора» показывает точку, но не её адресный контекст.
+      var isAddress = entry.id.indexOf('address:') === 0;
+      var factor = isAddress ? CONFIG.view.maxFactor : 2.6;
+      kernel.renderer.centerOn(entry.x, entry.y, Math.max(state.view.scale, kernel.renderer.fitScale() * factor));
     } else if (entry.kind === 'system') kernel.dossier.selectSystem(entry.id);
     else if (entry.kind === 'planet') kernel.dossier.selectPlanet(entry.id);
     else if (entry.kind === 'marker') {
