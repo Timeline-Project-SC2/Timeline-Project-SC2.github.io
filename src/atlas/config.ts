@@ -36,7 +36,6 @@ export const CONFIG = {
   view: {
     fitInset: 0.94, // «вся карта» с небольшим запасом по краям
     minFactor: 0.62, // насколько можно отъехать от режима «вся карта»
-    maxFactor: 22, // предел приближения относительно «вся карта»
     panMargin: 0.25, // карта может уйти внутрь экрана на эту долю размера экрана (как на галактике)
     wheelStep: 0.0016,
     animate: 340,
@@ -427,6 +426,8 @@ export interface DataLoaderApi {
 
 export interface CanvasRendererApi {
   fitScale(): number;
+  minScale(): number;
+  maxScale(): number;
   fitView(): void;
   clampView(): void;
   toScreen(x: number, y: number): MapPoint;
