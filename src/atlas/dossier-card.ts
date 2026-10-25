@@ -707,7 +707,8 @@ function pointCardButton(action: string, label: string, address: string, xy: str
 function stateWidth(kernel: AtlasKernel): number {
   var scale = kernel.state.view.scale;
   if (!(scale > 0)) return 0;
-  return Math.min(kernel.state.viewport.w, kernel.state.viewport.h) / scale;
+  // Ширина кадра по горизонтали — та же величина, что и `lw` в ссылке (§7.7).
+  return kernel.state.viewport.w / scale;
 }
 
 /**

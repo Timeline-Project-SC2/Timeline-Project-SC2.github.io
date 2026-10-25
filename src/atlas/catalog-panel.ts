@@ -1,7 +1,6 @@
 /* Map Atlas — поиск, фильтры, счётчики и левая панель каталога. */
 
 import {
-  CONFIG,
   PLACE_TYPES,
   escapeHtml,
   formatNumber,
@@ -117,9 +116,12 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
       kernel.dossier.clearDetail();
       // Адрес — это узел сетки: ведём к нему на предельное приближение, иначе
       // переход на «×2,6 от обзора» показывает точку, но не её адресный контекст.
+      // Потолок берётся у рендерера (`maxScale()` — кламп «1 св.г. до границы»),
+      // своих коэффициентов вместо него не вводим.
       var isAddress = entry.id.indexOf('address:') === 0;
-      var factor = isAddress ? CONFIG.view.maxFactor : 2.6;
-      kernel.renderer.centerOn(entry.x, entry.y, Math.max(state.view.scale, kernel.renderer.fitScale() * factor));
+      kernel.renderer.centerOn(entry.x, entry.y, isAddress
+        ? kernel.renderer.maxScale()
+        : Math.max(state.view.scale, kernel.renderer.fitScale() * 2.6));
     } else if (entry.kind === 'system') kernel.dossier.selectSystem(entry.id);
     else if (entry.kind === 'planet') kernel.dossier.selectPlanet(entry.id);
     else if (entry.kind === 'marker') {

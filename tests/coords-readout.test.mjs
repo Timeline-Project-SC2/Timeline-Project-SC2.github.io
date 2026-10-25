@@ -38,7 +38,7 @@ test('readout: на «вся карта» процент 100 и расстоян
   assert.ok(text.edge.startsWith('5' + NBSP + '319,15'), text.edge);
 });
 
-test('readout: расстояние до границы не зависит от соотношения сторон', () => {
+test('readout: расстояние до границы считается по короткой оси и не зависит от поворота экрана', () => {
   const tall = { w: 390, h: 844 };
   const wide = { w: 844, h: 390 };
   const fitTall = ladder.fitScaleFor(tall, MAP_SIZE, FIT_INSET);
@@ -46,7 +46,8 @@ test('readout: расстояние до границы не зависит от
   const a = readout.zoomReadoutText(tall, fitTall, fitTall);
   const b = readout.zoomReadoutText(wide, fitWide, fitWide);
   assert.equal(a.edge, b.edge);
-  assert.equal(readout.visibleWidthOf(tall, fitTall), readout.visibleWidthOf(wide, fitWide));
+  // Ширина кадра при этом разная: она идёт по горизонтали, а не по короткой оси.
+  assert.notEqual(readout.visibleWidthOf(tall, fitTall), readout.visibleWidthOf(wide, fitWide));
 });
 
 test('readout: нулевой и отрицательный масштаб не дают строк', () => {
@@ -93,12 +94,40 @@ test('ссылка ?at=: некорректная ширина кадра не �
   assert.equal(decimal.lw, 39.5);
 });
 
-test('ссылка ?at=: ширина кадра переводится в масштаб по метрике edgeDistance', () => {
+test('ссылка ?at=: lw=39 на 1920×1080 — это ширина кадра 39, высота 21,94', () => {
   const target = readout.parseMapLink('?at=KP·REQHC&lw=39');
   const scale = readout.scaleForVisibleWidth(VIEWPORT, target.lw);
-  assert.equal(scale, ladder.scaleForEdgeDistance(VIEWPORT, 39 / 2));
+  assert.equal(scale, VIEWPORT.w / 39);
+  assert.equal(scale, 1920 / 39);
   assert.ok(Math.abs(readout.visibleWidthOf(VIEWPORT, scale) - 39) < 1e-9);
+  // Высота кадра при той же величине в 1,78 раза меньше ширины.
+  assert.ok(Math.abs(VIEWPORT.h / scale - 21.94) < 0.01, String(VIEWPORT.h / scale));
   assert.equal(readout.scaleForVisibleWidth(VIEWPORT, 0), null);
+  assert.equal(readout.scaleForVisibleWidth(VIEWPORT, -1), null);
+});
+
+test('ссылка ?at=: на телефоне 390×844 lw=39 остаётся шириной 39', () => {
+  const phone = { w: 390, h: 844 };
+  const scale = readout.scaleForVisibleWidth(phone, 39);
+  assert.equal(scale, 390 / 39);
+  assert.ok(Math.abs(readout.visibleWidthOf(phone, scale) - 39) < 1e-9);
+  // Высота кадра тут уже почти в 2,2 раза больше ширины — и это не ошибка.
+  assert.ok(Math.abs(phone.h / scale - 84.4) < 0.05, String(phone.h / scale));
+});
+
+test('ссылка ?at=: на упоре клампа ширина не 0,5, а 3,5556 св.г.', () => {
+  // Кламп живёт в рендерере: `centerOn()` ограничивает масштаб до `maxScale()`,
+  // равного `min(w,h)/2` — это ровно «1,00 св.г. до границы» по короткой оси.
+  const requested = readout.scaleForVisibleWidth(VIEWPORT, 0.5);
+  assert.equal(requested, 1920 / 0.5);
+  const maxScale = ladder.maxScaleForTargetEdge(VIEWPORT, MAP_SIZE, FIT_INSET);
+  const applied = Math.min(requested, maxScale);
+  assert.equal(applied, 540);
+  const width = readout.visibleWidthOf(VIEWPORT, applied);
+  assert.ok(Math.abs(width - 3.5555555) < 1e-6, String(width));
+  assert.ok(width > 0.5);
+  // И это то же самое число, что 2·w/min(w,h).
+  assert.ok(Math.abs(width - 2 * VIEWPORT.w / Math.min(VIEWPORT.w, VIEWPORT.h)) < 1e-12);
 });
 
 test('админ-режим ?coords=1 распознаётся только точным значением', () => {

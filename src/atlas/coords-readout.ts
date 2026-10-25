@@ -22,7 +22,7 @@ import type {
   SystemRecord,
   TravelPointRecord,
 } from './config.ts';
-import { edgeDistance, scaleForEdgeDistance } from './level-ladder.ts';
+import { edgeDistance } from './level-ladder.ts';
 import { centerOf, formatAddress, parseAddress } from './sector-address.ts';
 import { formatDistanceLy } from './sector-units.ts';
 import { openPointCard } from './dossier-card.ts';
@@ -75,16 +75,28 @@ export function isCoordinatesMode(search?: string): boolean {
   }
 }
 
-/** Видимая ширина кадра по короткой оси, св.г. */
+/**
+ * Видимая ширина кадра по горизонтали, св.г. — ровно `lw` из `?at=…&lw=`.
+ *
+ * Величина ширины кадра, а не короткая ось: при `lw = 39` кадр 1920×1080 обязан
+ * быть 39 св.г. по ширине (высота при этом 21,94 св.г., потому что она в 1,78 раза
+ * короче). Метрика глубины «до границы» считается отдельно — `edgeDistance`.
+ */
 export function visibleWidthOf(viewport: { readonly w: number; readonly h: number }, scale: number): number {
-  if (!(scale > 0) || !(viewport.w > 0) || !(viewport.h > 0)) return 0;
-  return Math.min(viewport.w, viewport.h) / scale;
+  if (!(scale > 0) || !(viewport.w > 0)) return 0;
+  return viewport.w / scale;
 }
 
-/** Масштаб, при котором видимая ширина кадра равна `lw` св.г. */
+/**
+ * Масштаб, при котором ширина кадра равна `lw` св.г.
+ *
+ * Сверху масштаб клампит `centerOn()` рендерера (`[minScale, maxScale]`), поэтому
+ * на `lw` меньше `2·w/min(w,h)` кадр упирается в предел и ширина выходит больше
+ * заказанной. Ограничения здесь нет намеренно: одна граница — у рендерера.
+ */
 export function scaleForVisibleWidth(viewport: { readonly w: number; readonly h: number }, lw: number): number | null {
-  if (!(lw > 0)) return null;
-  return scaleForEdgeDistance({ w: viewport.w, h: viewport.h }, lw / 2);
+  if (!(lw > 0) || !(viewport.w > 0)) return null;
+  return viewport.w / lw;
 }
 
 export interface ZoomReadoutText {
