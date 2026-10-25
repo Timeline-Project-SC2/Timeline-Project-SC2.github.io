@@ -32,6 +32,9 @@ import { createCoordsReadout, parseMapLink, scaleForVisibleWidth } from './coord
 import { createDataLoader } from './data-loader.ts';
 import { createDossierCard, requestedSystemFrame } from './dossier-card.ts';
 import { createSectorField } from './sector-field.ts';
+import { createFlight, currentFlightPoint, planArrowTrip, planClickFlight } from './sector-flight.ts';
+import { createSectorArrows } from './sector-arrows.ts';
+import { addressOf, formatAddress } from './sector-address.ts';
 
 const doc = document;
 
@@ -128,6 +131,28 @@ kernel.catalog = createCatalogPanel(kernel);
 kernel.dossier = createDossierCard(kernel);
 kernel.coords = createCoordsReadout(kernel);
 kernel.app = { toast, layoutMapControls, resize, dismissTimelineLoader };
+const flight = createFlight(kernel);
+let sectorArrows: ReturnType<typeof createSectorArrows> | null = null;
+
+function startFlightTo(systemId: string, arrowTrip = false): void {
+  const target = state.systemsById[systemId];
+  if (!target?.coord) return;
+  const from = currentFlightPoint(kernel);
+  const to = { x: target.coord[0], y: target.coord[1], level: 9, id: target.id };
+  const screenTarget = kernel.renderer.toScreen(to.x, to.y);
+  const currentDistance = Math.hypot(screenTarget.x - state.viewport.w / 2, screenTarget.y - state.viewport.h / 2);
+  if (from.level >= 8 && currentDistance <= 0.5) {
+    toast('Enter — войти в систему');
+    return;
+  }
+  const plan = arrowTrip ? planArrowTrip(from, to) : planClickFlight(from, to);
+  flight.flyTo(plan, function (): void {
+    kernel.dossier.selectSystem(systemId, { center: false, pin: true, forceDetail: true });
+    sectorArrows?.refresh();
+  });
+  const arrows = doc.querySelector<HTMLElement>('.sector-arrows');
+  if (arrows) arrows.classList.add('is-flying');
+}
 
 /* ------------------------------------------------------------------ загрузочный экран */
 
@@ -254,6 +279,32 @@ function cacheElements(): void {
 function bindEvents(): void {
   // карта
   kernel.renderer.bindMapEvents();
+  el.mapStage.addEventListener('pointerdown', function (): void {
+    if (flight.active) flight.cancel();
+    const arrows = doc.querySelector<HTMLElement>('.sector-arrows');
+    if (arrows) arrows.classList.remove('is-flying');
+  }, true);
+  el.mapStage.addEventListener('wheel', function (): void { if (flight.active) flight.cancel(); }, true);
+  el.mapCanvas.addEventListener('click', function (event): void {
+    window.setTimeout(function (): void {
+      const rect = el.mapCanvas.getBoundingClientRect();
+      const sx = event.clientX - rect.left;
+      const sy = event.clientY - rect.top;
+      const nearby = state.systems.map(function (system) {
+        if (!system.coord) return null;
+        const screen = kernel.renderer.toScreen(system.coord[0], system.coord[1]);
+        const distance = Math.hypot(screen.x - sx, screen.y - sy);
+        return distance <= 24 ? { id: system.id, distance } : null;
+      }).filter((item): item is { id: string; distance: number } => item !== null)
+        .sort((a, b) => a.distance - b.distance);
+      if (nearby[0]) startFlightTo(nearby[0].id);
+    }, 0);
+  });
+
+  // Esc прерывает полёт даже при фокусе в поле ввода.
+  doc.addEventListener('keydown', function (event): void {
+    if (event.key === 'Escape' && flight.active) flight.cancel();
+  }, true);
 
   // управление
   el.zoomIn.addEventListener('click', function (): void {
@@ -306,6 +357,7 @@ function bindEvents(): void {
     const tag = ((event.target as Element | null)?.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
     if (event.key === 'Escape') {
+      if (flight.active) { flight.cancel(); return; }
       if (!el.helpModal.hidden) { closeModal(el.helpModal); return; }
       kernel.dossier.clearDetail();
       return;
@@ -403,6 +455,17 @@ function applyMapLink(): void {
  * ни отрисовки, ни заглушки: только отметка на корневом узле, по которой SW-5
  * заберёт запрос.
  */
+function applyFlyLink(): void {
+  const requested = new URLSearchParams(window.location.search).get('fly');
+  if (!requested) return;
+  const normalized = requested.replace(/\s+/g, '').replace(/\./g, '·').toUpperCase();
+  const target = state.systems.find(function (system): boolean {
+    if (!system.coord) return false;
+    return formatAddress(addressOf(system.coord[0], system.coord[1])).replace(/\s+/g, '').toUpperCase() === normalized;
+  });
+  if (target) startFlightTo(target.id, true);
+}
+
 function applySystemFrameRequest(): void {
   const request = requestedSystemFrame(kernel);
   if (!request) {
@@ -476,6 +539,11 @@ function boot(): void {
     // Кадр точки из `?at=<адрес>&lw=<ширина>` применяется после загрузки данных:
     // до неё центрировать нечего, а `mapSize` ещё неизвестен.
     applyMapLink();
+    sectorArrows = createSectorArrows(kernel, function (system): void {
+      if (system.coord) startFlightTo(system.id, true);
+    });
+    sectorArrows.refresh();
+    applyFlyLink();
     applySystemFrameRequest();
     kernel.coords.updateZoomReadout();
     kernel.renderer.requestRender();

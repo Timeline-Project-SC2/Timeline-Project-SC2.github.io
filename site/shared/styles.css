@@ -341,3 +341,27 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
   .map-hint { letter-spacing: .06em; }
 }
 
+/* Секторная навигация SW-3F: подсказки направления и рамка полёта. */
+.sector-arrows { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.sector-arrow { position: absolute; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; transform: translate(-50%, -50%); border: 1px solid rgba(174,205,239,.38); border-radius: 50%; color: #dcecff; background: rgba(5,12,22,.76); box-shadow: 0 0 18px rgba(104,158,221,.18); cursor: pointer; pointer-events: auto; }
+.sector-arrow:hover, .sector-arrow:focus-visible { border-color: rgba(195,222,251,.86); background: rgba(18,34,53,.96); outline: 2px solid rgba(181,211,250,.5); outline-offset: 2px; }
+.sector-arrow-chevron { display: block; font: 28px/1 Arial, sans-serif; transform: rotate(var(--arrow-angle)); }
+.sector-arrow.is-visible { opacity: .6; }
+.sector-arrow-copy { position: absolute; left: 50%; top: calc(100% + 4px); min-width: max-content; max-width: min(240px, 56vw); transform: translateX(-50%); padding: 4px 7px; border: 1px solid rgba(174,198,227,.2); background: rgba(5,10,18,.94); color: #e3edf9; font: 10px/1.35 var(--mono); text-align: center; pointer-events: none; }
+.sector-arrow-address { display: none; color: #9cacc0; }
+.sector-arrow:hover .sector-arrow-address, .sector-arrow:focus-visible .sector-arrow-address { display: block; }
+.sector-arrow-count { position: absolute; right: 18px; bottom: 20px; padding: 7px 10px; border: 1px solid rgba(174,198,227,.24); background: rgba(5,10,18,.86); color: #b9cce3; font: 10px var(--mono); }
+.sector-arrows.is-flying { opacity: .15; pointer-events: none; }
+.sector-flight-frame { position: absolute; z-index: 4; inset: 12%; pointer-events: none; opacity: 1; border: 1px solid rgba(181,211,250,.52); box-shadow: inset 0 0 42px rgba(116,169,231,.08), 0 0 36px rgba(121,176,238,.08); transform: scale(calc(1.28 - var(--flight-progress, 0) * .28)); transition: transform 50ms linear; }
+.sector-flight-frame::before, .sector-flight-frame::after { content: ''; position: absolute; inset: 0; border: 1px solid rgba(181,211,250,.24); }
+.sector-flight-frame::before { inset: 12% 7%; }
+.sector-flight-frame::after { inset: 7% 12%; }
+.sector-flight-frame.is-settling { transform: scale(1); }
+@media (max-width: 599px) {
+  .sector-arrow-count { right: 8px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .sector-arrow-copy { max-width: 62vw; font-size: 9px; }
+  .sector-flight-frame { inset: 9%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sector-arrow, .sector-flight-frame { transition: none; }
+}
