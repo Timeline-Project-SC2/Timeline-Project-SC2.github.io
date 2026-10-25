@@ -1049,8 +1049,22 @@ function toBubblePoint(raw: NetSystemInput, index: number): BubblePoint | null {
   };
 }
 
+/** Нижний и верхний пределы радиуса узла на экране, px (Z-4d дельта 3). */
+export const NODE_PX_MIN = 4;
+export const NODE_PX_MAX = 9;
+
 function nodeRadiusFactor(systemType: string): number {
   return NODE_RADIUS_BY_TYPE[systemType] ?? NODE_RADIUS_DEFAULT;
+}
+
+/** Экранный радиус узла по типу системы и экранному радиусу лепестка (`bubblePetalRadius × scale`). */
+export function nodeRadiusPx(systemType: string, petalRadiusPx: number): number {
+  const safePetal = Number.isFinite(petalRadiusPx) ? Math.max(0, petalRadiusPx) : 0;
+  return clamp(
+    safePetal * nodeRadiusFactor(normalizedSystemType(systemType)) * 0.35,
+    NODE_PX_MIN,
+    NODE_PX_MAX,
+  );
 }
 
 /**

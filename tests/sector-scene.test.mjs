@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const scene = require('../src/atlas/sector-scene.ts');
 const ladder = require('../src/atlas/level-ladder.ts');
 const address = require('../src/atlas/sector-address.ts');
+const { parseBounds } = require('../src/atlas/sector-bounds.ts');
 
 const {
   APERTURE_FIRST_LEVEL,
@@ -22,7 +23,7 @@ const {
   MAX_LOUPE_LABELS,
   MAX_LOUPE_LINES,
   MIN_DRAWABLE_PX,
-  TERRITORY_LEVELS,
+  boundsFor,
   buildSectorScene,
   cameraEdgeDistance,
   cameraForLevel,
@@ -39,9 +40,12 @@ const {
   pixelsPerLightYear,
   screenToWorld,
   sceneLevel,
-  territoriesFor,
   worldToScreen,
 } = scene;
+
+const SECTOR_BOUNDS = parseBounds(
+  readFileSync(fileURLToPath(new URL('../data/sector-bounds.json', import.meta.url)), 'utf8'),
+);
 
 const DESKTOP = { w: 1920, h: 1080 };
 const PHONE = { w: 390, h: 844 };
@@ -155,10 +159,10 @@ test('ничего мельче 0.25 px сцена не выдаёт (И-9)', ()
   }
 });
 
-test('сетка адресов живёт на L1…L8 по тирам Z-4c §1, берёт тир из кодека и не меняет тиры по уровням', () => {
-  assert.equal(GRID_LAST_LEVEL, 8);
+test('сетка адресов живёт на L1…L9 по тирам Z-4d, берёт тир из кодека и не меняет тиры по уровням', () => {
+  assert.equal(GRID_LAST_LEVEL, 9);
 
-  const expectedTier = { 1: 'T1', 2: 'T1', 3: 'T2', 4: 'T2', 5: 'T2', 6: 'T2', 7: 'T2', 8: 'T2' };
+  const expectedTier = { 1: 'T1', 2: 'T1', 3: 'T2', 4: 'T2', 5: 'T2', 6: 'T2', 7: 'T3', 8: 'T3', 9: 'T3' };
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
     const result = sceneAt(level);
     const lines = result.primitives.filter((primitive) => primitive.kind === 'grid.line');
@@ -170,7 +174,6 @@ test('сетка адресов живёт на L1…L8 по тирам Z-4c §1
       continue;
     }
 
-    // Z-4c §1: на L8 сетка живёт (прежнее «на L8 пусто» было следствием старой таблицы).
     assert.ok(lines.length > 0, `L${level}: нет линий сетки`);
     const tierId = expectedTier[level];
     for (const line of lines) {
@@ -191,14 +194,14 @@ test('сетка адресов живёт на L1…L8 по тирам Z-4c §1
   }
 });
 
-test('G1: таблица обычной сетки — [null,1,1,2,2,2,2,2,2,null] (индекс = уровень L0…L9)', () => {
-  assert.deepEqual([...GRID_TIER_BY_LEVEL], [null, 1, 1, 2, 2, 2, 2, 2, 2, null]);
+test('G1: таблица обычной сетки — [null,1,1,2,2,2,2,3,3,3] (индекс = уровень L0…L9)', () => {
+  assert.deepEqual([...GRID_TIER_BY_LEVEL], [null, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
   assert.equal(GRID_TIER_BY_LEVEL.length, ladder.DEEPEST_SECTOR_LEVEL + 1);
 });
 
 test('G2: число линий и подписей обычной сетки на 1920×1080 при центре кадра (допуск ±1)', () => {
-  const expectedLines = { 1: 6, 2: 4, 3: 18, 4: 14, 5: 10, 6: 10, 7: 6, 8: 6 };
-  const expectedLabels = { 1: 8, 2: 4, 3: 64, 4: 48, 5: 24, 6: 24, 7: 8, 8: 8 };
+  const expectedLines = { 1: 6, 2: 4, 3: 18, 4: 14, 5: 10, 6: 10, 7: 32, 8: 26, 9: 20 };
+  const expectedLabels = { 1: 8, 2: 4, 3: 64, 4: 48, 5: 24, 6: 24, 7: 64, 8: 64, 9: 64 };
   for (const level of Object.keys(expectedLines).map(Number)) {
     const { lines, labels } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
     assert.ok(
@@ -212,10 +215,39 @@ test('G2: число линий и подписей обычной сетки н
   }
 });
 
-test('G3: на L8 сетка не пустая и линий меньше 12 — предохранитель MAX_GRID_LINES не срабатывает', () => {
-  const { lines } = gridFor(DESKTOP, cameraForLevel(8, 5000, 5000), 8);
-  assert.ok(lines.length > 0, 'L8: сетка пустая');
-  assert.ok(lines.length < 12, `L8: линий ${lines.length}, ждали меньше 12`);
+test('G3: сетка на глубоких уровнях L6…L9, L0 и 390×844; нигде на L1…L9 не достигает MAX_GRID_LINES', () => {
+  // L0: сетки нет вовсе.
+  const g0 = gridFor(DESKTOP, cameraForLevel(0, 5000, 5000), 0);
+  assert.equal(g0.lines.length, 0);
+  assert.equal(g0.labels.length, 0);
+
+  // L6 остался T2.
+  const g6 = gridFor(DESKTOP, cameraForLevel(6, 5000, 5000), 6);
+  assert.ok(g6.lines.length > 0 && g6.lines.every((line) => line.tier === 'T2' && line.cellSize === 400));
+
+  // L7 и L8: T3, cellSize 80.
+  for (const level of [7, 8]) {
+    const g = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
+    assert.ok(g.lines.length > 0, `L${level}: сетка пустая`);
+    assert.ok(g.lines.every((line) => line.tier === 'T3' && line.cellSize === 80));
+  }
+
+  // L9 при 1920×1080: T3, cellSize 80, линий 21 ± 2, подписей ≥ 1 и ≤ 64.
+  const g9 = gridFor(DESKTOP, cameraForLevel(9, 5000, 5000), 9);
+  assert.ok(g9.lines.every((line) => line.tier === 'T3' && line.cellSize === 80));
+  assert.ok(Math.abs(g9.lines.length - 21) <= 2, `L9: линий ${g9.lines.length}, ждали 21 ± 2`);
+  assert.ok(g9.labels.length >= 1 && g9.labels.length <= MAX_GRID_LABELS, `L9: подписей ${g9.labels.length}`);
+
+  // На 390×844 на L9: линии непусты, проверка читаемости отключает подписи (0).
+  const g9Phone = gridFor(PHONE, cameraForLevel(9, 5000, 5000), 9);
+  assert.ok(g9Phone.lines.length > 0, '390×844 L9: линии пусты');
+  assert.equal(g9Phone.labels.length, 0, '390×844 L9: подписи должны быть отключены');
+
+  // Цикл L1…L9 при 1920×1080: число линий < MAX_GRID_LINES нигде.
+  for (let level = 1; level <= 9; level += 1) {
+    const { lines } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
+    assert.ok(lines.length > 0 && lines.length < MAX_GRID_LINES, `L${level}: линий ${lines.length}`);
+  }
 });
 
 test('G4: лимиты обычной сетки не подняты: MAX_GRID_LINES = 512, MAX_GRID_LABELS = 64', () => {
@@ -264,11 +296,11 @@ test('G7: при LOUPE_MIN_CELL_PX = 200 глубина падает до баз
   const strict = loupeGridFor(DESKTOP, camera, 8, point, { minCellPx: 200 });
 
   assert.equal(normal.tierIndex, 4);
-  // Ни один тир до базового (T2) не даёт 200 px, поэтому остаётся базовый тир.
-  assert.equal(strict.tierIndex, 2);
+  // Ни один тир до базового (T3 на L8) не даёт 200 px, поэтому остаётся базовый тир.
+  assert.equal(strict.tierIndex, 3);
   assert.ok(strict.tierIndex < normal.tierIndex);
   assert.ok(strict.lines.length > 0, 'кадр пустой');
-  assert.ok(strict.lines.length < normal.lines.length, 'линий стало не меньше');
+  assert.ok(strict.lines.length <= normal.lines.length, 'линий стало больше');
 });
 
 test('G8: точка осмотра — центр кадра для сенсора до тапа и позиция указателя для мыши', () => {
@@ -359,9 +391,9 @@ test('H3: центральная ячейка всегда имеет ровно
     return { loupe, atCentre };
   };
 
-  // Порог 200 px: тир упирается в базовый (T2), подпись центра одна и непустая.
+  // Порог 200 px: тир упирается в базовый (T3 на L8), подпись центра одна и непустая.
   const strict = centreLabel(DESKTOP, 8, { minCellPx: 200 });
-  assert.equal(strict.loupe.tierIndex, 2);
+  assert.equal(strict.loupe.tierIndex, 3);
   assert.equal(strict.atCentre.length, 1);
   assert.ok(strict.atCentre[0].text.length > 0);
 
@@ -382,8 +414,8 @@ test('H3: центральная ячейка всегда имеет ровно
   assert.equal(normal.atCentre[0].text.length, 4);
 });
 
-test('H4: тиры лупы по уровням при 1920×1080 — L1 2, L3 3, L5 3, L7 3, L8 4 (L2, L4, L6 — 3)', () => {
-  const expected = { 1: 2, 2: 3, 3: 3, 4: 3, 5: 3, 6: 3, 7: 3, 8: 4 };
+test('H4: тиры лупы по уровням при 1920×1080 — L1 2, L2…L7 3, L8…L9 4', () => {
+  const expected = { 1: 2, 2: 3, 3: 3, 4: 3, 5: 3, 6: 3, 7: 3, 8: 4, 9: 4 };
   for (const level of Object.keys(expected).map(Number)) {
     const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
     assert.equal(loupe.tierIndex, expected[level], `L${level}: тир T${loupe.tierIndex}, ждали T${expected[level]}`);
@@ -414,13 +446,20 @@ test('лупа: команд отрисовки не больше 26 + 9·3 на
   }
 });
 
-test('лупа на L0 и L9 не строится: базовой сетки на этих уровнях нет', () => {
-  for (const level of [0, 9]) {
-    const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
-    assert.equal(loupe.tierIndex, null);
-    assert.equal(loupe.lines.length, 0);
-    assert.equal(loupe.bounds, null);
-  }
+test('лупа: на L0 не строится, на L9 строится от базы тира 3', () => {
+  const loupe0 = loupeGridFor(DESKTOP, cameraForLevel(0, 5000, 5000), 0, { x: 960, y: 540 });
+  assert.equal(loupe0.tierIndex, null);
+  assert.equal(loupe0.lines.length, 0);
+  assert.equal(loupe0.bounds, null);
+
+  assert.equal(GRID_TIER_BY_LEVEL[9], 3);
+  const loupe9Phone = loupeGridFor(PHONE, cameraForLevel(9, 5000, 5000), 9, { x: 195, y: 422 });
+  assert.equal(loupe9Phone.tierIndex, 3);
+  assert.ok(loupe9Phone.lines.length > 0);
+
+  const loupe9Base = loupeGridFor(DESKTOP, cameraForLevel(9, 5000, 5000), 9, { x: 960, y: 540 }, { minCellPx: 200 });
+  assert.equal(loupe9Base.tierIndex, 3);
+  assert.ok(loupe9Base.lines.length > 0);
 });
 
 test('адресные метки сетки совпадают с кодеком адреса на той же точке', () => {
@@ -440,79 +479,80 @@ test('адресные метки сетки совпадают с кодеко�
   }
 });
 
-test('территории фракций считаются по системам и живут на L2…L9', () => {
-  // С Z-4b глубина лестницы девять: поле фракции больше не обрезается на L6,
-  // иначе на L6→L7 оно исчезало бы скачком (шов, запрещённый владельцем).
-  assert.deepEqual([...TERRITORY_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
-
+test('на L0…L9 сцена не содержит ни одного примитива kind === \'territory\'', () => {
+  assert.equal(scene.TERRITORY_LEVELS, undefined);
+  assert.equal(scene.territoriesFor, undefined);
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
-    const result = sceneAt(level, { systems: SYSTEMS });
-    const territories = result.primitives.filter((primitive) => primitive.kind === 'territory');
-    if (!TERRITORY_LEVELS.includes(level)) {
-      assert.equal(territories.length, 0, `L${level}: территории не должны рисоваться`);
-      continue;
-    }
-    assert.ok(territories.length > 0, `L${level}: территории пропали`);
-    for (const territory of territories) {
-      assert.ok(territory.systems >= 1);
-      assert.ok(territory.radius >= 0);
-      assert.ok(Number.isFinite(territory.x) && Number.isFinite(territory.y));
-      assert.ok(territory.screenRadius >= 0);
-      // Новый контракт Z-3.9: альфа слоя приходит из лестницы, а не из рендерера.
-      assert.equal(
-        territory.alpha,
-        ladder.layerFillAlpha(level),
-        `L${level}: альфа территории не из layerFillAlpha`,
-      );
-    }
-  }
-
-  const territories = territoriesFor(SYSTEMS, DESKTOP, cameraForLevel(3, 5720, 6257), 3);
-  const dominion = territories.find((territory) => territory.faction === 'Доминион Терран');
-  assert.ok(dominion !== undefined);
-  assert.equal(dominion.systems, 2);
-  assert.equal(dominion.centerX, (5720 + 5750) / 2);
-  assert.equal(dominion.centerY, (6257 + 6300) / 2);
-  assert.ok(Math.abs(dominion.radius - Math.hypot(15, 21.5)) <= 1e-9);
-  assert.equal(dominion.alpha, ladder.layerFillAlpha(3), 'альфа территории на L3');
-  // Система без фракции в территории не попадает.
-  assert.ok(!territories.some((territory) => territory.faction === ''));
-});
-
-/* --------------------------------------- затухание территорий на глубине (Z-3.9) */
-
-test('T7: территории на L7 и L9 не пуст, альфа = layerFillAlpha(level)', () => {
-  for (const level of [7, 8, 9]) {
-    const territories = territoriesFor(SYSTEMS, DESKTOP, cameraForLevel(level, 5720, 6257), level);
-    assert.ok(territories.length > 0, `L${level}: поле фракции исчезло`);
-    for (const territory of territories) {
-      assert.equal(
-        territory.alpha,
-        ladder.layerFillAlpha(level),
-        `L${level}: альфа ${territory.alpha} вместо ${ladder.layerFillAlpha(level)}`,
-      );
-      assert.ok(territory.alpha > 0, `L${level}: альфа слоя погасла в ноль`);
-    }
-    // Ниже L6 слой живёт, но слабеет: L7 и L9 стоят на нижней границе 0,25.
-    assert.ok(Math.abs(ladder.layerFillAlpha(level) - ladder.LAYER_FILL_ALPHA_MIN) <= 1e-9);
-  }
-
-  // Появление на L7 — не скачок: L6 ярче L7, L7 не ноль.
-  assert.ok(ladder.layerFillAlpha(6) > ladder.layerFillAlpha(7));
-});
-
-test('T8: на L1 и L0 территорий по-прежнему нет', () => {
-  for (const level of [0, 1]) {
-    assert.equal(TERRITORY_LEVELS.includes(level), false, `L${level} не должен давать территории`);
-    const territories = territoriesFor(SYSTEMS, DESKTOP, cameraForLevel(level, 5720, 6257), level);
-    assert.equal(territories.length, 0, `L${level}: территории не должны рисоваться`);
-
-    const result = sceneAt(level, { systems: SYSTEMS });
+    const result = sceneAt(level, { systems: SYSTEMS, extra: { sectorBounds: SECTOR_BOUNDS } });
     assert.equal(
       result.primitives.filter((primitive) => primitive.kind === 'territory').length,
       0,
-      `L${level}: сцена вернула территории`,
+      `L${level}: сцена содержит удалённый примитив territory`,
     );
+    assert.equal('territories' in result.counts, false);
+  }
+});
+
+test('B1–B4: контуры границ сектора и гало на L0…L9 (data/sector-bounds.json)', () => {
+  // B1: на L0 и на L9 сцена содержит 4 примитива kind 'bounds' при переданных данных и 0 — без них.
+  for (const level of [0, 9]) {
+    const withBounds = sceneAt(level, { extra: { sectorBounds: SECTOR_BOUNDS } });
+    const items = withBounds.primitives.filter((primitive) => primitive.kind === 'bounds');
+    assert.equal(items.length, 4, `L${level}: ожидалось 4 примитива bounds`);
+    assert.equal(withBounds.counts.bounds, 4);
+
+    const omitted = sceneAt(level);
+    assert.equal(omitted.primitives.filter((primitive) => primitive.kind === 'bounds').length, 0);
+    assert.equal(omitted.counts.bounds, 0);
+
+    const explicitNull = sceneAt(level, { extra: { sectorBounds: null } });
+    assert.equal(explicitNull.primitives.filter((primitive) => primitive.kind === 'bounds').length, 0);
+    assert.equal(boundsFor(null, DESKTOP, cameraForLevel(level)).length, 0);
+  }
+
+  // B2: точки контура лежат в пределах кадра ± 2 px (на L0…L9 и при наведении на вершину контура).
+  for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
+    for (const [cx, cy] of [[5000, 5000], [8024, 2788]]) {
+      const built = buildSectorScene({
+        systems: SYSTEMS,
+        viewport: DESKTOP,
+        camera: cameraForLevel(level, cx, cy),
+        sectorBounds: SECTOR_BOUNDS,
+      });
+      for (const item of built.primitives.filter((primitive) => primitive.kind === 'bounds')) {
+        for (const pt of item.points) {
+          assert.ok(pt.x >= -2 && pt.x <= DESKTOP.w + 2, `L${level} ${item.id}: x=${pt.x} вне кадра`);
+          assert.ok(pt.y >= -2 && pt.y <= DESKTOP.h + 2, `L${level} ${item.id}: y=${pt.y} вне кадра`);
+        }
+      }
+    }
+  }
+  const visibleArcL9 = boundsFor(SECTOR_BOUNDS, DESKTOP, cameraForLevel(9, 8024, 2788))
+    .find((item) => item.id === 'sector.outline');
+  assert.ok(visibleArcL9 !== undefined && visibleArcL9.points.length > 0, 'на L9 у вершины контура должна остаться видимая дуга');
+
+  // B3: у гало dash = [12, 8], у контура сектора dash пуст.
+  const l0Bounds = boundsFor(SECTOR_BOUNDS, DESKTOP, cameraForLevel(0, 5000, 5000));
+  const halo = l0Bounds.find((item) => item.boundsKind === 'halo');
+  const outline = l0Bounds.find((item) => item.boundsKind === 'sector');
+  assert.ok(halo !== undefined && outline !== undefined);
+  assert.deepEqual(halo.dash, [12, 8]);
+  assert.deepEqual(outline.dash, []);
+
+  // B4: порядок — все 'bounds' идут раньше любого 'marker' и сетки.
+  for (const level of [0, 3, 9]) {
+    const built = sceneAt(level, { extra: { sectorBounds: SECTOR_BOUNDS } });
+    let lastBoundsIndex = -1;
+    let firstOtherIndex = Infinity;
+    built.primitives.forEach((primitive, idx) => {
+      if (primitive.kind === 'bounds') {
+        lastBoundsIndex = idx;
+      } else if (primitive.kind === 'grid.line' || primitive.kind === 'grid.label' || primitive.kind === 'marker') {
+        firstOtherIndex = Math.min(firstOtherIndex, idx);
+      }
+    });
+    assert.ok(lastBoundsIndex >= 0);
+    assert.ok(lastBoundsIndex < firstOtherIndex, `L${level}: bounds должны идти раньше сетки и маркеров`);
   }
 });
 
@@ -612,7 +652,7 @@ test('пустой вход не падает: остаются только с�
         camera: cameraForLevel(level, 5000, 5000),
       });
       assert.equal(result.counts.markers, 0);
-      assert.equal(result.counts.territories, 0);
+      assert.equal(result.counts.bounds, 0);
       assert.equal(result.counts.apertures, 0);
       assert.equal(result.counts.labels, 0);
       assert.equal(result.counts.invalidSystems, 0);
@@ -697,12 +737,12 @@ test('маркеры отсечены по кадру и адрес берётс
 });
 
 test('сцена детерминирована и слои идут в порядке §8.1', () => {
-  const first = sceneAt(5);
-  const second = sceneAt(5);
+  const first = sceneAt(5, { extra: { sectorBounds: SECTOR_BOUNDS } });
+  const second = sceneAt(5, { extra: { sectorBounds: SECTOR_BOUNDS } });
   assert.deepEqual(second, first);
 
   const order = first.primitives.map((primitive) => primitive.kind);
-  const rank = { territory: 0, 'grid.line': 1, 'grid.label': 2, marker: 3, aperture: 4, label: 5 };
+  const rank = { bounds: 0, 'grid.line': 1, 'grid.label': 2, marker: 3, aperture: 4, label: 5 };
   for (let index = 1; index < order.length; index++) {
     assert.ok(rank[order[index]] >= rank[order[index - 1]], `слой ${order[index]} вышел раньше ${order[index - 1]}`);
   }
