@@ -1,11 +1,33 @@
-## 2026-10-25 — Черновик документации SW-2: процедурное поле и вывод растра
+## 2026-10-25 — Волна SW-2: процедурное поле, растр выведен (PR #260–#261)
 
-> Черновик Воркера 3. **Не сливать до явного сигнала «SW-2B слит».** Перед запросом на слияние сверить утверждения ниже с фактическим `git diff origin/main...<ветка SW-2B>` и поправить по его содержимому; сейчас это предварительная формулировка по §17.
+**SW-2A-style** (PR #260, `9a5986c`) и **SW-2B** (PR #261, `5d7c69b`) слиты в `main`.
+В рамках SW-2 растровая подложка `/sector/` заменена процедурным полем и весь секторный
+тайловый контур выведен из эксплуатации.
 
-- **Подложка сектора** заменена процедурным полем с WebGL2 и CPU-фолбэком; `nebula` — основной стиль, второй пресет `tactical` выбирается через `?style=tactical`; генерация детерминирована seed-текстом `KP`.
-- **Растровый контур** (тайлы, превью подложки и исходный `assets/src/koprulu-sector.jpg`) удалён; сборка ассетов больше не собирает секторную пирамиду. `imageVersion` в `data/meta.json` сохранён для кэш-бастинга изображений галактики.
-- **CI:** гейт `verify:no-raster` запускается раньше `npm test`.
-- Инвентарь и порядок документирования: [`agents_task_orchestration/agents_task_orchestration.md`](docs/agents_task_orchestration/agents_task_orchestration.md) §17.3 и §17.13; исполняемый гейт: [`tools/verify_no_raster.mjs`](tools/verify_no_raster.mjs).
+- **Поле сектора** (`src/atlas/sector-field.ts`): WebGL2 + CPU-фолбэк; `nebula` — стиль по
+  умолчанию, `tactical` выбирается через `?style=tactical` (`CONFIG.field.style`,
+  `resolveFieldStyle`); детерминизм — seed-текст `KP`. Параметризованный режим `edgeDist ≤ 1` св.г.
+  гасит туманность и пыль, оставляя звёздную пыль и мягкий фон; текущий вызов `renderField()` из
+  `canvas-renderer.ts` пока не передаёт `edgeDist`, поэтому гашение реализовано в модуле поля, но
+  не подключено к живому кадру. В `app.ts` при `boot()` создаётся отдельный offscreen `fieldCanvas`;
+  `canvas-renderer.ts` выводит его через `ctx.drawImage`. `drawSchematic()` сохранён как резерв
+  до загрузки данных, при недоступном поле и потере WebGL-контекста.
+- **Растр выведен, тайлы удалены:** удалены `src/atlas/tile-pyramid.ts`, `CONFIG.tiles`,
+  `rasterMode`, `state.tiles`, `SITE_LINKS.sectorMapPreview` и исходный
+  `assets/src/koprulu-sector.jpg` (`21,7` МиБ). `tools/build_assets.py` больше не собирает
+  секторные тайлы и `map-preview`; правила `.gitignore`, кэш тайлов в `pages.yml`, артефакт
+  в `assets.yml` и требование `assets/tiles.json` в `check.yml` убраны.
+- **Метаданные:** в `data/meta.json` сохранены `mapSize = 10000` и единственное поле блока
+  `assets.imageVersion = "05a76b26"`. `imageVersion` оставлен для кэш-бастинга изображений
+  галактики параметром `?v=` в публикации.
+- **Бесшовность:** рамка сектора `strokeRect` удалена по требованию владельца (§17.15.6);
+  координатные отметки и сетка сохранены, alpha сетки — `0.08`.
+- **CI и приёмка:** `verify:no-raster` (9 проверок, гейт **G7.3**) в job `scripts` стоит выше
+  `npm test`, а в job `build` запускается после `verify:publish`; результат гейта — `9/9`.
+  Приёмочная база `main`: `npm test` — `207` тестов, `199` pass и `8` известных падений
+  планетарного Stage-8 вне зоны; `verify:sector-core` — `3034`; `verify:publish` — `7` маршрутов.
+- Инвентарь и порядок — [§17.3, §17.13 и §17.18](docs/agents_task_orchestration/agents_task_orchestration.md);
+  исполняемый гейт — [`tools/verify_no_raster.mjs`](tools/verify_no_raster.mjs).
 
 ## Ядро сектора — адрес, лестница глубины и единицы (SW-1, 25.10.2026)
 
