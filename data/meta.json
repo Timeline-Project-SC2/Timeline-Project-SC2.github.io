@@ -10,11 +10,7 @@
   ],
   "mapSize": 10000,
   "assets": {
-    "hasRaster": true,
-    "preview": "/assets/map-preview.webp",
-    "tiles": "/assets/tiles.json",
-    "version": "17b60184",
-    "imageVersion": "0f419d0e"
+    "imageVersion": "05a76b26"
   },
   "source": "planet-generation-sheet"
 }

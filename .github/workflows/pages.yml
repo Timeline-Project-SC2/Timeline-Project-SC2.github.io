@@ -27,16 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v6
-      # Кэш производных изображений: основной расход времени — пирамида из 534 тайлов.
+      # Кэш производных изображений галактики, логотипа и макетов.
       # Ключ учитывает все исходники и логику сборки; при промахе workflow пересобирает и сохраняет их.
       - name: Восстановить кэш изображений
         id: image-cache
         uses: actions/cache/restore@v6.1.0
         with:
           path: |
-            assets/tiles
-            assets/tiles.json
-            assets/map-preview.webp
             assets/galaxy-map-*.webp
             assets/timeline-project-logo.webp
             assets/koprulu-macket.webp
@@ -73,9 +70,6 @@ jobs:
         uses: actions/cache/save@v6.1.0
         with:
           path: |
-            assets/tiles
-            assets/tiles.json
-            assets/map-preview.webp
             assets/galaxy-map-*.webp
             assets/timeline-project-logo.webp
             assets/koprulu-macket.webp

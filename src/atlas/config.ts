@@ -11,8 +11,9 @@ import type {
   TravelPlannerApi,
   TravelStop,
 } from '../../site/shared/travel-planner.ts';
+import type { FieldStyle, SectorField } from './sector-field.ts';
 
-export type { SiteLinks, TravelCalculation, TravelPlannerApi, TravelStop };
+export type { FieldStyle, SectorField, SiteLinks, TravelCalculation, TravelPlannerApi, TravelStop };
 
 export const CONFIG = {
   storage: {
@@ -29,10 +30,8 @@ export const CONFIG = {
     // Снимок профилей планет (Этап 7): place_id -> пресет, радиус, статус и ключ PG1.
     generation: 'planet-generation.csv',
   },
-  tiles: {
-    manifest: '/assets/tiles.json',
-    dir: '/assets/tiles',
-    cacheLimit: 260,
+  field: {
+    style: 'nebula' as FieldStyle,
   },
   view: {
     fitInset: 0.94, // «вся карта» с небольшим запасом по краям
@@ -215,31 +214,9 @@ export interface AtlasMeta {
   generatedAt?: string;
   generated?: string;
   assets?: {
-    hasRaster?: boolean;
-    preview?: string;
+    imageVersion?: string;
     [key: string]: unknown;
   };
-  levels?: unknown[];
-  [key: string]: unknown;
-}
-
-export interface TileLevel {
-  index: number;
-  size: number;
-  width?: number;
-  height?: number;
-  cols: number;
-  rows: number;
-  [key: string]: unknown;
-}
-
-export interface TileManifest {
-  mapSize?: number;
-  tileSize?: number;
-  version?: string | number;
-  dir?: string;
-  preview?: string;
-  levels: TileLevel[];
   [key: string]: unknown;
 }
 
@@ -249,7 +226,6 @@ export interface AtlasDataset {
   planets: PlaceRecord[];
   overrides: AtlasOverrides;
   labels: MapLabel[];
-  tiles: TileManifest | null;
 }
 
 interface SearchEntryBase {
@@ -307,7 +283,6 @@ export interface AtlasState {
   planets: PlaceRecord[];
   labels: MapLabel[];
   overrides: AtlasOverrides | null;
-  tiles: TileManifest | null;
   systemsById: Record<string, SystemRecord>;
   planetsById: Record<string, PlaceRecord>;
   planetByName: Record<string, PlaceRecord>;
@@ -327,7 +302,6 @@ export interface AtlasState {
   activeSystemId: string | null;
   activePlanetId: string | null;
   pinned: boolean;
-  rasterMode: string;
   view: AtlasView;
   viewport: AtlasViewport;
   dpr: number;
@@ -420,6 +394,7 @@ export interface AtlasRuntime {
   renderQueued: boolean;
   toastTimer: number | null;
   loaderDismissed: boolean;
+  fieldContextLost: boolean;
   coordinateReadoutEnabled: boolean;
   coordinatePointer: MapPoint | null;
   travelCore: TravelPlannerApi | null;
@@ -448,12 +423,6 @@ export interface DataLoaderApi {
   factionsOf(place: PlaceRecord): string[];
   systemFactions(system: SystemRecord): string[];
   search(query: string): SearchEntry[];
-}
-
-export interface TilePyramidApi {
-  configureTiles(manifest: TileManifest | null | undefined, meta: AtlasMeta | null | undefined): void;
-  drawRaster(): void;
-  hasPreviewImage(): boolean;
 }
 
 export interface CanvasRendererApi {
@@ -532,8 +501,9 @@ export interface AtlasKernel {
   runtime: AtlasRuntime;
   canvas: HTMLCanvasElement | null;
   ctx: CanvasRenderingContext2D | null;
+  fieldCanvas: HTMLCanvasElement | null;
+  field: SectorField | null;
   data: DataLoaderApi;
-  tiles: TilePyramidApi;
   renderer: CanvasRendererApi;
   catalog: CatalogPanelApi;
   dossier: DossierCardApi;
@@ -642,5 +612,15 @@ export function assetVersion(): string {
     return new URL(script.src).searchParams.get('v') || '';
   } catch {
     return '';
+  }
+}
+
+export function resolveFieldStyle(search?: string): FieldStyle {
+  try {
+    const raw = search === undefined ? window.location.search : search;
+    const param = new URLSearchParams(raw).get('style');
+    return param === 'tactical' ? 'tactical' : CONFIG.field.style;
+  } catch {
+    return CONFIG.field.style;
   }
 }

@@ -4,15 +4,10 @@
 Исходники лежат в assets/src/ и в репозиторий публикации не попадают (pages.yml
 их исключает). Из них этот скрипт делает то, что реально отдаётся в веб:
 
-  1. Карта сектора → пирамида тайлов WebP 512×512 (уровни 1250 → 10 000)
-     + assets/tiles.json (манифест) + assets/map-preview.webp (подложка на
-     первый кадр и запасной вариант, если манифеста нет).
-  2. Карта галактики → assets/galaxy-map-<ширина>.webp под srcset.
-  3. Логотип прелоадера → assets/timeline-project-logo.webp.
-  4. Макеты секторов → assets/<имя>.webp.
-  5. data/meta.json получает mapSize и assets.hasRaster — по этому флагу
-     app.js решает, запрашивать ли манифест тайлов.
-  6. data/meta.json получает imageVersion — общий SHA-256 исходников картинок.
+  1. Карта галактики → assets/galaxy-map-<ширина>.webp под srcset.
+  2. Логотип прелоадера → assets/timeline-project-logo.webp.
+  3. Макеты секторов → assets/<имя>.webp.
+  4. data/meta.json получает imageVersion — общий SHA-256 исходников картинок.
      Исходный HTML/JS этот скрипт больше не переписывает: версию к ссылкам на
      собранные картинки подставляет Vite-сборка публикации в .publish.
 
@@ -21,18 +16,13 @@
     pip install pillow
     python3 tools/build_assets.py            # собрать только устаревшее
     python3 tools/build_assets.py --force    # пересобрать всё
-    python3 tools/build_assets.py --check    # только проверить актуальность
-
-Свежесть определяется по SHA-256 исходника: хэш записан в манифест тайлов и в
-.meta.json, поэтому после подмены исходника сборка сама понимает, что устарела.
+    python3 tools/build_assets.py --check    # только проверить наличие собранных картинок
 """
 import argparse
 import hashlib
 import io
 import json
-import shutil
 import sys
-import time
 from pathlib import Path
 
 try:
@@ -40,22 +30,14 @@ try:
 except ImportError:
     sys.exit("Не установлен Pillow. Поставьте: pip install pillow")
 
-# исходник карты сектора 10 000×10 000 — больше стандартного лимита Pillow
+# крупные исходники могут превышать стандартный лимит Pillow
 Image.MAX_IMAGE_PIXELS = None
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "assets" / "src"
 ASSETS = ROOT / "assets"
-TILES_DIR = ASSETS / "tiles"
 META = ROOT / "data" / "meta.json"
-
-# --- карта сектора -----------------------------------------------------------
-SECTOR_SOURCE = "koprulu-sector.jpg"   # исходник, 10 000×10 000
-TILE_SIZE = 512
-TILE_LEVELS = [1250, 2500, 5000, 10000]
-TILE_QUALITY = 82
-PREVIEW_EDGE = 2500                    # подложка на первый кадр
-PREVIEW_QUALITY = 82
+CANONICAL_MAP_SIZE = 10000
 
 # --- карта галактики ---------------------------------------------------------
 GALAXY_SOURCE = "galaxy-map.jpg"
@@ -84,8 +66,7 @@ def sha256(path):
 def save_webp(image, path, quality, method=6):
     """Сохраняет WebP и возвращает размер файла в байтах.
 
-    method — степень сжатия: 6 даёт минимум размера, но заметно медленнее.
-    Для сотен тайлов берём 4, для единичных картинок — 6.
+    method — степень сжатия: 6 даёт минимум размера для единичных картинок.
     """
     buf = io.BytesIO()
     image.save(buf, "WEBP", quality=quality, method=method)
@@ -121,83 +102,6 @@ def human(num_bytes):
 
 
 # -----------------------------------------------------------------------------
-
-def build_tiles(force):
-    """Пирамида тайлов карты сектора + манифест."""
-    source = SRC / SECTOR_SOURCE
-    if not source.exists():
-        print(f"  ! нет исходника {source.relative_to(ROOT)} — пропуск")
-        return 0
-
-    manifest_path = ASSETS / "tiles.json"
-    source_sha = sha256(source)
-    if not force and manifest_path.exists():
-        try:
-            current = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            current = {}
-        if current.get("sourceSha256") == source_sha and TILES_DIR.exists():
-            print(f"  = тайлы актуальны ({current.get('tiles', '?')} шт.)")
-            return 0
-
-    started = time.time()
-    if TILES_DIR.exists():
-        shutil.rmtree(TILES_DIR)
-
-    image = Image.open(source)
-    image = image.convert("RGB")
-    print(f"  исходник {image.width}×{image.height}, {human(source.stat().st_size)}")
-
-    levels = []
-    total = 0
-    count = 0
-    # уровни считаем от маленького к большому: дешёвый ресайз от предыдущего
-    for index, edge in enumerate(TILE_LEVELS):
-        level_dir = TILES_DIR / str(index)
-        level_dir.mkdir(parents=True, exist_ok=True)
-        level = image.resize((edge, edge), Image.LANCZOS)
-        cols = (edge + TILE_SIZE - 1) // TILE_SIZE
-        rows = cols
-        for col in range(cols):
-            for row in range(rows):
-                box = (
-                    col * TILE_SIZE,
-                    row * TILE_SIZE,
-                    min((col + 1) * TILE_SIZE, edge),
-                    min((row + 1) * TILE_SIZE, edge),
-                )
-                tile = level.crop(box)
-                total += save_webp(tile, level_dir / f"{col}_{row}.webp", TILE_QUALITY, method=4)
-                count += 1
-        levels.append({
-            "index": index,
-            "width": edge,
-            "height": edge,
-            "cols": cols,
-            "rows": rows,
-        })
-        print(f"    уровень {index}: {edge}×{edge}, {cols}×{rows} тайлов")
-
-    # подложка пересобирается вместе с тайлами: исходник тот же
-    preview_size = save_webp(
-        resize_square(image, PREVIEW_EDGE), ASSETS / "map-preview.webp", PREVIEW_QUALITY
-    )
-
-    manifest = {
-        "mapSize": image.width,
-        "tileSize": TILE_SIZE,
-        "dir": "/assets/tiles",
-        "levels": levels,
-        "tiles": count,
-        "preview": "/assets/map-preview.webp",
-        "version": source_sha[:8],
-        "source": {"file": SECTOR_SOURCE, "sha256": source_sha},
-        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"  + {count} тайлов, {human(total)} · подложка {human(preview_size)} · {time.time() - started:.0f} с")
-    return total + preview_size
-
 
 def build_galaxy(force):
     """Карта галактики в нескольких ширинах под srcset."""
@@ -270,40 +174,31 @@ def image_version():
 
 
 def update_meta(force):
-    """meta.json: размер карты и флаг растра — по нему app.js берёт тайлы."""
-    manifest_path = ASSETS / "tiles.json"
-    if not manifest_path.exists():
-        print("  ! нет манифеста тайлов — meta.json не тронут")
-        return 0
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
+    """meta.json: размер карты и imageVersion для кэш-бастинга собранных картинок."""
     meta = {}
     if META.exists():
         meta = json.loads(META.read_text(encoding="utf-8"))
-    assets = dict(meta.get("assets") or {})
-    wanted = {
-        "hasRaster": True,
-        "preview": manifest.get("preview"),
-        "tiles": "/assets/tiles.json",
-        "version": manifest.get("version"),
-        "imageVersion": image_version(),
+    map_size = meta.get("mapSize") or CANONICAL_MAP_SIZE
+    version = image_version()
+    wanted_assets = {
+        "imageVersion": version,
     }
-    if not force and meta.get("mapSize") == manifest["mapSize"] and all(
-        assets.get(k) == v for k, v in wanted.items()
+    if (
+        not force
+        and meta.get("mapSize") == map_size
+        and meta.get("assets") == wanted_assets
     ):
         print("  = meta.json актуален")
         return 0
 
-    meta["mapSize"] = manifest["mapSize"]
-    assets.update(wanted)
-    meta["assets"] = assets
+    meta["mapSize"] = map_size
+    meta["assets"] = wanted_assets
     META.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"  + meta.json: mapSize={manifest['mapSize']}, hasRaster=true")
+    print(f"  + meta.json: mapSize={map_size}, imageVersion={version}")
     return 0
 
 
 STEPS = [
-    ("Тайлы карты сектора", build_tiles),
     ("Карта галактики", build_galaxy),
     ("Логотип прелоадера", build_logo),
     ("Макеты секторов", build_mackets),
@@ -312,26 +207,9 @@ STEPS = [
 
 
 def check_fresh():
-    """Проверяет, что собранные файлы не старше исходников. Ничего не пишет."""
+    """Проверяет, что собранные картинки на месте. Ничего не пишет."""
     problems = []
-    manifest_path = ASSETS / "tiles.json"
-    sector = SRC / SECTOR_SOURCE
-    if sector.exists():
-        if not manifest_path.exists():
-            problems.append("нет assets/tiles.json")
-        else:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest.get("source", {}).get("sha256") != sha256(sector):
-                problems.append(f"тайлы собраны из другого {SECTOR_SOURCE}")
-            missing = sum(
-                1 for level in manifest.get("levels", [])
-                for col in range(level["cols"]) for row in range(level["rows"])
-                if not (TILES_DIR / str(level["index"]) / f"{col}_{row}.webp").exists()
-            )
-            if missing:
-                problems.append(f"не хватает {missing} тайлов")
     required = [
-        ASSETS / "map-preview.webp",
         *(ASSETS / f"galaxy-map-{width}.webp" for width in GALAXY_WIDTHS),
         ASSETS / "timeline-project-logo.webp",
         *(ASSETS / f"{name}.webp" for name in MACKETS),

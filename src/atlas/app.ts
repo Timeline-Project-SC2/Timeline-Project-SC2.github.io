@@ -1,15 +1,12 @@
 /*!
  * Map Atlas — точка входа интерфейса атласа.
- * Статика без зависимостей: canvas-рендер тайлов с LOD, маркеры систем,
- * поиск, каталог, досье и слой подписей карты.
+ * Статика без зависимостей: процедурное поле сектора (WebGL2 + CPU-фолбэк),
+ * маркеры систем, поиск, каталог, досье и слой подписей карты.
  *
  * Данные: /data/meta.json, /data/systems.json, /data/planets.json,
  *         /data/system-overrides.json, /data/map-labels.json.
- * Растр:  /assets/tiles.json (+ /assets/tiles/<level>/<x>_<y>.webp) либо
- *         /assets/map-preview.webp.
  * Пути от корня сайта: страницы лежат в site/<страница>/, общий код — в
- * site/shared/. Если растра нет — рисуется схема с сеткой, звёздным полем и
- * слоем подписей, снятых с карты.
+ * site/shared/. До загрузки данных и при недоступности поля рисуется схема.
  */
 
 import {
@@ -18,6 +15,7 @@ import {
   escapeHtml,
   qs,
   readJSON,
+  resolveFieldStyle,
   writeJSON,
 } from './config.ts';
 import type {
@@ -33,7 +31,7 @@ import { createCatalogPanel } from './catalog-panel.ts';
 import { createCoordsReadout } from './coords-readout.ts';
 import { createDataLoader } from './data-loader.ts';
 import { createDossierCard } from './dossier-card.ts';
-import { createTilePyramid } from './tile-pyramid.ts';
+import { createSectorField } from './sector-field.ts';
 
 const doc = document;
 
@@ -44,7 +42,6 @@ const state: AtlasState = {
   planets: [],
   labels: [],
   overrides: null,
-  tiles: null,
   systemsById: {},
   planetsById: {},
   planetByName: {},
@@ -64,7 +61,6 @@ const state: AtlasState = {
   activeSystemId: null,
   activePlanetId: null,
   pinned: false,
-  rasterMode: 'none',
   view: { scale: 1, tx: 0, ty: 0 },
   viewport: { w: 1, h: 1 },
   dpr: 1,
@@ -105,6 +101,7 @@ const runtime: AtlasRuntime = {
   renderQueued: false,
   toastTimer: null,
   loaderDismissed: false,
+  fieldContextLost: false,
   coordinateReadoutEnabled: false,
   coordinatePointer: null,
   travelCore: window.TravelPlanner || null,
@@ -121,10 +118,11 @@ const kernel = {
   runtime,
   canvas: null,
   ctx: null,
+  fieldCanvas: null,
+  field: null,
 } as unknown as AtlasKernel;
 
 kernel.data = createDataLoader(kernel);
-kernel.tiles = createTilePyramid(kernel);
 kernel.renderer = createCanvasRenderer(kernel);
 kernel.catalog = createCatalogPanel(kernel);
 kernel.dossier = createDossierCard(kernel);
@@ -390,6 +388,34 @@ function boot(): void {
     return;
   }
 
+  // Поле живёт на собственном offscreen-канвасе: потеря WebGL-контекста на нём
+  // не повреждает 2D-контекст основного #mapCanvas.
+  const fieldCanvas = doc.createElement('canvas');
+  const field = createSectorField(fieldCanvas, { style: resolveFieldStyle() });
+  const onFieldContextLost = function (): void {
+    runtime.fieldContextLost = true;
+    kernel.renderer.requestRender();
+  };
+  const onFieldContextRestored = function (): void {
+    runtime.fieldContextLost = false;
+    kernel.renderer.requestRender();
+  };
+  fieldCanvas.addEventListener('webglcontextlost', onFieldContextLost);
+  fieldCanvas.addEventListener('webglcontextrestored', onFieldContextRestored);
+  kernel.fieldCanvas = fieldCanvas;
+  kernel.field = field;
+
+  const disposeField = function (): void {
+    fieldCanvas.removeEventListener('webglcontextlost', onFieldContextLost);
+    fieldCanvas.removeEventListener('webglcontextrestored', onFieldContextRestored);
+    if (!kernel.field) return;
+    kernel.field.dispose();
+    kernel.field = null;
+    kernel.fieldCanvas = null;
+  };
+  window.addEventListener('pagehide', disposeField);
+  window.addEventListener('beforeunload', disposeField);
+
   kernel.catalog.detectSkin();
   bindEvents();
 
@@ -399,10 +425,8 @@ function boot(): void {
     state.planets = data.planets || [];
     state.overrides = data.overrides || { systems: {} };
     state.labels = data.labels || [];
-    state.tiles = data.tiles || null;
 
     kernel.data.buildModel();
-    kernel.tiles.configureTiles(data.tiles, state.meta);
     kernel.coords.initializeTravelPlanner();
     resize();
     kernel.renderer.fitView();

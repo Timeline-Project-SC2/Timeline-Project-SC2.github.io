@@ -22,7 +22,6 @@ import type {
   PlanetProfileStatus,
   SearchEntry,
   SystemRecord,
-  TileManifest,
   UnknownRecord,
 } from './config.ts';
 
@@ -323,7 +322,6 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           planets: planets,
           overrides: inline.overrides || { systems: {} },
           labels: inline.labels || [],
-          tiles: null
         };
       });
     }
@@ -332,36 +330,36 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     var suffix = v ? ('?v=' + encodeURIComponent(v)) : '';
     var dir = CONFIG.data.dir;
 
-    // Сначала метаданные: в них флаг сборки растра, от которого зависит, нужно ли
-    // вообще запрашивать assets/tiles.json (иначе на каждый заход будет 404).
+    // Сначала метаданные карты, затем каталог систем, мест и снимки таблиц.
     return fetchJSON<AtlasMeta>(dir + CONFIG.data.meta + suffix, {}).then(function (meta) {
       if (meta && meta.generatedAt && !meta.generated) meta.generated = meta.generatedAt;
-      var wantsRaster = !!(meta && meta.assets && meta.assets.hasRaster);
       return Promise.all([
         fetchJSON<UnknownRecord[]>(dir + CONFIG.data.systems + suffix, []),
         fetchJSON<PlaceRecord[]>(dir + CONFIG.data.planets + suffix, []),
         fetchJSON<AtlasOverrides>(dir + CONFIG.data.overrides + suffix, { systems: {} }),
         fetchJSON<MapLabel[]>(dir + CONFIG.data.labels + suffix, []),
-        wantsRaster ? fetchJSON<TileManifest | null>(CONFIG.tiles.manifest + suffix, null) : Promise.resolve(null),
         fetchCSV('/data/systems.csv' + suffix),
         fetchCSV('/data/places.csv' + suffix),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix)
-      ]).then(function (parts) {
-        var systems = parts[0];
-        var planets = parts[1];
-        if ((!systems || !systems.length) && parts[5] && parts[5].length) {
-          systems = parts[5].map(mapSystemRow);
+      ]).then(function ([systemsJson, planetsJson, overrides, labels, systemRows, placeRows, generationRows]) {
+        var systems = systemsJson;
+        var planets = planetsJson;
+        if ((!systems || !systems.length) && systemRows && systemRows.length) {
+          systems = systemRows.map(mapSystemRow);
         }
-        if ((!planets || !planets.length) && parts[6] && parts[6].length) {
-          planets = parts[6].map(mapPlaceRow);
+        if ((!planets || !planets.length) && placeRows && placeRows.length) {
+          planets = placeRows.map(mapPlaceRow);
         } else {
-          planets = mergeStandalonePoiRows(planets || [], parts[6]);
+          planets = mergeStandalonePoiRows(planets || [], placeRows);
         }
-        systems = mergeSystemTypes(systems, parts[5]);
-        planets = mergePlanetGenerationRows(planets, parts[7]);
+        systems = mergeSystemTypes(systems, systemRows);
+        planets = mergePlanetGenerationRows(planets, generationRows);
         return {
-          meta: meta, systems: systems, planets: planets,
-          overrides: parts[2], labels: parts[3], tiles: parts[4]
+          meta: meta,
+          systems: systems,
+          planets: planets,
+          overrides: overrides,
+          labels: labels,
         };
       });
     });
