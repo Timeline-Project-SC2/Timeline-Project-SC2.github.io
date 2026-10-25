@@ -12,17 +12,18 @@ const {
   fitScaleFor,
   maxScaleForTargetEdge,
 } = require('../src/atlas/level-ladder.ts');
+const { unitsToLy } = require('../src/atlas/sector-units.ts');
 
 const MAP_SIZE = 10000;
 const EPS = 1e-9;
 
-/** Пять viewport из плана SW-3 / SW-3-wire с точными значениями maxScale = min(w, h) / 2. */
+/** Пять viewport из §17.23 с точными значениями maxScale = min(w, h) / 2000 (px/ед). */
 const PLAN_VIEWPORTS = [
-  { label: '1920×1080', w: 1920, h: 1080, expectedMaxScale: 540 },
-  { label: '1366×768', w: 1366, h: 768, expectedMaxScale: 384 },
-  { label: '2560×1440', w: 2560, h: 1440, expectedMaxScale: 720 },
-  { label: '390×844', w: 390, h: 844, expectedMaxScale: 195 },
-  { label: '844×390', w: 844, h: 390, expectedMaxScale: 195 },
+  { label: '1920×1080', w: 1920, h: 1080, expectedMaxScale: 0.54 },
+  { label: '1366×768', w: 1366, h: 768, expectedMaxScale: 0.384 },
+  { label: '2560×1440', w: 2560, h: 1440, expectedMaxScale: 0.72 },
+  { label: '390×844', w: 390, h: 844, expectedMaxScale: 0.195 },
+  { label: '844×390', w: 844, h: 390, expectedMaxScale: 0.195 },
 ];
 
 /** Целевые точки внутри сектора: геометрический центр и реальная столица (Тарсонис). */
@@ -176,7 +177,7 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
 
 /**
  * Геометрическое расстояние в св.г. от целевой точки `(targetX, targetY)` до каждой из
- * четырёх границ экрана и до ближайшей границы экрана — через `renderer.toWorld(...)`.
+ * четырёх границ экрана и до ближайшей границы экрана — через `renderer.toWorld(...)` и `unitsToLy`.
  */
 function targetToEdgeDistances(renderer, viewport, target) {
   const leftWorld = renderer.toWorld(0, viewport.h / 2);
@@ -184,10 +185,10 @@ function targetToEdgeDistances(renderer, viewport, target) {
   const topWorld = renderer.toWorld(viewport.w / 2, 0);
   const bottomWorld = renderer.toWorld(viewport.w / 2, viewport.h);
 
-  const left = target.x - leftWorld.x;
-  const right = rightWorld.x - target.x;
-  const top = target.y - topWorld.y;
-  const bottom = bottomWorld.y - target.y;
+  const left = unitsToLy(target.x - leftWorld.x);
+  const right = unitsToLy(rightWorld.x - target.x);
+  const top = unitsToLy(target.y - topWorld.y);
+  const bottom = unitsToLy(bottomWorld.y - target.y);
   const nearest = Math.min(left, right, top, bottom);
   const farthest = Math.max(left, right, top, bottom);
 
@@ -210,7 +211,7 @@ test('CONFIG.view.maxFactor удалён из конфигурации и не �
   }
 });
 
-test('maxScale и minScale на пяти плановых viewport: 540 / 384 / 720 / 195 / 195 и ровно 1,00 св.г. до границы', () => {
+test('maxScale и minScale на пяти плановых viewport: 0,54 / 0,384 / 0,72 / 0,195 / 0,195 и ровно 1,00 св.г. до границы', () => {
   assert.equal(TARGET_EDGE_LY, 1);
 
   for (const spec of PLAN_VIEWPORTS) {
@@ -220,7 +221,7 @@ test('maxScale и minScale на пяти плановых viewport: 540 / 384 / 
       const min = h.renderer.minScale();
       const max = h.renderer.maxScale();
 
-      // 1. Точное совпадение с планом: maxScale = min(w, h) / 2 (540 / 384 / 720 / 195 / 195).
+      // 1. Точное совпадение с §17.23: maxScale = min(w, h) / 2000 (0,54 / 0,384 / 0,72 / 0,195 / 0,195).
       assert.equal(max, spec.expectedMaxScale, `${spec.label}: maxScale`);
       assert.equal(
         max,
@@ -329,31 +330,31 @@ test('нижний упор minScale и пересчёт потолка при �
     assert.equal(h.state.view.scale, expectedMin);
     assert.ok(h.state.view.scale < h.renderer.maxScale());
 
-    // 2. Выход на потолок 2560×1440 (maxScale = 720), затем ресайз в 1366×768 (maxScale = 384).
+    // 2. Выход на потолок 2560×1440 (maxScale = 0,72), затем ресайз в 1366×768 (maxScale = 0,384).
     const target = { x: 5000, y: 5000 };
     h.renderer.centerOn(target.x, target.y, 1e6);
     h.flushAnimationFrame(performance.now() + CONFIG.view.animate + 50);
-    assert.equal(h.state.view.scale, 720);
+    assert.equal(h.state.view.scale, 0.72);
 
     h.state.viewport = { w: 1366, h: 768 };
-    h.state.view.tx = 1366 / 2 - target.x * 384;
-    h.state.view.ty = 768 / 2 - target.y * 384;
+    h.state.view.tx = 1366 / 2 - target.x * 0.384;
+    h.state.view.ty = 768 / 2 - target.y * 0.384;
     h.renderer.clampView();
-    assert.equal(h.state.view.scale, 384);
+    assert.equal(h.state.view.scale, 0.384);
     assert.ok(Math.abs(edgeDistance(h.state.viewport, h.state.view.scale) - 1) <= EPS);
 
-    // 3. Поворот экрана 390×844 ↔ 844×390 сохраняет потолок 195 и 1,00 св.г. до ближайшего края.
+    // 3. Поворот экрана 390×844 ↔ 844×390 сохраняет потолок 0,195 и 1,00 св.г. до ближайшего края.
     for (const rotated of [
       { w: 390, h: 844 },
       { w: 844, h: 390 },
     ]) {
       h.state.viewport = rotated;
-      h.state.view.scale = 10000;
-      h.state.view.tx = rotated.w / 2 - target.x * 195;
-      h.state.view.ty = rotated.h / 2 - target.y * 195;
+      h.state.view.scale = 10;
+      h.state.view.tx = rotated.w / 2 - target.x * 0.195;
+      h.state.view.ty = rotated.h / 2 - target.y * 0.195;
       h.renderer.clampView();
-      assert.equal(h.renderer.maxScale(), 195);
-      assert.equal(h.state.view.scale, 195);
+      assert.equal(h.renderer.maxScale(), 0.195);
+      assert.equal(h.state.view.scale, 0.195);
 
       const distances = targetToEdgeDistances(h.renderer, rotated, target);
       assert.ok(Math.abs(distances.nearest - 1) <= EPS);

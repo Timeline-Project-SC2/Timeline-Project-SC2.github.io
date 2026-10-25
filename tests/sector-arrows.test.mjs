@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { selectSectorArrows } = require('../src/atlas/sector-arrows.ts');
+const { distanceLabel, selectSectorArrows } = require('../src/atlas/sector-arrows.ts');
+const { NBSP } = require('../src/atlas/sector-units.ts');
 
 function point(id, name, distance, deg) {
   const angle = deg * Math.PI / 180;
@@ -20,10 +21,30 @@ const golden = [
   worldPoint('dorian', 'Дориан', -102, -57),
 ];
 
-test('golden для Корхала L4: пять систем ранжируются по расстоянию и углу', () => {
+test('golden для Корхала L4: пять систем ранжируются по расстоянию и углу, подписи 0,088…0,117 св.г.', () => {
   const result = selectSectorArrows(golden, 0, 0);
   assert.deepEqual(result.arrows.map((item) => item.name), ['Райдин', 'Мистафф', 'Джонтур', 'Норрис', 'Дориан']);
   assert.deepEqual(result.arrows.map((item) => Math.round(item.distance * 10) / 10), [88.4, 90.8, 108.1, 116.3, 116.8]);
+  assert.deepEqual(
+    result.arrows.map((item) => distanceLabel(item.distance)),
+    [
+      `0,088${NBSP}св.г.`,
+      `0,091${NBSP}св.г.`,
+      `0,108${NBSP}св.г.`,
+      `0,116${NBSP}св.г.`,
+      `0,117${NBSP}св.г.`,
+    ],
+  );
+  assert.deepEqual(
+    [88.4, 90.8, 108.07, 116.32, 116.76].map((distance) => distanceLabel(distance)),
+    [
+      `0,088${NBSP}св.г.`,
+      `0,091${NBSP}св.г.`,
+      `0,108${NBSP}св.г.`,
+      `0,116${NBSP}св.г.`,
+      `0,117${NBSP}св.г.`,
+    ],
+  );
   const angles = result.arrows.map((item) => Math.round(item.angle * 1800 / Math.PI) / 10);
   assert.deepEqual(angles, [136.4, -71.4, 92.7, 11.4, -150.8]);
   assert.equal(result.omitted, 0);
@@ -53,6 +74,7 @@ test('набор Слейна оставляет четыре направлен
   assert.equal(result.arrows.length, 4);
   assert.equal(result.omitted, 6);
   assert.equal(result.nextDistance, 2152);
+  assert.equal(distanceLabel(result.nextDistance), `2,2${NBSP}св.г.`);
 });
 
 test('видимость сохраняется как состояние цели, но не меняет расстояние ранжирования', () => {

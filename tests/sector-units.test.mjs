@@ -68,15 +68,59 @@ test('углы нормализуются в интервал (-180°, 180°] с
   assert.throws(() => units.formatAngleDeg(Number.NaN), RangeError);
 });
 
-test('режим label следует правилам подписи §6.5.1 и не меняет short/full', () => {
+test('режим label содержит три ступени точности (§17.23) и не меняет short/full', () => {
+  // Ступень ly < 1 -> 3 знака.
+  assert.equal(units.formatDistanceLy(0, 'label'), `0,000${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(0.0884, 'label'), `0,088${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(0.0908, 'label'), `0,091${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(0.10807, 'label'), `0,108${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(0.11632, 'label'), `0,116${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(0.11676, 'label'), `0,117${NBSP}св.г.`);
+
+  // Ступень 1 <= ly < 100 -> 1 знак.
+  assert.equal(units.formatDistanceLy(1, 'label'), `1,0${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(10, 'label'), `10,0${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(88.4, 'label'), `88,4${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(90.79, 'label'), `90,8${NBSP}св.г.`);
+
+  // Ступень 100 <= ly < 10 000 -> целое с разрядным NBSP; >= 10 000 -> порог.
+  assert.equal(units.formatDistanceLy(100, 'label'), `100${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(108.07, 'label'), `108${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(116.76, 'label'), `117${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(1302.6, 'label'), `1${NBSP}303${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(1303, 'label'), `1${NBSP}303${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(10000, 'label'), `≥ 10${NBSP}000${NBSP}св.г.`);
+
+  // Режимы short и full не меняются.
+  assert.equal(units.formatDistanceLy(0.0884, 'short'), `0,1${NBSP}св.г.`);
+  assert.equal(units.formatDistanceLy(0.0884, 'full'), `0,09${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(1, 'full'), `1,00${NBSP}св.г.`);
   assert.equal(units.formatDistanceLy(108.07, 'short'), `108,1${NBSP}св.г.`);
   assert.throws(() => units.formatDistanceLy(88.4, 'unknown'), RangeError);
+});
+
+test('UNITS_PER_LY = 1000, unitsToLy и lyToUnits: перевод, round-trip и валидация', () => {
+  assert.equal(units.UNITS_PER_LY, 1000);
+  assert.equal(units.unitsToLy(1000), 1);
+  assert.equal(units.unitsToLy(88.4), 0.0884);
+  assert.equal(units.unitsToLy(0), 0);
+  assert.equal(units.unitsToLy(10000), 10);
+
+  assert.equal(units.lyToUnits(0), 0);
+  assert.equal(units.lyToUnits(0.5), 500);
+  assert.equal(units.lyToUnits(1), 1000);
+  assert.equal(units.lyToUnits(10), 10000);
+
+  for (const u of [0, 0.5, 88.4, 90.8, 108.07, 116.32, 116.76, 990.4, 1000, 3672.4, 10000]) {
+    assert.ok(Math.abs(units.lyToUnits(units.unitsToLy(u)) - u) <= 1e-9, `round-trip ед→св.г.→ед для ${u}`);
+  }
+  for (const ly of [0, 0.0884, 0.101, 0.5, 0.99, 1, 3.6724, 10]) {
+    assert.ok(Math.abs(units.unitsToLy(units.lyToUnits(ly)) - ly) <= 1e-12, `round-trip св.г.→ед→св.г. для ${ly}`);
+  }
+
+  for (const bad of [-0.1, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, null, undefined]) {
+    assert.throws(() => units.unitsToLy(bad), RangeError, `unitsToLy(${String(bad)})`);
+    assert.throws(() => units.lyToUnits(bad), RangeError, `lyToUnits(${String(bad)})`);
+    assert.throws(() => units.formatDistanceLy(bad), RangeError, `formatDistanceLy(${String(bad)})`);
+  }
 });

@@ -9,9 +9,9 @@ import type {
   SelectionOptions,
   SystemRecord,
 } from './config.ts';
-import { levelForWidth, levelSpec } from './level-ladder.ts';
+import { levelForWidth, levelSpec, visibleWidthLyForLevel } from './level-ladder.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
-import { formatDistanceLy } from './sector-units.ts';
+import { formatDistanceLy, unitsToLy } from './sector-units.ts';
 
 export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
   const state = kernel.state;
@@ -578,10 +578,18 @@ export function nearestSystemTo(
   return best;
 }
 
-/** Уровень лестницы и его номинальная видимая ширина для строки `L7 · 78,1 св.г.`. */
+/** Уровень лестницы и его номинальная видимая ширина в св.г. (например, `L0 · 10,0 св.г.`). */
 export function levelCaption(visibleWidth: number): string {
-  var spec = levelSpec(levelForWidth(visibleWidth));
-  return spec.id + ' · ' + formatDistanceLy(spec.visibleWidth, 'short');
+  var level = levelForWidth(visibleWidth);
+  var spec = levelSpec(level);
+  return spec.id + ' · ' + formatDistanceLy(visibleWidthLyForLevel(level), 'short');
+}
+
+/** Расстояние от точки `(x, y)` в единицах карты до ядра сектора, отформатированное в св.г. */
+export function sectorCoreDistanceText(x: number, y: number): string {
+  var core = Math.hypot(x - SECTOR_CORE.x, y - SECTOR_CORE.y);
+  var coreLy = unitsToLy(core);
+  return formatDistanceLy(coreLy, 'full');
 }
 
 function createPointCardView(kernel: AtlasKernel): PointCardView {
@@ -654,7 +662,6 @@ function createPointCardView(kernel: AtlasKernel): PointCardView {
     var nearest = nearestSystemTo(kernel.state.systems, function (value) {
       return kernel.data.explicitMapNumber(value);
     }, x, y);
-    var core = Math.hypot(x - SECTOR_CORE.x, y - SECTOR_CORE.y);
 
     root.innerHTML =
       '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">' +
@@ -664,9 +671,9 @@ function createPointCardView(kernel: AtlasKernel): PointCardView {
       '<div>x ' + escapeHtml(formatPointTenths(x)) + ' &nbsp; y ' + escapeHtml(formatPointTenths(y)) + '</div>' +
       '<div>ближайшая система: ' +
       (nearest
-        ? escapeHtml(nearest.name) + ' · ' + formatDistanceLy(nearest.distance, 'full')
+        ? escapeHtml(nearest.name) + ' · ' + formatDistanceLy(unitsToLy(nearest.distance), 'full')
         : 'координат нет') + '</div>' +
-      '<div>от ядра сектора: ' + formatNumber(Math.round(core)) + ' св.г.</div>' +
+      '<div>от ядра сектора: ' + sectorCoreDistanceText(x, y) + '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:2px">' +
       pointCardButton('address', 'Копировать адрес', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +
       pointCardButton('xy', 'Копировать x⇥y', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +
