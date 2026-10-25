@@ -349,9 +349,9 @@ test('проекция мира на кадр: центр в центре, об�
   assert.ok(Math.abs(back.x - 5820) <= 1e-9);
   assert.ok(Math.abs(back.y - 6257) <= 1e-9);
 
-  // edgeDist сцены — метрика §17.15: половина видимой ширины.
-  assert.equal(cameraEdgeDistance(DESKTOP, camera), 312.5);
-  assert.equal(cameraEdgeDistance(PHONE, camera), 312.5);
+  // edgeDist сцены — метрика §17.15 / §17.23: половина видимой ширины в св.г.
+  assert.equal(cameraEdgeDistance(DESKTOP, camera), 0.3125);
+  assert.equal(cameraEdgeDistance(PHONE, camera), 0.3125);
 });
 
 test('хит-зона: d + 6 px, на сенсоре не меньше 44 px', () => {
