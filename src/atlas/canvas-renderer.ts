@@ -16,11 +16,36 @@ import type {
   PlaceRecord,
   SystemRecord,
 } from './config.ts';
-import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
+import { layerFillAlpha, layerLineAlpha, markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
-import type { NetChannel, NetSystemInput } from './faction-net.ts';
-import { CHANNEL_BRIGHTNESS, MAX_CHANNELS_PER_FRAME, channelsFor, isNetLayerLevel } from './faction-net.ts';
+import type {
+  Bubble,
+  BubbleNode,
+  FactionNet,
+  Flare,
+  MergedField,
+  NetChannel,
+  NetPoint,
+  NetSystemInput,
+} from './faction-net.ts';
+import {
+  CHANNEL_BRIGHTNESS,
+  CHANNEL_STROKE_PX,
+  CONTROL_FIELD_SIDE_RATIO,
+  FLARE_HEAD_ANGLE,
+  FLARE_HEAD_RATIO,
+  FLARE_STROKE_PX,
+  MAX_CHANNELS_PER_FRAME,
+  MAX_FLARES_PER_NET,
+  bubbleFor,
+  channelsFor,
+  flaresFor,
+  isNetLayerLevel,
+  mergedFields,
+  parseNetworks,
+  sampleGradient,
+} from './faction-net.ts';
 import type {
   SceneAperture,
   SceneCamera,
@@ -41,6 +66,12 @@ import {
   labelTextFor,
   loupeGridFor,
 } from './sector-scene.ts';
+
+/** Альфа заливки бабла на `L2`; глубже множится на `layerFillAlpha(level)` (С8). */
+export const BUBBLE_FILL_ALPHA = 0.55;
+
+/** Альфа «поля контроля» (квадрат под узлом); множится на `layerLineAlpha` (С11). */
+export const CONTROL_FIELD_ALPHA = 0.22;
 
 interface ViewAnimation {
   from: AtlasView;
@@ -523,6 +554,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     const ctx = kernel.ctx!;
     var radius = territory.screenRadius;
     if (!(radius > 2)) return;
+    // Контекст-заглушка тестов может не иметь резолвера цвета: поле не рисуется.
+    if (typeof kernel.data.factionColor !== 'function') return;
     // Цвет — данные таблицы фракций, а не оттенок от имени: на табличный цвет
     // накладывается только альфа радиального спада, сам цвет не изменяется.
     var rgb = parseHexColor(kernel.data.factionColor(territory.faction));
@@ -810,22 +843,403 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
+  /* --------------------------------------------- слой сетей: баблы (Z-3.9) */
+
+  /*
+   * Слой сетей в кадре (карточка `Z-3.9`, редакция 2 + дельта 3): геометрия
+   * считается в `faction-net.ts` (`mergedFields`, `bubbleFor`, `channelsFor`,
+   * `flaresFor`), рендерер её только рисует.
+   *
+   * Порядок сверху вниз по z закреплён карточкой (С6 + Д-1 + Д-3) — ровно так:
+   *
+   *   territory → заливка бабла → контур бабла → поле контроля (квадраты)
+   *   → белые кольца узлов → всполохи → каналы → сетка → лупа → маркеры → подписи
+   *
+   * Ленты `bridgesBetween` не рисуются (С13): канал — тонкая изогнутая линия, а
+   * `bridgesBetween` остаётся только поставщиком геометрии для `flaresFor`.
+   * Владелец: каналы идут ПОВЕРХ баблов и стрелок.
+   *
+   * Данные — та же сборка, что у каналов (`netChannelInputs()`), второго способа
+   * собирать системы нет: сети (`parseNetworks`), баблы (`bubbleFor`: стопы
+   * градиента, узлы, лепестки) и слитые контуры (`mergedFields`) кэшируются по
+   * ссылке `state.systems`, пересчёт — только при подмене набора данных.
+   */
+  let netLayerSource: SystemRecord[] | null = null;
+  let netLayerNets: readonly FactionNet[] = [];
+  let netLayerBubbles: readonly Bubble[] = [];
+  let netLayerFields: readonly MergedField[] = [];
+
+  /** Сети, баблы и слитые поля: `parseNetworks(netChannelInputs())`, кэш по `state.systems`. */
+  function refreshNetLayer(): void {
+    if (netLayerSource === state.systems) return;
+    netLayerSource = state.systems;
+    netLayerNets = [];
+    netLayerBubbles = [];
+    netLayerFields = [];
+    try {
+      var nets = parseNetworks(netChannelInputs());
+      var bubbles: Bubble[] = [];
+      for (var index = 0; index < nets.length; index += 1) {
+        var net = nets[index]!;
+        // Цвет — таблица `data/factions.csv`: оттенок из имени не вычисляется.
+        // Контекст-заглушка без резолвера получает бабл без стопов.
+        bubbles.push(kernel.data.factionColor
+          ? bubbleFor(net.members, {
+            netId: net.netId,
+            factionColor: function (faction) { return kernel.data.factionColor(faction); },
+          })
+          : bubbleFor(net.members, { netId: net.netId }));
+      }
+      netLayerNets = nets;
+      netLayerBubbles = bubbles;
+      // Одно общее поле вместо по-сетевых: близкие сети слипаются, далёкие — нет.
+      netLayerFields = mergedFields(nets);
+    } catch (err) {
+      // Битые данные сети: карта остаётся живой, но причина видна в консоли
+      // вместе с именем системы из сообщения `RangeError`.
+      console.error('Слой сетей: баблы не построены — '
+        + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  /** Табличный цвет фракции в синтаксис canvas (резолвер загрузчика). */
+  function factionColorOf(faction: string | null): string {
+    return kernel.data.factionColor(faction);
+  }
+
+  /** Число пути: два знака, без хвостовых нулей и без `-0`. */
+  function coordText(value: number): string {
+    var rounded = Math.round(value * 100) / 100;
+    var fixed = (rounded === 0 ? 0 : rounded).toFixed(2);
+    if (fixed.endsWith('.00')) return fixed.slice(0, -3);
+    if (fixed.endsWith('0')) return fixed.slice(0, -1);
+    return fixed;
+  }
+
+  /**
+   * Контуры слитого поля в экранных координатах. Масштаб — полная ширина кадра
+   * (`viewport.w / visibleWidth`), тот же, что у `worldToScreen` сцены, маркеров
+   * и территорий: бабл не съезжает относительно систем своего кадра.
+   */
+  function mergedScreenPath(rings: readonly (readonly NetPoint[])[]): string {
+    var cam = sceneCamera();
+    var scale = state.viewport.w / cam.visibleWidth;
+    var halfWidth = state.viewport.w / 2;
+    var halfHeight = state.viewport.h / 2;
+    var parts: string[] = [];
+    for (var ringIndex = 0; ringIndex < rings.length; ringIndex += 1) {
+      var ring = rings[ringIndex]!;
+      if (ring.length < 3) continue;
+      var commands: string[] = [];
+      for (var index = 0; index < ring.length; index += 1) {
+        var point = ring[index]!;
+        var screenX = halfWidth + (point.x - cam.centerX) * scale;
+        var screenY = halfHeight + (point.y - cam.centerY) * scale;
+        commands.push((index === 0 ? 'M' : 'L') + coordText(screenX) + ' ' + coordText(screenY));
+      }
+      parts.push(commands.join('') + 'Z');
+    }
+    return parts.join(' ');
+  }
+
+  /** Дальняя точка габаритов бабла от центра сети: конец градиента заливки. */
+  function gradientTipOf(bubble: Bubble): NetPoint {
+    var bounds = bubble.bounds;
+    var corners = [
+      { x: bounds.minX, y: bounds.minY },
+      { x: bounds.maxX, y: bounds.minY },
+      { x: bounds.maxX, y: bounds.maxY },
+      { x: bounds.minX, y: bounds.maxY },
+    ];
+    var best = corners[0]!;
+    var bestDistance = -1;
+    for (var index = 0; index < corners.length; index += 1) {
+      var corner = corners[index]!;
+      var distance = Math.hypot(corner.x - bubble.centerX, corner.y - bubble.centerY);
+      if (distance > bestDistance) {
+        bestDistance = distance;
+        best = corner;
+      }
+    }
+    return best;
+  }
+
+  /** Цвет из кортежа `sampleGradient` в синтаксис canvas. */
+  function rgbText(rgb: readonly [number, number, number]): string {
+    return 'rgb(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ')';
+  }
+
+  /**
+   * Заливка бабла (С8 + Д3.1): путь из `mergedFields`, цвет — стопы `colorStops`
+   * через `sampleGradient` от центра сети (`t = 0`) к дальней точке габаритов
+   * (`t = 1`), альфа `BUBBLE_FILL_ALPHA · layerFillAlpha(level)`.
+   */
+  function drawNetBubbleFill(field: MergedField, bubble: Bubble, net: FactionNet, level: number): void {
+    const ctx = kernel.ctx!;
+    var path = mergedScreenPath(field.rings);
+    // Тестовый контекст-заглушка: в Node нет `Path2D` — бабл просто не рисуется.
+    if (path.length === 0 || typeof Path2D === 'undefined') return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = BUBBLE_FILL_ALPHA * layerFillAlpha(level);
+    try {
+      var shape = new Path2D(path);
+      var stops = bubble.stops;
+      if (stops.length < 2) {
+        // Меньше двух стопов — заливка одним цветом первой фракции сети.
+        var faction = net.factions.length > 0 ? net.factions[0]! : null;
+        ctx.fillStyle = stops.length > 0 ? stops[0]!.color : factionColorOf(faction);
+      } else {
+        var center = toScreen(bubble.centerX, bubble.centerY);
+        var tip = gradientTipOf(bubble);
+        var tipPoint = toScreen(tip.x, tip.y);
+        var gradient = ctx.createLinearGradient(center.x, center.y, tipPoint.x, tipPoint.y);
+        gradient.addColorStop(0, rgbText(sampleGradient(stops, 0)));
+        gradient.addColorStop(1, rgbText(sampleGradient(stops, 1)));
+        ctx.fillStyle = gradient;
+      }
+      ctx.fill(shape);
+    } catch (err) {
+      // Контекст-заглушка без `Path2D`/градиентов (тесты): заливка не рисуется.
+    } finally {
+      ctx.restore();
+    }
+  }
+
+  /** Контур бабла (С7 + Д3.2): цвет фракции в полную силу, толщина в клампе `1…2`. */
+  function drawNetBubbleOutline(field: MergedField, net: FactionNet, level: number): void {
+    const ctx = kernel.ctx!;
+    var path = mergedScreenPath(field.rings);
+    if (path.length === 0 || typeof Path2D === 'undefined') return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = layerLineAlpha(level);
+    ctx.strokeStyle = factionColorOf(net.factions.length > 0 ? net.factions[0]! : null);
+    ctx.lineWidth = clamp(1.6 * state.view.scale, 1, 2);
+    try {
+      ctx.stroke(new Path2D(path));
+    } catch (err) {
+      // Контекст-заглушка без `Path2D`: контур не рисуется.
+    } finally {
+      ctx.restore();
+    }
+  }
+
+  /** Фракция системы внутри сети: лепесток бабла знает её, узел — нет. */
+  function petalFactionOf(bubble: Bubble, systemId: string): string | null {
+    for (var index = 0; index < bubble.petals.length; index += 1) {
+      var petal = bubble.petals[index]!;
+      if (petal.systemId === systemId) return petal.faction;
+    }
+    return null;
+  }
+
+  /**
+   * Поле контроля (С11, Д3.4): осевой квадрат со стороной
+   * `CONTROL_FIELD_SIDE_RATIO · r` цветом фракции, альфа
+   * `CONTROL_FIELD_ALPHA · layerLineAlpha`, без обводки. Рисуется под узлами —
+   * отдельным проходом, чтобы квадраты не перекрывали чужие узлы.
+   */
+  function drawNetControlField(node: BubbleNode, bubble: Bubble, level: number): void {
+    const ctx = kernel.ctx!;
+    var radius = node.radius * state.view.scale;
+    if (!(radius >= 1.5)) return;
+    var point = toScreen(node.x, node.y);
+    var side = CONTROL_FIELD_SIDE_RATIO * radius;
+    var half = side / 2;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = CONTROL_FIELD_ALPHA * layerLineAlpha(level);
+    ctx.fillStyle = factionColorOf(petalFactionOf(bubble, node.systemId));
+    ctx.fillRect(point.x - half, point.y - half, side, side);
+    ctx.restore();
+  }
+
+  /**
+   * Узел (С10, Д3.3): заливка табличным цветом фракции в полную силу (без
+   * приглушения — тип системы виден по радиусу) и белое кольцо `0,95`.
+   */
+  function drawNetNode(node: BubbleNode, bubble: Bubble): void {
+    const ctx = kernel.ctx!;
+    var radius = node.radius * state.view.scale;
+    if (!(radius >= 1.5)) return;
+    var point = toScreen(node.x, node.y);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = factionColorOf(petalFactionOf(bubble, node.systemId));
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = clamp(2.2 * state.view.scale, 1.4, 3);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * Соперники сети — только из данных (С14, Д2.3): все `netId` из результата
+   * `channelsFor`, кроме самой сети, по возрастанию. Нет пар в
+   * `net_confront_id` — нет и стрелок.
+   */
+  function dataRivalsOf(net: FactionNet, channels: readonly NetChannel[]): FactionNet[] {
+    var ids: number[] = [];
+    for (var index = 0; index < channels.length; index += 1) {
+      var channel = channels[index]!;
+      var other: number | null = null;
+      if (channel.from.netId === net.netId) other = channel.to.netId;
+      else if (channel.to.netId === net.netId) other = channel.from.netId;
+      if (other === null || other === net.netId) continue;
+      if (ids.indexOf(other) < 0) ids.push(other);
+    }
+    ids.sort(function (a, b) { return a - b; });
+
+    var rivals: FactionNet[] = [];
+    for (var idIndex = 0; idIndex < ids.length; idIndex += 1) {
+      for (var netIndex = 0; netIndex < netLayerNets.length; netIndex += 1) {
+        if (netLayerNets[netIndex]!.netId === ids[idIndex]) rivals.push(netLayerNets[netIndex]!);
+      }
+    }
+    return rivals;
+  }
+
+  /**
+   * Начало стрелки: край поля контроля своей системы по направлению выстрела,
+   * а если узел не найден — край контура своего бабла (`originX`, `originY`).
+   */
+  function flareStart(
+    flare: Flare,
+    bubble: Bubble,
+    dirX: number,
+    dirY: number,
+  ): MapPoint {
+    var best: BubbleNode | null = null;
+    var bestDistance = Number.POSITIVE_INFINITY;
+    for (var index = 0; index < bubble.nodes.length; index += 1) {
+      var node = bubble.nodes[index]!;
+      var distance = Math.hypot(node.x - flare.originX, node.y - flare.originY);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = node;
+      }
+    }
+    if (best === null) return toScreen(flare.originX, flare.originY);
+
+    var centre = toScreen(best.x, best.y);
+    var half = CONTROL_FIELD_SIDE_RATIO * best.radius * state.view.scale / 2;
+    // Точка на стороне осевого квадрата вдоль направления луча.
+    var reach = Math.max(Math.abs(dirX), Math.abs(dirY));
+    if (!(reach > 1e-6) || !(half > 0)) return centre;
+    var step = half / reach;
+    return { x: centre.x + dirX * step, y: centre.y + dirY * step };
+  }
+
+  /**
+   * Стрелка «всполоха» (Д2.2): древко по `flare.angle` длиной
+   * `clamp(length · scale, 28, 96)` px и голова из двух линий назад под
+   * `±FLARE_HEAD_ANGLE`. Цвет — табличный цвет своей фракции, альфа —
+   * `layerLineAlpha(level) · intensity`. Пучка нет: один элемент — одна стрелка.
+   */
+  function drawNetFlare(flare: Flare, net: FactionNet, bubble: Bubble | null, level: number): void {
+    const ctx = kernel.ctx!;
+    var alpha = layerLineAlpha(level) * flare.intensity;
+    if (!(alpha > 0)) return;
+    var length = clamp(flare.length * state.view.scale, 28, 96);
+    if (!(length > 0)) return;
+
+    var dirX = Math.cos(flare.angle);
+    var dirY = Math.sin(flare.angle);
+    var start = bubble === null
+      ? toScreen(flare.originX, flare.originY)
+      : flareStart(flare, bubble, dirX, dirY);
+    var tipX = start.x + dirX * length;
+    var tipY = start.y + dirY * length;
+    var head = FLARE_HEAD_RATIO * length;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = factionColorOf(net.factions.length > 0 ? net.factions[0]! : null);
+    ctx.lineWidth = FLARE_STROKE_PX;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(tipX, tipY);
+    for (var side = -1; side <= 1; side += 2) {
+      var angle = flare.angle + Math.PI + side * FLARE_HEAD_ANGLE;
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX + Math.cos(angle) * head, tipY + Math.sin(angle) * head);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Стрелки всех сетей: соперники берутся из данных, а не из близости. */
+  function drawNetFlares(level: number): void {
+    if (!(layerLineAlpha(level) > 0)) return;
+    var channels = netChannels();
+    if (channels.length === 0) return;
+    for (var index = 0; index < netLayerNets.length; index += 1) {
+      var net = netLayerNets[index]!;
+      var rivals = dataRivalsOf(net, channels);
+      if (rivals.length === 0) continue;
+      var flares = flaresFor(net, rivals, { limit: MAX_FLARES_PER_NET, fromData: true });
+      var bubble = netLayerBubbles[index] ?? null;
+      for (var flareIndex = 0; flareIndex < flares.length; flareIndex += 1) {
+        drawNetFlare(flares[flareIndex]!, net, bubble, level);
+      }
+    }
+  }
+
+  /** Слой сетей в кадре: гейт уровня общий с каналами (`isNetLayerLevel`). */
+  function drawNetLayer(level: number): void {
+    if (!isNetLayerLevel(level)) return;
+    refreshNetLayer();
+    var drawn = Math.min(netLayerFields.length, netLayerBubbles.length);
+    var index: number;
+    for (index = 0; index < drawn; index += 1) {
+      drawNetBubbleFill(netLayerFields[index]!, netLayerBubbles[index]!, netLayerNets[index]!, level);
+    }
+    for (index = 0; index < drawn; index += 1) {
+      drawNetBubbleOutline(netLayerFields[index]!, netLayerNets[index]!, level);
+    }
+    // Поле контроля — отдельным проходом под всеми узлами (С6), затем узлы.
+    var index2: number;
+    for (index2 = 0; index2 < drawn; index2 += 1) {
+      var fieldBubble = netLayerBubbles[index2]!;
+      for (var squareIndex = 0; squareIndex < fieldBubble.nodes.length; squareIndex += 1) {
+        drawNetControlField(fieldBubble.nodes[squareIndex]!, fieldBubble, level);
+      }
+    }
+    for (index = 0; index < drawn; index += 1) {
+      var bubble = netLayerBubbles[index]!;
+      for (var nodeIndex = 0; nodeIndex < bubble.nodes.length; nodeIndex += 1) {
+        drawNetNode(bubble.nodes[nodeIndex]!, bubble);
+      }
+    }
+    drawNetFlares(level);
+  }
+
   /* ------------------------------------------------------------ каналы сетей (Z-3.8) */
 
   /*
    * Каналы между сетями (`net_confront_id`, карточка `Z-3.8`) — отдельный проход
-   * ПОСЛЕ баблов и «всполохов» слоя сетей: лента идёт поверх заливки баблов и
-   * сквозь них, поэтому проход не обрезается по контурам баблов и рисуется
-   * `source-over`. Мировая геометрия от камеры не зависит, поэтому каналы
-   * считаются один раз на набор данных, а в кадре пересчитываются только
-   * экранные точки. В генерацию баблов каналы не входят (`bubbleFor` колонку
-   * `net_confront_id` не читает).
+   * ПОСЛЕ баблов, узлов и «всполохов»: линия идёт поверх заливки баблов и сквозь
+   * них, поэтому проход не обрезается по контурам и рисуется `source-over`.
+   * `Z-3.9` (С12, С13): канал — тонкая изогнутая линия `CHANNEL_STROKE_PX` по
+   * `curve` из `channelsFor`, а не залитая лента; `width`/`quad` оставлены ради
+   * совместимости и старых тестов. Мировая геометрия от камеры не зависит,
+   * поэтому каналы считаются один раз на набор данных, а в кадре
+   * пересчитываются только экранные точки.
    *
    * Колонки слоя сетей приходят из `data/systems.csv` через загрузчик: у каждой
    * записи есть `net_id` (`number | null`) и `net_confront_id` (`string | null`),
-   * пустая ячейка — `null`. Поэтому каналы строятся сразу, как только владелец
-   * разметил пары в таблице; пока ячейки пусты, лент ноль и кадр не меняется ни
-   * на одном уровне.
+   * пустая ячейка — `null`.
    */
   let netChannelSource: SystemRecord[] | null = null;
   let netChannelList: readonly NetChannel[] = [];
@@ -881,52 +1295,46 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     return netChannelList;
   }
 
-  /** Одна лента канала: градиент табличных цветов фракций двух концов. */
+  /** Один канал: квадратичная кривая с градиентом табличных цветов двух концов. */
   function drawNetChannel(channel: NetChannel): void {
     const ctx = kernel.ctx!;
     var stops = channel.stops;
-    // Без резолвера табличного цвета градиента нет: лента не рисуется вовсе.
+    // Без резолвера табличного цвета градиента нет: линия не рисуется вовсе.
     if (stops.length < 2) return;
-    var from = toScreen(channel.from.x, channel.from.y);
-    var to = toScreen(channel.to.x, channel.to.y);
-    var dx = to.x - from.x;
-    var dy = to.y - from.y;
-    var span = Math.hypot(dx, dy);
-    var half = channel.width * state.view.scale / 2;
-    if (!(span > 0.5) || !(half > 0)) return;
-    var normalX = -dy / span;
-    var normalY = dx / span;
+    var start = toScreen(channel.curve[0].x, channel.curve[0].y);
+    var control = toScreen(channel.curve[1].x, channel.curve[1].y);
+    var finish = toScreen(channel.curve[2].x, channel.curve[2].y);
+    if (!(Math.hypot(finish.x - start.x, finish.y - start.y) > 0.5)) return;
 
     ctx.save();
     // Проход поверх баблов: без обрезки по контурам и без сложения света.
     ctx.globalCompositeOperation = 'source-over';
     // Яркость одна на все каналы: ни номер канала, ни расстояние на неё не влияют.
     ctx.globalAlpha = CHANNEL_BRIGHTNESS;
+    ctx.lineWidth = CHANNEL_STROKE_PX;
+    ctx.lineCap = 'round';
     try {
-      var gradient = ctx.createLinearGradient(from.x, from.y, to.x, to.y);
+      var gradient = ctx.createLinearGradient(start.x, start.y, finish.x, finish.y);
       gradient.addColorStop(0, stops[0]!.color);
       gradient.addColorStop(1, stops[stops.length - 1]!.color);
-      ctx.fillStyle = gradient;
+      ctx.strokeStyle = gradient;
       ctx.beginPath();
-      ctx.moveTo(from.x + normalX * half, from.y + normalY * half);
-      ctx.lineTo(to.x + normalX * half, to.y + normalY * half);
-      ctx.lineTo(to.x - normalX * half, to.y - normalY * half);
-      ctx.lineTo(from.x - normalX * half, from.y - normalY * half);
-      ctx.closePath();
-      ctx.fill();
+      ctx.moveTo(start.x, start.y);
+      ctx.quadraticCurveTo(control.x, control.y, finish.x, finish.y);
+      ctx.stroke();
     } catch (err) {
-      // Контекст-заглушка без градиентов (тесты): лента просто не рисуется.
+      // Контекст-заглушка без градиентов (тесты): линия просто не рисуется.
     } finally {
       ctx.restore();
     }
   }
 
-  /** Каналы живут на уровнях слоя сетей (`L2…L6`) — тот же диапазон, что баблы. */
+  /** Каналы живут на уровнях слоя сетей (`L2…L9`) — тот же диапазон, что баблы. */
   function drawNetChannels(level: number): void {
     if (!isNetLayerLevel(level)) return;
     var channels = netChannels();
     // Бюджет кадра: геометрия считается целиком, а рисуется не больше
-    // `MAX_CHANNELS_PER_FRAME` лент — кадр не должен стоить дороже разметки.
+    // `MAX_CHANNELS_PER_FRAME` каналов — кадр не должен стоить дороже разметки.
     var drawn = channels.length < MAX_CHANNELS_PER_FRAME ? channels.length : MAX_CHANNELS_PER_FRAME;
     if (channels.length > drawn && netChannelOverflow !== channels.length) {
       netChannelOverflow = channels.length;
@@ -939,12 +1347,15 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   function renderScene(scene: SectorScene): void {
-    // Первый проход — заливка территорий; сюда же `Z-3.4` монтирует слой сетей
-    // (баблы, узлы и «всполохи»), поэтому порядок слоёв §8.1 не меняется.
+    // Порядок отрисовки сверху вниз по z закреплён карточкой `Z-3.9` (С6) — ровно так:
+    //   territory → заливка бабла → контур бабла → поле контроля (квадраты)
+    //   → белые кольца узлов → всполохи → каналы → сетка → лупа → маркеры → подписи.
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
       if (primitive.kind === 'territory') drawTerritory(primitive);
     }
+    // Баблы: заливка → контур → квадраты и узлы → стрелки (порядок внутри `drawNetLayer`).
+    drawNetLayer(scene.level);
     // Отдельный проход каналов: ленты идут поверх заливки баблов, но под адресной
     // сеткой и маркерами, поэтому стоят между двумя проходами примитивов сцены.
     drawNetChannels(scene.level);

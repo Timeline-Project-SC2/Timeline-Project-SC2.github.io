@@ -21,6 +21,7 @@ const {
   colorStops,
   flaresFor,
   isNetLayerLevel,
+  mergedFields,
   netsAtLevel,
   parseNetworks,
   parseNetId,
@@ -226,18 +227,162 @@ test('сети независимы от порядка строк: вход п�
 
 /* --------------------------------------------------------------- уровни слоя */
 
-test('правило 7: слой живёт только на L2…L6, как TERRITORY_LEVELS', () => {
+test('T4: слой живёт на L2…L9, как TERRITORY_LEVELS (с Z-4b глубина лестницы 9)', () => {
+  // T4: список уровней слоя — ровно L2…L9, и он совпадает со списком территорий
+  // (иначе на L6→L7 мягкое поле фракции исчезало бы скачком — шов, запрещённый
+  // владельцем).
+  assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
   assert.deepEqual([...NET_LAYER_LEVELS], [...scene.TERRITORY_LEVELS]);
-  for (const level of [0, 1, 7, 8, 9, 12]) {
+  for (const level of [0, 1, 10, 12]) {
     assert.equal(isNetLayerLevel(level), false, `L${level} не должен включать слой`);
   }
-  for (const level of [2, 3, 4, 5, 6]) {
+  for (const level of [2, 3, 4, 5, 6, 7, 8, 9]) {
     assert.equal(isNetLayerLevel(level), true, `L${level} обязан включать слой`);
   }
   const nets = parseNetworks(withNet([KORHAL, TARSONIS], 7));
   assert.equal(netsAtLevel(nets, 1).length, 0);
   assert.equal(netsAtLevel(nets, 2).length, 1);
-  assert.equal(netsAtLevel(nets, 7).length, 0);
+  assert.equal(netsAtLevel(nets, 7).length, 1, 'на L7 слой больше не обрезается');
+  assert.equal(netsAtLevel(nets, 9).length, 1, 'на L9 слой больше не обрезается');
+});
+
+/* --------------------------------------------------- затухание слоя (Z-3.9) */
+
+/** Таблица заливки из карточки `Z-3.9` (С1): уровень → альфа. */
+const FILL_ALPHA_BY_LEVEL = [
+  [2, 1], [3, 0.75], [4, 0.5625], [5, 0.421875],
+  [6, 0.31640625], [7, 0.25], [8, 0.25], [9, 0.25],
+];
+
+test('T1: layerFillAlpha — таблица L2…L9 и ноль вне диапазона', () => {
+  assert.equal(ladder.LAYER_FADE_STEP, 0.75);
+  assert.equal(ladder.LAYER_FILL_ALPHA_MIN, 0.25);
+  assert.equal(ladder.LAYER_LINE_ALPHA_MIN, 0.45);
+  assert.equal(ladder.DEEP_LAYER_FIRST_LEVEL, 2);
+
+  for (const [level, expected] of FILL_ALPHA_BY_LEVEL) {
+    assert.ok(
+      Math.abs(ladder.layerFillAlpha(level) - expected) <= 1e-9,
+      `L${level}: заливка ${ladder.layerFillAlpha(level)}, ожидалось ${expected}`,
+    );
+  }
+  for (const level of [0, 1, 10, -1]) {
+    assert.equal(ladder.layerFillAlpha(level), 0, `L${level}: заливки быть не должно`);
+  }
+});
+
+test('T2: layerLineAlpha — пол заливки 0,45 и ноль вне диапазона', () => {
+  // Формула С1 буквальна: `max(0,45; заливка)`. Поэтому линия совпадает с
+  // заливкой, пока та ярче пола (L2…L4), а с L5 упирается в `0,45` — пол
+  // `LAYER_LINE_ALPHA_MIN` держит контур на всей глубине до L9.
+  for (const [level, expected] of FILL_ALPHA_BY_LEVEL) {
+    const line = ladder.layerLineAlpha(level);
+    const want = Math.max(0.45, expected);
+    assert.ok(Math.abs(line - want) <= 1e-9, `L${level}: линия ${line}, ожидалось ${want}`);
+    assert.ok(line >= 0.45, `L${level}: линия ниже пола`);
+  }
+  for (const [level, expected] of FILL_ALPHA_BY_LEVEL) {
+    if (level <= 4) {
+      assert.ok(
+        Math.abs(ladder.layerLineAlpha(level) - expected) <= 1e-9,
+        `L${level}: на ярких уровнях линия равна заливке`,
+      );
+    }
+  }
+  for (const level of [0, 1, 10, -1]) {
+    assert.equal(ladder.layerLineAlpha(level), 0, `L${level}: линии быть не должно`);
+  }
+});
+
+test('T3: заливка слоя не растёт с глубиной', () => {
+  for (let level = 2; level < 9; level += 1) {
+    assert.ok(
+      ladder.layerFillAlpha(level + 1) <= ladder.layerFillAlpha(level),
+      `L${level}→L${level + 1}: альфа заливки выросла`,
+    );
+    assert.ok(ladder.layerLineAlpha(level) > 0, `L${level}: линия погасла в ноль`);
+  }
+});
+
+test('T5: bubblePath масштабирует по полной ширине кадра на 1920×1080 и 1366×768', () => {
+  // Проекция проверяется на контуре из трёх точек: `bubblePath` читает только
+  // `bubble.rings`, поэтому синтетический бабл честно проверяет именно масштаб.
+  const visibleWidth = 1000;
+  const camera = { centerX: 5000, centerY: 5000, visibleWidth };
+  const bubble = {
+    netId: 1,
+    petals: [],
+    nodes: [],
+    centerX: camera.centerX,
+    centerY: camera.centerY,
+    rings: [[
+      { x: camera.centerX + 100, y: camera.centerY },
+      { x: camera.centerX + 100, y: camera.centerY + 100 },
+      { x: camera.centerX, y: camera.centerY + 100 },
+    ]],
+    bounds: { minX: 5000, minY: 5000, maxX: 5100, maxY: 5100 },
+    stops: [],
+  };
+
+  for (const viewport of [DESKTOP, { w: 1366, h: 768 }]) {
+    const points = pathPoints(bubblePath(bubble, camera, viewport));
+    const scaleX = (100 * viewport.w) / visibleWidth;
+    assert.ok(
+      Math.abs(points[0].x - (viewport.w / 2 + scaleX)) <= 1e-6,
+      `${viewport.w}×${viewport.h}: x = ${points[0].x}, ожидалось ${viewport.w / 2 + scaleX}`,
+    );
+    // На неквадратном кадре масштаб короткой оси даёт другое число: проверяем,
+    // что он больше не используется.
+    const shortSideX = (100 * Math.min(viewport.w, viewport.h)) / visibleWidth;
+    assert.ok(
+      Math.abs(points[0].x - (viewport.w / 2 + shortSideX)) > 1e-6,
+      'масштаб снова считается по короткой оси кадра',
+    );
+  }
+
+  // 1366×768 отдельно: масштаб по высоте (768/1366 = 0,562) запрещён — это дефект S8.
+  const phoneLaptop = { w: 1366, h: 768 };
+  const projected = pathPoints(bubblePath(bubble, camera, phoneLaptop))[0].x;
+  const byHeight = phoneLaptop.w / 2 + (100 * 768) / visibleWidth;
+  assert.ok(
+    Math.abs(projected - byHeight) > 1e-6,
+    `бабл встал в масштаб короткой оси: ${projected} ≈ ${byHeight}`,
+  );
+});
+
+test('T6: регресс на квадратном 1000×1000 — числа не изменились', () => {
+  const visibleWidth = 1000;
+  const camera = { centerX: 5000, centerY: 5000, visibleWidth };
+  const bubble = {
+    netId: 1,
+    petals: [],
+    nodes: [],
+    centerX: camera.centerX,
+    centerY: camera.centerY,
+    rings: [[
+      { x: camera.centerX + 100, y: camera.centerY },
+      { x: camera.centerX + 100, y: camera.centerY + 100 },
+      { x: camera.centerX, y: camera.centerY + 100 },
+    ]],
+    bounds: { minX: 5000, minY: 5000, maxX: 5100, maxY: 5100 },
+    stops: [],
+  };
+  const square = { w: 1000, h: 1000 };
+  const points = pathPoints(bubblePath(bubble, camera, square));
+
+  // На квадратном кадре полная и короткая ось совпадают: старый и новый
+  // масштаб дают одно и то же число, регресса нет.
+  assert.ok(Math.abs(points[0].x - (1000 / 2 + 100)) <= 1e-6, `x = ${points[0].x}`);
+  assert.ok(Math.abs(points[0].x - (500 + (100 * 1000) / visibleWidth)) <= 1e-6);
+  assert.ok(Math.abs(points[0].x - (500 + (100 * Math.min(1000, 1000)) / visibleWidth)) <= 1e-6);
+  assert.equal(points[1].y, 600);
+
+  // Реальный бабл на квадратном кадре тоже считается по полной ширине.
+  const real = bubbleFor(withNet([KORHAL, TARSONIS], 7), { netId: 7 });
+  const realCamera = { centerX: KORHAL.x, centerY: KORHAL.y, visibleWidth: L2_WIDTH };
+  const realPath = bubblePath(real, realCamera, square);
+  assert.equal(realPath, bubblePath(real, realCamera, square), 'путь зависит от вызова');
+  assert.ok(pathPoints(realPath).length >= 3);
 });
 
 /* ------------------------------------------------------------------ бабл */
@@ -334,6 +479,179 @@ test('далёкие системы одной сети не тянут обол
   }
   const path = bubblePath(bubble, { centerX: 5000, centerY: 5000, visibleWidth: 10000 }, { w: 1000, h: 1000 });
   assert.equal((path.match(/Z/g) ?? []).length, 2, 'в пути не два замкнутых контура');
+});
+
+
+/* ------------------------------------------------ слияние полей сетей (Д-1) */
+
+/** Одна система сети: радиус лепестка — `SOLO_PETAL_RADIUS` (`150`). */
+function soloNet(id, netId, x, y) {
+  return { id, name: `Система ${id}`, x, y, faction: 'Доминион Терран', type: 'standard', net_id: netId };
+}
+
+function ringArea(ring) {
+  let sum = 0;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+    sum += ring[previous].x * ring[index].y - ring[index].x * ring[previous].y;
+  }
+  return Math.abs(sum) / 2;
+}
+
+function ringsArea(rings) {
+  return rings.reduce((total, ring) => total + ringArea(ring), 0);
+}
+
+function ringGap(ringsA, ringsB) {
+  let best = Number.POSITIVE_INFINITY;
+  for (const a of ringsA) {
+    for (const b of ringsB) {
+      for (const p of a) {
+        for (const q of b) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+      }
+    }
+  }
+  return best;
+}
+
+function filled(nets, x, y) {
+  let total = 0;
+  for (const netItem of nets) {
+    for (const member of netItem.members) {
+      const distanceSquared = (x - member.x) ** 2 + (y - member.y) ** 2;
+      if (distanceSquared < 1e-9) return true;
+      total += (SOLO_PETAL_RADIUS * SOLO_PETAL_RADIUS / distanceSquared) ** 3;
+    }
+  }
+  return total >= 1;
+}
+
+test('T7: поле контроля шире узла (CONTROL_FIELD_SIDE_RATIO > 2)', () => {
+  assert.ok(net.CONTROL_FIELD_SIDE_RATIO > 2, 'квадрат поля контроля не шире узла');
+  assert.equal(net.CONTROL_FIELD_SIDE_RATIO, 2.7, 'доля стороны разошлась с эскизом владельца');
+});
+
+test('M1: две близкие сети слипаются — середина залита, кольца смыкаются', () => {
+  // Порог слияния для показателя 6: (2r/d)^6 · 2 ≥ 1 → d ≤ 2·2^(−1/6)·r ≈ 1,78r,
+  // то есть расстояние между сетями из одной системы не больше ≈ 1,12·(r1 + r2).
+  // Берём 1,1·(r1 + r2) = 2,2r: сумма полей на середине 1,13 > 1 — середина залита.
+  const radius = SOLO_PETAL_RADIUS;
+  const gap = 1.1 * (radius + radius);
+  const nets = parseNetworks([soloNet('1', 1, 5000, 5000), soloNet('2', 2, 5000 + gap, 5000)]);
+  const fields = mergedFields(nets);
+  assert.deepEqual(fields.map((field) => field.netId), [1, 2]);
+  for (const field of fields) assert.ok(field.rings.length >= 1, `сеть ${field.netId}: контура нет`);
+
+  const middleX = 5000 + gap / 2;
+  assert.ok(filled(nets, middleX, 5000), 'середина между сетями не залита при 1,1·(r1 + r2)');
+  const owners = fields.filter((field) => field.rings.some((ring) => insideRing(ring, middleX, 5000)));
+  assert.ok(owners.length >= 1, 'середина не принадлежит ни одной сети');
+
+  assert.ok(ringGap(fields[0].rings, fields[1].rings) <= 1, 'кольца слипшихся сетей не сомкнулись');
+});
+
+test('M2: далёкие сети оставляют чёрный просвет (4 · (r1 + r2))', () => {
+  const radius = SOLO_PETAL_RADIUS;
+  const gap = 4 * (radius + radius);
+  const nets = parseNetworks([soloNet('1', 1, 5000, 5000), soloNet('2', 2, 5000 + gap, 5000)]);
+  const fields = mergedFields(nets);
+
+  const middleX = 5000 + gap / 2;
+  assert.equal(filled(nets, middleX, 5000), false, 'середина залита — сети не должны слипаться');
+  const owners = fields.filter((field) => field.rings.some((ring) => insideRing(ring, middleX, 5000)));
+  assert.equal(owners.length, 0, 'середина принадлежит сети при просвете');
+  assert.ok(ringGap(fields[0].rings, fields[1].rings) > 100, 'сети далеко, а кольца рядом');
+});
+
+test('M3: одна сеть — кольца совпадают с bubbleFor побайтово', () => {
+  const members = withNet([KORHAL, MISTAFF, TARSONIS], 7);
+  const nets = parseNetworks(members);
+  const merged = mergedFields(nets);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].netId, 7);
+  assert.equal(
+    JSON.stringify(merged[0].rings),
+    JSON.stringify(bubbleFor(nets[0].members).rings),
+    'вырожденный случай разошёлся с bubbleFor',
+  );
+});
+
+test('M4: равенство полей — меньший netId, результат не зависит от порядка сетей', () => {
+  const radius = SOLO_PETAL_RADIUS;
+  const gap = 1.1 * (radius + radius);
+  const input = [soloNet('1', 2, 5000 + gap, 5000), soloNet('2', 1, 5000, 5000)];
+  const forward = mergedFields(parseNetworks(input));
+  const backward = mergedFields(parseNetworks(input.slice().reverse()));
+  assert.deepEqual(forward, backward, 'слияние зависит от порядка сетей');
+  assert.deepEqual(forward.map((field) => field.netId), [1, 2]);
+
+  // Серединный перпендикуляр равноудалён от сетей: по правилу равенства точки
+  // на нём отдаются сети с меньшим `netId`. Сам перпендикуляр — шов масок, то
+  // есть ровно граница обоих колец: проверяем, что шов лежит посередине
+  // (кольца смыкаются именно там) и что по обе стороны от него маски не
+  // накладываются и не оставляют дырки.
+  const middle = { x: 5000 + gap / 2, y: 5000 };
+  const small = forward.find((field) => field.netId === 1);
+  const big = forward.find((field) => field.netId === 2);
+  assert.ok(filled(parseNetworks(input), middle.x, middle.y), 'точка на перпендикуляре не залита');
+  assert.ok(ringGap(small.rings, big.rings) <= 1, 'шов масок не посередине');
+
+  const ownSide = (field, x) => field.rings.some((ring) => insideRing(ring, x, 5000));
+  assert.ok(ownSide(small, middle.x - 30), 'своя сторона шва не у сети 1');
+  assert.ok(!ownSide(big, middle.x - 30), 'маски сетей накладываются слева от шва');
+  assert.ok(ownSide(big, middle.x + 30), 'своя сторона шва не у сети 2');
+  assert.ok(!ownSide(small, middle.x + 30), 'маски сетей накладываются справа от шва');
+});
+
+test('M5: три сети — сумма площадей колец равна площади залитой маски, кольца не накладываются', () => {
+  const nets = parseNetworks([
+    soloNet('1', 1, 5000, 5000),
+    soloNet('2', 2, 5300, 5000),
+    soloNet('3', 3, 5150, 5290),
+  ]);
+  const fields = mergedFields(nets);
+  assert.equal(fields.length, 3);
+  for (const field of fields) assert.equal(field.rings.length, 1, `сеть ${field.netId}: колец не одно`);
+
+  // Площадь маски — плотная выборка общего поля `W ≥ 1` по габаритам колец.
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const field of fields) {
+    for (const ring of field.rings) {
+      for (const point of ring) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+    }
+  }
+  const steps = 600;
+  const dx = (maxX - minX) / steps;
+  const dy = (maxY - minY) / steps;
+  let hits = 0;
+  for (let row = 0; row < steps; row += 1) {
+    for (let column = 0; column < steps; column += 1) {
+      if (filled(nets, minX + (column + 0.5) * dx, minY + (row + 0.5) * dy)) hits += 1;
+    }
+  }
+  const maskArea = hits * dx * dy;
+  const ringsTotal = fields.reduce((total, field) => total + ringsArea(field.rings), 0);
+  const error = Math.abs(ringsTotal - maskArea) / maskArea;
+  assert.ok(error <= 0.01, `площадь колец расходится с маской на ${(error * 100).toFixed(2)} %`);
+
+  // Кольца не накладываются: центр одной сети не внутри чужого кольца.
+  for (const owner of fields) {
+    for (const other of fields) {
+      if (owner.netId === other.netId) continue;
+      const netItem = nets.find((candidate) => candidate.netId === other.netId);
+      assert.ok(
+        !owner.rings.some((ring) => insideRing(ring, netItem.centerX, netItem.centerY)),
+        `кольцо сети ${owner.netId} накрыло центр сети ${other.netId}`,
+      );
+    }
+  }
 });
 
 /* ------------------------------------------------------------------- путь */
@@ -549,6 +867,37 @@ test('flaresFor не использует Math.random и Date.now', () => {
   assert.ok(!/Math\s*\.\s*random\s*\(/.test(source), 'в модуле есть вызов Math.random');
   assert.ok(!/Date\s*\.\s*now\s*\(/.test(source), 'в модуле есть вызов Date.now');
   assert.ok(!/new\s+Date\s*\(/.test(source), 'в модуле есть new Date');
+});
+
+
+test('всполохи из данных: далёкая пара из net_confront_id даёт стрелку, без пары — пусто', () => {
+  // Сети далеко друг от друга: `bridgesBetween` вернёт `null`, но пара объявлена
+  // в данных, поэтому `fromData` стрелку всё равно строит (Z-3.9, С14/Д2.3).
+  const nets = parseNetworks([
+    { id: '1', name: 'Своя', x: 1000, y: 1000, faction: 'Доминион Терран', type: 'standard', net_id: 1, net_confront_id: '1-2' },
+    { id: '2', name: 'Чужая', x: 9000, y: 9000, faction: 'Кел-Морийский Синдикат', type: 'standard', net_id: 2, net_confront_id: '2-1' },
+    { id: '3', name: 'Одинокая', x: 5000, y: 2000, faction: 'Дэлаамы', type: 'standard', net_id: 3 },
+  ]);
+  const own = nets.find((item) => item.netId === 1);
+  const rival = nets.find((item) => item.netId === 2);
+  const lonely = nets.find((item) => item.netId === 3);
+
+  assert.equal(bridgesBetween(own, rival), null, 'сети слишком далеко для ленты');
+  assert.equal(flaresFor(own, [rival]).length, 0, 'без fromData близость обязательна');
+
+  const arrows = flaresFor(own, [rival], { fromData: true });
+  assert.ok(arrows.length > 0, 'пара из данных не дала стрелку');
+  assert.ok(arrows.length <= MAX_FLARES_PER_NET);
+  for (const flare of arrows) {
+    assert.equal(flare.targetNetId, 2);
+    assert.ok(flare.intensity > 0 && flare.intensity <= 1);
+    assert.ok(flare.length > 0);
+  }
+  // Соперники без пары — стрелки не рисуются вовсе (Д2.3).
+  assert.equal(flaresFor(own, [], { fromData: true }).length, 0);
+  assert.equal(flaresFor(lonely, [], { fromData: true }).length, 0);
+  // Детерминизм: два вызова подряд дают идентичный JSON.
+  assert.equal(JSON.stringify(flaresFor(own, [rival], { fromData: true })), JSON.stringify(arrows));
 });
 
 /* ----------------------------------------------------------------- CSV */

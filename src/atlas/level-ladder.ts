@@ -250,6 +250,48 @@ export function markerDiameter(visibleWidth: number): number {
   return Math.max(2.5, Math.min(40, diameter));
 }
 
+/* ------------------------------------------------- затухание слоёв (Z-3.9, §8.1)
+ *
+ * Глубина лестницы — десять уровней `L0…L9` (Z-4b), поэтому слой сетей и мягкое
+ * поле фракции живут не до `L6`, а на всей лестнице: `L2…L9`. Чтобы на глубине
+ * слой не превращался в плотное пятно, его альфа убывает геометрически от `L2`
+ * (полная яркость `1`) к `L6` (`0,75⁴ ≈ 0,316`) и упирается в нижнюю границу
+ * `0,25`; контур гаснет медленнее заливки и ниже `0,45` не опускается.
+ *
+ * Функции — чистая арифметика от уровня: ни DOM, ни состояния, ни цвета. Формула
+ * объявлена здесь однажды, а `faction-net.ts`, `sector-scene.ts` и
+ * `canvas-renderer.ts` импортируют её отсюда (дублей в двух файлах нет).
+ */
+
+/** Шаг затухания на уровень: альфа заливки `L(n) = 0,75^(n−2)`. */
+export const LAYER_FADE_STEP = 0.75;
+
+/** Нижняя граница альфы заливки слоя: глубже `L7` слой не исчезает совсем. */
+export const LAYER_FILL_ALPHA_MIN = 0.25;
+
+/** Нижняя граница альфы линии (контур, узел, всполох): контур виден на глубине. */
+export const LAYER_LINE_ALPHA_MIN = 0.45;
+
+/** Первый уровень, на котором живут слои территорий и сетей (`L2`). */
+export const DEEP_LAYER_FIRST_LEVEL = 2;
+
+/** Альфа заливки слоя на уровне: `0` вне `L2…L9`, иначе `max(0,25; 0,75^(n−2))`. */
+export function layerFillAlpha(level: number): number {
+  if (!(level >= DEEP_LAYER_FIRST_LEVEL) || level > DEEPEST_SECTOR_LEVEL) return 0;
+
+  return Math.max(LAYER_FILL_ALPHA_MIN, LAYER_FADE_STEP ** (level - DEEP_LAYER_FIRST_LEVEL));
+}
+
+/**
+ * Альфа линии слоя на уровне: `0` вне `L2…L9`, иначе не меньше альфы заливки,
+ * но и не меньше `0,45` — контур переживает затухание заливки.
+ */
+export function layerLineAlpha(level: number): number {
+  if (!(level >= DEEP_LAYER_FIRST_LEVEL) || level > DEEPEST_SECTOR_LEVEL) return 0;
+
+  return Math.max(LAYER_LINE_ALPHA_MIN, layerFillAlpha(level));
+}
+
 /* --------------------------------------------------- метрики кадра (Z-4b, §17.23)
  *
  * Уровень выбирается по полной видимой ширине кадра: `visibleWidth` уровней

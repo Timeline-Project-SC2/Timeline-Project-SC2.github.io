@@ -654,7 +654,111 @@ test('отрисовка: отдельный проход после бабло�
   assert.ok(markerAt > channelsAt, 'каналы рисуются после маркеров');
   assert.ok(/isNetLayerLevel\(level\)/.test(source), 'каналы не ограничены уровнями слоя сетей');
   assert.ok(/channelsFor\(/.test(source), 'рендерер не использует channelsFor из faction-net.ts');
-  assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6]);
+  // Z-3.9 (С3): с Z-4b глубина лестницы девять, слой не обрезается на L6.
+  assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+
+/* --------------------------- канал линией: изгиб и границы баблов (Z-3.9, С12) */
+
+/** Сети на одной горизонтали: своя система с большим радиусом, чужая — с малым. */
+function farPair(distance, idsA = ['1'], idsB = ['2'], confrontA = '1-2', confrontB = '2-1') {
+  const left = idsA.map((id, index) => sys(id, `Своя ${id}`, 5000, 5000 + index * 40, DOMINION, 1, index === 0 ? confrontA : undefined));
+  const right = idsB.map((id, index) => sys(id, `Чужая ${id}`, 5000 + distance, 5000 + index * 40, KMS, 2, index === 0 ? confrontB : undefined));
+  return left.concat(right);
+}
+
+test('C14: edgeFrom и edgeTo стоят на границах своих баблов', () => {
+  const result = channelsFor(farPair(900), { factionColor: tableColor });
+  assert.ok(result.channels.length >= 1);
+  assert.equal(net.CHANNEL_STROKE_PX, 2.5);
+  assert.equal(net.CHANNEL_BOW_RATIO, 0.08);
+
+  for (const channel of result.channels) {
+    const fromGap = Math.hypot(channel.edgeFrom.x - channel.from.x, channel.edgeFrom.y - channel.from.y);
+    const toGap = Math.hypot(channel.edgeTo.x - channel.to.x, channel.edgeTo.y - channel.to.y);
+    assert.ok(
+      Math.abs(fromGap - channel.from.radius) <= 1e-6,
+      `edgeFrom на ${fromGap}, радиус ${channel.from.radius}`,
+    );
+    assert.ok(
+      Math.abs(toGap - channel.to.radius) <= 1e-6,
+      `edgeTo на ${toGap}, радиус ${channel.to.radius}`,
+    );
+    // Канал рисуется линией, а не лентой: thickness — константа рендерера.
+    assert.ok(channel.width > 0 && channel.quad.length === 4, 'поля ленты должны остаться');
+  }
+});
+
+test('C15: curve — начало, контрольная точка, конец; вынос изгиба равен |bow|', () => {
+  const result = channelsFor(farPair(900), { factionColor: tableColor });
+  for (const channel of result.channels) {
+    assert.equal(channel.curve.length, 3);
+    assert.deepEqual(channel.curve[0], channel.edgeFrom);
+    assert.deepEqual(channel.curve[2], channel.edgeTo);
+
+    const middle = {
+      x: (channel.edgeFrom.x + channel.edgeTo.x) / 2,
+      y: (channel.edgeFrom.y + channel.edgeTo.y) / 2,
+    };
+    const control = channel.curve[1];
+    const offset = Math.hypot(control.x - middle.x, control.y - middle.y);
+    assert.ok(Math.abs(offset - Math.abs(channel.bow)) <= 1e-6, `вынос ${offset} ≠ |bow| ${Math.abs(channel.bow)}`);
+    // Знак изгиба определяется порядком идентификаторов систем.
+    const expected = channel.from.systemId < channel.to.systemId ? 1 : -1;
+    assert.equal(Math.sign(channel.bow), expected, 'знак изгиба разошёлся с порядком систем');
+  }
+});
+
+test('C16: у пары с обратным порядком идентификаторов знаки изгиба противоположны', () => {
+  // Две системы своей сети идут к одной чужой: идентификаторы «1» и «4» лежат
+  // по разные стороны от «2», поэтому у двух каналов одной пары сетей знаки
+  // изгиба разные — линии уходят на разные стороны, как на эскизе владельца.
+  const rows = farPair(900, ['1', '4'], ['2']).map((row) => (
+    row.id === '4' ? { ...row, net_confront_id: '1-2' } : row
+  ));
+  const result = channelsFor(rows, { factionColor: tableColor });
+  const mine = result.channels.filter((channel) => channel.from.netId === 1);
+  assert.equal(mine.length, 2, 'ожидались два канала одной пары сетей');
+  const signs = mine.map((channel) => Math.sign(channel.bow));
+  assert.deepEqual(signs, [1, -1], 'знаки изгиба не противоположны');
+});
+
+test('C17: перекрытие баблов — границы в центрах систем, изгиба нет', () => {
+  const rows = farPair(40, ['1'], ['2']).map((row) => (
+    // Обе сети перекрываются: расстояние меньше суммы радиусов лепестков.
+    ({ ...row })
+  ));
+  const result = channelsFor(rows, { factionColor: tableColor });
+  assert.ok(result.channels.length >= 1);
+  for (const channel of result.channels) {
+    assert.ok(channel.gap <= channel.from.radius + channel.to.radius, 'сети не перекрываются');
+    assert.equal(channel.edgeFrom.x, channel.from.x);
+    assert.equal(channel.edgeFrom.y, channel.from.y);
+    assert.equal(channel.edgeTo.x, channel.to.x);
+    assert.equal(channel.edgeTo.y, channel.to.y);
+    assert.equal(channel.bow, 0);
+  }
+});
+
+test('C18: новые поля канала детерминированы', () => {
+  const rows = farPair(900, ['1', '4'], ['2']);
+  const first = channelsFor(rows, { factionColor: tableColor });
+  const second = channelsFor(rows.slice().reverse(), { factionColor: tableColor });
+  assert.equal(JSON.stringify(first.channels), JSON.stringify(second.channels), 'порядок строк CSV влияет на канал');
+});
+
+test('C19: запись «1-2-3» — оба канала из одной системы, знак изгиба один', () => {
+  const rows = [
+    sys('1', 'Своя', 5000, 5000, DOMINION, 1, '1-2-3'),
+    sys('2', 'Вторая', 5400, 5000, KMS, 2, '2-1'),
+    sys('3', 'Третья', 5000, 5600, DAELAAM, 3, '3-1'),
+  ];
+  const result = channelsFor(rows, { factionColor: tableColor });
+  const mine = result.channels.filter((channel) => channel.from.systemId === '1');
+  assert.equal(mine.length, 2, 'ожидались два канала из одной системы');
+  const signs = new Set(mine.map((channel) => Math.sign(channel.bow)));
+  assert.equal(signs.size, 1, 'лучи одной системы ушли на разные стороны');
 });
 
 /* ------------------------------- колонки сетей в загрузчике (дельта Z-3.8) */

@@ -19,8 +19,10 @@
  *      баблами; `null`, если сети не соседние (критерий — `BRIDGE_GAP_FACTOR`).
  *   6. `flaresFor` — «всполохи» в сторону конфронтующей сети; число и
  *      направление детерминированы данными сети, без случайности.
- *   7. Слой живёт только на уровнях территорий `L2…L6` (`NET_LAYER_LEVELS`,
- *      тот же диапазон, что `TERRITORY_LEVELS` сцены, §8.1).
+ *   7. Слой живёт на уровнях территорий `L2…L9` (`NET_LAYER_LEVELS`, тот же
+ *      диапазон, что `TERRITORY_LEVELS` сцены, §8.1): с `Z-4b` глубина лестницы
+ *      девять, поэтому слой не обрезается на `L6`; альфа слоя убывает по
+ *      `layerFillAlpha` / `layerLineAlpha` из `level-ladder.ts` (`Z-3.9`).
  *   8. `channelsFor` — каналы между сетями из колонки `net_confront_id`
  *      (карточка `Z-3.8`): узкая лента «свой-чужой» между двумя системами,
  *      идёт поверх баблов и сквозь них, в генерации баблов не участвует.
@@ -46,19 +48,20 @@ import type { FactionColor } from './config.ts';
 /* --------------------------------------------------------------- уровни слоя */
 
 /**
- * Слой баблов активен только на уровнях территорий (`L2…L6`, §8.1) — тот же
- * диапазон, что `TERRITORY_LEVELS` в `sector-scene.ts`. Массив объявлен здесь
- * независимо (совпадение закреплено тестом `faction-net.test.mjs`): рантайм-импорт
- * сцены создал бы цикл, когда `Z-3.4` смонтирует слой сетей внутрь кадра.
+ * Слой баблов активен на уровнях территорий (`L2…L9`, §8.1) — тот же диапазон,
+ * что `TERRITORY_LEVELS` в `sector-scene.ts`. `L2…L9`: с `Z-4b` глубина лестницы
+ * девять, слой больше не обрезается на `L6`. Массив объявлен здесь независимо
+ * (совпадение закреплено тестом `faction-net.test.mjs`): рантайм-импорт сцены
+ * создал бы цикл, когда слой сетей монтируется внутрь кадра.
  */
-export const NET_LAYER_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6]);
+export const NET_LAYER_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
 
-/** Живёт ли слой сетей на уровне лестницы (`L2…L6`). */
+/** Живёт ли слой сетей на уровне лестницы (`L2…L9`). */
 export function isNetLayerLevel(level: number): boolean {
   return NET_LAYER_LEVELS.includes(level);
 }
 
-/** Сети для кадра: на обзоре (`L0…L1`) и глубже `L6` слой не рисуется. */
+/** Сети для кадра: на обзоре (`L0…L1`) и вне `L2…L9` слой не рисуется. */
 export function netsAtLevel(
   nets: readonly FactionNet[],
   level: number,
@@ -109,6 +112,13 @@ export const NODE_RADIUS_BY_TYPE: Readonly<Record<string, number>> = Object.free
 export const NODE_RADIUS_DEFAULT = 0.24;
 
 /**
+ * Сторона «поля контроля» (осевой квадрат под узлом) как доля радиуса узла:
+ * `2,7` — замер по эскизу владельца (111 px против 41,5 px узла). Квадрат
+ * осевой: поворот на эскизе — след редактора, его не воспроизводим.
+ */
+export const CONTROL_FIELD_SIDE_RATIO = 2.7;
+
+/**
  * Критерий соседства сетей для ленты: просвет между ближайшими кругами не
  * больше `1,6 · (rA + rB)`. Дальше ленты нет — сети не конфликтуют на карте.
  */
@@ -128,6 +138,18 @@ export const MAX_FLARES_PER_NET = 6;
 
 /** Разброс направлений «всполохов» вокруг направления на конфронтующую сеть, рад. */
 export const FLARE_SPREAD = 0.5;
+
+/**
+ * Толщина стрелки «всполоха», экранные px (дельта 3, Д2.1). Пучка нет: сколько
+ * стрелок вернул `flaresFor`, столько и рисуется — по одной на элемент.
+ */
+export const FLARE_STROKE_PX = 2;
+
+/** Полуугол головы стрелки от древка, рад (`±28°`) — Д2.1. */
+export const FLARE_HEAD_ANGLE = 0.49;
+
+/** Длина головы как доля длины древка — Д2.1. */
+export const FLARE_HEAD_RATIO = 0.35;
 
 /** Минимальная и максимальная длина «всполоха», единицы карты. */
 export const MIN_FLARE_LENGTH = 24;
@@ -307,6 +329,13 @@ export interface Flare {
 
 export interface FlareOptions {
   readonly limit?: number;
+  /**
+   * Соперники берутся из данных (`Z-3.9`, дельта 4, В5): список `rivals` — это
+   * уже объявленные в `net_confront_id` пары (`channelsFor`), поэтому критерий
+   * геометрической близости `bridgesBetween` не применяется. Нет объявленных
+   * пар — пустой список соперников и ноль всполохов.
+   */
+  readonly fromData?: boolean;
 }
 
 /* ------------------------------------------------------------- малые утилиты */
@@ -1066,6 +1095,333 @@ export function bubbleFor(
   };
 }
 
+/* ------------------------------------------------- слияние полей сетей (Д-1) */
+
+/** Часть общего поля, принадлежащая одной сети. */
+export interface MergedField {
+  readonly netId: number;
+  /** Контуры своей части: замкнутые кольца в мировых координатах. */
+  readonly rings: readonly (readonly NetPoint[])[];
+}
+
+/** Значение поля сети `k` в точке — та же формула, что у `bubbleFor`. */
+function netFieldAt(
+  point: NetPoint,
+  geometry: NetGeometry,
+  power: number,
+  sixthPowers: readonly number[] | null,
+): number {
+  return metaballField(point.x, point.y, geometry.points, geometry.radii, power, sixthPowers);
+}
+
+function sixthPowersOf(radii: readonly number[], power: number): readonly number[] | null {
+  return power === 6 ? radii.map((radius) => radius ** 6) : null;
+}
+
+/**
+ * Слияние полей сетей (дельта 3, Д1 — главное).
+ *
+ * Одно общее метаполе вместо по-сетевых: `W(x, y) = Σ_k w_k(x, y)`, где
+ * `w_k = Σ (r_i / d_i)^6` по системам сети `k` с теми же радиусами лепестков,
+ * что у `bubbleFor`. Точка залита, если `W ≥ 1`; принадлежит сети `k`, если
+ * она залита и `w_k` максимальна (равенство — меньший `netId`, ради
+ * детерминизма). Новых порогов близости нет: близкие сети слипаются сами
+ * (сумма пересекает единицу там, где каждая по отдельности ещё нет), далёкие
+ * оставляют чёрный просвет.
+ *
+ * Контур каждой сети — изоляция её маски марчинг-скверсом по общей сетке:
+ * на внешней границе интерполируется `W` по уровню `1`, на внутренней
+ * (сеть против соседа) — разность `w_k − max_{j≠k} w_j` по уровню `0`,
+ * поэтому кольца соседей смыкаются точно, без зазора и без наложения.
+ *
+ * Слияние — не конфронтация: каналы и всполохи из него не выводятся.
+ */
+export function mergedFields(
+  nets: readonly FactionNet[],
+  options: BubbleOptions = {},
+): readonly MergedField[] {
+  const resolved = resolveBubbleOptions(options);
+  const list = (nets ?? [])
+    .filter((net) => net && net.members.length > 0)
+    .slice()
+    .sort((a, b) => a.netId - b.netId);
+  if (list.length === 0) return [];
+
+  const geometries = list.map((net) => geometryOf(net, resolved));
+  // Вырожденный случай Д1.4: одна сеть — ровно геометрия `bubbleFor`.
+  if (list.length === 1) {
+    return [{
+      netId: list[0]!.netId,
+      rings: buildRings(geometries[0]!.points, geometries[0]!.radii, resolved),
+    }];
+  }
+
+  let maxRadius = 0;
+  for (const geometry of geometries) {
+    for (const radius of geometry.radii) maxRadius = Math.max(maxRadius, radius);
+  }
+  let pad = Math.max(maxRadius * 0.6, 1);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const geometry of geometries) {
+      for (let index = 0; index < geometry.points.length; index += 1) {
+        const point = geometry.points[index]!;
+        const radius = geometry.radii[index]!;
+        minX = Math.min(minX, point.x - radius);
+        minY = Math.min(minY, point.y - radius);
+        maxX = Math.max(maxX, point.x + radius);
+        maxY = Math.max(maxY, point.y + radius);
+      }
+    }
+    minX -= pad;
+    minY -= pad;
+    maxX += pad;
+    maxY += pad;
+
+    // Сетка одна на все сети — над объединением габаритов (Д1.3).
+    const side = Math.max(maxX - minX, maxY - minY, 1e-6);
+    const originX = (minX + maxX) / 2 - side / 2;
+    const originY = (minY + maxY) / 2 - side / 2;
+    const cells = clamp(
+      Math.ceil(side / (maxRadius / GRID_CELLS_PER_RADIUS)),
+      resolved.gridCells,
+      MAX_GRID_CELLS,
+    );
+    const cellSize = side / cells;
+    const stride = cells + 1;
+    const count = stride * stride;
+
+    const powers = geometries.map((geometry) =>
+      sixthPowersOf(geometry.radii, resolved.fieldPower));
+    const fields: Float64Array[] = [];
+    const total = new Float64Array(count);
+    for (let netIndex = 0; netIndex < geometries.length; netIndex += 1) {
+      const geometry = geometries[netIndex]!;
+      const values = new Float64Array(count);
+      for (let row = 0; row <= cells; row += 1) {
+        const y = originY + row * cellSize;
+        for (let column = 0; column <= cells; column += 1) {
+          const index = row * stride + column;
+          const value = netFieldAt({ x: originX + column * cellSize, y }, geometry, resolved.fieldPower, powers[netIndex]!);
+          values[index] = value;
+          total[index] = total[index]! + value;
+        }
+      }
+      fields.push(values);
+    }
+
+    let borderInside = false;
+    for (let index = 0; index < stride; index += 1) {
+      if (
+        total[index]! >= 1
+        || total[cells * stride + index]! >= 1
+        || total[index * stride]! >= 1
+        || total[index * stride + cells]! >= 1
+      ) {
+        borderInside = true;
+        break;
+      }
+    }
+    if (borderInside) {
+      pad *= 2;
+      continue;
+    }
+
+    return list.map((net, netIndex) => ({
+      netId: net.netId,
+      rings: mergedRingsOf(
+        netIndex,
+        fields,
+        total,
+        cells,
+        stride,
+        cellSize,
+        originX,
+        originY,
+        geometries,
+        resolved,
+      ),
+    }));
+  }
+
+  return list.map((net) => ({ netId: net.netId, rings: [] as NetPoint[][] }));
+}
+
+/** Принадлежность угла сетке `netIndex`: залито (`W ≥ 1`) и поле максимально. */
+function ownerAt(fields: readonly Float64Array[], total: number, index: number): number {
+  if (total < 1) return -1;
+  let best = -1;
+  let bestValue = Number.NEGATIVE_INFINITY;
+  for (let netIndex = 0; netIndex < fields.length; netIndex += 1) {
+    const value = fields[netIndex]![index]!;
+    // Строго больше: при равенстве побеждает меньший `netId` (сети отсортированы).
+    if (value > bestValue) {
+      bestValue = value;
+      best = netIndex;
+    }
+  }
+  return best;
+}
+
+/**
+ * Кольца одной сети: марчинг-скверс по её маске. `buildRings` здесь не годится —
+ * там маска считается по полю одной сети, а тут она зависит от соседей.
+ */
+function mergedRingsOf(
+  netIndex: number,
+  fields: readonly Float64Array[],
+  total: Float64Array,
+  cells: number,
+  stride: number,
+  cellSize: number,
+  originX: number,
+  originY: number,
+  geometries: readonly NetGeometry[],
+  options: ResolvedBubbleOptions,
+): NetPoint[][] {
+  const own = fields[netIndex]!;
+  const owners = new Int32Array(stride * stride);
+  for (let index = 0; index < owners.length; index += 1) {
+    owners[index] = ownerAt(fields, total[index]!, index);
+  }
+
+  /** Точка пересечения на ребре ячейки: внешняя граница — по `W`, внутренняя — по разности полей. */
+  const crossing = (ax: number, ay: number, ia: number, bx: number, by: number, ib: number): NetPoint => {
+    const insideA = owners[ia] === netIndex;
+    const insideB = owners[ib] === netIndex;
+    const bothFilled = total[ia]! >= 1 && total[ib]! >= 1;
+    let t: number;
+    if (insideA && insideB) {
+      t = 0.5;
+    } else if (bothFilled) {
+      // Граница двух сетей: разность `w_own − w_other` переходит ноль ровно здесь.
+      const otherA = maxOtherField(fields, netIndex, ia);
+      const otherB = maxOtherField(fields, netIndex, ib);
+      const ua = own[ia]! - otherA;
+      const ub = own[ib]! - otherB;
+      const delta = ub - ua;
+      t = delta === 0 ? 0.5 : clamp(-ua / delta, 0, 1);
+    } else {
+      const va = total[ia]!;
+      const vb = total[ib]!;
+      const delta = vb - va;
+      t = delta === 0 ? 0.5 : clamp((1 - va) / delta, 0, 1);
+    }
+    return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t };
+  };
+
+  const segments: BubbleSegment[] = [];
+  for (let row = 0; row < cells; row += 1) {
+    for (let column = 0; column < cells; column += 1) {
+      const ia = row * stride + column;
+      const ib = ia + 1;
+      const ic = ib + stride;
+      const id = ia + stride;
+      const mask = (owners[ia] === netIndex ? 1 : 0)
+        | (owners[ib] === netIndex ? 2 : 0)
+        | (owners[ic] === netIndex ? 4 : 0)
+        | (owners[id] === netIndex ? 8 : 0);
+      if (mask === 0 || mask === 15) continue;
+
+      const x0 = originX + column * cellSize;
+      const x1 = x0 + cellSize;
+      const y0 = originY + row * cellSize;
+      const y1 = y0 + cellSize;
+      const bottom = crossing(x0, y0, ia, x1, y0, ib);
+      const right = crossing(x1, y0, ib, x1, y1, ic);
+      const top = crossing(x0, y1, id, x1, y1, ic);
+      const left = crossing(x0, y0, ia, x0, y1, id);
+
+      const push = (a: NetPoint, b: NetPoint): void => {
+        segments.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y });
+      };
+
+      switch (mask) {
+        case 1:
+        case 14:
+          push(left, bottom);
+          break;
+        case 2:
+        case 13:
+          push(bottom, right);
+          break;
+        case 3:
+        case 12:
+          push(left, right);
+          break;
+        case 4:
+        case 11:
+          push(right, top);
+          break;
+        case 5:
+        case 10: {
+          // Центр ячейки: принадлежность считается той же функцией, что у углов.
+          const centre = {
+            x: (x0 + x1) / 2,
+            y: (y0 + y1) / 2,
+          };
+          let centreTotal = 0;
+          let centreOwner = -1;
+          let centreBest = Number.NEGATIVE_INFINITY;
+          for (let other = 0; other < geometries.length; other += 1) {
+            const value = netFieldAt(centre, geometries[other]!, options.fieldPower, null);
+            centreTotal += value;
+            if (value > centreBest) {
+              centreBest = value;
+              centreOwner = other;
+            }
+          }
+          const centreInside = centreTotal >= 1 && centreOwner === netIndex;
+          if (mask === 5) {
+            if (centreInside) {
+              push(left, top);
+              push(bottom, right);
+            } else {
+              push(left, bottom);
+              push(right, top);
+            }
+          } else if (centreInside) {
+            push(left, bottom);
+            push(right, top);
+          } else {
+            push(left, top);
+            push(bottom, right);
+          }
+          break;
+        }
+        case 6:
+        case 9:
+          push(bottom, top);
+          break;
+        case 7:
+        case 8:
+          push(left, top);
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  const rings = chainRings(segments);
+  return options.smooth ? rings.map((ring) => smoothRing(ring)) : rings;
+}
+
+/** Максимальное поле среди соседних сетей в узле сетки. */
+function maxOtherField(fields: readonly Float64Array[], netIndex: number, index: number): number {
+  let best = Number.NEGATIVE_INFINITY;
+  for (let other = 0; other < fields.length; other += 1) {
+    if (other === netIndex) continue;
+    const value = fields[other]![index]!;
+    if (value > best) best = value;
+  }
+  return best === Number.NEGATIVE_INFINITY ? 0 : best;
+}
+
 /* -------------------------------------------------------------------- путь */
 
 function requireMeasure(value: number, what: string): number {
@@ -1114,7 +1470,12 @@ function pathNumber(value: number): string {
 /**
  * SVG/Canvas-путь бабла в пикселях кадра. `camera` и `viewport` те же по смыслу,
  * что у сцены сектора (`SceneCamera` / `FrameViewport`), поэтому масштаб
- * совпадает с маркерами и территориями.
+ * совпадает с маркерами и территориями: масштаб по полной ширине кадра, как у
+ * маркеров и территорий (`worldToScreen` сцены — тоже `frame.w / visibleWidth`).
+ *
+ * `Z-3.9` (дефект): раньше здесь стоял `Math.min(frame.w, frame.h)`, и на
+ * `1366×768` бабл выходил в `768/1366 = 0,562` от нужного размера и съезжал к
+ * центру кадра — расходился с маркерами и территориями того же кадра.
  */
 export function bubblePath(
   bubble: Bubble,
@@ -1126,7 +1487,7 @@ export function bubblePath(
   if (bubble === null || bubble === undefined || bubble.rings.length === 0) {
     return '';
   }
-  const scale = Math.min(frame.w, frame.h) / cam.visibleWidth;
+  const scale = frame.w / cam.visibleWidth;
   const halfWidth = frame.w / 2;
   const halfHeight = frame.h / 2;
 
@@ -1284,6 +1645,40 @@ function flareLimit(value: number | undefined): number {
   return value;
 }
 
+/** Геометрия всполоха, когда ленты нет: направления и длины — от центров сетей. */
+interface FlareGeometry {
+  readonly gap: number;
+  readonly originX: number;
+  readonly originY: number;
+  readonly width: number;
+}
+
+/**
+ * Свой конец всполоха без ленты: ближайшая к сопернику система своей сети.
+ * Она лежит внутри своего бабла, поэтому сгусток стартует на краю своего поля
+ * контроля, а не в пустоте между сетями.
+ */
+function dataFlareGeometry(net: FactionNet, rival: FactionNet): FlareGeometry | null {
+  if (net.members.length === 0 || rival.members.length === 0) return null;
+  let own = net.members[0]!;
+  let nearest = Number.POSITIVE_INFINITY;
+  for (const member of net.members) {
+    const distance = Math.hypot(rival.centerX - member.x, rival.centerY - member.y);
+    if (distance < nearest) {
+      nearest = distance;
+      own = member;
+    }
+  }
+
+  return {
+    gap: Math.max(Math.hypot(rival.centerX - net.centerX, rival.centerY - net.centerY), 1e-9),
+    originX: own.x,
+    originY: own.y,
+    // Тот же порядок, что у ленты: `0,3 · BRIDGE_MIN_WIDTH`, но не меньше 2.
+    width: Math.max(2, BRIDGE_MIN_WIDTH * 0.3),
+  };
+}
+
 /**
  * «Всполохи» сети в сторону конфронтующих сетей.
  *
@@ -1291,6 +1686,11 @@ function flareLimit(value: number | undefined): number {
  * не видна рядом). Число импульсов на соседа и разброс направления берутся из
  * детерминированного хеша `(net_id, rival_id, индекс)` — без `Math.random`
  * и без `Date.now`; суммарно не больше `MAX_FLARES_PER_NET`.
+ *
+ * `fromData: true` (дельта 4, В5): соперники уже отобраны данными
+ * (`net_confront_id` → `channelsFor`), поэтому далёкие сети без ленты всполох
+ * всё равно получают — геометрия считается от центров и ближайших систем.
+ * Без объявленных пар список соперников пуст и всполохов нет.
  */
 export function flaresFor(
   net: FactionNet,
@@ -1299,6 +1699,7 @@ export function flaresFor(
 ): readonly Flare[] {
   const limit = flareLimit(options.limit);
   if (!net || limit === 0) return [];
+  const fromData = options.fromData === true;
   const ordered = (rivals ?? [])
     .filter((rival) => rival && rival.netId !== net.netId)
     .slice()
@@ -1308,26 +1709,30 @@ export function flaresFor(
   for (const rival of ordered) {
     if (flares.length >= limit) break;
     const bridge = bridgesBetween(net, rival);
-    if (bridge === null) continue;
+    const fallback = bridge === null && fromData ? dataFlareGeometry(net, rival) : null;
+    if (bridge === null && fallback === null) continue;
+    const gap = bridge === null ? fallback!.gap : bridge.gap;
+    const originX = bridge === null ? fallback!.originX : bridge.from.x;
+    const originY = bridge === null ? fallback!.originY : bridge.from.y;
+    const width = bridge === null ? fallback!.width : Math.max(2, bridge.width * 0.3);
 
     const spanX = rival.centerX - net.centerX;
     const spanY = rival.centerY - net.centerY;
     const span = Math.hypot(spanX, spanY);
     const baseAngle = span > 1e-9
       ? Math.atan2(spanY, spanX)
-      : Math.atan2(bridge.to.y - bridge.from.y, bridge.to.x - bridge.from.x);
+      : Math.atan2(rival.centerY - net.centerY, rival.centerX - net.centerX);
     const count = 1 + (flareSeed(net.netId, rival.netId, 0) % MAX_FLARES_PER_RIVAL);
-    const intensity = clamp(1 / (1 + bridge.gap / 400), 0, 1);
-    const length = clamp(bridge.gap * 0.45, MIN_FLARE_LENGTH, MAX_FLARE_LENGTH);
-    const width = Math.max(2, bridge.width * 0.3);
+    const intensity = clamp(1 / (1 + gap / 400), 0, 1);
+    const length = clamp(gap * 0.45, MIN_FLARE_LENGTH, MAX_FLARE_LENGTH);
 
     for (let index = 0; index < count && flares.length < limit; index += 1) {
       const jitter = ((flareSeed(net.netId, rival.netId, index + 1) % 1001) / 1000 - 0.5);
       flares.push({
         netId: net.netId,
         targetNetId: rival.netId,
-        originX: bridge.from.x,
-        originY: bridge.from.y,
+        originX,
+        originY,
         angle: baseAngle + jitter * FLARE_SPREAD,
         length,
         width,
@@ -1401,6 +1806,15 @@ export const CHANNEL_WIDTH_RATIO = BRIDGE_WIDTH_RATIO * 0.5;
 /** Яркость канала: одна на все каналы, от номера канала и расстояния не зависит. */
 export const CHANNEL_BRIGHTNESS = 1;
 
+/**
+ * Изгиб канала как доля хорды (дельта 3/редакция 2, С12): линия на эскизе
+ * владельца изогнута, а не прямая. Знак берётся от порядка `systemId`.
+ */
+export const CHANNEL_BOW_RATIO = 0.08;
+
+/** Толщина линии канала, экранные px: канал рисуется линией, а не лентой. */
+export const CHANNEL_STROKE_PX = 2.5;
+
 /** Конец канала: система сети в мировых координатах. */
 export interface ChannelEnd {
   readonly netId: number;
@@ -1426,8 +1840,19 @@ export interface NetChannel {
   /** Длина ленты: канал идёт от системы до системы, без обрезки по баблам. */
   readonly length: number;
   readonly width: number;
-  /** Четыре угла ленты в мировых координатах: A+, B+, B−, A−. */
+  /**
+   * Углы ленты: оставлены ради совместимости и старых тестов. Канал
+   * рисуется линией `CHANNEL_STROKE_PX` по `curve`, а `width`/`quad` — нет.
+   */
   readonly quad: readonly [NetPoint, NetPoint, NetPoint, NetPoint];
+  /** Выход канала на границе своего бабла (или центр системы при перекрытии). */
+  readonly edgeFrom: NetPoint;
+  /** Вход канала на границе чужого бабла (или центр системы при перекрытии). */
+  readonly edgeTo: NetPoint;
+  /** Сдвиг контрольной точки квадратичной кривой, со знаком; при перекрытии `0`. */
+  readonly bow: number;
+  /** Квадратичная кривая канала: `[начало, контрольная точка, конец]`. */
+  readonly curve: readonly [NetPoint, NetPoint, NetPoint];
   /** Градиент табличных цветов фракций двух концов (`data/factions.csv`). */
   readonly stops: readonly ColorStop[];
   /** `true` — партнёр объявил ту же пару встречно, связь принудительная. */
@@ -1817,6 +2242,24 @@ export function channelsFor(
     const normalX = -uy;
     const normalY = ux;
     const pair = netPairKey(first.netId, second.netId);
+
+    /* Изогнутая линия канала (С12, дельта 3): выход и вход — на границах баблов,
+     * изгиб — доля хорды со знаком, чтобы у взаимной пары линии пересекались,
+     * а два луча одной системы (`1-2-3`) шли в одну сторону. */
+    const inside = gap <= first.radius + second.radius;
+    const edgeFrom: NetPoint = inside
+      ? { x: first.x, y: first.y }
+      : { x: first.x + ux * first.radius, y: first.y + uy * first.radius };
+    const edgeTo: NetPoint = inside
+      ? { x: second.x, y: second.y }
+      : { x: second.x - ux * second.radius, y: second.y - uy * second.radius };
+    const chord = Math.hypot(edgeTo.x - edgeFrom.x, edgeTo.y - edgeFrom.y);
+    const sign = compareIds(first.id, second.id) <= 0 ? 1 : -1;
+    const bow = inside ? 0 : sign * CHANNEL_BOW_RATIO * chord;
+    const control: NetPoint = {
+      x: (edgeFrom.x + edgeTo.x) / 2 + -uy * bow,
+      y: (edgeFrom.y + edgeTo.y) / 2 + ux * bow,
+    };
     const declarers = (declaredPairs.get(pair) ?? []).slice().sort(compareIds);
 
     const endOf = (system: ChannelSystem): ChannelEnd => ({
@@ -1849,6 +2292,10 @@ export function channelsFor(
         { x: second.x - normalX * half, y: second.y - normalY * half },
         { x: first.x - normalX * half, y: first.y - normalY * half },
       ],
+      edgeFrom,
+      edgeTo,
+      bow,
+      curve: [edgeFrom, control, edgeTo],
       stops: options.factionColor
         ? [
           colorStopAt(0, colorPointOf(first), options.factionColor),
