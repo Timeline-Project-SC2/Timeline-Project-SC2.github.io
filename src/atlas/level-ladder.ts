@@ -153,3 +153,53 @@ export function frameOf(level: number): LadderFrame {
 export function visibleWidthForLevel(level: number): number {
   return levelSpec(level).visibleWidth;
 }
+
+export function levelForWidth(visibleWidth: number, prev?: number): number {
+  if (Number.isNaN(visibleWidth)) {
+    throw new RangeError('Ширина кадра должна быть числом');
+  }
+
+  let rawLevel: number;
+  if (visibleWidth >= MAX_VISIBLE_WIDTH) {
+    rawLevel = 0;
+  } else if (visibleWidth <= visibleWidthForLevel(9)) {
+    rawLevel = 9;
+  } else {
+    rawLevel = Math.max(
+      0,
+      Math.min(
+        9,
+        Math.floor(Math.log2(MAX_VISIBLE_WIDTH / visibleWidth) + 1e-9),
+      ),
+    );
+  }
+
+  if (prev === undefined) {
+    return rawLevel;
+  }
+  if (!Number.isInteger(prev) || prev < 0 || prev > 9) {
+    throw new RangeError(`Секторный уровень вне диапазона 0…9: ${prev}`);
+  }
+
+  if (rawLevel > prev) {
+    const nextLevel = prev + 1;
+    const enterThreshold = visibleWidthForLevel(nextLevel) * (1 - HYSTERESIS);
+    return visibleWidth <= enterThreshold ? nextLevel : prev;
+  }
+
+  if (rawLevel < prev) {
+    const leaveThreshold = visibleWidthForLevel(prev) * (1 + HYSTERESIS);
+    return visibleWidth >= leaveThreshold ? prev - 1 : prev;
+  }
+
+  return rawLevel;
+}
+
+export function markerDiameter(visibleWidth: number): number {
+  if (Number.isNaN(visibleWidth) || visibleWidth < 0) {
+    throw new RangeError('Ширина кадра для маркера не может быть отрицательной');
+  }
+
+  const diameter = 2.5 * (MAX_VISIBLE_WIDTH / visibleWidth) ** 0.42;
+  return Math.max(2.5, Math.min(40, diameter));
+}
