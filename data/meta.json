@@ -1,16 +1,17 @@
 {
   "version": null,
-  "sha": "f75560c354364b201fac29b0def051c6495ce828cf216c9dd8a003c82a4cb908",
+  "sha": "414a1e78fbc04c497db36b276be319252f6bfe70bff41447b5eea4b5efa40216",
   "bounds": null,
-  "generatedAt": "2026-10-20T01:49:48.238211Z",
+  "generatedAt": "2026-10-25T19:48:27.191364Z",
   "sources": [
     "systems-sheet",
     "places-sheet",
-    "planet-generation-sheet"
+    "planet-generation-sheet",
+    "faction-details-sheet"
   ],
   "mapSize": 10000,
   "assets": {
     "imageVersion": "05a76b26"
   },
-  "source": "planet-generation-sheet"
+  "source": "faction-details-sheet"
 }
