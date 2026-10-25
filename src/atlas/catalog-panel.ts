@@ -1,7 +1,6 @@
 /* Map Atlas — поиск, фильтры, счётчики и левая панель каталога. */
 
 import {
-  CATALOG_VIEW_TYPES,
   PLACE_TYPES,
   escapeHtml,
   formatNumber,
@@ -148,22 +147,19 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
     return null;
   }
 
-  // Виды вкладки «Места»: planet, station, platform, other. Каждый тип должен
-  // попадать ровно в одну вкладку, иначе место есть в данных, но не видно ни в
-  // одной. Набор типов вида берётся из CATALOG_VIEW_TYPES (config.ts): новый тип
-  // попадает в каталог правкой одной таблицы.
+  // platform, other. Каждый должен попадать ровно в одну вкладку, иначе место есть
+  // в данных, но не видно ни в одной.
   function matchesCatalogView(place: PlaceRecord, view?: string | null): boolean {
     var types = kernel.data.placeTypesOf(place);
     view = view || state.catalogView;
     if (!view || view === 'systems') return true;
-    // Платформа и станция делят один тип `station`: платформа отличается признаком
-    // isPlatformPlace. Пару разбираем до общей таблицы, иначе станция-платформа
-    // попала бы сразу в две вкладки и задвоила счётчики.
-    if (view === 'station') return types.indexOf('station') > -1 && !kernel.data.isPlatformPlace(place);
+    if (view === 'planet') return types.indexOf('planet') > -1;
     if (view === 'platform') return types.indexOf('platform') > -1 || kernel.data.isPlatformPlace(place);
-    var viewTypes = CATALOG_VIEW_TYPES[view];
-    if (!viewTypes) return true;
-    return viewTypes.some(function (type) { return types.indexOf(type) > -1; });
+    if (view === 'station') return types.indexOf('station') > -1 && !kernel.data.isPlatformPlace(place);
+    if (view === 'other') {
+      return types.indexOf('moon') > -1 || types.indexOf('asteroid') > -1 || types.indexOf('other') > -1;
+    }
+    return true;
   }
 
   function catalogViewForPlace(place: PlaceRecord): string {
@@ -204,10 +200,10 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
       state.activeTypes = [];
       setTab('systems', { keepCatalogView: true });
     } else {
-      // Стартовые фильтры вида — ровно его типы из общей таблицы, иначе фильтр
-      // отсекал бы то, что вид показывает (так `unknown` терял «Иное место»).
-      var viewTypes = view ? CATALOG_VIEW_TYPES[view] : null;
-      state.activeTypes = viewTypes ? [...viewTypes] : [];
+      if (view === 'planet') state.activeTypes = ['planet'];
+      else if (view === 'station') state.activeTypes = ['station'];
+      else if (view === 'platform') state.activeTypes = ['platform', 'station'];
+      else if (view === 'other') state.activeTypes = ['moon', 'asteroid', 'other'];
       setTab('planets', { keepCatalogView: true });
     }
     updateCatalogSectionState();
@@ -302,7 +298,7 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
       '<div class="filter-options">' +
       '<button class="filter-chip' + (!state.activeTypes.length ? ' active' : '') +
       '" type="button" data-type="">Все типы</button>';
-    ['planet', 'moon', 'asteroid', 'station', 'platform', 'other', 'unknown'].forEach(function (type) {
+    ['planet', 'moon', 'asteroid', 'station', 'platform', 'other'].forEach(function (type) {
       if (!typeCounter[type]) return;
       var active = state.activeTypes.indexOf(type) > -1;
       var config = PLACE_TYPES[type] || { plural: type };

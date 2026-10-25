@@ -117,7 +117,7 @@ export function zoomReadoutText(
   if (!(scale > 0) || !(fit > 0) || !(viewport.w > 0) || !(viewport.h > 0)) return null;
   return {
     percent: Math.round(scale / fit * 100) + '%',
-    // Два знака: на пределе приближения строка обязана читаться как «1,00 св.г.».
+    // На пределе приближения строка обязана читаться как «1,00 св.г. до границы».
     edge: formatDistanceLy(edgeDistance({ w: viewport.w, h: viewport.h }, scale), 'full') + ' до границы',
   };
 }

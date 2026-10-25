@@ -1,4 +1,5 @@
 export const NBSP = '\u00A0';
+export const UNITS_PER_LY = 1000;
 
 export type DistanceMode = 'full' | 'short' | 'label';
 
@@ -6,14 +7,24 @@ export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): stri
   if (Number.isNaN(ly) || ly < 0) {
     throw new RangeError('Расстояние не может быть отрицательным или неопределённым');
   }
-  if (mode !== 'short' && mode !== 'full' && mode !== 'label') {
-    throw new RangeError(`Неизвестный режим форматирования расстояния: ${mode}`);
-  }
   if (ly >= 10000) {
     return `≥ 10${NBSP}000${NBSP}св.г.`;
   }
-  if (mode === 'label' && ly >= 100) {
-    const groupedInteger = Math.round(ly).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+  if (mode !== 'short' && mode !== 'full' && mode !== 'label') {
+    throw new RangeError(`Неизвестный режим форматирования расстояния: ${mode}`);
+  }
+
+  if (mode === 'label') {
+    if (ly < 1) {
+      const rounded = ly.toFixed(3);
+      return formatLabelValue(rounded);
+    }
+    if (ly < 100) {
+      const rounded = ly.toFixed(1);
+      return formatLabelValue(rounded);
+    }
+    const rounded = Math.round(ly).toString();
+    const groupedInteger = rounded.replace(/\B(?=(\d{3})+(?!\\d))/g, NBSP);
     return `${groupedInteger}${NBSP}св.г.`;
   }
 
@@ -22,9 +33,31 @@ export function formatDistanceLy(ly: number, mode: DistanceMode = 'short'): stri
   const decimalIndex = rounded.indexOf('.');
   const integerPart = rounded.slice(0, decimalIndex);
   const fractionalPart = rounded.slice(decimalIndex + 1);
-  const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+  const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\\d))/g, NBSP);
 
   return `${groupedInteger},${fractionalPart}${NBSP}св.г.`;
+}
+
+function formatLabelValue(rounded: string): string {
+  const decimalIndex = rounded.indexOf('.');
+  const integerPart = rounded.slice(0, decimalIndex);
+  const fractionalPart = rounded.slice(decimalIndex + 1);
+  const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\\d))/g, NBSP);
+  return `${groupedInteger},${fractionalPart}${NBSP}св.г.`;
+}
+
+export function unitsToLy(units: number): number {
+  if (Number.isNaN(units) || units < 0) {
+    throw new RangeError('Расстояние не может быть отрицательным или неопределённым');
+  }
+  return units / UNITS_PER_LY;
+}
+
+export function lyToUnits(ly: number): number {
+  if (Number.isNaN(ly) || ly < 0) {
+    throw new RangeError('Расстояние не может быть отрицательным или неопределённым');
+  }
+  return ly * UNITS_PER_LY;
 }
 
 export function pluralYears(n: number): 'год' | 'года' | 'лет' {

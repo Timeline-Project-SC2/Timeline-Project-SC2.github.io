@@ -1,3 +1,5 @@
+import { unitsToLy, lyToUnits } from './sector-units.ts';
+
 export type LadderFrame = 'S' | 'O';
 
 export interface LevelSpec {
@@ -178,10 +180,16 @@ export const DEEPEST_SECTOR_LEVEL = 12;
 export const TARGET_EDGE_LY = 1;
 
 /**
- * Глубже 0,5 св.г. до границы начинается системный кадр: вход туда — только
- * действием (§6.1 п. 4), клампом зума он не достигается.
+ * Целевое расстояние от цели до границы в единицах карты:
+ * 1 св.г. × 1000 единиц/св.г. = 1000 единиц.
  */
-export const MIN_CLAMP_EDGE_LY = 0.5;
+export const TARGET_EDGE_UNITS = 1000;
+
+/**
+ * Глубже 500 единиц карты (≈0,5 св.г.) до границы начинается системный кадр:
+ * вход туда — только действием (§6.1 п. 4), клампом зума он не достигается.
+ */
+export const MIN_CLAMP_EDGE_UNITS = 500;
 
 export function levelSpec(level: number): LevelSpec {
   const spec = LEVELS[level];
@@ -198,6 +206,14 @@ export function frameOf(level: number): LadderFrame {
 
 export function visibleWidthForLevel(level: number): number {
   return levelSpec(level).visibleWidth;
+}
+
+/**
+ * Видимая ширина кадра уровня `level` в световых годах:
+ * `visibleWidthForLevel(level) / 1000`.
+ */
+export function visibleWidthLyForLevel(level: number): number {
+  return visibleWidthForLevel(level) / 1000;
 }
 
 export function levelForWidth(visibleWidth: number, prev?: number): number {
@@ -257,11 +273,14 @@ export function markerDiameter(visibleWidth: number): number {
  * Единственная метрика глубины — `edgeDist`, расстояние от центра кадра (цели)
  * до ближайшей границы экрана в световых годах:
  *
- *     edgeDist = min(viewport.w, viewport.h) / 2 / scale
+ *     edgeDist = min(viewport.w, viewport.h) / 2 / scale / 1000
+ *
+ * где `scale` — масштаб в единицах карты на пиксель, а делитель 1000 переводит
+ * единицы карты в световые годы (1000 единиц = 1 св.г., §17.23).
  *
  * `visibleWidth` уровней — производная величина: она трактуется как протяжённость
- * мира по КОРОТКОЙ оси кадра, поэтому `edgeDist = visibleWidth / 2`. Это та же
- * ось, по которой масштабирует `fitScale()` в `canvas-renderer.ts`
+ * мира по КОРОТКОЙ оси кадра в единицах карты, поэтому `edgeDist = visibleWidth / 2 / 1000`.
+ * Это та же ось, по которой масштабирует `fitScale()` в `canvas-renderer.ts`
  * (`min(w, h) / mapSize * fitInset`), — поэтому формула `fitScaleFor` совпадает
  * с рендерером до порядка операций.
  */
@@ -292,20 +311,28 @@ function shortSide(viewport: FrameViewport): number {
   return Math.min(w, h);
 }
 
-/** Расстояние от цели (центра кадра) до ближайшей границы экрана, в св.г. */
+/** Расстояние от цели (центра кадра) до ближайшей границы экрана, в световых годах.
+ *
+ * Формула: `shortSide(viewport) / 2 / scale / 1000`, где scale — в единицах карты
+ * на пиксель, а делитель 1000 переводит единицы в световые годы.
+ */
 export function edgeDistance(viewport: FrameViewport, scale: number): number {
   const short = shortSide(viewport);
-  const pixelsPerLy = requirePositive(scale, 'Масштаб кадра (scale)');
+  const pixelsPerUnit = requirePositive(scale, 'Масштаб кадра (scale)');
 
-  return short / 2 / pixelsPerLy;
+  return short / 2 / pixelsPerUnit / 1000;
 }
 
-/** Масштаб, при котором до ближайшей границы ровно `edgeDist` св.г. */
+/** Масштаб, при котором до ближайшей границы ровно `edgeDist` световых лет.
+ *
+ * Принимает `edgeDist` в световых годах, возвращает масштаб в единицах карты
+ * на пиксель: `shortSide(viewport) / 2 / (edgeDist * 1000)`.
+ */
 export function scaleForEdgeDistance(viewport: FrameViewport, edgeDist: number): number {
   const short = shortSide(viewport);
   const lightYears = requirePositive(edgeDist, 'Расстояние до границы кадра (edgeDist)');
 
-  return short / 2 / lightYears;
+  return short / 2 / (lightYears * 1000);
 }
 
 /** «Вся карта» по короткой оси — формула `fitScale()` из `canvas-renderer.ts`. */
@@ -321,8 +348,9 @@ export function fitScaleFor(viewport: FrameViewport, mapSize: number, fitInset: 
  * Предел приближения по требованию: масштаб точки «1 св.г. до границы».
  *
  * §17.17 п. 4 (решение Гайдлайнера): кламп стоит **ровно на требовании**, без
- * запаса вниз — `edgeDistance(maxScale) === 1,00` точно, то есть
- * `maxScale = min(w, h) / 2`. Не `0,95` и не `0,975`.
+ * запаса вниз — `edgeDistance(maxScale) === 1,00` точно. При единицах карты,
+ * где 1000 единиц = 1 св.г., масштаб точки «1 св.г. до границы» равен
+ * `shortSide(viewport) / 2000` (бывший `shortSide / 2` при трактовке 1 ед = 1 св.г.).
  *
  * Множитель при этом выведен, а не взят из плана `600…1100×`, и получается
  * тождеством, а не приближением:
@@ -346,8 +374,8 @@ export function maxScaleForTargetEdge(
   requirePositive(mapSize, 'Размер карты (mapSize)');
   requirePositive(fitInset, 'Отступ вписывания (fitInset)');
 
-  const atRequirement = shortSide(viewport) / (2 * TARGET_EDGE_LY);
-  const systemFrameGuard = shortSide(viewport) / (2 * MIN_CLAMP_EDGE_LY);
+  const atRequirement = shortSide(viewport) / (2 * TARGET_EDGE_UNITS);
+  const systemFrameGuard = shortSide(viewport) / (2 * MIN_CLAMP_EDGE_UNITS / 1000);
 
   return Math.min(atRequirement, systemFrameGuard);
 }

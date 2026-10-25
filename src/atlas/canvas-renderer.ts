@@ -5,7 +5,6 @@ import {
   clamp,
   easeOutCubic,
   normalize,
-  parseHexColor,
   rng,
 } from './config.ts';
 import type {
@@ -512,15 +511,20 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     };
   }
 
+  /** Устойчивый оттенок фракции: цвет не зависит от глубины и от запуска (§6.2 п. 4). */
+  function factionHue(faction: string): number {
+    var hash = 0;
+    for (var index = 0; index < faction.length; index += 1) {
+      hash = (hash * 31 + faction.charCodeAt(index)) % 360;
+    }
+    return hash;
+  }
+
   function drawTerritory(territory: SceneTerritory): void {
     const ctx = kernel.ctx!;
     var radius = territory.screenRadius;
     if (!(radius > 2)) return;
-    // Цвет — данные таблицы фракций, а не оттенок от имени: на табличный цвет
-    // накладывается только альфа радиального спада, сам цвет не изменяется.
-    var rgb = parseHexColor(kernel.data.factionColor(territory.faction));
-    if (!rgb) return;
-    var channels = rgb[0] + ', ' + rgb[1] + ', ' + rgb[2];
+    var hue = factionHue(territory.faction);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     try {
@@ -528,9 +532,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
         territory.x, territory.y, Math.min(radius * 0.12, 18),
         territory.x, territory.y, radius,
       );
-      gradient.addColorStop(0, 'rgba(' + channels + ', .16)');
-      gradient.addColorStop(0.65, 'rgba(' + channels + ', .07)');
-      gradient.addColorStop(1, 'rgba(' + channels + ', 0)');
+      gradient.addColorStop(0, 'hsla(' + hue + ', 68%, 62%, .16)');
+      gradient.addColorStop(0.65, 'hsla(' + hue + ', 64%, 52%, .07)');
+      gradient.addColorStop(1, 'hsla(' + hue + ', 60%, 45%, 0)');
       ctx.fillStyle = gradient;
       ctx.beginPath();
       ctx.arc(territory.x, territory.y, radius, 0, Math.PI * 2);

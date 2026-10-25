@@ -9,9 +9,9 @@ import type {
   SelectionOptions,
   SystemRecord,
 } from './config.ts';
-import { levelForWidth, levelSpec } from './level-ladder.ts';
+import { levelForWidth, levelSpec, visibleWidthLyForLevel } from './level-ladder.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
-import { formatDistanceLy } from './sector-units.ts';
+import { formatDistanceLy, unitsToLy } from './sector-units.ts';
 
 export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
   const state = kernel.state;
@@ -581,7 +581,7 @@ export function nearestSystemTo(
 /** Уровень лестницы и его номинальная видимая ширина для строки `L7 · 78,1 св.г.`. */
 export function levelCaption(visibleWidth: number): string {
   var spec = levelSpec(levelForWidth(visibleWidth));
-  return spec.id + ' · ' + formatDistanceLy(spec.visibleWidth, 'short');
+  return spec.id + ' · ' + formatDistanceLy(visibleWidthLyForLevel(spec.level), 'short');
 }
 
 function createPointCardView(kernel: AtlasKernel): PointCardView {
@@ -664,9 +664,9 @@ function createPointCardView(kernel: AtlasKernel): PointCardView {
       '<div>x ' + escapeHtml(formatPointTenths(x)) + ' &nbsp; y ' + escapeHtml(formatPointTenths(y)) + '</div>' +
       '<div>ближайшая система: ' +
       (nearest
-        ? escapeHtml(nearest.name) + ' · ' + formatDistanceLy(nearest.distance, 'full')
+        ? escapeHtml(nearest.name) + ' · ' + formatDistanceLy(unitsToLy(nearest.distance), 'full')
         : 'координат нет') + '</div>' +
-      '<div>от ядра сектора: ' + formatNumber(Math.round(core)) + ' св.г.</div>' +
+      '<div>от ядра сектора: ' + formatDistanceLy(unitsToLy(core), 'full') + '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:2px">' +
       pointCardButton('address', 'Копировать адрес', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +
       pointCardButton('xy', 'Копировать x⇥y', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +

@@ -3,7 +3,7 @@
 import type { AtlasKernel, SystemRecord } from './config.ts';
 import { formatAddress, addressOf } from './sector-address.ts';
 import { levelForWidth } from './level-ladder.ts';
-import { formatDistanceLy } from './sector-units.ts';
+import { formatDistanceLy, unitsToLy } from './sector-units.ts';
 
 export interface ArrowSystem {
   readonly id: string;
@@ -27,8 +27,10 @@ export interface ArrowSelection {
 const MAX_ARROWS = 5;
 const MIN_SEPARATION = 24 * Math.PI / 180;
 
-function distanceLabel(ly: number): string {
-  return formatDistanceLy(ly, 'label');
+// Берём единый форматтер проекта; в подписи убираем только избыточный «,0».
+// Расстояние в единицах карты переводится в световые годы перед форматированием.
+function distanceLabel(units: number): string {
+  return formatDistanceLy(unitsToLy(units), 'label').replace(/,0(?=\u00a0св\.г\.$)/, '');
 }
 
 function angleDistance(a: number, b: number): number {
