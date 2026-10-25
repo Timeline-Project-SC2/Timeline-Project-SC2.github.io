@@ -568,6 +568,32 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
+  /*
+   * Приглушение маркеров в `anticipation` (`§6.4`): цель полёта остаётся яркой
+   * (`1`), остальные гаснут до `dimAlpha` (`0,35`). Фазу знает только полёт
+   * (`sector-flight.ts`), поэтому рендерер хранит лишь полученное состояние:
+   * `setFlightDim(null, 1)` возвращает штатные `1` / `0,66`.
+   */
+  let flightDimTargetId: string | null = null;
+  let flightDimAlpha = 1;
+
+  function setFlightDim(targetId: string | null, alpha: number): void {
+    var nextTarget = targetId || null;
+    var nextAlpha = nextTarget === null
+      ? 1
+      : clamp(Number.isFinite(alpha) ? alpha : 1, 0, 1);
+    if (nextTarget === flightDimTargetId && nextAlpha === flightDimAlpha) return;
+    flightDimTargetId = nextTarget;
+    flightDimAlpha = nextAlpha;
+    requestRender();
+  }
+
+  /** `globalAlpha` маркера: приглушение полёта важнее подсветки и флага координат. */
+  function markerAlpha(markerId: string, highlighted: boolean, verified: boolean): number {
+    if (flightDimTargetId !== null) return markerId === flightDimTargetId ? 1 : flightDimAlpha;
+    return highlighted || verified ? 1 : 0.66;
+  }
+
   function drawMarker(marker: SceneMarker): void {
     const ctx = kernel.ctx!;
     var system = state.systemsById[marker.id];
@@ -588,7 +614,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       ctx.shadowColor = theme.accent;
       ctx.shadowBlur = 18;
     }
-    ctx.globalAlpha = highlighted || verified ? 1 : 0.66;
+    ctx.globalAlpha = markerAlpha(marker.id, highlighted, verified);
     ctx.beginPath();
     ctx.arc(marker.x, marker.y, radius, 0, Math.PI * 2);
     ctx.lineWidth = stroke * (highlighted ? 1.35 : 1);
@@ -1170,5 +1196,6 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     visiblePointsOfInterest,
     hasActivePointers,
     bindMapEvents,
+    setFlightDim,
   };
 }

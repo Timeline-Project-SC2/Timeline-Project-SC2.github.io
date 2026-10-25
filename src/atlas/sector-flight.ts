@@ -18,12 +18,23 @@ export interface FlightPlan {
   readonly targetScaleLevel: 9;
 }
 
+/**
+ * Фазы полёта `§6.4`. Окна заданы числами `FLIGHT_TIMING`, границы считает
+ * `flightPhaseAt`; отдельного таймера у рендерера нет — о смене фазы он узнаёт
+ * подпиской `onPhaseChange`.
+ */
+export type FlightPhase = 'idle' | 'anticipation' | 'frame' | 'stages' | 'settle';
+
+export type FlightPhaseListener = (phase: FlightPhase, targetId: string | null) => void;
+
 export interface FlightApi {
   planClickFlight(from: FlightPoint, to: FlightPoint): FlightPlan;
   planArrowTrip(current: FlightPoint, target: FlightPoint): FlightPlan;
   flyTo(plan: FlightPlan, onArrive?: () => void): void;
   cancel(): void;
   readonly active: boolean;
+  readonly phase: FlightPhase;
+  onPhaseChange(listener: FlightPhaseListener): () => void;
 }
 
 export const FLIGHT_TIMING = Object.freeze({
@@ -40,6 +51,23 @@ export function flightDuration(delta: number): number {
   if (!Number.isFinite(delta) || delta < 0) throw new RangeError('Разница уровней должна быть неотрицательной');
   return Math.max(FLIGHT_TIMING.min, Math.min(FLIGHT_TIMING.max,
     FLIGHT_TIMING.base + FLIGHT_TIMING.perLevel * delta));
+}
+
+/** Приглушение остальных маркеров в `anticipation` (`§6.4`): цель — `1`, прочие — `0,35`. */
+export const FLIGHT_MARKER_DIM = 0.35;
+
+/**
+ * Фаза полёта по прошедшему времени (`§6.4`): `0…140` — `anticipation`,
+ * `140…380` — `frame`, `380…T−120` — `stages`, `T−120…T` — `settle`, после `T` — `idle`.
+ * Чистая функция: ни `Date.now`, ни `Math.random`, поэтому границы проверяются тестом.
+ */
+export function flightPhaseAt(elapsedMs: number, durationMs: number): FlightPhase {
+  if (!Number.isFinite(elapsedMs) || !Number.isFinite(durationMs)) return 'idle';
+  if (!(durationMs > 0) || elapsedMs < 0 || elapsedMs >= durationMs) return 'idle';
+  if (elapsedMs < FLIGHT_TIMING.anticipation) return 'anticipation';
+  if (elapsedMs < FLIGHT_TIMING.frameEnd) return 'frame';
+  if (elapsedMs < durationMs - FLIGHT_TIMING.settle) return 'stages';
+  return 'settle';
 }
 
 function pointOf(value: FlightPoint | SystemRecord, level?: number): FlightPoint {
@@ -72,7 +100,28 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
   let active = false;
   let savedCenterOn: AtlasKernel['renderer']['centerOn'] | null = null;
   let onArrive: (() => void) | undefined;
+  let phase: FlightPhase = 'idle';
+  let phaseTargetId: string | null = null;
+  const phaseListeners = new Set<FlightPhaseListener>();
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  // Смена фазы — единственное место, где рендерер узнаёт о ходе полёта:
+  // своего таймера у него нет (`И-13`, один владелец камеры).
+  function setPhase(next: FlightPhase, targetId: string | null): void {
+    if (next === phase && targetId === phaseTargetId) return;
+    phase = next;
+    phaseTargetId = targetId;
+    // Слушатель не должен ронять кадр полёта: он получает копию списка и вызывается
+    // отдельно от расчёта фазы, поэтому отписка внутри обработчика тоже безопасна.
+    Array.from(phaseListeners).forEach(function (listener): void {
+      listener(next, targetId);
+    });
+  }
+
+  function onPhaseChange(listener: FlightPhaseListener): () => void {
+    phaseListeners.add(listener);
+    return function (): void { phaseListeners.delete(listener); };
+  }
 
   function ease(t: number): number { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
   function restoreSetter(): void {
@@ -89,6 +138,9 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
     kernel.el.mapCanvas.classList.remove('sector-flight-reduced');
     const ui = kernel.el.mapStage.querySelector<HTMLElement>('.sector-flight-frame');
     if (ui) ui.remove();
+    // Отмена — тот же выход в `idle`, что и прибытие: подписчик обязан снять
+    // приглушение маркеров, иначе они останутся тусклыми.
+    setPhase('idle', null);
     kernel.renderer.requestRender();
   }
 
@@ -118,11 +170,17 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
     overlay.setAttribute('aria-hidden', 'true');
     if (!reduced.matches) kernel.el.mapStage.append(overlay);
     else kernel.el.mapCanvas.classList.add('sector-flight-reduced');
+    const targetId = plan.to.id ?? null;
+    setPhase('anticipation', targetId);
 
     function tick(now: number): void {
       if (!active) return;
       const elapsed = Math.min(duration, now - started);
       const p = Math.min(1, elapsed / duration);
+      // `idle` выдаётся только прибытием или отменой — всегда с пустой целью,
+      // поэтому последний кадр не анонсирует «idle с целью» отдельно.
+      const nextPhase = flightPhaseAt(elapsed, duration);
+      if (nextPhase !== 'idle') setPhase(nextPhase, targetId);
       const stageStart = reduced.matches ? 0 : FLIGHT_TIMING.frameEnd;
       const stageEnd = reduced.matches ? duration : duration - FLIGHT_TIMING.settle;
       const stageP = Math.max(0, Math.min(1, (elapsed - stageStart) / Math.max(1, stageEnd - stageStart)));
@@ -156,6 +214,7 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
       kernel.renderer.requestRender();
       active = false;
       restoreSetter();
+      setPhase('idle', null);
       kernel.el.mapCanvas.style.opacity = '';
       kernel.el.mapCanvas.classList.remove('sector-flight-reduced');
       window.setTimeout(function (): void { overlay.remove(); }, reduced.matches ? 0 : 0);
@@ -165,7 +224,15 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
     }
     frame = window.requestAnimationFrame(tick);
   }
-  return { planClickFlight, planArrowTrip, flyTo, cancel, get active(): boolean { return active; } };
+  return {
+    planClickFlight,
+    planArrowTrip,
+    flyTo,
+    cancel,
+    onPhaseChange,
+    get active(): boolean { return active; },
+    get phase(): FlightPhase { return phase; },
+  };
 }
 
 export function currentFlightPoint(kernel: AtlasKernel): FlightPoint {
