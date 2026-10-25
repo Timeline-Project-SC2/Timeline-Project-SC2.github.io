@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Источники. Включены три листа одной опубликованной целиком книги Google Sheets: systems (gid=0), places (gid=1415856610) и planet_generation (gid=1183479406). Конкретная вкладка выбирается параметром gid в каждом CSV-URL. Книга должна оставаться опубликованной в интернете с тем же токеном 2PACX: доступ «по ссылке» для синхронизации не подходит, а отмена или повторная публикация может сменить адрес.",
+  "note": "Источники. Включены четыре листа одной опубликованной целиком книги Google Sheets: systems (gid=0), places (gid=1415856610), planet_generation (gid=1183479406) и faction_details (gid=1917487455). Конкретная вкладка выбирается параметром gid в каждом CSV-URL. Книга должна оставаться опубликованной в интернете с тем же токеном 2PACX: доступ «по ссылке» для синхронизации не подходит, а отмена или повторная публикация может сменить адрес.",
   "sources": [
     {
       "id": "systems-sheet",
@@ -39,6 +39,20 @@
       "role": "planet_generation",
       "sheetName": "planet_generation",
       "target": "data/planet-generation.csv",
+      "transform": {
+        "flipY": false,
+        "scale": 1,
+        "offsetX": 0,
+        "offsetY": 0
+      }
+    },
+    {
+      "id": "faction-details-sheet",
+      "type": "url",
+      "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQrNzh4Te01vHYmnHxZQoNrTMmeeWjU2XbOGsTl9M6U8djTZ8evbNMmPTONwWZYbNeImHcqMpGiKKy7/pub?gid=1917487455&single=true&output=csv",
+      "kind": "sheet",
+      "role": "faction_details",
+      "target": "data/factions.csv",
       "transform": {
         "flipY": false,
         "scale": 1,

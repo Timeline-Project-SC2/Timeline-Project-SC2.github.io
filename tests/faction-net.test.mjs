@@ -19,7 +19,6 @@ const {
   bubbleFor,
   bubblePath,
   colorStops,
-  factionRgb,
   flaresFor,
   isNetLayerLevel,
   netsAtLevel,
@@ -78,6 +77,33 @@ function readSystemsCsv() {
     return Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? '']));
   });
   return { headers, rows };
+}
+
+/** Табличные цвета фракций (`data/factions.csv`, Z-3.7): источник резолвера. */
+const FACTION_COLORS = (() => {
+  const text = readFileSync(new URL('../data/factions.csv', import.meta.url), 'utf8');
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '');
+  const headers = csvLine(lines[0]);
+  const colors = new Map();
+  for (const line of lines.slice(1)) {
+    const cells = csvLine(line);
+    const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? '']));
+    colors.set(row.faction, row.color);
+  }
+  return colors;
+})();
+
+/** Резолвер в духе загрузчика: неизвестное и пустое имя — цвет строки «—». */
+function tableColor(faction) {
+  return FACTION_COLORS.get(faction) ?? FACTION_COLORS.get('\u2014');
+}
+
+function hexToRgb(hex) {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
 }
 
 /** Числа пути в порядке следования: пары «x y». */
@@ -368,16 +394,18 @@ test('colorStops: у сети из двух фракций ровно 2 стоп
     { id: '2', name: 'Мория', x: 5568, y: 5994, faction: 'Кел-Морийский Синдикат', net_id: 9 },
     { id: '1', name: 'Корхал', x: 5720, y: 6257, faction: 'Доминион Терран', net_id: 9 },
   ];
-  const stops = colorStops(members);
+  const stops = colorStops(members, tableColor);
   assert.equal(stops.length, 2);
   assert.deepEqual(stops.map((stop) => stop.offset), [0, 1]);
   // Стоп 0 — участник пары с меньшим id (Корхал, 1), стоп 1 — Мория (2).
   assert.deepEqual(stops.map((stop) => stop.faction), ['Доминион Терран', 'Кел-Морийский Синдикат']);
   assert.deepEqual(stops.map((stop) => stop.systemId), ['1', '2']);
-  assert.deepEqual(stops[0].rgb, factionRgb('Доминион Терран'));
-  assert.deepEqual(stops[1].rgb, factionRgb('Кел-Морийский Синдикат'));
+  // Цвета — табличные: Доминион `#fe0000`, Синдикат — его строка factions.csv.
+  assert.deepEqual(stops[0].rgb, hexToRgb(FACTION_COLORS.get('Доминион Терран')));
+  assert.deepEqual(stops[0].rgb, [254, 0, 0]);
+  assert.deepEqual(stops[1].rgb, hexToRgb(FACTION_COLORS.get('Кел-Морийский Синдикат')));
   // Порядок строк во входе не меняет градиент.
-  assert.deepEqual(colorStops(members.slice().reverse()), stops);
+  assert.deepEqual(colorStops(members.slice().reverse(), tableColor), stops);
   assert.notDeepEqual(stops[0].rgb, stops[1].rgb);
   assert.match(stops[0].color, /^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/);
 
@@ -395,7 +423,7 @@ test('colorStops: при 4 цветах стопов ровно 2 — тольк
     { id: '3', name: 'Гамма', x: 6000, y: 5000, faction: 'Дэлаамы', net_id: 3 },
     { id: '4', name: 'Дельта', x: 5000, y: 6000, faction: 'Тал-даримы', net_id: 3 },
   ];
-  const stops = colorStops(members);
+  const stops = colorStops(members, tableColor);
   assert.equal(stops.length, 2, 'при 4 цветах стопов должно быть ровно 2');
   assert.deepEqual(stops.map((stop) => stop.faction), ['Доминион Терран', 'Рой зергов Загары']);
   assert.deepEqual(stops.map((stop) => stop.systemId), ['1', '2']);
@@ -408,7 +436,7 @@ test('colorStops: при 4 цветах стопов ровно 2 — тольк
 });
 
 test('colorStops: одна фракция даёт два стопа одного цвета', () => {
-  const stops = colorStops(withNet([KORHAL, MISTAFF], 7));
+  const stops = colorStops(withNet([KORHAL, MISTAFF], 7), tableColor);
   assert.equal(stops.length, 2);
   assert.deepEqual(stops[0].rgb, stops[1].rgb);
 });
@@ -418,7 +446,7 @@ test('бабл несёт градиент своих участников', () 
     { id: '1', name: 'Корхал', x: 5720, y: 6257, faction: 'Доминион Терран', net_id: 9 },
     { id: '2', name: 'Мория', x: 5568, y: 5994, faction: 'Кел-Морийский Синдикат', net_id: 9 },
   ];
-  const bubble = bubbleFor(members, { netId: 9 });
+  const bubble = bubbleFor(members, { netId: 9, factionColor: tableColor });
   assert.equal(bubble.stops.length, 2);
   assert.deepEqual(bubble.stops.map((stop) => stop.faction), ['Доминион Терран', 'Кел-Морийский Синдикат']);
 });
@@ -435,7 +463,9 @@ test('bridgesBetween: критерий соседства зафиксирова
   const threshold = BRIDGE_GAP_FACTOR * SOLO_PETAL_RADIUS * 2;
   assert.equal(threshold, 480);
 
-  const near = bridgesBetween(makeNet(1, 5000, 5000), makeNet(2, 5000 + threshold - 20, 5000));
+  const near = bridgesBetween(makeNet(1, 5000, 5000), makeNet(2, 5000 + threshold - 20, 5000), {
+    factionColor: tableColor,
+  });
   assert.ok(near !== null, 'соседние сети не соединились лентой');
   assert.equal(near.from.netId, 1);
   assert.equal(near.to.netId, 2);
@@ -463,10 +493,10 @@ test('bridgesBetween: градиент ленты — цвет своей сет
     { id: '1', name: 'Корхал', x: 5720, y: 6257, faction: 'Доминион Терран', net_id: 7 },
     { id: '2', name: 'Мория', x: 5568, y: 5994, faction: 'Кел-Морийский Синдикат', net_id: 9 },
   ]);
-  const bridge = bridgesBetween(nets[0], nets[1]);
+  const bridge = bridgesBetween(nets[0], nets[1], { factionColor: tableColor });
   assert.ok(bridge !== null);
-  assert.deepEqual(bridge.stops[0].rgb, factionRgb('Доминион Терран'));
-  assert.deepEqual(bridge.stops[1].rgb, factionRgb('Кел-Морийский Синдикат'));
+  assert.deepEqual(bridge.stops[0].rgb, hexToRgb(FACTION_COLORS.get('Доминион Терран')));
+  assert.deepEqual(bridge.stops[1].rgb, hexToRgb(FACTION_COLORS.get('Кел-Морийский Синдикат')));
 
   // Лента соединяет именно ближайшие системы: концы лежат на их лепестках.
   const fromPetal = bubbleFor(nets[0].members).petals.find((petal) => petal.systemId === bridge.from.systemId);
