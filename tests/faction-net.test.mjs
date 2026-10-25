@@ -553,18 +553,32 @@ test('flaresFor не использует Math.random и Date.now', () => {
 
 /* ----------------------------------------------------------------- CSV */
 
-test('systems.csv читается: колонка net_id последняя и не ломает существующие поля', () => {
+test('systems.csv читается: колонки сетей на месте и не ломают существующие поля', () => {
   const { headers, rows } = readSystemsCsv();
-  assert.equal(headers[headers.length - 1], 'net_id', 'net_id должна быть последней колонкой');
+  // `net_confront_id` (каналы, Z-3.8) стоит сразу после `net_id`; позицию в
+  // таблице задаёт лист владельца, код читает колонки по заголовку.
+  assert.ok(headers.includes('net_confront_id'), 'в systems.csv нет net_confront_id');
+  assert.equal(
+    headers.indexOf('net_confront_id'),
+    headers.indexOf('net_id') + 1,
+    'net_confront_id должна стоять сразу после net_id',
+  );
   assert.equal(rows.length, 173, 'изменилось число систем');
   for (const header of ['name', 'system_id', 'type', 'x', 'y', 'faction', 'description', 'source_url']) {
     assert.ok(headers.includes(header), `пропала колонка ${header}`);
   }
 
-  // Владелец ещё не размечал сети: у всех строк 0 (сеть не задана).
+  // Разметка владельца (25.10.2026): сети 1…4, 27 систем с сетью, 146 без.
   const filled = rows.filter((row) => parseNetId(row.net_id) !== null);
-  assert.equal(filled.length, 0, 'в systems.csv появились сети, которых владелец не давал');
-  assert.ok(rows.every((row) => row.net_id === '0'), 'значение net_id отличается от 0');
+  assert.equal(filled.length, 27, 'изменилось число систем с сетью');
+  assert.equal(rows.filter((row) => row.net_id === '').length, 146, 'изменилось число систем без сети');
+  // Каналы размечены взаимно: Тарсонис `1-3` и Умоджа `3-1`, других нет.
+  const channels = rows.filter((row) => row.net_confront_id !== '');
+  assert.deepEqual(
+    channels.map((row) => `${row.name}:${row.net_id}:${row.net_confront_id}`),
+    ['Умоджа:3:3-1', 'Тарсонис:1:1-3'],
+    'разметка каналов разошлась с таблицей владельца',
+  );
 
   // Существующие поля на месте: имя, координаты и тип читаются как раньше.
   const korhal = rows.find((row) => row.name === 'Корхал');
@@ -574,12 +588,17 @@ test('systems.csv читается: колонка net_id последняя и 
   assert.equal(korhal.type, 'capital');
   assert.equal(korhal.system_id, '1');
 
-  // Сети по текущему снимку: ни одной — слой пока пуст, но разметка не выдумана.
-  assert.equal(parseNetworks(rows).length, 0);
+  // Сети по текущему снимку: четыре (1…4), разметка владельца, не выдумана.
+  assert.deepEqual(
+    parseNetworks(rows).map((net) => net.netId),
+    [1, 2, 3, 4],
+    'состав сетей разошёлся с таблицей владельца',
+  );
 
   // Строки CSV со строковыми координатами и net_id тоже группируются:
   // разметку владелец добавит прямо в таблицу, без промежуточного JSON.
-  const labeled = rows.map((row) =>
+  const unassigned = rows.map((row) => ({ ...row, net_id: '' }));
+  const labeled = unassigned.map((row) =>
     ['1', '11', '13'].includes(row.system_id) ? { ...row, net_id: '7' } : row,
   );
   const nets = parseNetworks(labeled);
@@ -619,6 +638,8 @@ test('колонка net_id не ломает существующий загр�
     // Лишнюю колонку загрузчик не читает и не падает на ней: net_id приходит
     // только через faction-net.parseNetworks из сырого CSV.
     assert.equal(korhal.net_id, undefined);
+    // То же для каналов (Z-3.8): net_confront_id читает faction-net.channelsFor.
+    assert.equal(korhal.net_confront_id, undefined);
   } finally {
     globalThis.window = restore.window;
     globalThis.document = restore.document;
