@@ -74,6 +74,19 @@ test('FIELD_PALETTES: ровно два пресета с заполненным
     assert.ok(palette.densityStops[palette.densityStops.length - 1] <= 1, palette.id);
   }
 
+  // Яркость по §17.12 `V-1`: core > rim >= dust > background. Иначе «ободок»
+  // светлее ядра и рампа даёт бирюзовые блины вместо волокон.
+  for (const palette of FIELD_PALETTES) {
+    const luminance = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const core = luminance(palette.core);
+    const rim = luminance(palette.rim);
+    const dust = luminance(palette.dust);
+    const background = luminance(palette.background);
+    assert.ok(core > rim, `${palette.id}: core ${core.toFixed(1)} не ярче rim ${rim.toFixed(1)}`);
+    assert.ok(rim >= dust, `${palette.id}: rim ${rim.toFixed(1)} темнее dust ${dust.toFixed(1)}`);
+    assert.ok(dust > background, `${palette.id}: dust ${dust.toFixed(1)} не ярче background ${background.toFixed(1)}`);
+  }
+
   // Пресеты должны различаться цветом, иначе ?style=tactical ничего не меняет.
   const nebula = FIELD_PALETTES.find(({ id }) => id === 'nebula');
   const tactical = FIELD_PALETTES.find(({ id }) => id === 'tactical');
