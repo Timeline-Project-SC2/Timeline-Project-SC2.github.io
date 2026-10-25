@@ -1,3 +1,12 @@
+## 2026-10-25 — Черновик документации SW-2: процедурное поле и вывод растра
+
+> Черновик Воркера 3. **Не сливать до явного сигнала «SW-2B слит».** Перед запросом на слияние сверить утверждения ниже с фактическим `git diff origin/main...<ветка SW-2B>` и поправить по его содержимому; сейчас это предварительная формулировка по §17.
+
+- **Подложка сектора** заменена процедурным полем с WebGL2 и CPU-фолбэком; `nebula` — основной стиль, второй пресет `tactical` выбирается через `?style=tactical`; генерация детерминирована seed-текстом `KP`.
+- **Растровый контур** (тайлы, превью подложки и исходный `assets/src/koprulu-sector.jpg`) удалён; сборка ассетов больше не собирает секторную пирамиду. `imageVersion` в `data/meta.json` сохранён для кэш-бастинга изображений галактики.
+- **CI:** гейт `verify:no-raster` запускается раньше `npm test`.
+- Инвентарь и порядок документирования: [`agents_task_orchestration/agents_task_orchestration.md`](docs/agents_task_orchestration/agents_task_orchestration.md) §17.3 и §17.13; исполняемый гейт: [`tools/verify_no_raster.mjs`](tools/verify_no_raster.mjs).
+
 ## Ядро сектора — адрес, лестница глубины и единицы (SW-1, 25.10.2026)
 
 **Волна `SW-1` под-уровня Этапов 9–12 (`Tri-Agent Wave`), 25.10.2026.** Появился фундамент глубинного секториального рендера: три модуля в `src/atlas/`, верификатор адресов и сквозной гейт ядра. Рантайм `/sector/` не менялся — это база для `SW-2`/`SW-3`. PR: Воркер 1 — [PR #244](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/244) `c9c36b4`, Воркер 2 — [PR #245](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/245) `86ded61`, сквозной гейт Гайдлайнера — [PR #248](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/248) `dd1f2ea`; матрица волны и факт — [`docs/agents_task_orchestration/agents_task_orchestration.md`](docs/agents_task_orchestration/agents_task_orchestration.md) §16, §16.9.
