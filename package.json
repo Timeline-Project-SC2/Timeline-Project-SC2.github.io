@@ -12,6 +12,7 @@
     "check:planet-core": "node tools/build_planet_core.mjs --check",
     "verify:contract": "node tools/verify_planet_contract_cross.mjs",
     "verify:address": "node tools/verify_sector_address.mjs",
+    "verify:sector-core": "node tools/verify_sector_core.mjs",
     "verify:publish": "node tools/verify_feature_parity.mjs",
     "verify:hashes": "node tools/verify_planet_hashes.mjs",
     "assets:build": "python3 tools/build_assets.py",
