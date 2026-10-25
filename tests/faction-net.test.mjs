@@ -553,9 +553,12 @@ test('flaresFor не использует Math.random и Date.now', () => {
 
 /* ----------------------------------------------------------------- CSV */
 
-test('systems.csv читается: колонка net_id последняя и не ломает существующие поля', () => {
+test('systems.csv читается: колонки сетей последние и не ломают существующие поля', () => {
   const { headers, rows } = readSystemsCsv();
-  assert.equal(headers[headers.length - 1], 'net_id', 'net_id должна быть последней колонкой');
+  // `net_confront_id` (каналы, Z-3.8) встала после `net_id`: обе колонки сетей —
+  // в конце таблицы, существующие поля не сдвинуты.
+  assert.equal(headers[headers.length - 1], 'net_confront_id', 'net_confront_id должна быть последней');
+  assert.equal(headers[headers.length - 2], 'net_id', 'net_id должна стоять перед net_confront_id');
   assert.equal(rows.length, 173, 'изменилось число систем');
   for (const header of ['name', 'system_id', 'type', 'x', 'y', 'faction', 'description', 'source_url']) {
     assert.ok(headers.includes(header), `пропала колонка ${header}`);
@@ -565,6 +568,11 @@ test('systems.csv читается: колонка net_id последняя и 
   const filled = rows.filter((row) => parseNetId(row.net_id) !== null);
   assert.equal(filled.length, 0, 'в systems.csv появились сети, которых владелец не давал');
   assert.ok(rows.every((row) => row.net_id === '0'), 'значение net_id отличается от 0');
+  // Каналов в снимке тоже нет: колонка пустая во всех строках (Z-3.8).
+  assert.ok(
+    rows.every((row) => row.net_confront_id === ''),
+    'в systems.csv появились каналы, которых владелец не давал',
+  );
 
   // Существующие поля на месте: имя, координаты и тип читаются как раньше.
   const korhal = rows.find((row) => row.name === 'Корхал');
@@ -619,6 +627,8 @@ test('колонка net_id не ломает существующий загр�
     // Лишнюю колонку загрузчик не читает и не падает на ней: net_id приходит
     // только через faction-net.parseNetworks из сырого CSV.
     assert.equal(korhal.net_id, undefined);
+    // То же для каналов (Z-3.8): net_confront_id читает faction-net.channelsFor.
+    assert.equal(korhal.net_confront_id, undefined);
   } finally {
     globalThis.window = restore.window;
     globalThis.document = restore.document;
