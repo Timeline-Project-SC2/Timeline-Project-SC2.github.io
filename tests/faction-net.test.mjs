@@ -19,6 +19,8 @@ const {
   bubbleFor,
   bubblePath,
   colorStops,
+  flarePulse,
+  flarePulseSeed,
   flaresFor,
   isNetLayerLevel,
   mergedFields,
@@ -898,6 +900,36 @@ test('всполохи из данных: далёкая пара из net_confr
   assert.equal(flaresFor(lonely, [], { fromData: true }).length, 0);
   // Детерминизм: два вызова подряд дают идентичный JSON.
   assert.equal(JSON.stringify(flaresFor(own, [rival], { fromData: true })), JSON.stringify(arrows));
+});
+
+
+/* ------------------------------- ритм «всполоха» (Z-3.9, дельта 5, П1.4) */
+
+test('F1: flarePulse — середина 0,775, период 1400 мс, диапазон 0,55…1', () => {
+  assert.equal(net.FLARE_PULSE_MS, 1400);
+  assert.ok(Math.abs(flarePulse(0, 0) - 0.775) <= 1e-9, `flarePulse(0, 0) = ${flarePulse(0, 0)}`);
+
+  // Период: сдвиг времени на FLARE_PULSE_MS значение не меняет.
+  for (const time of [0, 137, 500, 1234, 4999]) {
+    assert.ok(
+      Math.abs(flarePulse(time, 0.25) - flarePulse(time + net.FLARE_PULSE_MS, 0.25)) <= 1e-9,
+      `период нарушен на t = ${time}`,
+    );
+  }
+
+  // Диапазон: 200 точек на 0…5000 мс и на разных фазах.
+  for (let step = 0; step <= 200; step += 1) {
+    const time = (step / 200) * 5000;
+    const value = flarePulse(time, 0.37);
+    assert.ok(value >= 0.55 - 1e-12 && value <= 1 + 1e-12, `flarePulse(${time}) = ${value}`);
+  }
+
+  // Фаза из хеша пары — 0…1, и у пары 1-3 она ненулевая (иначе все сети мигают в такт).
+  for (const [netId, rivalId] of [[1, 3], [3, 1], [2, 4]]) {
+    const seed = flarePulseSeed(netId, rivalId);
+    assert.ok(seed >= 0 && seed < 1, `seed ${seed} вне 0…1`);
+  }
+  assert.notEqual(flarePulseSeed(1, 3), flarePulseSeed(3, 1), 'фаза пары не зависит от направления');
 });
 
 /* ----------------------------------------------------------------- CSV */

@@ -140,16 +140,39 @@ export const MAX_FLARES_PER_NET = 6;
 export const FLARE_SPREAD = 0.5;
 
 /**
- * Толщина стрелки «всполоха», экранные px (дельта 3, Д2.1). Пучка нет: сколько
- * стрелок вернул `flaresFor`, столько и рисуется — по одной на элемент.
+ * Период ритма «всполоха» — плазменного сгустка, мс (дельта 5, П1.4).
+ * Геометрия сгустка живёт в рендерере, а ритм — здесь: он считается из
+ * детерминированного хеша пары `(netId, rivalId)` и чист от времени.
  */
-export const FLARE_STROKE_PX = 2;
+export const FLARE_PULSE_MS = 1400;
 
-/** Полуугол головы стрелки от древка, рад (`±28°`) — Д2.1. */
-export const FLARE_HEAD_ANGLE = 0.49;
+/** Середина ритма: `0,775 ± 0,225` даёт диапазон `0,55…1`. */
+export const FLARE_PULSE_MID = 0.775;
 
-/** Длина головы как доля длины древка — Д2.1. */
-export const FLARE_HEAD_RATIO = 0.35;
+/** Амплитуда ритма — половина размаха `0,55…1`. */
+export const FLARE_PULSE_AMPLITUDE = 0.225;
+
+/**
+ * Ритм «всполоха»: `0,775 + 0,225 · sin(2π · (nowMs / 1400 + seed))`, то есть
+ * `0,55…1`. Время приходит аргументом — `Date.now` внутри нет, `Math.random`
+ * тоже: один и тот же кадр всегда даёт одно и то же значение.
+ */
+export function flarePulse(nowMs: number, seed: number): number {
+  const time = Number.isFinite(nowMs) ? nowMs : 0;
+  const phase = Number.isFinite(seed) ? seed : 0;
+
+  return FLARE_PULSE_MID
+    + FLARE_PULSE_AMPLITUDE * Math.sin(2 * Math.PI * (time / FLARE_PULSE_MS + phase));
+}
+
+/**
+ * Фаза ритма для всполоха: `seed = (хеш пары) % 1000 / 1000` — тот же хеш
+ * `(net_id, rival_id, 0)`, по которому `flaresFor` решает, сколько импульсов
+ * у пары. Рендерер берёт фазу отсюда, чтобы не знать про хеш.
+ */
+export function flarePulseSeed(netId: number, rivalId: number): number {
+  return (flareSeed(netId, rivalId, 0) % 1000) / 1000;
+}
 
 /** Минимальная и максимальная длина «всполоха», единицы карты. */
 export const MIN_FLARE_LENGTH = 24;

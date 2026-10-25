@@ -33,13 +33,12 @@ import {
   CHANNEL_BRIGHTNESS,
   CHANNEL_STROKE_PX,
   CONTROL_FIELD_SIDE_RATIO,
-  FLARE_HEAD_ANGLE,
-  FLARE_HEAD_RATIO,
-  FLARE_STROKE_PX,
   MAX_CHANNELS_PER_FRAME,
   MAX_FLARES_PER_NET,
   bubbleFor,
   channelsFor,
+  flarePulse,
+  flarePulseSeed,
   flaresFor,
   isNetLayerLevel,
   mergedFields,
@@ -72,6 +71,30 @@ export const BUBBLE_FILL_ALPHA = 0.55;
 
 /** Альфа «поля контроля» (квадрат под узлом); множится на `layerLineAlpha` (С11). */
 export const CONTROL_FIELD_ALPHA = 0.22;
+
+/** Ядро плазменного сгустка «всполоха», экранные px (дельта 5, П1.2). */
+export const FLARE_CORE_PX = 2;
+
+/** Гало сгустка: толщина линии-ореола, px. */
+export const FLARE_HALO_PX = 5.5;
+
+/** Альфа гало сгустка до умножения на `intensity` и ритм `flarePulse`. */
+export const FLARE_HALO_ALPHA = 0.32;
+
+/** Ветвей шлейфа у одного сгустка (по одной на каждую сторону). */
+export const FLARE_BRANCHES = 2;
+
+/** Полуугол ветви от древка, рад. */
+export const FLARE_BRANCH_ANGLE = 0.35;
+
+/** Доля длины древка, на которой ветвится шлейф. */
+export const FLARE_BRANCH_AT = 0.55;
+
+/** Длина ветви как доля длины древка. */
+export const FLARE_BRANCH_LEN = 0.4;
+
+/** Вспышка на конце сгустка, px: радиус `clamp(FLARE_HEAD_PX · scale, 1,5, 3)`. */
+export const FLARE_HEAD_PX = 2.4;
 
 interface ViewAnimation {
   from: AtlasView;
@@ -554,7 +577,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     const ctx = kernel.ctx!;
     var radius = territory.screenRadius;
     if (!(radius > 2)) return;
-    // Контекст-заглушка тестов может не иметь резолвера цвета: поле не рисуется.
+    // Без таблицы цветов слой не рисуется — резолвер приходит из `data-loader`,
+    // в стабах тестов его нет. У слоя сетей такой же гейт стоит в `drawNetLayer`.
     if (typeof kernel.data.factionColor !== 'function') return;
     // Цвет — данные таблицы фракций, а не оттенок от имени: на табличный цвет
     // накладывается только альфа радиального спада, сам цвет не изменяется.
@@ -881,14 +905,11 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       var bubbles: Bubble[] = [];
       for (var index = 0; index < nets.length; index += 1) {
         var net = nets[index]!;
-        // Цвет — таблица `data/factions.csv`: оттенок из имени не вычисляется.
-        // Контекст-заглушка без резолвера получает бабл без стопов.
-        bubbles.push(kernel.data.factionColor
-          ? bubbleFor(net.members, {
-            netId: net.netId,
-            factionColor: function (faction) { return kernel.data.factionColor(faction); },
-          })
-          : bubbleFor(net.members, { netId: net.netId }));
+        bubbles.push(bubbleFor(net.members, {
+          netId: net.netId,
+          // Цвет — таблица `data/factions.csv`: оттенок из имени не вычисляется.
+          factionColor: function (faction) { return kernel.data.factionColor(faction); },
+        }));
       }
       netLayerNets = nets;
       netLayerBubbles = bubbles;
@@ -1140,16 +1161,26 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /**
-   * Стрелка «всполоха» (Д2.2): древко по `flare.angle` длиной
-   * `clamp(length · scale, 28, 96)` px и голова из двух линий назад под
-   * `±FLARE_HEAD_ANGLE`. Цвет — табличный цвет своей фракции, альфа —
-   * `layerLineAlpha(level) · intensity`. Пучка нет: один элемент — одна стрелка.
+   * «Всполох» — плазменный сгусток (дельта 5, П1.3), а не стрелка: гало, две
+   * ветви шлейфа, белое ядро и вспышка на конце. Никакого `Math.random`: ритм
+   * берётся из `flarePulse(nowMs, seed)` — `nowMs` того же кадра, которым
+   * рисуется сцена, `seed` — из детерминированного хеша пары сетей.
+   *
+   * Порядок внутри одного `save()/restore()`:
+   *   a) гало (lighter) → b) ветви (source-over) → c) ядро (lighter) → d) вспышка (lighter).
    */
-  function drawNetFlare(flare: Flare, net: FactionNet, bubble: Bubble | null, level: number): void {
+  function drawNetFlare(
+    flare: Flare,
+    net: FactionNet,
+    bubble: Bubble | null,
+    level: number,
+    nowMs: number,
+  ): void {
     const ctx = kernel.ctx!;
-    var alpha = layerLineAlpha(level) * flare.intensity;
-    if (!(alpha > 0)) return;
-    var length = clamp(flare.length * state.view.scale, 28, 96);
+    var intensity = flare.intensity;
+    if (!(intensity > 0)) return;
+    var pulse = flarePulse(nowMs, flarePulseSeed(flare.netId, flare.targetNetId));
+    var length = clamp(flare.length * state.view.scale, 20, 84);
     if (!(length > 0)) return;
 
     var dirX = Math.cos(flare.angle);
@@ -1159,28 +1190,70 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       : flareStart(flare, bubble, dirX, dirY);
     var tipX = start.x + dirX * length;
     var tipY = start.y + dirY * length;
-    var head = FLARE_HEAD_RATIO * length;
+    var color = factionColorOf(net.factions.length > 0 ? net.factions[0]! : null);
+    // Множитель слоя на уровне — общий для всех четырёх частей сгустка.
+    var layer = layerLineAlpha(level);
 
     ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = factionColorOf(net.factions.length > 0 ? net.factions[0]! : null);
-    ctx.lineWidth = FLARE_STROKE_PX;
     ctx.lineCap = 'round';
+
+    // a) гало: широкий мягкий ореол своего цвета фракции.
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = FLARE_HALO_ALPHA * intensity * pulse * layer;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = FLARE_HALO_PX;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = color;
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.lineTo(tipX, tipY);
-    for (var side = -1; side <= 1; side += 2) {
-      var angle = flare.angle + Math.PI + side * FLARE_HEAD_ANGLE;
-      ctx.moveTo(tipX, tipY);
-      ctx.lineTo(tipX + Math.cos(angle) * head, tipY + Math.sin(angle) * head);
+    ctx.stroke();
+
+    // b) шлейф: две ветви от точки `FLARE_BRANCH_AT · L` под ±FLARE_BRANCH_ANGLE.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 0.5 * intensity * pulse * layer;
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 0;
+    var branchX = start.x + dirX * FLARE_BRANCH_AT * length;
+    var branchY = start.y + dirY * FLARE_BRANCH_AT * length;
+    var branch = FLARE_BRANCH_LEN * length;
+    ctx.beginPath();
+    for (var side = 0; side < FLARE_BRANCHES; side += 1) {
+      var angle = flare.angle + (side === 0 ? -FLARE_BRANCH_ANGLE : FLARE_BRANCH_ANGLE);
+      ctx.moveTo(branchX, branchY);
+      ctx.lineTo(branchX + Math.cos(angle) * branch, branchY + Math.sin(angle) * branch);
     }
     ctx.stroke();
+
+    // c) ядро: та же линия, но белая и тонкая.
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.85 * intensity * pulse * layer;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = FLARE_CORE_PX;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = color;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+
+    // d) вспышка на конце сгустка.
+    ctx.globalAlpha = 0.8 * pulse * layer;
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, clamp(FLARE_HEAD_PX * state.view.scale, 1.5, 3), 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.restore();
   }
 
-  /** Стрелки всех сетей: соперники берутся из данных, а не из близости. */
-  function drawNetFlares(level: number): void {
+  /**
+   * Сгустки всех сетей: соперники берутся из данных (`net_confront_id`), а не из
+   * близости. Число сгустков — сколько вернул `flaresFor`: лимиты
+   * `MAX_FLARES_PER_RIVAL` / `MAX_FLARES_PER_NET` не меняются.
+   */
+  function drawNetFlares(level: number, nowMs: number): void {
     if (!(layerLineAlpha(level) > 0)) return;
     var channels = netChannels();
     if (channels.length === 0) return;
@@ -1191,14 +1264,21 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       var flares = flaresFor(net, rivals, { limit: MAX_FLARES_PER_NET, fromData: true });
       var bubble = netLayerBubbles[index] ?? null;
       for (var flareIndex = 0; flareIndex < flares.length; flareIndex += 1) {
-        drawNetFlare(flares[flareIndex]!, net, bubble, level);
+        drawNetFlare(flares[flareIndex]!, net, bubble, level, nowMs);
       }
     }
   }
 
-  /** Слой сетей в кадре: гейт уровня общий с каналами (`isNetLayerLevel`). */
-  function drawNetLayer(level: number): void {
+  /**
+   * Слой сетей в кадре. Два гейта на входе: уровень (`isNetLayerLevel`, общий с
+   * каналами) и резолвер табличного цвета. Без таблицы `data/factions.csv` слой
+   * не рисуется вовсе — резолвер приходит из `data-loader`, в стабах тестов его
+   * нет, и проверка здесь одна на заливку, контур, узлы, поле и сгустки.
+   * `nowMs` — время того же кадра, которым рисуется сцена (нужно ритму сгустков).
+   */
+  function drawNetLayer(level: number, nowMs: number): void {
     if (!isNetLayerLevel(level)) return;
+    if (typeof kernel.data.factionColor !== 'function') return;
     refreshNetLayer();
     var drawn = Math.min(netLayerFields.length, netLayerBubbles.length);
     var index: number;
@@ -1222,7 +1302,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
         drawNetNode(bubble.nodes[nodeIndex]!, bubble);
       }
     }
-    drawNetFlares(level);
+    drawNetFlares(level, nowMs);
   }
 
   /* ------------------------------------------------------------ каналы сетей (Z-3.8) */
@@ -1346,7 +1426,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     }
   }
 
-  function renderScene(scene: SectorScene): void {
+  function renderScene(scene: SectorScene, nowMs: number): void {
     // Порядок отрисовки сверху вниз по z закреплён карточкой `Z-3.9` (С6) — ровно так:
     //   territory → заливка бабла → контур бабла → поле контроля (квадраты)
     //   → белые кольца узлов → всполохи → каналы → сетка → лупа → маркеры → подписи.
@@ -1354,8 +1434,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       var primitive = scene.primitives[index]!;
       if (primitive.kind === 'territory') drawTerritory(primitive);
     }
-    // Баблы: заливка → контур → квадраты и узлы → стрелки (порядок внутри `drawNetLayer`).
-    drawNetLayer(scene.level);
+    // Баблы: заливка → контур → квадраты и узлы → сгустки (порядок внутри `drawNetLayer`).
+    drawNetLayer(scene.level, nowMs);
     // Отдельный проход каналов: ленты идут поверх заливки баблов, но под адресной
     // сеткой и маркерами, поэтому стоят между двумя проходами примитивов сцены.
     drawNetChannels(scene.level);
@@ -1514,7 +1594,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     // ресайз и смена фильтра подхватываются через `requestRender()` без
     // отдельного кеша и без новых слушателей.
     const scene = buildScene();
-    if (scene) renderScene(scene);
+    if (scene) renderScene(scene, frameTime);
 
     drawTravelRoute(frameTime);
     drawPointsOfInterest();
