@@ -34,7 +34,11 @@ import type {
 import {
   buildSectorScene,
   hitRadiusFor,
+  inspectOf,
+  inspectOnPointer,
+  inspectPointFor,
   labelTextFor,
+  loupeGridFor,
 } from './sector-scene.ts';
 
 interface ViewAnimation {
@@ -935,8 +939,49 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       primitive = scene.primitives[index]!;
       if (primitive.kind === 'grid.line') drawGridLine(primitive);
       else if (primitive.kind === 'grid.label') drawGridLabel(primitive);
-      else if (primitive.kind === 'marker') drawMarker(primitive);
     }
+    // Лупа режима осмотра (Z-4c §2): после сетки адресов и до маркеров.
+    drawLoupe(scene.level);
+    for (index = 0; index < scene.primitives.length; index += 1) {
+      primitive = scene.primitives[index]!;
+      if (primitive.kind === 'marker') drawMarker(primitive);
+    }
+  }
+
+  /**
+   * Лупа режима осмотра: линии окна — пунктиром 1 px тем же цветом, что сетка;
+   * подписи — короткий адрес ячейки. Заливки нет. Вне наведения (`hovering: false`)
+   * окно рисуется с alpha `0,85`, чтобы не мигало. Команд столько же, сколько
+   * построено линий и подписей (`loupeCommandCount`), и это не зависит от площади кадра.
+   */
+  function drawLoupe(level: number): void {
+    var inspect = inspectOf(state);
+    if (!inspect.on) return;
+    var loupe = loupeGridFor(state.viewport, sceneCamera(), level, inspectPointFor(state.viewport, inspect));
+    if (loupe.tierIndex === null || loupe.bounds === null) return;
+    var ctx = kernel.ctx!;
+    ctx.save();
+    ctx.globalAlpha = inspect.hovering ? 1 : 0.85;
+    ctx.strokeStyle = 'rgba(150,180,215,.10)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    for (var index = 0; index < loupe.lines.length; index += 1) {
+      var line = loupe.lines[index]!;
+      ctx.moveTo(Math.round(line.x1) + 0.5, Math.round(line.y1) + 0.5);
+      ctx.lineTo(Math.round(line.x2) + 0.5, Math.round(line.y2) + 0.5);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '9px ' + theme.mono;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(160,186,216,.42)';
+    for (index = 0; index < loupe.labels.length; index += 1) {
+      var label = loupe.labels[index]!;
+      ctx.fillText(label.text, label.x, label.y);
+    }
+    ctx.restore();
   }
 
   /** Апертуры — последним слоем кадра §8.1 (после подписей), с `L8`. */
@@ -1132,6 +1177,12 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var point = localPoint(event);
     runtime.coordinatePointer = runtime.coordinateReadoutEnabled && event.pointerType !== 'touch' ? point : null;
     kernel.coords.updateCoordinateReadout();
+    // Точка осмотра следует за мышью; сенсор её тапом (см. onPointerUp).
+    if (event.pointerType !== 'touch') {
+      var moved = inspectOf(state);
+      Object.assign(moved, inspectOnPointer(moved, { kind: 'move', x: point.x, y: point.y, coarse: coarsePointer() }));
+      if (moved.on) requestRender();
+    }
 
     if (drag && drag.mode === 'pan' && pointerList.length === 1) {
       var dx = point.x - drag.startX;
@@ -1207,6 +1258,12 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     if (finished.mode === 'pan' && finished.button === 0) {
       var tapDistance = Math.hypot(point.x - finished.startX, point.y - finished.startY);
       var shiftPressed = event.shiftKey || finished.shiftKey;
+      if (tapDistance <= 8 && coarsePointer()) {
+        // Тап на сенсоре переносит точку осмотра; остальная обработка тапа не меняется.
+        var tapped = inspectOf(state);
+        Object.assign(tapped, inspectOnPointer(tapped, { kind: 'tap', x: point.x, y: point.y, coarse: true }));
+        if (tapped.on) requestRender();
+      }
       if (state.travel.enabled && state.travel.freePointMode) {
         if (shiftPressed && tapDistance <= 3) {
           event.preventDefault();
@@ -1286,6 +1343,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     canvas.addEventListener('pointerleave', function () {
       runtime.coordinatePointer = null;
       kernel.coords.updateCoordinateReadout();
+      var left = inspectOf(state);
+      Object.assign(left, inspectOnPointer(left, { kind: 'leave' }));
+      if (left.on) requestRender();
       if (!drag && (state.hoverId || state.hoverPoiId)) {
         state.hoverId = null;
         state.hoverPoiId = null;

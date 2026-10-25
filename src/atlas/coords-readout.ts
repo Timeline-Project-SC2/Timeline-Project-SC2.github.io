@@ -23,9 +23,10 @@ import type {
   TravelPointRecord,
 } from './config.ts';
 import { edgeDistance } from './level-ladder.ts';
-import { centerOf, formatAddress, parseAddress } from './sector-address.ts';
+import { MAP_SIZE, addressOf, centerOf, formatAddress, parseAddress } from './sector-address.ts';
 import { formatDistanceLy } from './sector-units.ts';
 import { openPointCard } from './dossier-card.ts';
+import { inspectOf, inspectPointFor, loupeGridFor, sceneLevel } from './sector-scene.ts';
 
 /** Кадр, восстановленный из ссылки `?at=<адрес>&lw=<видимая ширина>`. */
 export interface MapLinkTarget {
@@ -126,6 +127,36 @@ export function zoomReadoutText(
   };
 }
 
+/**
+ * Строка режима осмотра (Z-4c §3): «осмотр L8 · KP·REQHC · 16 ед». Адрес — полный,
+ * пятибуквенный, от мировых координат точки; размер — от тира лупы (`null` — тира нет).
+ * При выключенном режиме строки нет (`null`).
+ */
+export function inspectReadoutText(on: boolean, level: number, world: MapPoint, cellSize: number | null): string | null {
+  if (!on) return null;
+  const head = 'осмотр L' + String(level);
+  if (!(world.x >= 0 && world.y >= 0 && world.x < MAP_SIZE && world.y < MAP_SIZE)) return head + ' · вне карты';
+  const parts = [head, formatAddress(addressOf(world.x, world.y))];
+  if (cellSize !== null) parts.push(String(cellSize).replace('.', ',') + ' ед');
+
+  return parts.join(' · ');
+}
+
+/** Сенсорный экран: кнопка «Осмотр сетки» нужна только там, где нет клавиши G. */
+function isCoarsePointer(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(pointer: coarse)').matches;
+}
+
+/** Клавиша G не перехватывается, если фокус в поле ввода. */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element || typeof element.tagName !== 'string') return false;
+  const tag = element.tagName.toLowerCase();
+
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || element.isContentEditable === true;
+}
+
 interface StoredTravelState {
   version?: unknown;
   ids?: unknown;
@@ -159,10 +190,91 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
 
   function updateZoomReadout(): void {
     var text = zoomReadoutText(state.viewport, state.view.scale, kernel.renderer.fitScale());
-    if (!text) return;
-    el.zoomPercent.textContent = text.percent;
-    var edgeNode = edgeDistanceNode();
-    if (edgeNode) edgeNode.textContent = text.edge;
+    if (text) {
+      el.zoomPercent.textContent = text.percent;
+      var edgeNode = edgeDistanceNode();
+      if (edgeNode) edgeNode.textContent = text.edge;
+    }
+    updateInspectReadout();
+  }
+
+  /**
+   * Кнопка «Осмотр сетки» (только на сенсоре) и aria-live строка режима — после узла
+   * расстояния до границы. Создаются здесь, по тому же правилу, что `zoomEdgeDistance`:
+   * общие шаблоны и CSS атласа не меняются.
+   */
+  function inspectNodes(): { button: HTMLButtonElement; line: HTMLElement } | null {
+    var percent = el.zoomPercent;
+    if (!percent) return null;
+    edgeDistanceNode();
+    var existingButton = doc.getElementById('inspectToggle') as HTMLButtonElement | null;
+    var existingLine = doc.getElementById('inspectReadout');
+    if (existingButton && existingLine) return { button: existingButton, line: existingLine };
+    var container = percent.parentElement;
+    if (!container) return null;
+
+    var button = doc.createElement('button');
+    button.type = 'button';
+    button.id = 'inspectToggle';
+    button.textContent = 'Осмотр сетки';
+    button.title = 'Режим осмотра: точка — тап по карте; на клавиатуре то же — клавиша G';
+    button.setAttribute('aria-pressed', 'false');
+    // Inline-стили как у кнопок карточки точки (dossier-card); общий CSS не трогаем.
+    button.style.cssText = 'padding:3px 7px;border:1px solid rgba(175,199,228,.22);background:transparent;' +
+      'color:#cfe0f4;font:9px/1.2 var(--mono,Consolas,monospace);cursor:pointer';
+    button.hidden = !isCoarsePointer();
+    container.appendChild(button);
+
+    var line = doc.createElement('span');
+    line.id = 'inspectReadout';
+    line.setAttribute('aria-live', 'polite');
+    line.style.fontSize = '8px';
+    line.style.lineHeight = '1.25';
+    line.style.textAlign = 'center';
+    line.style.opacity = '.72';
+    line.hidden = true;
+    container.appendChild(line);
+
+    return { button: button, line: line };
+  }
+
+  /** Строка режима осмотра: `осмотр L{n} · адрес · размер`. Точка — из состояния осмотра. */
+  function updateInspectReadout(): void {
+    var nodes = inspectNodes();
+    if (!nodes) return;
+    var inspect = inspectOf(state);
+    nodes.button.setAttribute('aria-pressed', String(inspect.on));
+    var scale = state.view.scale;
+    if (!inspect.on || !(scale > 0) || !(state.viewport.w > 0) || !(state.viewport.h > 0)) {
+      nodes.line.hidden = true;
+      nodes.line.textContent = '';
+      return;
+    }
+    // Камера та же, что у рендерера: центр кадра и полная ширина `viewport.w / scale`.
+    var center = kernel.renderer.toWorld(state.viewport.w / 2, state.viewport.h / 2);
+    var camera = { centerX: center.x, centerY: center.y, visibleWidth: state.viewport.w / scale };
+    var point = inspectPointFor(state.viewport, inspect);
+    var world = kernel.renderer.toWorld(point.x, point.y);
+    var level = sceneLevel(camera.visibleWidth);
+    var loupe = loupeGridFor(state.viewport, camera, level, point);
+    var text = inspectReadoutText(true, level, world, loupe.tierIndex === null ? null : loupe.cellSize);
+    nodes.line.textContent = text ?? '';
+    nodes.line.hidden = text === null;
+  }
+
+  function setInspectMode(on: boolean): void {
+    inspectOf(state).on = on;
+    updateInspectReadout();
+    kernel.renderer.requestRender();
+  }
+
+  function onInspectKey(event: KeyboardEvent): void {
+    if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key !== 'g' && event.key !== 'G' && event.key !== 'п' && event.key !== 'П') return;
+    // Во время маршрута клавиша занята режимом расчётов — не перехватываем.
+    if (state.travel.enabled) return;
+    if (isTextEntryTarget(event.target)) return;
+    setInspectMode(!inspectOf(state).on);
   }
 
   /**
@@ -744,6 +856,11 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
     // `?coords=1` — админ-режим (§7.8): readout X/Y включён с самого начала,
     // потому что админ пришёл за числами, а не за буквами.
     if (isCoordinatesMode()) runtime.coordinateReadoutEnabled = true;
+    var inspectNodesNow = inspectNodes();
+    if (inspectNodesNow) {
+      inspectNodesNow.button.addEventListener('click', function () { setInspectMode(!inspectOf(state).on); });
+    }
+    window.addEventListener('keydown', onInspectKey);
     syncCoordinateToggle();
     if (el.coordinateToggle) el.coordinateToggle.addEventListener('click', function () {
       runtime.coordinateReadoutEnabled = !runtime.coordinateReadoutEnabled;

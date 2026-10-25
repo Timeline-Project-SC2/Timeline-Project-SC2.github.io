@@ -22,6 +22,7 @@
  */
 
 import { ADDRESS_TIERS, MAP_SIZE, addressOf, formatAddress, prefixOf } from './sector-address.ts';
+import type { AddressLetters } from './sector-address.ts';
 import type { LabelLayoutResult, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, LABEL_GAP, estimateLabelSize, layoutLabels } from './label-layout.ts';
 import type { FrameViewport, LadderFrame } from './level-ladder.ts';
@@ -206,13 +207,31 @@ export const MAX_GRID_LINES = 512;
 export const MAX_GRID_LABELS = 64;
 
 /**
- * Тир адресной сетки по уровню лестницы — по таблице §6:
- * `L1…L2` — квадранты `2 000`, `L3…L4` — регионы `400`, `L5…L6` — субсекторы `80`,
- * `L7` — ячейки `16`, `L8` — узлы `3,2`. На `L0` и глубже `L8` сетки нет (§8.1).
+ * Тир обычной адресной сетки по уровню `L0…L9` (индекс = уровень), Z-4c §1:
+ * `L1…L2` — квадранты `T1` (2 000), `L3…L8` — регионы `T2` (400), `L0` и `L9` —
+ * сетки нет. Подробность на `L8` даёт режим осмотра (лупа), а не обычная сетка.
  */
 export const GRID_TIER_BY_LEVEL: readonly (number | null)[] = Object.freeze([
-  null, 1, 1, 2, 2, 3, 3, 4, 5, null,
+  null, 1, 1, 2, 2, 2, 2, 2, 2, null,
 ]);
+
+/** Режим осмотра (Z-4c §2): мельче этого размера ячейки на экране подпись нечитаема. */
+export const LOUPE_MIN_CELL_PX = 18;
+
+/** Окно лупы: 12 × 12 ячеек вокруг точки осмотра (радиус 6). */
+export const LOUPE_WINDOW_CELLS = 12;
+
+/** Предохранитель линий лупы: 13 + 13 (границы окна по обеим осям). */
+export const MAX_LOUPE_LINES = 26;
+
+/** Предохранитель подписей лупы: 3 × 3 ячейки вокруг точки. */
+export const MAX_LOUPE_LABELS = 9;
+
+/** Лупа не глубже базового тира уровня + этот шаг. */
+export const LOUPE_MAX_TIER_STEP = 2;
+
+/** Индекс самого мелкого тира `ADDRESS_TIERS` (`T5`, узел): глубже лупа не идёт. */
+const DEEPEST_ADDRESS_TIER = ADDRESS_TIERS.length - 1;
 
 function requirePositive(value: number, what: string): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -572,6 +591,227 @@ export function gridFor(
   }
 
   return { lines, labels };
+}
+
+/* ------------------------------------------------------------------ режим осмотра (Z-4c) */
+
+/** Прямоугольник окна лупы на экране, px. */
+export interface LoupeBounds {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/** Результат лупы: тир, размер ячейки, линии, подписи и окно. `tierIndex === null` — лупы на уровне нет. */
+export interface LoupeGrid {
+  /** Индекс тира в `ADDRESS_TIERS`; `null` на `L0` и `L9`, где нет базовой сетки. */
+  readonly tierIndex: number | null;
+  /** Размер ячейки лупы в единицах карты; `0`, если тира нет. */
+  readonly cellSize: number;
+  /** Размер ячейки лупы на экране, px (`cellSize · w / visibleWidth`). */
+  readonly cellPx: number;
+  readonly lines: readonly SceneGridLine[];
+  /** Короткие адреса ячеек вокруг точки (центр ячейки), px. */
+  readonly labels: readonly SceneGridLabel[];
+  /** Окно лупы, px: 12 × 12 ячеек, обрезанное кадром и границами карты. `null` — окна нет. */
+  readonly bounds: LoupeBounds | null;
+}
+
+export interface LoupeOptions {
+  /** Порог читаемости ячейки, px. По умолчанию `LOUPE_MIN_CELL_PX`; меняется только тестами. */
+  readonly minCellPx?: number;
+}
+
+/**
+ * Состояние осмотра (Z-4c §2). Экранные px; `x`/`y` равны `null`, пока точки ещё
+ * не было, и тогда точка осмотра — центр кадра (прицел). `hovering` — указатель
+ * над холстом: после `pointerleave` точка сохраняется, окно рисуется с alpha `0,85`.
+ */
+export interface InspectState {
+  on: boolean;
+  x: number | null;
+  y: number | null;
+  hovering: boolean;
+}
+
+const inspectStates = new WeakMap<object, InspectState>();
+
+/**
+ * Состояние осмотра, привязанное к объекту состояния атласа. Это `state.inspect`
+ * по смыслу, но без правки общего типа состояния: отдельный слой не трогает
+ * `config.ts` и `app.ts`.
+ */
+export function inspectOf(owner: object): InspectState {
+  const existing = inspectStates.get(owner);
+  if (existing !== undefined) return existing;
+  const created: InspectState = { on: false, x: null, y: null, hovering: false };
+  inspectStates.set(owner, created);
+
+  return created;
+}
+
+export type InspectPointerEvent =
+  | { readonly kind: 'move'; readonly x: number; readonly y: number; readonly coarse: boolean }
+  | { readonly kind: 'tap'; readonly x: number; readonly y: number; readonly coarse: boolean }
+  | { readonly kind: 'leave' };
+
+/**
+ * Переход состояния осмотра по событию указателя (без DOM).
+ * Мышь (`coarse: false`) двигает точку перемещением; сенсор (`coarse: true`) —
+ * только тапом, а перемещение пальцем точку не трогает.
+ */
+export function inspectOnPointer(inspect: InspectState, event: InspectPointerEvent): InspectState {
+  if (event.kind === 'leave') return { ...inspect, hovering: false };
+  if (event.kind === 'move') {
+    if (event.coarse) return inspect;
+    return { ...inspect, x: event.x, y: event.y, hovering: true };
+  }
+  if (!event.coarse) return inspect;
+
+  return { ...inspect, x: event.x, y: event.y };
+}
+
+/** Точка осмотра в экранных px: последняя указанная, а до первого указания — центр кадра. */
+export function inspectPointFor(
+  viewport: FrameViewport,
+  inspect: { readonly x: number | null; readonly y: number | null },
+): { readonly x: number; readonly y: number } {
+  const frame = resolveViewport(viewport);
+  if (inspect.x === null || inspect.y === null) return { x: frame.w / 2, y: frame.h / 2 };
+
+  return { x: inspect.x, y: inspect.y };
+}
+
+/** Команды отрисовки лупы: один отрезок на линию и одна подпись на подпись. */
+export function loupeCommandCount(loupe: LoupeGrid): number {
+  return loupe.lines.length + loupe.labels.length;
+}
+
+/**
+ * Лупа на тире `tierIndex` вокруг точки. Окно — линии с индексами `col-6 … col+6`
+ * по каждой оси (13 линий, 12 ячеек), обрезанные границами карты `[0, columns]`.
+ * Затем экранная проекция обрезается кадром: лишние линии и подписи не строятся.
+ */
+function buildLoupe(
+  frame: FrameViewport,
+  cam: SceneCamera,
+  tierIndex: number,
+  point: { readonly x: number; readonly y: number },
+): LoupeGrid {
+  const tier = addressTierAt(tierIndex);
+  if (tier === undefined) throw new RangeError(`Неизвестный тир лупы: ${String(tierIndex)}`);
+  const { cellSize } = tier;
+  const scale = frame.w / cam.visibleWidth;
+  const cellPx = cellSize * scale;
+  const columns = Math.round(MAP_SIZE / cellSize);
+  const half = LOUPE_WINDOW_CELLS / 2;
+  const empty: LoupeGrid = { tierIndex, cellSize, cellPx, lines: [], labels: [], bounds: null };
+
+  const world = screenToWorld(frame, cam, point.x, point.y);
+  const col = Math.floor(world.x / cellSize);
+  const row = Math.floor(world.y / cellSize);
+  const kx0 = Math.max(0, col - half);
+  const kx1 = Math.min(columns, col + half);
+  const ky0 = Math.max(0, row - half);
+  const ky1 = Math.min(columns, row + half);
+  if (kx1 <= kx0 || ky1 <= ky0) return empty;
+
+  const topLeft = worldToScreen(frame, cam, kx0 * cellSize, ky0 * cellSize);
+  const bottomRight = worldToScreen(frame, cam, kx1 * cellSize, ky1 * cellSize);
+  const left = Math.max(0, topLeft.x);
+  const top = Math.max(0, topLeft.y);
+  const right = Math.min(frame.w, bottomRight.x);
+  const bottom = Math.min(frame.h, bottomRight.y);
+  if (!(right > left) || !(bottom > top)) return empty;
+
+  const lines: SceneGridLine[] = [];
+  for (let k = kx0; k <= kx1; k += 1) {
+    const x = worldToScreen(frame, cam, k * cellSize, 0).x;
+    if (x < left || x > right) continue;
+    lines.push({ kind: 'grid.line', tier: tier.id, cellSize, x1: x, y1: top, x2: x, y2: bottom });
+  }
+  for (let k = ky0; k <= ky1; k += 1) {
+    const y = worldToScreen(frame, cam, 0, k * cellSize).y;
+    if (y < top || y > bottom) continue;
+    lines.push({ kind: 'grid.line', tier: tier.id, cellSize, x1: left, y1: y, x2: right, y2: y });
+  }
+
+  // Подписи: 3 × 3 ячейки вокруг ячейки точки; адрес — префикс до тира лупы.
+  const labels: SceneGridLabel[] = [];
+  const letters = tierIndex as AddressLetters;
+  for (let dr = -1; dr <= 1; dr += 1) {
+    for (let dc = -1; dc <= 1; dc += 1) {
+      const c = col + dc;
+      const r = row + dr;
+      if (c < 0 || r < 0 || c >= columns || r >= columns) continue;
+      if (labels.length >= MAX_LOUPE_LABELS) continue;
+      const centerX = (c + 0.5) * cellSize;
+      const centerY = (r + 0.5) * cellSize;
+      const p = worldToScreen(frame, cam, centerX, centerY);
+      if (p.x < left || p.x > right || p.y < top || p.y > bottom) continue;
+      labels.push({
+        kind: 'grid.label',
+        tier: tier.id,
+        text: formatAddress(prefixOf(centerX, centerY, letters)),
+        x: p.x,
+        y: p.y,
+      });
+    }
+  }
+
+  return {
+    tierIndex,
+    cellSize,
+    cellPx,
+    lines: lines.slice(0, MAX_LOUPE_LINES),
+    labels,
+    bounds: { x0: left, y0: top, x1: right, y1: bottom },
+  };
+}
+
+/**
+ * Лупа режима осмотра (Z-4c §2). Тир — самый мелкий из допустимых (не глубже
+ * базового + `LOUPE_MAX_TIER_STEP` и не глубже `T5`), у которого ячейка на экране
+ * не меньше `LOUPE_MIN_CELL_PX`. Если таких нет, берётся базовый (самый крупный).
+ * Предохранитель `MAX_LOUPE_LINES`: при превышении тир шагает на один грубее.
+ * Чистая функция: DOM, таймеров и случайности нет.
+ */
+export function loupeGridFor(
+  viewport: FrameViewport,
+  camera: SceneCamera,
+  level: number,
+  point: { readonly x: number; readonly y: number },
+  options: LoupeOptions = {},
+): LoupeGrid {
+  const frame = resolveViewport(viewport);
+  const cam = resolveCamera(camera);
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    throw new RangeError(`Точка осмотра должна быть числами: ${String(point.x)}, ${String(point.y)}`);
+  }
+  const minCellPx = requirePositive(options.minCellPx ?? LOUPE_MIN_CELL_PX, 'Порог ячейки лупы (minCellPx)');
+
+  const base = GRID_TIER_BY_LEVEL[level] ?? null;
+  if (base === null) return { tierIndex: null, cellSize: 0, cellPx: 0, lines: [], labels: [], bounds: null };
+
+  const scale = frame.w / cam.visibleWidth;
+  const deepest = Math.min(base + LOUPE_MAX_TIER_STEP, DEEPEST_ADDRESS_TIER);
+  let tierIndex = base;
+  for (let index = deepest; index >= base; index -= 1) {
+    const tier = addressTierAt(index);
+    if (tier !== undefined && tier.cellSize * scale >= minCellPx) {
+      tierIndex = index;
+      break;
+    }
+  }
+
+  let loupe = buildLoupe(frame, cam, tierIndex, point);
+  while (loupe.lines.length > MAX_LOUPE_LINES && tierIndex > base) {
+    tierIndex -= 1;
+    loupe = buildLoupe(frame, cam, tierIndex, point);
+  }
+
+  return loupe;
 }
 
 /**
