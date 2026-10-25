@@ -43,7 +43,7 @@ const SYSTEMS = [
 ];
 
 /** План §6.2: диаметр маркера по уровням `L0…L9`. */
-const PLAN_DIAMETERS = [2.5, 3.3, 4.5, 6.0, 8.0, 10.7, 14.3, 19.2, 25.7, 34.3];
+const PLAN_DIAMETERS = [2.5, 3.3, 4.5, 6.0, 8.0, 10.7, 14.3, 19.2, 25.6, 34.3];
 
 function sceneAt(level, options = {}) {
   const viewport = options.viewport ?? DESKTOP;
@@ -75,8 +75,9 @@ test('уровень кадра берётся из лестницы, а не с
   }
 });
 
-test('размер маркера на L8 и L9 совпадает с планом §6.2', () => {
-  for (const [level, expected] of [ [8, 25.7], [9, 34.3] ]) {
+test('размер маркера на L8 и L9 совпадает с планом §6.2, апертура — ровно на L9 (Z-4b §2)', () => {
+  assert.equal(APERTURE_FIRST_LEVEL, 9);
+  for (const [level, expected] of [ [8, 25.6], [9, 34.3] ]) {
     const result = sceneAt(level);
     const markers = markersOf(result);
     assert.ok(markers.length > 0, `L${level}: в кадре нет маркеров`);
@@ -87,17 +88,22 @@ test('размер маркера на L8 и L9 совпадает с плано
       );
       assert.equal(marker.diameter, ladder.markerDiameter(result.visibleWidth));
     }
-    // Апертура на этой глубине есть, кольцо равно диаметру маркера.
     const aperture = result.primitives.find((primitive) => primitive.kind === 'aperture');
-    assert.ok(aperture !== undefined, `L${level}: нет апертуры`);
-    assert.ok(Math.abs(aperture.ringDiameter - expected) <= 0.06);
-    assert.match(aperture.hint, /войти/);
+    if (level === 9) {
+      // Апертура активна ровно при level === 9, кольцо равно диаметру маркера.
+      assert.ok(aperture !== undefined, 'L9: нет апертуры');
+      assert.ok(Math.abs(aperture.ringDiameter - expected) <= 0.06);
+      assert.match(aperture.hint, /войти/);
+    } else {
+      assert.equal(aperture, undefined, `L${level}: апертура должна включаться только на L9`);
+      assert.equal(result.counts.apertures, 0);
+    }
   }
 });
 
-test('маркер растёт с глубиной монотонно, а его мировой след убывает', () => {
+test('маркер растёт с глубиной монотонно и совпадает с планом §6.2 на всех L0…L9', () => {
   let previousDiameter = 0;
-  let previousFootprint = Number.POSITIVE_INFINITY;
+  let previousFootprint = 0;
 
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
     const result = sceneAt(level);
@@ -105,20 +111,16 @@ test('маркер растёт с глубиной монотонно, а ег�
     assert.ok(markers.length > 0, `L${level}: нет маркеров`);
     const diameter = markers[0].diameter;
 
-    // Основное чтение карточки: с глубиной маркер только растёт (кламп 40 px).
+    // С глубиной маркер только растёт — ровно плановые числа §6.2.
     assert.ok(diameter >= previousDiameter, `L${level}: диаметр ${diameter} меньше предыдущего ${previousDiameter}`);
-    // До L9 — ровно плановые числа §6.2.
-    if (level <= 9) {
-      assert.ok(Math.abs(diameter - PLAN_DIAMETERS[level]) <= 0.06, `L${level}: ${diameter} вместо ${PLAN_DIAMETERS[level]}`);
-    } else {
-      assert.equal(diameter, 40, `L${level}: кламп диаметра не 40 px`);
-    }
+    assert.ok(Math.abs(diameter - PLAN_DIAMETERS[level]) <= 0.06, `L${level}: ${diameter} вместо ${PLAN_DIAMETERS[level]}`);
     previousDiameter = diameter;
 
-    // Мировой след маркера (сколько св.г. занимает диск) с глубиной падает:
-    // именно это «маркер уменьшается с глубиной» означает в единицах мира.
+    // Мировой след маркера (сколько единиц карты занимает диск) при новой
+    // лестнице растёт: диаметр растёт в 13,7 раза при размахе зума 10 раз
+    // (`MARKER_EXPONENT = 1,1374` под шаг `10^(1/9)`, Z-4b §1).
     const footprint = diameter / pixelsPerLightYear(DESKTOP, cameraForLevel(level, 5720, 6257));
-    assert.ok(footprint < previousFootprint, `L${level}: мировой след ${footprint} не убывает`);
+    assert.ok(footprint > previousFootprint, `L${level}: мировой след ${footprint} не растёт`);
     previousFootprint = footprint;
   }
 });
@@ -141,7 +143,7 @@ test('ничего мельче 0.25 px сцена не выдаёт (И-9)', ()
   }
 });
 
-test('сетка адресов живёт на L1…L8 и берёт тир из кодека адреса', () => {
+test('сетка адресов живёт на L1…L8, берёт тир из кодека, а на L8 её гасит MAX_GRID_LINES', () => {
   assert.equal(GRID_TIER_BY_LEVEL.length, ladder.LEVELS.filter((spec) => spec.frame === 'S').length);
   assert.equal(GRID_LAST_LEVEL, 8);
 
@@ -153,6 +155,14 @@ test('сетка адресов живёт на L1…L8 и берёт тир и�
 
     if (level === 0 || level > GRID_LAST_LEVEL) {
       assert.equal(lines.length, 0, `L${level}: сетка не должна рисоваться`);
+      assert.equal(labels.length, 0);
+      continue;
+    }
+    if (level === GRID_LAST_LEVEL) {
+      // Z-4b: на L8 полная ширина 1291,55 ед. при ячейке T5 3,2 ед. — это
+      // сотни линий, и предохранитель `MAX_GRID_LINES` честно гасит сетку
+      // целиком, а не рисует часть кадра за бюджетом.
+      assert.equal(lines.length, 0, 'L8: предохранитель MAX_GRID_LINES не сработал');
       assert.equal(labels.length, 0);
       continue;
     }
@@ -239,9 +249,17 @@ test('кластеры: ближе 1.6 · d маркеры сливаются с
   const reversed = clusterSystems(near.slice().reverse(), DESKTOP, cameraL0, ladder.markerDiameter(10000));
   assert.deepEqual(reversed, merged);
 
-  // На глубине те же две системы разъезжаются — порог в пикселях.
+  // Порог слияния — в пикселях: при Z-4b мировой след маркера растёт с
+  // глубиной (§1), поэтому та же пара в 10 ед. на L5 ещё слита (расстояние
+  // в px меньше `1,6 · d`), а пара в 200 ед. там уже разъезжается.
   const cameraL5 = cameraForLevel(5, 5000, 5000);
-  const apart = clusterSystems(near, DESKTOP, cameraL5, ladder.markerDiameter(cameraL5.visibleWidth));
+  const stillMerged = clusterSystems(near, DESKTOP, cameraL5, ladder.markerDiameter(cameraL5.visibleWidth));
+  assert.equal(stillMerged.length, 1, 'пара в 10 ед. на L5 должна оставаться кластером при новом следе маркера');
+  const far = [
+    near[0],
+    { id: 'b', name: 'Бета', x: 5200, y: 5000, faction: null, type: 'system' },
+  ];
+  const apart = clusterSystems(far, DESKTOP, cameraL5, ladder.markerDiameter(cameraL5.visibleWidth));
   assert.equal(apart.length, 2);
 
   // Кластерная подпись показывает число присоединённых систем (на L2 — у кластера).
@@ -336,7 +354,8 @@ test('пустой вход не падает: остаются только с�
 test('проекция мира на кадр: центр в центре, обратное преобразование точное', () => {
   const camera = cameraForLevel(4, 5720, 6257);
   const scale = pixelsPerLightYear(DESKTOP, camera);
-  assert.equal(scale, Math.min(DESKTOP.w, DESKTOP.h) / camera.visibleWidth);
+  // Масштаб — по полной ширине кадра (Z-4b §3): `viewport.w / visibleWidth`.
+  assert.equal(scale, DESKTOP.w / camera.visibleWidth);
 
   const center = worldToScreen(DESKTOP, camera, 5720, 6257);
   assert.equal(center.x, DESKTOP.w / 2);
@@ -349,9 +368,16 @@ test('проекция мира на кадр: центр в центре, об�
   assert.ok(Math.abs(back.x - 5820) <= 1e-9);
   assert.ok(Math.abs(back.y - 6257) <= 1e-9);
 
-  // edgeDist сцены — метрика §17.15 / §17.23: половина видимой ширины в св.г.
-  assert.equal(cameraEdgeDistance(DESKTOP, camera), 0.3125);
-  assert.equal(cameraEdgeDistance(PHONE, camera), 0.3125);
+  // edgeDist сцены: масштаб из полной ширины, короткая ось — внутри
+  // `edgeDistance`. Камера L4 задаёт видимую ширину 3593,81 ед.
+  assert.ok(Math.abs(cameraEdgeDistance(DESKTOP, camera) - 1.0107600929450513) <= 1e-9);
+  assert.ok(Math.abs(cameraEdgeDistance(PHONE, camera) - 1.7969068319023138) <= 1e-9);
+
+  // На номинале L9 (полная ширина 1000 ед.): 1920×1080 → 0,28 св.г.
+  // до ближайшей границы, 390×844 → 0,50 св.г. (Z-4b §3).
+  const deepest = cameraForLevel(9, 5720, 6257);
+  assert.ok(Math.abs(cameraEdgeDistance(DESKTOP, deepest) - 0.28125) <= 1e-9);
+  assert.ok(Math.abs(cameraEdgeDistance(PHONE, deepest) - 0.5) <= 1e-9);
 });
 
 test('хит-зона: d + 6 px, на сенсоре не меньше 44 px', () => {

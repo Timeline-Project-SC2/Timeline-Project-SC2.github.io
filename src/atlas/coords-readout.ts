@@ -91,8 +91,10 @@ export function visibleWidthOf(viewport: { readonly w: number; readonly h: numbe
  * Масштаб (px/ед), при котором ширина кадра равна `lw` единиц карты.
  *
  * Сверху масштаб клампит `centerOn()` рендерера (`[minScale, maxScale]`), поэтому
- * на `lw` меньше `2000·w/min(w,h)` кадр упирается в предел `1,00 св.г. до границы`
- * и ширина выходит больше заказанной. Ограничения здесь нет намеренно: одна граница — у рендерера.
+ * на `lw` меньше `1000` единиц кадр упирается в предел зума по полной ширине
+ * (Z-4b: `maxScale = viewport.w / lyToUnits(1)`, полная ширина на упоре —
+ * `1` св.г.) и ширина выходит больше заказанной. Ограничения здесь нет
+ * намеренно: одна граница — у рендерера.
  */
 export function scaleForVisibleWidth(viewport: { readonly w: number; readonly h: number }, lw: number): number | null {
   if (!(lw > 0) || !(viewport.w > 0)) return null;
@@ -107,7 +109,9 @@ export interface ZoomReadoutText {
 /**
  * Строки индикатора глубины: процент приближения и расстояние от цели в центре
  * кадра до ближайшей границы. Вторая строка намеренно не «ширина кадра»:
- * требование владельца (§17.15.1) задано метрикой `edgeDistance`.
+ * она задана метрикой `edgeDistance` по короткой оси. Предел зума при этом
+ * задан полной шириной (Z-4b), поэтому на упоре `1920×1080` читается
+ * `1891%` и `0,28 св.г. до границы`, а не прежние `532%` / `1,00 св.г.`
  */
 export function zoomReadoutText(
   viewport: { readonly w: number; readonly h: number },
@@ -117,7 +121,7 @@ export function zoomReadoutText(
   if (!(scale > 0) || !(fit > 0) || !(viewport.w > 0) || !(viewport.h > 0)) return null;
   return {
     percent: Math.round(scale / fit * 100) + '%',
-    // Два знака: на пределе приближения строка обязана читаться как «1,00 св.г.».
+    // Два знака: на пределе приближения строка обязана читаться как «0,28 св.г.» (`1920×1080`).
     edge: formatDistanceLy(edgeDistance({ w: viewport.w, h: viewport.h }, scale), 'full') + ' до границы',
   };
 }
@@ -162,7 +166,7 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
   }
 
   /**
-   * Строка «1,00 св.г. до границы» под процентом зума.
+   * Строка «0,28 св.г. до границы» (`1920×1080` на упоре) под процентом зума.
    *
    * Узел создаётся здесь, а не в шаблоне: разметка `.zoom-readout` общая для всех
    * вариантов атласа, и правка шаблона задела бы чужие экраны. Вставка аддитивная
