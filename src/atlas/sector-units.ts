@@ -55,15 +55,18 @@ export function formatAngleDeg(rad: number): string {
     normalized -= fullTurn;
   }
 
-  const roundedDegrees = Math.round((normalized * 180 / Math.PI) * 10) / 10;
-  if (roundedDegrees === 0) {
-    return '0°';
+  const degrees = normalized * 180 / Math.PI;
+  const nearestInteger = Math.round(degrees);
+  if (Math.abs(degrees - nearestInteger) <= 1e-10) {
+    if (nearestInteger === 0) {
+      return '0°';
+    }
+
+    const sign = nearestInteger < 0 ? '−' : '';
+    return `${sign}${Math.abs(nearestInteger)}°`;
   }
 
-  const absoluteDegrees = Math.abs(roundedDegrees);
-  const degreeText = Number.isInteger(absoluteDegrees)
-    ? String(absoluteDegrees)
-    : absoluteDegrees.toFixed(1).replace('.', ',');
-  const sign = roundedDegrees < 0 ? '−' : '';
+  const degreeText = Math.abs(degrees).toFixed(1).replace('.', ',');
+  const sign = degrees < 0 ? '−' : '';
   return `${sign}${degreeText}°`;
 }

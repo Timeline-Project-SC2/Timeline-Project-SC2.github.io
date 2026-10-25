@@ -63,6 +63,7 @@ test('углы нормализуются в интервал (-180°, 180°] с
   assert.equal(units.formatAngleDeg(0), '0°');
   assert.equal(units.formatAngleDeg(-Math.PI / 2), '−90°');
   assert.equal(units.formatAngleDeg(7 * Math.PI / 4), '−45°');
+  assert.equal(units.formatAngleDeg(12.04 * Math.PI / 180), '12,0°');
   assert.equal(units.formatAngleDeg(136.4 * Math.PI / 180), '136,4°');
   assert.throws(() => units.formatAngleDeg(Number.NaN), RangeError);
 });
