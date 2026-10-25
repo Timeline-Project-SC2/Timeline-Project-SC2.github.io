@@ -679,3 +679,237 @@ export function formatAngleDeg(rad: number): string;
 кламп зума обязан доходить до **`MIN_REACHABLE_WIDTH = 17,1875` св.г.** При этой
 ширине `markerDiameter = 36,24 px`, что укладывается в кламп диаметра `40 px`,
 поэтому таблица `LEVELS` и формула диаметра правок не требуют.
+
+---
+
+## 17. Матрица волны SW-2 (Процедурное поле и вывод растра из эксплуатации)
+
+Дата постановки: **25 октября 2026 года**. Статус: **волна открыта**, кодовые PR не созданы.
+Источник чисел — гайдлайнер [`../stages/stage-9-12-sector-deep-render-plan.md`](../stages/stage-9-12-sector-deep-render-plan.md)
+(§8 поле, §10 контракты, §11 гейты, §12 `SW-2`, §14 целевое состояние).
+
+### 17.1. Цель и границы
+
+`SW-2` заменяет растровую подложку сектора процедурным полем и **в той же волне** выводит из
+эксплуатации весь тайловый конвейер. Это единственная необратимая волна под-уровня: после
+слияния `SW-2B` в репозитории не остаётся ни исходника растра, ни тайлов, ни кода, который их
+читает (`D-07`, `D-11`, инвариант `И-10`).
+
+**Входит:** `src/atlas/sector-field.ts`, интеграция поля в кадр `/sector/` и `/minimal/`,
+удаление `tile-pyramid.ts`, `CONFIG.tiles`, `state.rasterMode`, `SITE_LINKS.sectorMapPreview`,
+тайлового шага сборки, кэша тайлов в `pages.yml`, workflow `assets.yml`, требования
+`.publish/assets/tiles.json` в `check.yml`, исходника `assets/src/koprulu-sector.jpg`.
+
+**Не входит:** маркеры, подписи, территории, лестница уровней в рантайме (`SW-3`); полёт и
+стрелки (`SW-3F`); адресный UI (`SW-4`); системный кадр (`SW-5`); планетарный контур (`И-11`);
+растр галактики `assets/src/galaxy-map.jpg` и маршрут `/` (`D-12`); данные `data/*.csv`.
+
+### 17.2. Решения перед стартом (приняты Гайдлайнером 25.10.2026)
+
+1. **Два пресета поля.** `nebula` — по умолчанию (`D-08`); `tactical` («тактический тёмный») —
+   за флагом `?style=tactical`. Причина: удаление растра необратимо, а второй пресет стоит
+   ≈ 2 агено-часа и снимает риск `R-1` («поле визуально хуже карты») до приёмки, а не после.
+   Переключение — одна константа в `CONFIG.field.style`; оба пресета рисуются одним кодом,
+   различие только в таблице цвета и параметрах шума.
+2. **Эталон «до» не снимается отдельным артефактом** (`D-11`), но и не теряется: исходник
+   растра остаётся в истории Git и восстанавливается одной командой
+   `git show b3306cb:assets/src/koprulu-sector.jpg > /tmp/koprulu-sector.jpg`, а тайлы из него
+   пересобираются `python3 tools/build_assets.py --force` на любой ветке до `SW-2B`.
+   Поэтому специальный протокол скриншотов не нужен; вместо него — **предпросмотр поля
+   без браузера** (§17.7, пункт `G7.3`-подготовка).
+3. **Волна идёт последовательно, а не тройкой.** Обоснование — §17.9.
+
+### 17.3. Инвентарь: где растр живёт на `main` (`b3306cb`)
+
+| Файл | Строки | Что держит |
+|---|---|---|
+| `src/atlas/tile-pyramid.ts` | весь файл (212 строк) | `createTilePyramid`, `drawRaster`, `hasPreviewImage`, `rasterExpected`, кэш `cacheLimit: 260` |
+| `src/atlas/config.ts` | `32…37` (`tiles`), `50…55` (`markerLod`), `252`, `310`, `330` (`rasterMode`), `536` | `CONFIG.tiles`, состояние `tiles`/`rasterMode` |
+| `src/atlas/canvas-renderer.ts` | `723…732` | ветка `rasterMode === 'tiles'/'preview'` → `kernel.tiles.drawRaster()` |
+| `src/atlas/data-loader.ts` | `336…345` | `wantsRaster` → `fetchJSON(CONFIG.tiles.manifest)` |
+| `src/atlas/app.ts` | `47`, `67`, `127`, `402…405` | инициализация `kernel.tiles`, `configureTiles` |
+| `site/shared/links.ts` | `7…10`, `17`, `31` | `sectorMapPreview` (читается `tile-pyramid.ts:84,87`) |
+| `tools/build_assets.py` | `53…58`, `125…190`, `306`, `318…325`, `194` | `SECTOR_SOURCE`, `TILE_*`, `PREVIEW_*`, `build_tiles`, проверка свежести |
+| `data/meta.json` | блок `assets` | `hasRaster`, `preview`, `tiles`, `version`, **`imageVersion`** |
+| `.gitignore` | `5…7` | `assets/tiles/`, `assets/tiles.json`, `assets/map-preview.webp` |
+| `.github/workflows/pages.yml` | `37…39` | кэш тайлов и превью |
+| `.github/workflows/check.yml` | `57` | требует `.publish/assets/tiles.json` — **в плане гайдлайнера не учтён** |
+| `.github/workflows/assets.yml` | `24…30` | собирает `build_assets.py --force` и выгружает артефакт с тайлами — **в плане не учтён** |
+| `site/AGENTS.md` | `61` | описывает тайлы как действующий контур (SSoT) |
+| `tools/AGENTS.md` | `55` | описывает пирамиду WebP как действующий контур (SSoT) |
+
+### 17.4. Матрица файлов (`Zero File Overlap`)
+
+Волна разбита на два шага, чтобы каждая ветка собиралась зелёной (§17.9). Пересечений между
+шагами нет по построению: `SW-2A` не трогает ни одного существующего файла рантайма.
+
+**Шаг `SW-2A` — поле (создаётся, ничего не удаляется).**
+
+| Воркер | Поток | `OWNED_FILES` | Запрещено |
+|---|---|---|---|
+| **Воркер 1** | `src/atlas/sector-field.ts`: WebGL2-рендер процедурного поля + CPU-фолбэк, два пресета, дизеринг, детерминизм от `xxHash32`; `tools/sector_field_preview.mjs` — предпросмотр PNG без браузера; тест | `src/atlas/sector-field.ts`<br>`tools/sector_field_preview.mjs`<br>`tests/sector-field.test.mjs` | Все остальные файлы, включая `canvas-renderer.ts`, `config.ts`, `app.ts`, `tile-pyramid.ts`, `package.json`, `.github/*` |
+
+**Шаг `SW-2B` — вывод растра и интеграция (после слияния `SW-2A`).**
+
+| Воркер | Поток | `OWNED_FILES` |
+|---|---|---|
+| **Воркер 2** | Интеграция поля в кадр, удаление тайлового конвейера, правки сборки и CI | `src/atlas/canvas-renderer.ts`<br>`src/atlas/config.ts`<br>`src/atlas/data-loader.ts`<br>`src/atlas/app.ts`<br>`src/atlas/tile-pyramid.ts` *(удаление)*<br>`site/shared/links.ts`<br>`data/meta.json`<br>`tools/build_assets.py`<br>`.gitignore`<br>`.github/workflows/pages.yml`<br>`.github/workflows/assets.yml`<br>`.github/workflows/check.yml`<br>`assets/src/koprulu-sector.jpg` *(удаление)*<br>`package.json` |
+| **Гейт Гайдлайнера** | `tools/verify_no_raster.mjs` — исполняемая форма `И-10` | `tools/verify_no_raster.mjs` |
+| **Воркер 3** | Документация: доменные SSoT описывают **уже** удалённый контур | `site/AGENTS.md`<br>`tools/AGENTS.md`<br>`CHANGELOG.md`<br>`docs/HANDOFF.md`<br>`docs/stages/stage_patches.md`<br>`docs/PREPARATION_PLAN.md` (строка статуса) |
+
+**Стык `package.json`.** Один владелец на шаг: `SW-2A` — Воркер 1 (скрипт `sector-field:preview`),
+`SW-2B` — Воркер 2 (скрипт `verify:no-raster`). Правило О-1 соблюдено внутри каждого шага.
+
+### 17.5. Контракт до буквы (`Interface-First`)
+
+**`src/atlas/sector-field.ts` (Воркер 1).**
+
+~~~~text
+export type FieldStyle = 'nebula' | 'tactical';
+
+export interface FieldPalette {
+  readonly id: FieldStyle;
+  readonly background: readonly [number, number, number];
+  readonly dust: readonly [number, number, number];
+  readonly core: readonly [number, number, number];
+  readonly rim: readonly [number, number, number];
+  readonly densityStops: readonly number[];
+}
+
+export interface SectorFieldState {
+  readonly view: { readonly scale: number; readonly tx: number; readonly ty: number };
+  readonly viewport: { readonly w: number; readonly h: number };
+  readonly dpr: number;
+  readonly mapSize: number;
+}
+
+export interface SectorField {
+  readonly style: FieldStyle;
+  readonly backend: 'webgl2' | 'cpu';
+  renderField(state: SectorFieldState): void;
+  renderToImageData(state: SectorFieldState): ImageData;
+  dispose(): void;
+}
+
+export const FIELD_SEED_TEXT = 'KP';
+export const FIELD_PALETTES: readonly FieldPalette[];
+
+export function hashSeed(text: string): number;
+export function createSectorField(canvas: HTMLCanvasElement | null, opts?: { readonly style?: FieldStyle }): SectorField;
+~~~~
+
+Жёсткие требования:
+
+1. **Камеро-относительная математика.** Центр кадра считается в `float64` в JS
+   (`cx = (mapSize / 2 - tx) / scale`), в шейдер передаётся **только смещение** относительно
+   центра, разложенное на старшую и младшую части (`u_offsetHi`/`u_offsetLo` как `vec2`).
+   Прямая передача мировых координат в `uniform float` запрещена: на `L9` (`scale ≈ 512`)
+   `float32` перестаёт различать соседние пиксели (`R-3`).
+2. **Детерминизм.** Всё случайное — только от `hashSeed(FIELD_SEED_TEXT)`; `Math.random`,
+   `Date.now`, `performance.now` в генерации запрещены. CPU-фолбэк обязан быть **побитово**
+   воспроизводим между прогонами и машинами.
+3. **CPU-фолбэк обязателен.** Нет WebGL2 или контекст потерян → `backend === 'cpu'`, картинка
+   та же по композиции, без исключений и без пустого холста (`rc-01` п. 2).
+4. **Никакой сети и никаких ассетов.** Модуль не делает ни одного `fetch`, не читает картинок,
+   не создаёт `Image` — гейт `И-10` проверяет это по коду.
+5. **Бюджеты.** Полный кадр `L0` (viewport `1920 × 1080`, `dpr = 1`) — `p95 ≤ 16,7 мс` на
+   целевом десктопе; GPU-память поля `≤ 32 МБ`; предпросмотр `1024 × 1024` на CPU —
+   `≤ 8 с` без оптимизаций.
+6. **Строгий TS без DOM там, где это возможно.** `renderToImageData` обязан работать без
+   реального `<canvas>` (в Node, через CPU-путь) — это требование предпросмотра и тестов.
+
+### 17.6. Точка интеграции в кадре (шаг `SW-2B`)
+
+Было (`canvas-renderer.ts:723…732`):
+
+~~~~text
+if (state.rasterMode === 'tiles' || (state.rasterMode === 'preview' && kernel.tiles.hasPreviewImage())) {
+  ctx.fillStyle = '#03060c';
+  ctx.fillRect(0, 0, state.viewport.w, state.viewport.h);
+  ctx.imageSmoothingEnabled = true;
+  if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+  kernel.tiles.drawRaster();
+} else {
+  drawSchematic();
+}
+~~~~
+
+Стало:
+
+~~~~text
+kernel.field.renderField({
+  view: state.view,
+  viewport: state.viewport,
+  dpr: state.dpr,
+  mapSize: kernel.data.mapSize(),
+});
+~~~~
+
+`drawSchematic()` остаётся резервом на случаи «данные ещё грузятся» и «нет ни поля, ни WebGL2»;
+удалять его в `SW-2` запрещено — это состояние загрузки (`rc-01` п. 2), а не растр.
+
+### 17.7. Гейты волны
+
+| Гейт | Критерий |
+|---|---|
+| **G7.3 Ноль растра** | исполняемая форма: `npm run verify:no-raster` возвращает `0` и проверяет — в `.publish` нет `assets/tiles*` и `assets/map-preview*`; в репозитории нет `assets/src/koprulu-sector.jpg`; в рантайме (`src/atlas/*.ts`, `site/shared/links.ts`) `0` вхождений `CONFIG.tiles`, `rasterMode`, `sectorMapPreview`, `TilePyramid`; в `check.yml` нет требования `assets/tiles.json`; в `pages.yml`/`assets.yml` нет шага и кэша тайлов. Плюс `verify:publish` — `7/7` |
+| **G7.6 Детерминизм** | CPU-путь: SHA-256 `ImageData` совпадает на двух прогонах (обязательно, побитово). GPU-путь: два прогона в одном браузере — побитово; **между браузерами** — допуск `max |Δchannel| ≤ 2` и среднее `≤ 0,5` |
+| **G7.4 Производительность** | `L0` — `p95 ≤ 16,7 мс` (десктоп) и `≤ 33,3 мс` (Redmi Note 10); при непрерывном зуме нет кадров `> 100 мс`; поле `≤ 32 МБ` GPU; CPU-фолбэк не блокирует главный поток дольше `50 мс` за кадр |
+| **G7.5 Загрузка** | `0` запросов `/assets/tiles*` и `/assets/map-preview*` в Network при входе на `/sector/` и `/minimal/` |
+| **G7.4 Матрица** | как в §16.4: собственные проверки зелёные, `0` новых падений относительно базы на момент старта, «Скрипты сайта» вне приёмки |
+
+**Поправка Гайдлайнера к `G7.6` (обязательна к учёту).** Формулировка гайдлайнера «хэш
+`ImageData` совпадает на двух браузерах» **недостижима** для GPU-пути: `float32` в шейдере
+округляется по-разному на разных вендорах, и побитовое совпадение между драйверами не
+гарантируется ни одним стандартом. Поэтому гейт разделён: побитовость требуется от CPU-пути
+и от повторных прогонов в одном браузере, между браузерами — измеряемый допуск. Ослаблением
+порога это не является: `R-1` защищает именно CPU-эталон, а он побитовый.
+
+**Предпросмотр до необратимого удаления.** `npm run sector-field:preview` (Воркер 1) обязан
+без браузера отрисовать оба пресета на ширинах `L0 / L4 / L9` через CPU-путь и записать шесть
+PNG в `docs/stages/evidence/sw2-field/`. Владелец смотрит **пиксели поля** до слияния `SW-2B`,
+а не после. Это заменяет протокол скриншотов «до/после» (§17.2 п. 2).
+
+### 17.8. Ловушки, которых нет в плане гайдлайнера
+
+| № | Ловушка | Что делать |
+|---|---|---|
+| 1 | `check.yml:57` требует `.publish/assets/tiles.json` | убрать строку из списка в том же PR `SW-2B`, иначе job «Сборка на ubuntu-24.04/26.04» падает с «нет файла» |
+| 2 | `.github/workflows/assets.yml` собирает тайлы и публикует артефакт | убрать шаг артефакта и пути тайлов; workflow остаётся для галактики и макетов |
+| 3 | `data/meta.json` → `assets.imageVersion` читает конвейер `tools/vite/asset-utils.ts:37` для кэш-бастинга `?v=` | удалять только `hasRaster`/`preview`/`tiles`/`version`; **`imageVersion` обязан остаться**, иначе слетает версионирование картинок галактики |
+| 4 | `SECTOR_SOURCE` в `build_assets.py` используется дважды: `build_tiles` (127) и проверка свежести (318…325) | удалить обе точки и константу; `--check` не должен падать на `FileNotFoundError` |
+| 5 | `site/AGENTS.md:61`, `tools/AGENTS.md:55` описывают тайлы как действующий контур (SSoT) | правка в `SW-2B`-док-шаге (Воркер 3), а не в `SW-2A` |
+| 6 | `sectorMapPreview` читается только из `tile-pyramid.ts:84,87` | удалять вместе с модулем одним PR; других потребителей нет (проверено `grep` по `src/`, `site/`, `tools/`) |
+
+### 17.9. Порядок запуска: почему волна идёт последовательно
+
+**Решение Гайдлайнера: `SW-2A` → `SW-2B` → документация. Параллельной тройки в этой волне нет.**
+
+Причина не в объёме, а в стыке. По правилу О-3 воркер-потребитель обязан опираться на
+зафиксированную сигнатуру, не дожидаясь ветки соседа, — а единственный способ сделать это без
+нового модуля — временный шим. Именно так в `Stage-8.7` заглушка `createLocalMapQuickNavShim`
+дожила до прода и стрелки не рисовались вообще при полностью зелёном CI (PR #204). Здесь цена
+такой ошибки выше: `SW-2B` **удаляет** растр, и если поле окажется не подключённым, откатиться
+будет некуда — эталона нет по решению `D-11`.
+
+Поэтому:
+
+1. `SW-2A` — поле, предпросмотр и тесты. Ничего не удаляется, рантайм не меняется, `main`
+   остаётся зелёным, владелец смотрит PNG.
+2. `SW-2B` — интеграция и удаление. Ветка строится от `main`, **уже содержащего** боевой
+   `sector-field.ts`, поэтому импорт настоящий, шимов нет.
+3. Документация — после `SW-2B`, потому что доменные `AGENTS.md` описывают удалённый контур.
+
+Оценка: `SW-2A` — `8–10` агено-часов, `SW-2B` — `10–14`, документация — `3–4`; итого
+`21–28` против `14–20` в плане гайдлайнера. Разница — цена отказа от параллелизма и двух
+пресетов; она принята осознанно, потому что это единственная необратимая волна.
+
+### 17.10. Учтённые уроки
+
+| Урок | Как учтён |
+|---|---|
+| Stage-8.7.2: шим по О-3 дожил до прода | волна последовательная, потребитель импортирует боевой модуль из `main` |
+| SW-1: гейт, стоящий после красного шага, не выполняется | `verify:no-raster` ставится **выше** `npm test` в `check.yml` (как `verify:sector-core`) |
+| SW-1: критерий «0 новых падений» проверяем только при зафиксированной базе | база снимается один раз перед стартом `SW-2A` и переносится в `§17` при первом коммите волны |
+| `R-1`: эталона для сравнения нет | предпросмотр PNG на CPU до необратимого шага; исходник восстанавливается из истории Git |
+| План гайдлайнера пропустил два файла CI и `imageVersion` | §17.3 и §17.8 фиксируют их до старта, а не после падения сборки |
