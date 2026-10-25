@@ -51,6 +51,7 @@
   `imageVersion`. В CI job `scripts` этот шаг стоит **выше `npm test`**, а job `build` запускает его
   **после `verify:publish`**; приёмка SW-2 — **9/9**. `imageVersion` сохраняет кэш-бастинг картинок
   галактики (`?v=`) через `tools/vite/asset-utils.ts`. Инвентарь и порядок — [§17.3 и §17.13 SW-2](../docs/agents_task_orchestration/agents_task_orchestration.md).
+- **Секторная матрица проверок на базе `147a0e2`** (после `31ee897`): `npm test` запускает 25 файлов, в том числе `canvas-zoom-clamp.test.mjs`, `sector-scene.test.mjs`, `label-layout.test.mjs` и `coords-readout.test.mjs`; фактический итог — 261 тест, 253 pass и 8 известных планетарных fail (Stage-8/A-17/W26b, вне секторной задачи). Не выдавать эти 8 падений за регрессию сектора и не исправлять их в этой волне. `npm run verify:sector-core` (`tools/verify_sector_core.mjs`) — 3 880 проверок; `npm run verify:no-raster` — 9/9; `npm run verify:publish` — 7 маршрутов и 36 hashed-ассетов. `npm run build` на этой базе прошёл.
 
 ---
 
