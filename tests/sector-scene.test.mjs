@@ -440,8 +440,10 @@ test('адресные метки сетки совпадают с кодеко�
   }
 });
 
-test('территории фракций считаются по системам и живут только на L2…L6', () => {
-  assert.deepEqual([...TERRITORY_LEVELS], [2, 3, 4, 5, 6]);
+test('территории фракций считаются по системам и живут на L2…L9', () => {
+  // С Z-4b глубина лестницы девять: поле фракции больше не обрезается на L6,
+  // иначе на L6→L7 оно исчезало бы скачком (шов, запрещённый владельцем).
+  assert.deepEqual([...TERRITORY_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
 
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
     const result = sceneAt(level, { systems: SYSTEMS });
@@ -456,6 +458,12 @@ test('территории фракций считаются по система
       assert.ok(territory.radius >= 0);
       assert.ok(Number.isFinite(territory.x) && Number.isFinite(territory.y));
       assert.ok(territory.screenRadius >= 0);
+      // Новый контракт Z-3.9: альфа слоя приходит из лестницы, а не из рендерера.
+      assert.equal(
+        territory.alpha,
+        ladder.layerFillAlpha(level),
+        `L${level}: альфа территории не из layerFillAlpha`,
+      );
     }
   }
 
@@ -466,8 +474,46 @@ test('территории фракций считаются по система
   assert.equal(dominion.centerX, (5720 + 5750) / 2);
   assert.equal(dominion.centerY, (6257 + 6300) / 2);
   assert.ok(Math.abs(dominion.radius - Math.hypot(15, 21.5)) <= 1e-9);
+  assert.equal(dominion.alpha, ladder.layerFillAlpha(3), 'альфа территории на L3');
   // Система без фракции в территории не попадает.
   assert.ok(!territories.some((territory) => territory.faction === ''));
+});
+
+/* --------------------------------------- затухание территорий на глубине (Z-3.9) */
+
+test('T7: территории на L7 и L9 не пуст, альфа = layerFillAlpha(level)', () => {
+  for (const level of [7, 8, 9]) {
+    const territories = territoriesFor(SYSTEMS, DESKTOP, cameraForLevel(level, 5720, 6257), level);
+    assert.ok(territories.length > 0, `L${level}: поле фракции исчезло`);
+    for (const territory of territories) {
+      assert.equal(
+        territory.alpha,
+        ladder.layerFillAlpha(level),
+        `L${level}: альфа ${territory.alpha} вместо ${ladder.layerFillAlpha(level)}`,
+      );
+      assert.ok(territory.alpha > 0, `L${level}: альфа слоя погасла в ноль`);
+    }
+    // Ниже L6 слой живёт, но слабеет: L7 и L9 стоят на нижней границе 0,25.
+    assert.ok(Math.abs(ladder.layerFillAlpha(level) - ladder.LAYER_FILL_ALPHA_MIN) <= 1e-9);
+  }
+
+  // Появление на L7 — не скачок: L6 ярче L7, L7 не ноль.
+  assert.ok(ladder.layerFillAlpha(6) > ladder.layerFillAlpha(7));
+});
+
+test('T8: на L1 и L0 территорий по-прежнему нет', () => {
+  for (const level of [0, 1]) {
+    assert.equal(TERRITORY_LEVELS.includes(level), false, `L${level} не должен давать территории`);
+    const territories = territoriesFor(SYSTEMS, DESKTOP, cameraForLevel(level, 5720, 6257), level);
+    assert.equal(territories.length, 0, `L${level}: территории не должны рисоваться`);
+
+    const result = sceneAt(level, { systems: SYSTEMS });
+    assert.equal(
+      result.primitives.filter((primitive) => primitive.kind === 'territory').length,
+      0,
+      `L${level}: сцена вернула территории`,
+    );
+  }
 });
 
 test('кластеры: ближе 1.6 · d маркеры сливаются с числом, порядок входа не важен', () => {

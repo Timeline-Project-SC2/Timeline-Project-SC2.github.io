@@ -15,7 +15,8 @@
  *   — слияние ближе `1,6 · d` — §6.2 п. 3; хит-зона `d + 6 px` и `≥ 44 px`
  *     на сенсорном экране — §6.2 п. 5;
  *   — бюджет кадра уровня — `frameBudgetMs` из `LEVELS` (§6, §8.4);
- *   — территории `L2…L6`, сетка адресов `L1…L8`, апертура ровно на `L9` — §8.1, Z-4b §2;
+ *   — территории `L2…L9` (альфа — `layerFillAlpha` из `level-ladder.ts`, Z-3.9),
+ *     сетка адресов `L1…L8`, апертура ровно на `L9` — §8.1, Z-4b §2;
  *   — подпись на уровне — колонка «Подпись» таблицы §6.2, приоритет
  *     «столица → фракция → плотность» — §8.1;
  *   — бюджет подписей `120` — `LABEL_BUDGET` из `label-layout.ts` (§6, §8.1).
@@ -29,6 +30,7 @@ import type { FrameViewport, LadderFrame } from './level-ladder.ts';
 import {
   DEEPEST_SECTOR_LEVEL,
   edgeDistance,
+  layerFillAlpha,
   levelForWidth,
   levelSpec,
   markerDiameter,
@@ -66,7 +68,7 @@ export interface SectorSceneInput {
   readonly labels?: boolean;
 }
 
-/** Мягкое поле фракции (§8.1, уровни `L2…L6`). Заливку и alpha выбирает рендерер. */
+/** Мягкое поле фракции (§8.1, уровни `L2…L9`). Цвет заливки выбирает рендерер. */
 export interface SceneTerritory {
   readonly kind: 'territory';
   readonly faction: string;
@@ -78,6 +80,12 @@ export interface SceneTerritory {
   /** Радиус по данным: максимальное расстояние от центроида до системы, св.г. */
   readonly radius: number;
   readonly screenRadius: number;
+  /**
+   * Альфа заливки слоя на уровне (`layerFillAlpha(level)`, Z-3.9): на `L2` — `1`,
+   * к `L6` — `0,316`, глубже — `0,25`. Поле переживает `L6`, а не исчезает
+   * скачком: шва на `L6→L7` нет.
+   */
+  readonly alpha: number;
 }
 
 /** Линия сетки адреса (§8.1, уровни `L1…L8`). */
@@ -190,8 +198,12 @@ export const MIN_DRAWABLE_PX = 0.25;
 /** Апертура системы активна ровно на предельном `L9` (Z-4b §2). */
 export const APERTURE_FIRST_LEVEL = 9;
 
-/** Территории фракций живут на `L2…L6` (§8.1). */
-export const TERRITORY_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6]);
+/**
+ * Территории фракций живут на `L2…L9` (§8.1): с `Z-4b` глубина лестницы девять,
+ * и мягкое поле фракции тянется до последнего уровня, иначе на `L6→L7` оно
+ * исчезало бы скачком. Яркость на глубине гасит `layerFillAlpha`, а не гейт уровня.
+ */
+export const TERRITORY_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
 
 /** Сетка адресов живёт на `L1…L8` (§8.1). */
 export const GRID_FIRST_LEVEL = 1;
@@ -455,7 +467,7 @@ function labelPriorityOf(system: SceneSystemInput): number {
   return LABEL_PRIORITY.system;
 }
 
-/** Мягкие поля фракций: центроид и радиус по системам (§8.1, `L2…L6`). */
+/** Мягкие поля фракций: центроид, радиус и альфа слоя по системам (§8.1, `L2…L9`). */
 export function territoriesFor(
   systems: readonly SceneSystemInput[],
   viewport: FrameViewport,
@@ -477,6 +489,8 @@ export function territoriesFor(
     else bucket.push(system);
   }
 
+  // Альфа одна на весь уровень: затухание считается в `level-ladder.ts`, а не здесь.
+  const alpha = layerFillAlpha(level);
   const territories: SceneTerritory[] = [];
   for (const [faction, members] of groups) {
     const centerX = members.reduce((total, member) => total + member.x, 0) / members.length;
@@ -497,6 +511,7 @@ export function territoriesFor(
       y: point.y,
       radius,
       screenRadius: radius * scale,
+      alpha,
     });
   }
 
