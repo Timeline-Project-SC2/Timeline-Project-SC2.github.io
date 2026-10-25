@@ -11,9 +11,10 @@ import type {
   TravelPlannerApi,
   TravelStop,
 } from '../../site/shared/travel-planner.ts';
+import type { SectorBounds } from './sector-bounds.ts';
 import type { FieldStyle, SectorField } from './sector-field.ts';
 
-export type { FieldStyle, SectorField, SiteLinks, TravelCalculation, TravelPlannerApi, TravelStop };
+export type { FieldStyle, SectorBounds, SectorField, SiteLinks, TravelCalculation, TravelPlannerApi, TravelStop };
 
 export const CONFIG = {
   storage: {
@@ -27,6 +28,7 @@ export const CONFIG = {
     planets: 'planets.json',
     overrides: 'system-overrides.json',
     labels: 'map-labels.json',
+    bounds: 'sector-bounds.json',
     // Снимок профилей планет (Этап 7): place_id -> пресет, радиус, статус и ключ PG1.
     generation: 'planet-generation.csv',
   },
@@ -253,7 +255,10 @@ export interface AtlasDataset {
   planets: PlaceRecord[];
   overrides: AtlasOverrides;
   labels: MapLabel[];
+  readonly sectorBounds?: SectorBounds | null;
 }
+
+export type AtlasData = AtlasDataset;
 
 interface SearchEntryBase {
   kindLabel: string;
@@ -310,6 +315,7 @@ export interface AtlasState {
   planets: PlaceRecord[];
   labels: MapLabel[];
   overrides: AtlasOverrides | null;
+  sectorBounds?: SectorBounds | null;
   systemsById: Record<string, SystemRecord>;
   planetsById: Record<string, PlaceRecord>;
   planetByName: Record<string, PlaceRecord>;

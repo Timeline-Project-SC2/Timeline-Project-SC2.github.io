@@ -2,7 +2,7 @@
  *
  * Модуль ничего не рисует и ни к чему не подключён: на вход идут данные систем,
  * камера и размер кадра, на выход — плоский список примитивов в порядке слоёв
- * плана §8.1 (территории → сетка → системы → апертура → подписи). Рантайм-проводка
+ * плана §8.1 (границы сектора → сетка → системы → апертура → подписи). Рантайм-проводка
  * (`canvas-renderer.ts`) — отдельный слот, поэтому здесь нет обращений к DOM,
  * графического контекста и цикла кадров.
  *
@@ -15,8 +15,8 @@
  *   — слияние ближе `1,6 · d` — §6.2 п. 3; хит-зона `d + 6 px` и `≥ 44 px`
  *     на сенсорном экране — §6.2 п. 5;
  *   — бюджет кадра уровня — `frameBudgetMs` из `LEVELS` (§6, §8.4);
- *   — территории `L2…L9` (альфа — `layerFillAlpha` из `level-ladder.ts`, Z-3.9),
- *     сетка адресов `L1…L8`, апертура ровно на `L9` — §8.1, Z-4b §2;
+ *   — границы сектора и гало `L0…L9`, сетка адресов `L1…L9`, апертура ровно
+ *     на `L9` — §8.1, Z-4b §2, Z-4d;
  *   — подпись на уровне — колонка «Подпись» таблицы §6.2, приоритет
  *     «столица → фракция → плотность» — §8.1;
  *   — бюджет подписей `120` — `LABEL_BUDGET` из `label-layout.ts` (§6, §8.1).
@@ -24,13 +24,14 @@
 
 import { ADDRESS_TIERS, MAP_SIZE, addressOf, formatAddress, prefixOf } from './sector-address.ts';
 import type { AddressLetters } from './sector-address.ts';
+import { clipPolylineToViewport } from './sector-bounds.ts';
+import type { Point, SectorBounds } from './sector-bounds.ts';
 import type { LabelLayoutResult, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, LABEL_GAP, estimateLabelSize, layoutLabels } from './label-layout.ts';
 import type { FrameViewport, LadderFrame } from './level-ladder.ts';
 import {
   DEEPEST_SECTOR_LEVEL,
   edgeDistance,
-  layerFillAlpha,
   levelForWidth,
   levelSpec,
   markerDiameter,
@@ -60,6 +61,7 @@ export interface SectorSceneInput {
   readonly systems: readonly SceneSystemInput[];
   readonly viewport: FrameViewport;
   readonly camera: SceneCamera;
+  readonly sectorBounds?: SectorBounds | null;
   /** Сенсорный экран включает хит-зону `≥ 44 px` (§6.2 п. 5). По умолчанию мышь. */
   readonly hitTarget?: 'mouse' | 'touch';
   /** Переопределение бюджета подписей (по умолчанию `LABEL_BUDGET`). */
@@ -68,27 +70,19 @@ export interface SectorSceneInput {
   readonly labels?: boolean;
 }
 
-/** Мягкое поле фракции (§8.1, уровни `L2…L9`). Цвет заливки выбирает рендерер. */
-export interface SceneTerritory {
-  readonly kind: 'territory';
-  readonly faction: string;
-  readonly systems: number;
-  readonly centerX: number;
-  readonly centerY: number;
-  readonly x: number;
-  readonly y: number;
-  /** Радиус по данным: максимальное расстояние от центроида до системы, св.г. */
-  readonly radius: number;
-  readonly screenRadius: number;
-  /**
-   * Альфа заливки слоя на уровне (`layerFillAlpha(level)`, Z-3.9): на `L2` — `1`,
-   * к `L6` — `0,316`, глубже — `0,25`. Поле переживает `L6`, а не исчезает
-   * скачком: шва на `L6→L7` нет.
-   */
-  readonly alpha: number;
+/** Контур сектора, гало или туманности (`data/sector-bounds.json`, `L0…L9`). */
+export interface SceneBounds {
+  readonly kind: 'bounds';
+  readonly id: string;
+  readonly boundsKind: 'sector' | 'halo' | 'nebula';
+  readonly label: string;
+  readonly color: 'nebula' | 'tactical';
+  readonly strokeWidth: number;
+  readonly dash: readonly number[];
+  readonly points: readonly { readonly x: number; readonly y: number }[];
 }
 
-/** Линия сетки адреса (§8.1, уровни `L1…L8`). */
+/** Линия сетки адреса (§8.1, уровни `L1…L9`). */
 export interface SceneGridLine {
   readonly kind: 'grid.line';
   readonly tier: string;
@@ -153,7 +147,7 @@ export interface SceneLabel extends LabelRect {
 }
 
 export type ScenePrimitive =
-  | SceneTerritory
+  | SceneBounds
   | SceneGridLine
   | SceneGridLabel
   | SceneMarker
@@ -172,7 +166,7 @@ export interface SectorScene {
   readonly labels: LabelLayoutResult;
   readonly primitives: readonly ScenePrimitive[];
   readonly counts: {
-    readonly territories: number;
+    readonly bounds: number;
     readonly gridLines: number;
     readonly gridLabels: number;
     readonly markers: number;
@@ -198,16 +192,9 @@ export const MIN_DRAWABLE_PX = 0.25;
 /** Апертура системы активна ровно на предельном `L9` (Z-4b §2). */
 export const APERTURE_FIRST_LEVEL = 9;
 
-/**
- * Территории фракций живут на `L2…L9` (§8.1): с `Z-4b` глубина лестницы девять,
- * и мягкое поле фракции тянется до последнего уровня, иначе на `L6→L7` оно
- * исчезало бы скачком. Яркость на глубине гасит `layerFillAlpha`, а не гейт уровня.
- */
-export const TERRITORY_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
-
-/** Сетка адресов живёт на `L1…L8` (§8.1). */
+/** Сетка адресов живёт на `L1…L9` (§8.1, Z-4d). */
 export const GRID_FIRST_LEVEL = 1;
-export const GRID_LAST_LEVEL = 8;
+export const GRID_LAST_LEVEL = 9;
 
 /** Приоритеты подписей по §8.1: столица → фракция → плотность. */
 export const LABEL_PRIORITY = Object.freeze({ capital: 100, faction: 50, system: 10 });
@@ -219,12 +206,10 @@ export const MAX_GRID_LINES = 512;
 export const MAX_GRID_LABELS = 64;
 
 /**
- * Тир обычной адресной сетки по уровню `L0…L9` (индекс = уровень), Z-4c §1:
- * `L1…L2` — квадранты `T1` (2 000), `L3…L8` — регионы `T2` (400), `L0` и `L9` —
- * сетки нет. Подробность на `L8` даёт режим осмотра (лупа), а не обычная сетка.
+ * L1…L2 — T1, L3…L6 — T2, L7…L9 — T3 (80 ед); на L0 сетки нет.
  */
 export const GRID_TIER_BY_LEVEL: readonly (number | null)[] = Object.freeze([
-  null, 1, 1, 2, 2, 2, 2, 2, 2, null,
+  null, 1, 1, 2, 2, 2, 2, 3, 3, 3,
 ]);
 
 /**
@@ -467,55 +452,36 @@ function labelPriorityOf(system: SceneSystemInput): number {
   return LABEL_PRIORITY.system;
 }
 
-/** Мягкие поля фракций: центроид, радиус и альфа слоя по системам (§8.1, `L2…L9`). */
-export function territoriesFor(
-  systems: readonly SceneSystemInput[],
+/** Контуры границ сектора, гало и туманностей в экранных координатах кадра (`L0…L9`). */
+export function boundsFor(
+  sectorBounds: SectorBounds | null | undefined,
   viewport: FrameViewport,
   camera: SceneCamera,
-  level: number,
-): readonly SceneTerritory[] {
-  if (!TERRITORY_LEVELS.includes(level)) return [];
+): readonly SceneBounds[] {
+  if (sectorBounds === null || sectorBounds === undefined) return [];
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const scale = frame.w / cam.visibleWidth;
+  const boundsViewport = { width: frame.w, height: frame.h };
+  const screenCamera = { x: 0, y: 0, scale: 1 };
 
-  const groups = new Map<string, SceneSystemInput[]>();
-  for (const system of systems) {
-    if (!isUsableSystem(system)) continue;
-    const faction = system.faction ?? '';
-    if (faction.length === 0) continue;
-    const bucket = groups.get(faction);
-    if (bucket === undefined) groups.set(faction, [system]);
-    else bucket.push(system);
-  }
-
-  // Альфа одна на весь уровень: затухание считается в `level-ladder.ts`, а не здесь.
-  const alpha = layerFillAlpha(level);
-  const territories: SceneTerritory[] = [];
-  for (const [faction, members] of groups) {
-    const centerX = members.reduce((total, member) => total + member.x, 0) / members.length;
-    const centerY = members.reduce((total, member) => total + member.y, 0) / members.length;
-    const radius = members.reduce(
-      (max, member) => Math.max(max, Math.hypot(member.x - centerX, member.y - centerY)),
-      0,
-    );
-    const point = worldToScreen(frame, cam, centerX, centerY);
-
-    territories.push({
-      kind: 'territory',
-      faction,
-      systems: members.length,
-      centerX,
-      centerY,
-      x: point.x,
-      y: point.y,
-      radius,
-      screenRadius: radius * scale,
-      alpha,
+  return sectorBounds.bounds.map((item) => {
+    const projected: Point[] = item.points.map(([wx, wy]) => {
+      const point = worldToScreen(frame, cam, wx, wy);
+      return [point.x, point.y] as const;
     });
-  }
+    const clipped = clipPolylineToViewport(projected, screenCamera, boundsViewport);
 
-  return territories.sort((a, b) => (a.faction < b.faction ? -1 : (a.faction > b.faction ? 1 : 0)));
+    return {
+      kind: 'bounds' as const,
+      id: item.id,
+      boundsKind: item.kind,
+      label: item.label,
+      color: item.style.color,
+      strokeWidth: item.style.strokeWidth,
+      dash: [...item.style.dash],
+      points: clipped.map(([x, y]) => ({ x, y })),
+    };
+  });
 }
 
 /** Видимая часть мира по камере (для обхода сетки). */
@@ -634,7 +600,7 @@ export interface LoupeBounds {
 
 /** Результат лупы: тир, размер ячейки, линии, подписи и окно. `tierIndex === null` — лупы на уровне нет. */
 export interface LoupeGrid {
-  /** Индекс тира в `ADDRESS_TIERS`; `null` на `L0` и `L9`, где нет базовой сетки. */
+  /** Индекс тира в `ADDRESS_TIERS`; `null` на `L0`, где нет базовой сетки. */
   readonly tierIndex: number | null;
   /** Размер ячейки лупы в единицах карты; `0`, если тира нет. */
   readonly cellSize: number;
@@ -914,7 +880,7 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
   const systems = input.systems ?? [];
   const invalidSystems = systems.filter((system) => !isUsableSystem(system)).length;
 
-  const territories = territoriesFor(systems, frame, cam, level);
+  const bounds = boundsFor(input.sectorBounds, frame, cam);
   const grid = gridFor(frame, cam, level);
   const markers = clusterSystems(systems, frame, cam, diameter, input.hitTarget ?? 'mouse');
   const apertures = aperturesFor(markers, level);
@@ -959,7 +925,7 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
   }));
 
   const primitives: ScenePrimitive[] = [
-    ...territories,
+    ...bounds,
     ...grid.lines,
     ...grid.labels,
     ...markers,
@@ -977,7 +943,7 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
     labels: layout,
     primitives,
     counts: {
-      territories: territories.length,
+      bounds: bounds.length,
       gridLines: grid.lines.length,
       gridLabels: grid.labels.length,
       markers: markers.length,

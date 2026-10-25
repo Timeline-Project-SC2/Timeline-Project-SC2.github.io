@@ -25,9 +25,11 @@ import type {
   PlaceRecord,
   PlanetProfileStatus,
   SearchEntry,
+  SectorBounds,
   SystemRecord,
   UnknownRecord,
 } from './config.ts';
+import { parseBounds } from './sector-bounds.ts';
 
 type SheetRow = Record<string, string>;
 
@@ -89,6 +91,21 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         return response.json() as Promise<T>;
       })
       .catch(function () { return fallback; });
+  }
+
+  function fetchSectorBounds(url: string): Promise<SectorBounds | null> {
+    return fetch(url, { credentials: 'same-origin' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json() as Promise<unknown>;
+      })
+      .then(function (raw) {
+        return parseBounds(raw);
+      })
+      .catch(function (err) {
+        console.error('Границы сектора: ' + (err instanceof Error ? err.message : String(err)));
+        return null;
+      });
   }
 
   function splitCSVLine(line: string): string[] {
@@ -400,24 +417,30 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
   function loadDataset(): Promise<AtlasDataset> {
     const inline = window.__MAP_DATA__;
     if (inline && inline.systems) {
+      const inlineBoundsPromise: Promise<SectorBounds | null> = inline.sectorBounds !== undefined
+        ? Promise.resolve(inline.sectorBounds)
+        : fetchSectorBounds(CONFIG.data.dir + CONFIG.data.bounds);
       return Promise.all([
         fetchCSV('/data/systems.csv'),
         fetchCSV('/data/places.csv'),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation),
-        fetchCSV('/data/factions.csv')
-      ]).then(function (rows) {
-        setFactionRows(rows[3]!);
+        fetchCSV('/data/factions.csv'),
+        inlineBoundsPromise
+      ]).then(function ([systemRows, placeRows, generationRows, factionRows, sectorBounds]) {
+        setFactionRows(factionRows);
+        state.sectorBounds = sectorBounds;
         var planets = inline.planets || [];
         planets = planets.length
-          ? mergeStandalonePoiRows(planets, rows[1])
-          : rows[1].map(mapPlaceRow);
-        planets = mergePlanetGenerationRows(planets, rows[2]);
+          ? mergeStandalonePoiRows(planets, placeRows)
+          : placeRows.map(mapPlaceRow);
+        planets = mergePlanetGenerationRows(planets, generationRows);
         return {
           meta: inline.meta || {},
-          systems: mergeSystemTypes(inline.systems || [], rows[0]),
+          systems: mergeSystemTypes(inline.systems || [], systemRows),
           planets: planets,
           overrides: inline.overrides || { systems: {} },
           labels: inline.labels || [],
+          sectorBounds: sectorBounds,
         };
       });
     }
@@ -434,12 +457,14 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         fetchJSON<PlaceRecord[]>(dir + CONFIG.data.planets + suffix, []),
         fetchJSON<AtlasOverrides>(dir + CONFIG.data.overrides + suffix, { systems: {} }),
         fetchJSON<MapLabel[]>(dir + CONFIG.data.labels + suffix, []),
+        fetchSectorBounds(dir + CONFIG.data.bounds + suffix),
         fetchCSV('/data/systems.csv' + suffix),
         fetchCSV('/data/places.csv' + suffix),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix),
         fetchCSV('/data/factions.csv' + suffix)
-      ]).then(function ([systemsJson, planetsJson, overrides, labels, systemRows, placeRows, generationRows, factionRows]) {
+      ]).then(function ([systemsJson, planetsJson, overrides, labels, sectorBounds, systemRows, placeRows, generationRows, factionRows]) {
         setFactionRows(factionRows);
+        state.sectorBounds = sectorBounds;
         var systems = systemsJson;
         var planets = planetsJson;
         if ((!systems || !systems.length) && systemRows && systemRows.length) {
@@ -458,6 +483,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           planets: planets,
           overrides: overrides,
           labels: labels,
+          sectorBounds: sectorBounds,
         };
       });
     });

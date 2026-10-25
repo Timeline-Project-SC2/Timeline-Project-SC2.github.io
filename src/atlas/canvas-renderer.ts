@@ -5,7 +5,6 @@ import {
   clamp,
   easeOutCubic,
   normalize,
-  parseHexColor,
   rng,
 } from './config.ts';
 import type {
@@ -42,17 +41,18 @@ import {
   flaresFor,
   isNetLayerLevel,
   mergedFields,
+  nodeRadiusPx,
   parseNetworks,
   sampleGradient,
 } from './faction-net.ts';
 import type {
   SceneAperture,
+  SceneBounds,
   SceneCamera,
   SceneGridLabel,
   SceneGridLine,
   SceneMarker,
   SceneSystemInput,
-  SceneTerritory,
   SectorScene,
 } from './sector-scene.ts';
 import {
@@ -79,7 +79,10 @@ export const FLARE_CORE_PX = 2;
 export const FLARE_HALO_PX = 5.5;
 
 /** Альфа гало сгустка до умножения на `intensity` и ритм `flarePulse`. */
-export const FLARE_HALO_ALPHA = 0.32;
+export const FLARE_HALO_ALPHA = 0.45;
+
+/** Шаг перерисовки пульса сгустков в покое, мс (30 fps). */
+export const FLARE_PULSE_FRAME_MS = 33;
 
 /** Ветвей шлейфа у одного сгустка (по одной на каждую сторону). */
 export const FLARE_BRANCHES = 2;
@@ -488,6 +491,10 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   // размеров маркера и шагов сетки здесь нет (И-8).
 
   let coarsePointerQuery: MediaQueryList | null = null;
+  var netPulseActive = false;
+  var lastPulseFrame = 0;
+  var pulseQuery: MediaQueryList | null = null;
+  var pulseOnlyTick = false;
 
   /**
    * Грубый указатель (сенсор) расширяет хит-зону до 44 px (§6.2 п. 5).
@@ -498,6 +505,12 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
     if (coarsePointerQuery === null) coarsePointerQuery = window.matchMedia('(pointer: coarse)');
     return coarsePointerQuery.matches;
+  }
+
+  function reducedMotion(): boolean {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    if (pulseQuery === null) pulseQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    return pulseQuery.matches;
   }
 
   /** Уровень выбирается по полной ширине (Z-4b); короткая ось — только для edgeDistance. */
@@ -538,6 +551,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       systems: sceneSystems(),
       viewport: state.viewport,
       camera: sceneCamera(),
+      sectorBounds: state.sectorBounds ?? null,
       hitTarget: coarsePointer() ? 'touch' : 'mouse',
       // Подписи раскладывает рендерер: только он знает фактические метрики шрифта.
       labels: false,
@@ -573,35 +587,24 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     };
   }
 
-  function drawTerritory(territory: SceneTerritory): void {
+  function drawBounds(bounds: SceneBounds): void {
+    if (bounds.points.length < 2) return;
     const ctx = kernel.ctx!;
-    var radius = territory.screenRadius;
-    if (!(radius > 2)) return;
-    // Без таблицы цветов слой не рисуется — резолвер приходит из `data-loader`,
-    // в стабах тестов его нет. У слоя сетей такой же гейт стоит в `drawNetLayer`.
-    if (typeof kernel.data.factionColor !== 'function') return;
-    // Цвет — данные таблицы фракций, а не оттенок от имени: на табличный цвет
-    // накладывается только альфа радиального спада, сам цвет не изменяется.
-    var rgb = parseHexColor(kernel.data.factionColor(territory.faction));
-    if (!rgb) return;
-    var channels = rgb[0] + ', ' + rgb[1] + ', ' + rgb[2];
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    try {
-      var gradient = ctx.createRadialGradient(
-        territory.x, territory.y, Math.min(radius * 0.12, 18),
-        territory.x, territory.y, radius,
-      );
-      gradient.addColorStop(0, 'rgba(' + channels + ', .16)');
-      gradient.addColorStop(0.65, 'rgba(' + channels + ', .07)');
-      gradient.addColorStop(1, 'rgba(' + channels + ', 0)');
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.arc(territory.x, territory.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-    } catch (err) {
-      // Контекст-заглушка без градиентов: мягкое поле просто не рисуется.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = bounds.boundsKind === 'halo' ? 0.55 : 0.7;
+    ctx.strokeStyle = bounds.color === 'tactical' ? theme.accent : theme.accent2;
+    ctx.lineWidth = Math.max(1, bounds.strokeWidth);
+    ctx.setLineDash([...bounds.dash]);
+    ctx.beginPath();
+    var first = bounds.points[0]!;
+    ctx.moveTo(first.x, first.y);
+    for (var index = 1; index < bounds.points.length; index += 1) {
+      var point = bounds.points[index]!;
+      ctx.lineTo(point.x, point.y);
     }
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
   }
 
@@ -731,11 +734,17 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.arc(aperture.x, aperture.y, radius, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.font = '10px ' + theme.mono;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = 'rgba(226,196,130,.75)';
-    ctx.fillText(aperture.hint, aperture.x, Math.min(state.viewport.h - 16, aperture.y + radius + 6));
+    var hoveredSystemId = state.hoverId
+      ?? (state.hoverPoiId && !state.planetsById[state.hoverPoiId] ? state.hoverPoiId : null);
+    var focusedSystemId = state.activeSystemId
+      ?? (state.activePlanetId && !state.planetsById[state.activePlanetId] ? state.activePlanetId : null);
+    if (aperture.systemId === hoveredSystemId || aperture.systemId === focusedSystemId) {
+      ctx.font = '10px ' + theme.mono;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = 'rgba(226,196,130,.75)';
+      ctx.fillText(aperture.hint, aperture.x, Math.min(state.viewport.h - 16, aperture.y + radius + 6));
+    }
     ctx.restore();
   }
 
@@ -996,6 +1005,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
    * (`t = 1`), альфа `BUBBLE_FILL_ALPHA · layerFillAlpha(level)`.
    */
   function drawNetBubbleFill(field: MergedField, bubble: Bubble, net: FactionNet, level: number): void {
+    if (level >= 8) return;
     const ctx = kernel.ctx!;
     var path = mergedScreenPath(field.rings);
     // Тестовый контекст-заглушка: в Node нет `Path2D` — бабл просто не рисуется.
@@ -1057,16 +1067,24 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     return null;
   }
 
+  /** Мировой радиус лепестка системы внутри бабла. */
+  function petalRadiusOf(bubble: Bubble, systemId: string): number {
+    for (var index = 0; index < bubble.petals.length; index += 1) {
+      var petal = bubble.petals[index]!;
+      if (petal.systemId === systemId) return petal.radius;
+    }
+    return 0;
+  }
+
   /**
-   * Поле контроля (С11, Д3.4): осевой квадрат со стороной
-   * `CONTROL_FIELD_SIDE_RATIO · r` цветом фракции, альфа
+   * Поле контроля (С11, Д3.4, Z-4d У1.2): осевой квадрат со стороной
+   * `CONTROL_FIELD_SIDE_RATIO · r_px` цветом фракции, альфа
    * `CONTROL_FIELD_ALPHA · layerLineAlpha`, без обводки. Рисуется под узлами —
    * отдельным проходом, чтобы квадраты не перекрывали чужие узлы.
    */
   function drawNetControlField(node: BubbleNode, bubble: Bubble, level: number): void {
     const ctx = kernel.ctx!;
-    var radius = node.radius * state.view.scale;
-    if (!(radius >= 1.5)) return;
+    var radius = nodeRadiusPx(node.systemType, petalRadiusOf(bubble, node.systemId) * state.view.scale);
     var point = toScreen(node.x, node.y);
     var side = CONTROL_FIELD_SIDE_RATIO * radius;
     var half = side / 2;
@@ -1080,13 +1098,12 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /**
-   * Узел (С10, Д3.3): заливка табличным цветом фракции в полную силу (без
-   * приглушения — тип системы виден по радиусу) и белое кольцо `0,95`.
+   * Узел (С10, Д3.3, Z-4d У1.2): заливка табличным цветом фракции в полную силу
+   * и белое кольцо `0,95`; радиус зажат в экранных пикселях (`nodeRadiusPx`).
    */
   function drawNetNode(node: BubbleNode, bubble: Bubble): void {
     const ctx = kernel.ctx!;
-    var radius = node.radius * state.view.scale;
-    if (!(radius >= 1.5)) return;
+    var radius = nodeRadiusPx(node.systemType, petalRadiusOf(bubble, node.systemId) * state.view.scale);
     var point = toScreen(node.x, node.y);
 
     ctx.save();
@@ -1152,7 +1169,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     if (best === null) return toScreen(flare.originX, flare.originY);
 
     var centre = toScreen(best.x, best.y);
-    var half = CONTROL_FIELD_SIDE_RATIO * best.radius * state.view.scale / 2;
+    var nodePx = nodeRadiusPx(best.systemType, petalRadiusOf(bubble, best.systemId) * state.view.scale);
+    var half = CONTROL_FIELD_SIDE_RATIO * nodePx / 2;
     // Точка на стороне осевого квадрата вдоль направления луча.
     var reach = Math.max(Math.abs(dirX), Math.abs(dirY));
     if (!(reach > 1e-6) || !(half > 0)) return centre;
@@ -1175,13 +1193,14 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     bubble: Bubble | null,
     level: number,
     nowMs: number,
-  ): void {
+  ): boolean {
     const ctx = kernel.ctx!;
     var intensity = flare.intensity;
-    if (!(intensity > 0)) return;
-    var pulse = flarePulse(nowMs, flarePulseSeed(flare.netId, flare.targetNetId));
+    if (!(intensity > 0)) return false;
+    var seed = flarePulseSeed(flare.netId, flare.targetNetId);
+    var pulse = reducedMotion() ? 1 : flarePulse(nowMs, seed);
     var length = clamp(flare.length * state.view.scale, 20, 84);
-    if (!(length > 0)) return;
+    if (!(length > 0)) return false;
 
     var dirX = Math.cos(flare.angle);
     var dirY = Math.sin(flare.angle);
@@ -1211,7 +1230,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
 
     // b) шлейф: две ветви от точки `FLARE_BRANCH_AT · L` под ±FLARE_BRANCH_ANGLE.
     ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 0.5 * intensity * pulse * layer;
+    ctx.globalAlpha = 0.6 * intensity * pulse * layer;
     ctx.lineWidth = 1.2;
     ctx.shadowBlur = 0;
     var branchX = start.x + dirX * FLARE_BRANCH_AT * length;
@@ -1246,6 +1265,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.fill();
 
     ctx.restore();
+    return true;
   }
 
   /**
@@ -1254,6 +1274,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
    * `MAX_FLARES_PER_RIVAL` / `MAX_FLARES_PER_NET` не меняются.
    */
   function drawNetFlares(level: number, nowMs: number): void {
+    netPulseActive = false;
     if (!(layerLineAlpha(level) > 0)) return;
     var channels = netChannels();
     if (channels.length === 0) return;
@@ -1264,7 +1285,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       var flares = flaresFor(net, rivals, { limit: MAX_FLARES_PER_NET, fromData: true });
       var bubble = netLayerBubbles[index] ?? null;
       for (var flareIndex = 0; flareIndex < flares.length; flareIndex += 1) {
-        drawNetFlare(flares[flareIndex]!, net, bubble, level, nowMs);
+        if (drawNetFlare(flares[flareIndex]!, net, bubble, level, nowMs)) {
+          netPulseActive = true;
+        }
       }
     }
   }
@@ -1381,23 +1404,42 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var stops = channel.stops;
     // Без резолвера табличного цвета градиента нет: линия не рисуется вовсе.
     if (stops.length < 2) return;
-    var start = toScreen(channel.curve[0].x, channel.curve[0].y);
-    var control = toScreen(channel.curve[1].x, channel.curve[1].y);
-    var finish = toScreen(channel.curve[2].x, channel.curve[2].y);
-    if (!(Math.hypot(finish.x - start.x, finish.y - start.y) > 0.5)) return;
+    var rawStart = toScreen(channel.curve[0].x, channel.curve[0].y);
+    var rawControl = toScreen(channel.curve[1].x, channel.curve[1].y);
+    var rawFinish = toScreen(channel.curve[2].x, channel.curve[2].y);
+    var span = Math.hypot(rawFinish.x - rawStart.x, rawFinish.y - rawStart.y);
+    if (!(span > 0.5)) return;
+    var ux = (rawFinish.x - rawStart.x) / span;
+    var uy = (rawFinish.y - rawStart.y) / span;
+    var padStart = CONTROL_FIELD_SIDE_RATIO
+      * nodeRadiusPx(channel.from.systemType, channel.from.radius * state.view.scale) / 2 + 2;
+    var padFinish = CONTROL_FIELD_SIDE_RATIO
+      * nodeRadiusPx(channel.to.systemType, channel.to.radius * state.view.scale) / 2 + 2;
+    if (span - padStart - padFinish < 6) return;
+    var start = { x: rawStart.x + ux * padStart, y: rawStart.y + uy * padStart };
+    var finish = { x: rawFinish.x - ux * padFinish, y: rawFinish.y - uy * padFinish };
+    var midShift = (padStart - padFinish) / 2;
+    var control = { x: rawControl.x + ux * midShift, y: rawControl.y + uy * midShift };
 
     ctx.save();
     // Проход поверх баблов: без обрезки по контурам и без сложения света.
     ctx.globalCompositeOperation = 'source-over';
     // Яркость одна на все каналы: ни номер канала, ни расстояние на неё не влияют.
     ctx.globalAlpha = CHANNEL_BRIGHTNESS;
-    ctx.lineWidth = CHANNEL_STROKE_PX;
     ctx.lineCap = 'round';
     try {
       var gradient = ctx.createLinearGradient(start.x, start.y, finish.x, finish.y);
       gradient.addColorStop(0, stops[0]!.color);
       gradient.addColorStop(1, stops[stops.length - 1]!.color);
+      ctx.strokeStyle = 'rgba(2,5,10,.55)';
+      ctx.lineWidth = CHANNEL_STROKE_PX + 2;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.quadraticCurveTo(control.x, control.y, finish.x, finish.y);
+      ctx.stroke();
+
       ctx.strokeStyle = gradient;
+      ctx.lineWidth = CHANNEL_STROKE_PX;
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, finish.x, finish.y);
@@ -1427,12 +1469,11 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   function renderScene(scene: SectorScene, nowMs: number): void {
-    // Порядок отрисовки сверху вниз по z закреплён карточкой `Z-3.9` (С6) — ровно так:
-    //   territory → заливка бабла → контур бабла → поле контроля (квадраты)
-    //   → белые кольца узлов → всполохи → каналы → сетка → лупа → маркеры → подписи.
+    // Первыми идут границы сектора и гало (Z-4d Б3); старый слой пятен
+    // (primitive.kind === 'territory') удалён, территории задаются баблами сетей.
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
-      if (primitive.kind === 'territory') drawTerritory(primitive);
+      if (primitive.kind === 'bounds') drawBounds(primitive);
     }
     // Баблы: заливка → контур → квадраты и узлы → сгустки (порядок внутри `drawNetLayer`).
     drawNetLayer(scene.level, nowMs);
@@ -1547,17 +1588,36 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /* ------------------------------------------------------------------ цикл рендера */
 
   function requestRender(): void {
+    pulseOnlyTick = false;
     if (runtime.renderQueued) return;
+    runtime.renderQueued = true;
+    requestAnimationFrame(render);
+  }
+
+  function requestPulseRender(): void {
+    if (runtime.renderQueued) return;
+    pulseOnlyTick = true;
     runtime.renderQueued = true;
     requestAnimationFrame(render);
   }
 
   function render(now?: number): void {
     const ctx = kernel.ctx!;
+    var wasPulseOnly = pulseOnlyTick;
+    pulseOnlyTick = false;
     runtime.renderQueued = false;
     var frameTime = now || performance.now();
     var running = stepAnimation(frameTime);
-    if (running || kernel.coords.isTravelAnimationActive()) requestRender();
+    var travelActive = kernel.coords.isTravelAnimationActive();
+    if (running || travelActive) {
+      requestRender();
+    } else if (wasPulseOnly) {
+      if (!netPulseActive) return;
+      if (!reducedMotion() && frameTime - lastPulseFrame < FLARE_PULSE_FRAME_MS) {
+        requestPulseRender();
+        return;
+      }
+    }
 
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
     ctx.clearRect(0, 0, state.viewport.w, state.viewport.h);
@@ -1589,10 +1649,9 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       drawSchematic();
     }
 
-    // Порядок слоёв §8.1: поле → территории → сетка адресов → маркеры →
-    // подписи → апертуры. Сцена пересобирается в каждом кадре, поэтому зум, пан,
-    // ресайз и смена фильтра подхватываются через `requestRender()` без
-    // отдельного кеша и без новых слушателей.
+    // Порядок слоёв §8.1: поле → контуры сектора → баблы и каналы → сетка →
+    // маркеры → подписи → апертуры. Сцена пересобирается в каждом кадре.
+    netPulseActive = false;
     const scene = buildScene();
     if (scene) renderScene(scene, frameTime);
 
@@ -1602,6 +1661,11 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     if (scene) {
       drawSceneLabels(scene);
       drawApertures(scene);
+    }
+
+    lastPulseFrame = frameTime;
+    if (!runtime.renderQueued && netPulseActive && !reducedMotion()) {
+      requestPulseRender();
     }
 
     kernel.coords.updateZoomReadout();

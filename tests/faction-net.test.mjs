@@ -12,6 +12,8 @@ const {
   BRIDGE_GAP_FACTOR,
   MAX_FLARES_PER_NET,
   MAX_FLARES_PER_RIVAL,
+  NODE_PX_MAX,
+  NODE_PX_MIN,
   NODE_RADIUS_BY_TYPE,
   SOLO_PETAL_RADIUS,
   NET_LAYER_LEVELS,
@@ -25,6 +27,7 @@ const {
   isNetLayerLevel,
   mergedFields,
   netsAtLevel,
+  nodeRadiusPx,
   parseNetworks,
   parseNetId,
   sampleGradient,
@@ -229,12 +232,9 @@ test('сети независимы от порядка строк: вход п�
 
 /* --------------------------------------------------------------- уровни слоя */
 
-test('T4: слой живёт на L2…L9, как TERRITORY_LEVELS (с Z-4b глубина лестницы 9)', () => {
-  // T4: список уровней слоя — ровно L2…L9, и он совпадает со списком территорий
-  // (иначе на L6→L7 мягкое поле фракции исчезало бы скачком — шов, запрещённый
-  // владельцем).
+test('T4: слой живёт на L2…L9 (с Z-4b глубина лестницы 9, в Z-4d пятна TERRITORY_LEVELS убраны)', () => {
   assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
-  assert.deepEqual([...NET_LAYER_LEVELS], [...scene.TERRITORY_LEVELS]);
+  assert.equal(scene.TERRITORY_LEVELS, undefined);
   for (const level of [0, 1, 10, 12]) {
     assert.equal(isNetLayerLevel(level), false, `L${level} не должен включать слой`);
   }
@@ -929,7 +929,35 @@ test('F1: flarePulse — середина 0,775, период 1400 мс, диа�
     const seed = flarePulseSeed(netId, rivalId);
     assert.ok(seed >= 0 && seed < 1, `seed ${seed} вне 0…1`);
   }
-  assert.notEqual(flarePulseSeed(1, 3), flarePulseSeed(3, 1), 'фаза пары не зависит от направления');
+  assert.notEqual(flarePulseSeed(1, 3), flarePulseSeed(3, 1), 'у двух сторон одной пары разные фазы: seed(1,3) ≠ seed(3,1)');
+});
+
+test('N1–N5: nodeRadiusPx — экранный радиус узла зажат в [4, 9] px и упорядочен по типу системы', () => {
+  assert.equal(NODE_PX_MIN, 4);
+  assert.equal(NODE_PX_MAX, 9);
+
+  // N1: разреженная сеть / глубокий зум — упирается в потолок 9 px.
+  assert.equal(nodeRadiusPx('capital', 400), 9);
+  assert.equal(nodeRadiusPx('standard', 400), 9);
+
+  // N2: плотная сеть — упирается в пол 4 px.
+  assert.equal(nodeRadiusPx('capital', 12), 4);
+  assert.equal(nodeRadiusPx('standard', 12), 4);
+
+  // N3, N4, N5: монотонность, диапазон [4, 9] и capital ≥ standard ≥ unknown на 500 значениях 0…500.
+  const prev = { capital: -Infinity, standard: -Infinity, unknown: -Infinity };
+  for (let i = 0; i < 500; i += 1) {
+    const petalPx = (i / 499) * 500;
+    const cap = nodeRadiusPx('capital', petalPx);
+    const std = nodeRadiusPx('standard', petalPx);
+    const unk = nodeRadiusPx('unknown', petalPx);
+    for (const [kind, val] of [['capital', cap], ['standard', std], ['unknown', unk]]) {
+      assert.ok(val >= NODE_PX_MIN && val <= NODE_PX_MAX, `${kind} при ${petalPx}: ${val} вне [4, 9]`);
+      assert.ok(val + 1e-12 >= prev[kind], `${kind}: нарушение монотонности на ${petalPx}`);
+      prev[kind] = val;
+    }
+    assert.ok(cap >= std && std >= unk, `порядок типов нарушен на ${petalPx}: ${cap}, ${std}, ${unk}`);
+  }
 });
 
 /* ----------------------------------------------------------------- CSV */
