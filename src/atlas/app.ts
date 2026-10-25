@@ -28,9 +28,9 @@ import type {
 } from './config.ts';
 import { createCanvasRenderer } from './canvas-renderer.ts';
 import { createCatalogPanel } from './catalog-panel.ts';
-import { createCoordsReadout } from './coords-readout.ts';
+import { createCoordsReadout, parseMapLink, scaleForVisibleWidth } from './coords-readout.ts';
 import { createDataLoader } from './data-loader.ts';
-import { createDossierCard } from './dossier-card.ts';
+import { createDossierCard, requestedSystemFrame } from './dossier-card.ts';
 import { createSectorField } from './sector-field.ts';
 
 const doc = document;
@@ -337,7 +337,11 @@ function bindEvents(): void {
     if (event.key === 'ArrowDown') { state.view.ty -= pan; kernel.renderer.clampView(); kernel.renderer.requestRender(); }
   });
 
-  window.addEventListener('hashchange', kernel.dossier.applyHash);
+  window.addEventListener('hashchange', function (): void {
+    kernel.dossier.applyHash();
+    // `#system=<id>&frame=<S|O>`: кадр разобран и сохранён в `dossier-card.ts`.
+    applySystemFrameRequest();
+  });
   window.addEventListener('resize', resize);
 
   if (window.ResizeObserver) {
@@ -374,6 +378,40 @@ function initUI(): void {
     return '<option value="' + escapeHtml(faction) + '">' + escapeHtml(faction) + ' · ' + factions[faction] + '</option>';
   }).join('');
   el.mapFactionFilter.innerHTML = '<option value="all">Все фракции · ' + (state.systems.length + poiCount) + '</option>' + options;
+}
+
+/**
+ * Применяет кадр из ссылки `?at=<адрес>&lw=<видимая ширина>` (§7.7).
+ *
+ * Обратное преобразование адреса в точку живёт в `sector-address.ts`
+ * (`parseAddress`/`centerOf`), здесь только камера. Без `lw` остаётся тот же
+ * масштаб, что и у обычного перехода к точке.
+ */
+function applyMapLink(): void {
+  const target = parseMapLink();
+  if (!target) return;
+  const scale = target.lw === null ? null : scaleForVisibleWidth(state.viewport, target.lw);
+  kernel.renderer.centerOn(target.x, target.y, scale === null ? undefined : scale);
+  kernel.renderer.requestRender();
+}
+
+/**
+ * Каркас разбора `#system=<id>&frame=<S|O>` (§7.7).
+ *
+ * Параметр уже разобран `applyHash` и хранится в `dossier-card.ts`
+ * (`requestedSystemFrame`). Системный кадр рисует волна SW-5, поэтому здесь нет
+ * ни отрисовки, ни заглушки: только отметка на корневом узле, по которой SW-5
+ * заберёт запрос.
+ */
+function applySystemFrameRequest(): void {
+  const request = requestedSystemFrame(kernel);
+  if (!request) {
+    doc.documentElement.removeAttribute('data-system-frame');
+    doc.documentElement.removeAttribute('data-system-frame-id');
+    return;
+  }
+  doc.documentElement.setAttribute('data-system-frame', request.frame);
+  doc.documentElement.setAttribute('data-system-frame-id', request.systemId);
 }
 
 function boot(): void {
@@ -435,6 +473,10 @@ function boot(): void {
     kernel.catalog.renderCatalog();
 
     kernel.dossier.applyHash();
+    // Кадр точки из `?at=<адрес>&lw=<ширина>` применяется после загрузки данных:
+    // до неё центрировать нечего, а `mapSize` ещё неизвестен.
+    applyMapLink();
+    applySystemFrameRequest();
     kernel.coords.updateZoomReadout();
     kernel.renderer.requestRender();
     // Два кадра дают canvas отрисоваться под лоад-скрином без белого всплеска.

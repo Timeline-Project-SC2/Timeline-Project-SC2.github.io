@@ -22,6 +22,105 @@ import type {
   SystemRecord,
   TravelPointRecord,
 } from './config.ts';
+import { edgeDistance } from './level-ladder.ts';
+import { centerOf, formatAddress, parseAddress } from './sector-address.ts';
+import { formatDistanceLy } from './sector-units.ts';
+import { openPointCard } from './dossier-card.ts';
+
+/** Кадр, восстановленный из ссылки `?at=<адрес>&lw=<видимая ширина>`. */
+export interface MapLinkTarget {
+  readonly address: string;
+  readonly x: number;
+  readonly y: number;
+  readonly lw: number | null;
+}
+
+/** Разбирает `?at=<адрес>&lw=<ширина>` (§7.7). Обратный адрес — только через `sector-address.ts`. */
+export function parseMapLink(search?: string): MapLinkTarget | null {
+  var raw: string;
+  try {
+    raw = search === undefined ? window.location.search : search;
+  } catch (err) {
+    return null;
+  }
+  var params: URLSearchParams;
+  try {
+    params = new URLSearchParams(raw || '');
+  } catch (err) {
+    return null;
+  }
+  var at = params.get('at');
+  if (!at) return null;
+  var parsed = parseAddress(at);
+  if (!parsed) return null;
+  var center = centerOf(parsed);
+  var lwRaw = params.get('lw');
+  var lw = lwRaw === null ? null : Number(lwRaw.replace(',', '.'));
+  if (lw !== null && !(Number.isFinite(lw) && lw > 0)) lw = null;
+  return { address: formatAddress(parsed), x: center.x, y: center.y, lw: lw };
+}
+
+/** Админ-режим `?coords=1`: readout X/Y включён, `Shift+клик` копирует `x⇥y` без карточки (§7.8). */
+export function isCoordinatesMode(search?: string): boolean {
+  var raw: string;
+  try {
+    raw = search === undefined ? window.location.search : search;
+  } catch (err) {
+    return false;
+  }
+  try {
+    return new URLSearchParams(raw || '').get('coords') === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * Видимая ширина кадра по горизонтали, св.г. — ровно `lw` из `?at=…&lw=`.
+ *
+ * Величина ширины кадра, а не короткая ось: при `lw = 39` кадр 1920×1080 обязан
+ * быть 39 св.г. по ширине (высота при этом 21,94 св.г., потому что она в 1,78 раза
+ * короче). Метрика глубины «до границы» считается отдельно — `edgeDistance`.
+ */
+export function visibleWidthOf(viewport: { readonly w: number; readonly h: number }, scale: number): number {
+  if (!(scale > 0) || !(viewport.w > 0)) return 0;
+  return viewport.w / scale;
+}
+
+/**
+ * Масштаб, при котором ширина кадра равна `lw` св.г.
+ *
+ * Сверху масштаб клампит `centerOn()` рендерера (`[minScale, maxScale]`), поэтому
+ * на `lw` меньше `2·w/min(w,h)` кадр упирается в предел и ширина выходит больше
+ * заказанной. Ограничения здесь нет намеренно: одна граница — у рендерера.
+ */
+export function scaleForVisibleWidth(viewport: { readonly w: number; readonly h: number }, lw: number): number | null {
+  if (!(lw > 0) || !(viewport.w > 0)) return null;
+  return viewport.w / lw;
+}
+
+export interface ZoomReadoutText {
+  readonly percent: string;
+  readonly edge: string;
+}
+
+/**
+ * Строки индикатора глубины: процент приближения и расстояние от цели в центре
+ * кадра до ближайшей границы. Вторая строка намеренно не «ширина кадра»:
+ * требование владельца (§17.15.1) задано метрикой `edgeDistance`.
+ */
+export function zoomReadoutText(
+  viewport: { readonly w: number; readonly h: number },
+  scale: number,
+  fit: number,
+): ZoomReadoutText | null {
+  if (!(scale > 0) || !(fit > 0) || !(viewport.w > 0) || !(viewport.h > 0)) return null;
+  return {
+    percent: Math.round(scale / fit * 100) + '%',
+    // Два знака: на пределе приближения строка обязана читаться как «1,00 св.г.».
+    edge: formatDistanceLy(edgeDistance({ w: viewport.w, h: viewport.h }, scale), 'full') + ' до границы',
+  };
+}
 
 interface StoredTravelState {
   version?: unknown;
@@ -55,9 +154,37 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
   let travelSmallScreen = false;
 
   function updateZoomReadout(): void {
-    var fit = kernel.renderer.fitScale();
-    var factor = fit > 0 ? state.view.scale / fit : 1;
-    el.zoomPercent.textContent = Math.round(factor * 100) + '%';
+    var text = zoomReadoutText(state.viewport, state.view.scale, kernel.renderer.fitScale());
+    if (!text) return;
+    el.zoomPercent.textContent = text.percent;
+    var edgeNode = edgeDistanceNode();
+    if (edgeNode) edgeNode.textContent = text.edge;
+  }
+
+  /**
+   * Строка «1,00 св.г. до границы» под процентом зума.
+   *
+   * Узел создаётся здесь, а не в шаблоне: разметка `.zoom-readout` общая для всех
+   * вариантов атласа, и правка шаблона задела бы чужие экраны. Вставка аддитивная
+   * и повторяется ровно один раз.
+   */
+  function edgeDistanceNode(): HTMLElement | null {
+    var percent = el.zoomPercent;
+    if (!percent) return null;
+    var existing = doc.getElementById('zoomEdgeDistance');
+    if (existing) return existing;
+    var container = percent.parentElement;
+    if (!container) return null;
+    var node = doc.createElement('span');
+    node.id = 'zoomEdgeDistance';
+    node.className = 'zoom-edge-distance';
+    node.title = 'Расстояние от цели в центре кадра до ближайшей границы кадра';
+    node.style.fontSize = '8px';
+    node.style.lineHeight = '1.25';
+    node.style.textAlign = 'center';
+    node.style.opacity = '.72';
+    container.appendChild(node);
+    return node;
   }
 
   function updateCoordinateReadout(): void {
@@ -130,10 +257,21 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
       kernel.app.toast('Shift+клик по самой карте');
       return;
     }
-    var x = Math.round(world.x);
-    var y = Math.round(world.y);
-    // Табуляция разделяет значения на две соседние ячейки при вставке в таблицу.
-    copyCoordinatesToClipboard(x + '\t' + y, x + ', ' + y);
+    if (isCoordinatesMode()) {
+      var x = Math.round(world.x);
+      var y = Math.round(world.y);
+      // Табуляция разделяет значения на две соседние ячейки при вставке в таблицу.
+      copyCoordinatesToClipboard(x + '\t' + y, x + ', ' + y);
+      return;
+    }
+    // Обычный режим: Shift+клик открывает карточку точки (§7.8), а не молча копирует.
+    // `point` — координаты внутри холста; карточка позиционируется как `fixed`,
+    // поэтому ей нужны координаты окна, а не холста.
+    var rect = el.mapCanvas ? el.mapCanvas.getBoundingClientRect() : { left: 0, top: 0 };
+    openPointCard(kernel, {
+      world: world,
+      screen: { x: rect.left + point.x, y: rect.top + point.y }
+    });
   }
 
   function travelSystemKey(system: SystemRecord | TravelPointRecord | null | undefined): string {
@@ -590,13 +728,22 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
     copyTextToClipboard(log, 'Лог маршрута скопирован', 'Не удалось скопировать лог маршрута');
   }
 
+  function syncCoordinateToggle(): void {
+    if (!el.coordinateToggle) return;
+    el.coordinateToggle.setAttribute('aria-pressed', String(runtime.coordinateReadoutEnabled));
+    var label = runtime.coordinateReadoutEnabled ? 'Отключить координаты наведения' : 'Включить координаты наведения';
+    el.coordinateToggle.setAttribute('aria-label', label);
+    el.coordinateToggle.title = label;
+  }
+
   function bind(): void {
+    // `?coords=1` — админ-режим (§7.8): readout X/Y включён с самого начала,
+    // потому что админ пришёл за числами, а не за буквами.
+    if (isCoordinatesMode()) runtime.coordinateReadoutEnabled = true;
+    syncCoordinateToggle();
     if (el.coordinateToggle) el.coordinateToggle.addEventListener('click', function () {
       runtime.coordinateReadoutEnabled = !runtime.coordinateReadoutEnabled;
-      el.coordinateToggle!.setAttribute('aria-pressed', String(runtime.coordinateReadoutEnabled));
-      var label = runtime.coordinateReadoutEnabled ? 'Отключить координаты наведения' : 'Включить координаты наведения';
-      el.coordinateToggle!.setAttribute('aria-label', label);
-      el.coordinateToggle!.title = label;
+      syncCoordinateToggle();
       updateCoordinateReadout();
     });
 

@@ -4,10 +4,14 @@ import { PLACE_TYPES, PLANET_GLOBE, escapeHtml, formatNumber, plural } from './c
 import type {
   AtlasKernel,
   DossierCardApi,
+  MapPoint,
   PlaceRecord,
   SelectionOptions,
   SystemRecord,
 } from './config.ts';
+import { levelForWidth, levelSpec } from './level-ladder.ts';
+import { addressOf, formatAddress } from './sector-address.ts';
+import { formatDistanceLy } from './sector-units.ts';
 
 export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
   const state = kernel.state;
@@ -402,6 +406,11 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
 
   function applyHash(): boolean {
     var hash = window.location.hash || '';
+    // `#system=<id>&frame=<S|O>` (§7.7): кадр только разбирается и запоминается.
+    // Системный кадр рисует волна SW-5, поэтому здесь нет ни отрисовки, ни заглушек.
+    var frameParam = /[?&]frame=([^&]*)/.exec(hash);
+    var frame = parseFrame(frameParam ? frameParam[1] : null);
+    hash = hash.replace(/[?&]frame=[^&]*/, '');
     var match = /^#\/([sp])\/(.+)$/.exec(hash);
     // Обратные ссылки со страницы планеты: /sector/#system=<id> и /sector/#planet=<id>.
     var named = /^#(system|planet)=(.+)$/.exec(hash);
@@ -412,6 +421,7 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
     try { id = decodeURIComponent(raw); } catch (err) { return false; }
     if (!id) return false;
     if ((kind === 's' || kind === 'system') && state.systemsById[id]) {
+      rememberSystemFrame(kernel, id, frame);
       selectSystem(id, { center: true });
       return true;
     }
@@ -482,4 +492,237 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
     updateHash,
     applyHash,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Кадр системы из адресной строки (§7.7)                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Кадр системы, разобранный из `#system=<id>&frame=<S|O>`; рисует его волна SW-5. */
+export interface SystemFrameRequest {
+  readonly systemId: string;
+  readonly frame: 'S' | 'O';
+}
+
+const frameRequests = new WeakMap<AtlasKernel, SystemFrameRequest>();
+
+/** Разбирает значение параметра `frame`: понимает только `S` и `O`, остальное — «нет кадра». */
+export function parseFrame(value: string | null | undefined): 'S' | 'O' | null {
+  var text = String(value == null ? '' : value).trim().toUpperCase();
+  return text === 'S' || text === 'O' ? text : null;
+}
+
+function rememberSystemFrame(kernel: AtlasKernel, systemId: string, frame: 'S' | 'O' | null): void {
+  if (frame) frameRequests.set(kernel, { systemId: systemId, frame: frame });
+  else frameRequests.delete(kernel);
+}
+
+/**
+ * Запрошенный системный кадр или `null`, если в адресе кадра не было.
+ *
+ * Пока это только разбор и хранение параметра: системного кадра в рендере ещё нет
+ * (SW-5). Функция намеренно ничего не рисует — заглушек быть не должно.
+ */
+export function requestedSystemFrame(kernel: AtlasKernel): SystemFrameRequest | null {
+  return frameRequests.get(kernel) ?? null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Карточка точки по Shift+клику (§7.8)                                       */
+/* -------------------------------------------------------------------------- */
+
+/** Центр ядра сектора Копрулу по данным (§3.3 плана глубокого рендера). */
+const SECTOR_CORE = Object.freeze({ x: 6014, y: 5856 });
+
+export interface PointCardTarget {
+  /** Мировые координаты точки в единицах карты. */
+  world: MapPoint;
+  /** Координаты указателя внутри холста карты, px. */
+  screen: MapPoint;
+}
+
+interface PointCardView {
+  open(target: PointCardTarget): void;
+  close(): void;
+}
+
+const pointCardViews = new WeakMap<AtlasKernel, PointCardView>();
+
+/** Координата с одним знаком после запятой: `5 720,0`. */
+export function formatPointTenths(value: number): string {
+  var text = (Math.round(value * 10) / 10).toFixed(1);
+  var parts = text.split('.');
+  return formatNumber(parts[0] ?? '0') + ',' + (parts[1] ?? '0');
+}
+
+/**
+ * Ближайшая к точке система (только системы с координатами на карте).
+ * Возвращает `null`, если ни у одной системы координат нет.
+ */
+export function nearestSystemTo(
+  systems: readonly SystemRecord[],
+  explicitNumber: (value: unknown) => number | null,
+  x: number,
+  y: number,
+): { name: string; distance: number } | null {
+  var best: { name: string; distance: number } | null = null;
+  systems.forEach(function (system) {
+    if (system.coordSource !== 'map' || !Array.isArray(system.coord) || system.coord.length < 2) return;
+    var px = explicitNumber(system.coord[0]);
+    var py = explicitNumber(system.coord[1]);
+    if (px === null || py === null) return;
+    var distance = Math.hypot(px - x, py - y);
+    if (best && distance >= best.distance) return;
+    best = { name: system.name, distance: distance };
+  });
+  return best;
+}
+
+/** Уровень лестницы и его номинальная видимая ширина для строки `L7 · 78,1 св.г.`. */
+export function levelCaption(visibleWidth: number): string {
+  var spec = levelSpec(levelForWidth(visibleWidth));
+  return spec.id + ' · ' + formatDistanceLy(spec.visibleWidth, 'short');
+}
+
+function createPointCardView(kernel: AtlasKernel): PointCardView {
+  var doc = kernel.doc;
+  var root = doc.createElement('div');
+  root.className = 'point-card';
+  root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-live', 'polite');
+  root.setAttribute('aria-label', 'Карточка точки карты');
+  root.setAttribute('tabindex', '-1');
+  // `hidden` не годится: inline `display:flex` перебивает стиль браузера.
+  root.style.cssText = [
+    'position:fixed', 'z-index:45', 'min-width:236px', 'max-width:302px',
+    'padding:10px 12px', 'display:flex', 'flex-direction:column', 'gap:6px',
+    'background:rgba(5,10,17,.96)', 'border:1px solid rgba(172,194,221,.28)',
+    'box-shadow:0 12px 30px rgba(0,0,0,.42)', 'backdrop-filter:blur(10px)',
+    'color:#d8e4f4', 'font:10px/1.45 var(--mono,Consolas,monospace)',
+    'letter-spacing:.01em', 'outline:none'
+  ].join(';');
+  root.style.display = 'none';
+  doc.body.appendChild(root);
+
+  function close(): void {
+    if (root.style.display === 'none') return;
+    root.style.display = 'none';
+    var canvas = kernel.el.mapCanvas;
+    if (!canvas) return;
+    // Холст без tabindex не принимает фокус; `-1` делает это без нового таб-стопа.
+    if (!canvas.hasAttribute('tabindex')) canvas.setAttribute('tabindex', '-1');
+    try { canvas.focus(); } catch (err) { /* фокус недоступен — молча продолжаем */ }
+  }
+
+  function copy(value: string, message: string): void {
+    kernel.coords.copyTextToClipboard(value, message, 'Не удалось скопировать');
+  }
+
+  root.addEventListener('click', function (event: Event) {
+    var button = (event.target as Element).closest<HTMLElement>('[data-point-action]');
+    if (!button) return;
+    var action = button.getAttribute('data-point-action');
+    var address = button.getAttribute('data-point-address') || '';
+    var row = button.getAttribute('data-point-row') || '';
+    if (action === 'close') { close(); return; }
+    if (action === 'address') copy(address, 'Адрес скопирован: ' + address);
+    else if (action === 'xy') copy(button.getAttribute('data-point-xy') || '', 'Координаты скопированы');
+    else if (action === 'row') copy(row, 'Строка скопирована');
+  });
+
+  doc.addEventListener('keydown', function (event: KeyboardEvent) {
+    if (root.style.display === 'none') return;
+    if (event.key === 'Escape') { close(); event.preventDefault(); }
+  });
+
+  doc.addEventListener('pointerdown', function (event: Event) {
+    if (root.style.display === 'none') return;
+    if (event.target instanceof Node && root.contains(event.target)) return;
+    close();
+  }, true);
+
+  function open(target: PointCardTarget): void {
+    var x = target.world.x;
+    var y = target.world.y;
+    var address = formatAddress(addressOf(
+      Math.min(Math.max(x, 0), 9999),
+      Math.min(Math.max(y, 0), 9999)
+    ));
+    var roundedX = Math.round(x);
+    var roundedY = Math.round(y);
+    var visibleWidth = stateWidth(kernel);
+    var nearest = nearestSystemTo(kernel.state.systems, function (value) {
+      return kernel.data.explicitMapNumber(value);
+    }, x, y);
+    var core = Math.hypot(x - SECTOR_CORE.x, y - SECTOR_CORE.y);
+
+    root.innerHTML =
+      '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">' +
+      '<b style="font-size:12px;font-weight:600;color:#f5f8fc">' + escapeHtml(address) + '</b>' +
+      '<span style="opacity:.72">' + escapeHtml(levelCaption(visibleWidth)) + '</span>' +
+      '</div>' +
+      '<div>x ' + escapeHtml(formatPointTenths(x)) + ' &nbsp; y ' + escapeHtml(formatPointTenths(y)) + '</div>' +
+      '<div>ближайшая система: ' +
+      (nearest
+        ? escapeHtml(nearest.name) + ' · ' + formatDistanceLy(nearest.distance, 'full')
+        : 'координат нет') + '</div>' +
+      '<div>от ядра сектора: ' + formatNumber(Math.round(core)) + ' св.г.</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:2px">' +
+      pointCardButton('address', 'Копировать адрес', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +
+      pointCardButton('xy', 'Копировать x⇥y', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +
+      pointCardButton('row', 'Копировать строку', address, roundedX + '\t' + roundedY, address + '\t' + roundedX + '\t' + roundedY) +
+      '<button type="button" data-point-action="close" aria-label="Закрыть карточку точки" ' +
+      'style="margin-left:auto;width:22px;height:22px;border:1px solid rgba(175,199,228,.22);' +
+      'background:transparent;color:#b6c8de;font:11px/1 var(--mono,Consolas,monospace);cursor:pointer">×</button>' +
+      '</div>';
+
+    var margin = 14;
+    var left = target.screen.x + margin;
+    var top = target.screen.y + margin;
+    root.style.display = 'flex';
+    var width = root.offsetWidth;
+    var height = root.offsetHeight;
+    var maxWidth = window.innerWidth || kernel.state.viewport.w;
+    var maxHeight = window.innerHeight || kernel.state.viewport.h;
+    if (left + width > maxWidth - 8) left = target.screen.x - width - margin;
+    if (top + height > maxHeight - 8) top = target.screen.y - height - margin;
+    root.style.left = Math.max(8, Math.min(left, maxWidth - width - 8)) + 'px';
+    root.style.top = Math.max(8, Math.min(top, maxHeight - height - 8)) + 'px';
+    try { root.focus(); } catch (err) { /* фокус недоступен — молча продолжаем */ }
+  }
+
+  return { open, close };
+}
+
+function pointCardButton(action: string, label: string, address: string, xy: string, row: string): string {
+  return '<button type="button" data-point-action="' + action + '"' +
+    ' data-point-address="' + escapeHtml(address) + '"' +
+    ' data-point-xy="' + escapeHtml(xy) + '"' +
+    ' data-point-row="' + escapeHtml(row) + '"' +
+    ' style="padding:3px 7px;border:1px solid rgba(175,199,228,.22);background:transparent;' +
+    'color:#cfe0f4;font:9px/1.2 var(--mono,Consolas,monospace);cursor:pointer">' +
+    escapeHtml(label) + '</button>';
+}
+
+function stateWidth(kernel: AtlasKernel): number {
+  var scale = kernel.state.view.scale;
+  if (!(scale > 0)) return 0;
+  // Ширина кадра по горизонтали — та же величина, что и `lw` в ссылке (§7.7).
+  return kernel.state.viewport.w / scale;
+}
+
+/**
+ * Открывает карточку точки `Shift+кликом` (§7.8): адрес, координаты, ближайшая
+ * система, расстояние до ядра сектора, уровень и видимая ширина кадра.
+ *
+ * Вызывается из `copyMapCoordinates`, чтобы не менять контракт `canvas-renderer.ts`:
+ * рендерер по-прежнему сообщает только точку указателя.
+ */
+export function openPointCard(kernel: AtlasKernel, target: PointCardTarget): void {
+  var view = pointCardViews.get(kernel);
+  if (!view) {
+    view = createPointCardView(kernel);
+    pointCardViews.set(kernel, view);
+  }
+  view.open(target);
 }
