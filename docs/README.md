@@ -42,6 +42,7 @@
 | Сквозные решения и общий TODO | [`registers/decisions.md`](registers/decisions.md), [`registers/todo.md`](registers/todo.md) |
 | Администраторы Google Sheets | [`ADMIN_GUIDE.md`](ADMIN_GUIDE.md), [`admins/`](admins/README.md) |
 | Мультиагентная разработка | [`agents_task_orchestration/README.md`](agents_task_orchestration/README.md), [волны](agents_task_orchestration/agents_task_orchestration.md) |
+| Работа с ИИ-агентами «от и до» (опрос, план, тесты до кода) | [`ai-workflow.md`](ai-workflow.md) |
 | История агентских сессий (бывший `HANDOFF.md`) | [`handoff/status.md`](handoff/status.md) |
 | Планетные промпты и Зерус | [`prompts/`](prompts/planet-seeds-from-reference.md), [`zerus/README.md`](zerus/README.md) |
 | Журнал изменений (append-only) | [`../CHANGELOG.md`](../CHANGELOG.md) |
