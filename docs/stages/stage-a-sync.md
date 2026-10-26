@@ -1,25 +1,18 @@
-# Этап A — Автосинк (скелет)
+# Этап A — автосинк — навигация
 
-Статус: скелет реализован. Требует реальных `owner/repo` и путей в `data/sources.json`.
+Историческая редакция разнесена по контексту 26.10.2026. Этот файл сохранён
+как короткий хаб, чтобы старые ссылки из PR, CHANGELOG и кода работали.
 
-## Реализовано
-- `tools/sync.py` — синк: SHA через GitHub API, сравнение с `data/upstream/manifest.json`, скачивание через raw.githubusercontent.com, валидация размера/формата, чтение размеров PNG/JPEG, transform CSV (flipY/scale/offset), валидация координат и уникальности id, запись `meta.json`/`manifest.json`, сохранение оригиналов в `data/upstream/`.
-- `.github/workflows/sync.yml` — cron каждые 6 ч + `workflow_dispatch`, запуск синка, создание Issue при падении, коммит/пуш при изменениях.
+Назад: [этапы](README.md) · [документация](../README.md) · [паспорт этапа](stage-02/plan.md) · [регистры](../registers/README.md).
 
-## Не реализовано (TODO)
-- Автоконвертация PNG >15 МБ → JPG (нужен libvips/Pillow).
-- Автоопределение разделителя/кодировки (частично: ; → , и utf-8/cp1251).
-- Мерж лор-колонок по id (разделение ответственности).
-- Discord-вебхук алерт.
-- Негативный сценарий-тест (несуществующий путь → Issue, данные не затёрты).
+## Где что
 
-## Открытые вопросы
-- Заполнить `data/sources.json` реальными значениями (Этап 0).
+| Тема | Файл |
+|---|---|
+| Автосинк и открытые вопросы | [`autosync-skeleton.md`](stage-02/notes/autosync-skeleton.md) |
 
-## Обновление: алерты
-- Discord-вебхук при падении и при успешном обновлении (через `secrets.DISCORD_WEBHOOK`).
-- Триггер `repository_dispatch` (types: upstream-updated) для мгновенного синка.
+## Регистры этапа
 
-## Обновление: источники типа url
-- Поддержка прямых ссылок (в т.ч. Google Sheets published CSV) через `type: "url"`.
-- Ссылка-шаблон в `data/sources.json` (`systems-sheet`).
+- [План](stage-02/plan.md) · [Ошибки](stage-02/errors.md) · [Баги](stage-02/bugs.md) · [Решения](stage-02/decisions.md) · [TODO](stage-02/todo.md)
+
+> Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

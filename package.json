@@ -17,6 +17,7 @@
     "sector-field:preview": "node tools/sector_field_preview.mjs",
     "verify:publish": "node tools/verify_feature_parity.mjs",
     "verify:hashes": "node tools/verify_planet_hashes.mjs",
+    "verify:docs": "python3 tools/check_docs.py",
     "assets:build": "python3 tools/build_assets.py",
     "assets:check": "python3 tools/build_assets.py --check",
     "assets:sync-only": "python3 tools/build_assets.py --sync-only"

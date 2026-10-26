@@ -2,7 +2,7 @@
 
 Этот файл — **корневой источник истины (SSoT)** по общим правилам репозитория
 `Timeline-Project-SC2.github.io`. Перед началом работы прочитайте этот документ,
-актуальный срез состояния в [`docs/HANDOFF.md`](docs/HANDOFF.md) и доменный `AGENTS.md`
+актуальный срез состояния в [`docs/handoff/status.md`](docs/handoff/status.md) (хаб — [`docs/HANDOFF.md`](docs/HANDOFF.md)) и доменный `AGENTS.md`
 той директории, в которой вы вносите изменения. Если исторические заметки противоречат
 текущему коду в `main`, приоритет у кода в `main` и явных указаний пользователя;
 после завершения работы обновите документацию согласно регламенту режима.
@@ -127,7 +127,7 @@ git diff --check                                # проверка отсутс�
   и выполните первый содержательный коммит с немедленным `git push -u origin HEAD`. Убедитесь,
   что `git rev-parse HEAD` совпадает с `origin/<ветка>`, а `git status --short` чист.
 - **Коммит и пуш после каждого завершённого шага:** песочница и `/tmp` эфемерны и не сохраняются
-  между сессиями (см. казус CR-01 PR 4 в `docs/HANDOFF.md` §7). Коммитьте и пушьте после каждого
+  между сессиями (см. казус CR-01 PR 4 в [`docs/handoff/infra-pitfalls.md`](docs/handoff/infra-pitfalls.md)). Коммитьте и пушьте после каждого
   логического шага, не откладывая сохранение на конец задачи.
 - **Запрет параллельной записи и чтения одного файла:** не отправляйте в одном блоке вызовов
   запись файла (`write_file`/`edit_file`) и зависящую от него команду `bash` — инструменты одного
@@ -139,16 +139,16 @@ git diff --check                                # проверка отсутс�
 
 ## 7. Порядок ведения документации (`Single-Agent` vs `Split-Work`)
 
-- **`docs/HANDOFF.md` и `CHANGELOG.md`:** фиксируют итоги этапов, архитектурные решения,
+- **`docs/HANDOFF.md` (и `docs/handoff/`) и `CHANGELOG.md`:** фиксируют итоги этапов, архитектурные решения,
   замеры производительности и инфраструктурные особенности репозитория.
-- **Стандартный одиночный режим (`Single-Agent`):** агент обновляет `docs/HANDOFF.md` и `CHANGELOG.md`
+- **Стандартный одиночный режим (`Single-Agent`):** агент обновляет `docs/HANDOFF.md` (и `docs/handoff/`) и `CHANGELOG.md`
   в том же PR и после прохождения всех проверок `check.yml` доводит PR до слияния по указанию владельца.
 - **Параллельный сплит-режим (`Split-Work` / `Tri-Agent Wave`):**
   1. При наличии карточки `Role & Boundary Card` строго следуйте
      [`docs/agents_task_orchestration/worker_instruction_on_splitwork.md`](docs/agents_task_orchestration/worker_instruction_on_splitwork.md)
-     и разделу 7 [`docs/agents_task_orchestration/agents_task_orchestration.md`](docs/agents_task_orchestration/agents_task_orchestration.md).
+     и матрице волны DX-1 §7 [`docs/agents_task_orchestration/waves/stage-6-dx.md`](docs/agents_task_orchestration/waves/stage-6-dx.md).
   2. Разрешено создавать и изменять **только** файлы из своего списка `OWNED_FILES`
      (обязательна самопроверка `git status --short` и `git diff --name-only origin/main...HEAD`).
-  3. Воркерам 1 и 2 категорически запрещено трогать `docs/HANDOFF.md` и `CHANGELOG.md` —
+  3. Воркерам 1 и 2 категорически запрещено трогать `docs/HANDOFF.md` (и `docs/handoff/`) и `CHANGELOG.md` —
      сводку всей волны централизованно оформляет **Worker-3**.
   4. Каждый воркер открывает PR в `main` и останавливается перед слиянием (`Стоп перед merge`).

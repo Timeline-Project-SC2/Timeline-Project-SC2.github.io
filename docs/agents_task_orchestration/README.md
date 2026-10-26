@@ -5,7 +5,8 @@
 
 | Файл | Отвечает на вопрос |
 |---|---|
-| [`agents_task_orchestration.md`](agents_task_orchestration.md) | Как устроена волна `Split-Work` / `Tri-Agent Wave`: матрица `Zero File Overlap`, порядок запуска, шаблон промпта Воркера |
+| [`agents_task_orchestration.md`](agents_task_orchestration.md) | Хаб: карта разделов `§1…§18` и правила `О-1…О-4` |
+| [`waves/`](waves/protocol.md) | Сами разделы по волнам: `protocol`, `stage-6-dx`, `stage-8`, `sw-1`, `sw-2*`, `z-3`, `unit-*`, `f` |
 | [`worker_instruction_on_splitwork.md`](worker_instruction_on_splitwork.md) | Что делает **Воркер** в параллельной тройке: `OWNED_FILES`, самопроверка, формат отчёта |
 | [`external_agency_agents_audit.md`](external_agency_agents_audit.md) | Откуда взяты карточки ролей: аудит внешнего набора `agency-agents`, что взято, что отброшено и почему |
 | [`role_cards/`](role_cards/) | **Что считать готовым** в конкретной зоне: восемь режимов работы одного агента |
@@ -32,14 +33,14 @@
 
 | Карточка | Волна | Статус |
 |---|---|---|
-| [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | выдана 26.10.2026, кодовых PR нет |
+| [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | принята 26.10.2026 (PR #300); исполнение — [`F-1-execution.md`](wave_cards/F-1-execution.md), вердикт — [`F-1-verdict.md`](wave_cards/F-1-verdict.md) |
 
 ## Как пользоваться
 
 1. Перед волной оркестратор (`rc-07`) выбирает **2–3 роли** — больше не нужно: карточка задаёт
    режим, а не отдельного человека. Выданная карточка волны лежит в [`wave_cards/`](wave_cards/)
    и выдаётся воркеру вместе с промптом.
-2. Промпт Воркера собирается по шаблону из `agents_task_orchestration.md` §5, а в блок
+2. Промпт Воркера собирается по шаблону из [`waves/protocol.md`](waves/protocol.md) §5, а в блок
    «Что считается готовым» вставляется раздел 4 нужной карточки **дословно**.
 3. Числа (тайминги, бюджеты, тиры адреса) берутся **только** из гайдлайнера
    [`../stages/stage-9-12-sector-deep-render-plan.md`](../stages/stage-9-12-sector-deep-render-plan.md), не из карточек.
