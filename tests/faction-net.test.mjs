@@ -251,12 +251,14 @@ test('T4: слой живёт на L2…L9 (с Z-4b глубина лестни�
 /* --------------------------------------------------- затухание слоя (Z-3.9) */
 
 /** Таблица заливки из карточки `Z-3.9` (С1): уровень → альфа. */
+// Лестница углублена до L12 волной F-1 (Z-5): пол 0,25 держится до L12.
 const FILL_ALPHA_BY_LEVEL = [
   [2, 1], [3, 0.75], [4, 0.5625], [5, 0.421875],
   [6, 0.31640625], [7, 0.25], [8, 0.25], [9, 0.25],
+  [10, 0.25], [11, 0.25], [12, 0.25],
 ];
 
-test('T1: layerFillAlpha — таблица L2…L9 и ноль вне диапазона', () => {
+test('T1: layerFillAlpha — таблица L2…L12 и ноль вне диапазона', () => {
   assert.equal(ladder.LAYER_FADE_STEP, 0.75);
   assert.equal(ladder.LAYER_FILL_ALPHA_MIN, 0.25);
   assert.equal(ladder.LAYER_LINE_ALPHA_MIN, 0.45);
@@ -268,7 +270,7 @@ test('T1: layerFillAlpha — таблица L2…L9 и ноль вне диап�
       `L${level}: заливка ${ladder.layerFillAlpha(level)}, ожидалось ${expected}`,
     );
   }
-  for (const level of [0, 1, 10, -1]) {
+  for (const level of [0, 1, 13, -1]) {
     assert.equal(ladder.layerFillAlpha(level), 0, `L${level}: заливки быть не должно`);
   }
 });
@@ -276,7 +278,7 @@ test('T1: layerFillAlpha — таблица L2…L9 и ноль вне диап�
 test('T2: layerLineAlpha — пол заливки 0,45 и ноль вне диапазона', () => {
   // Формула С1 буквальна: `max(0,45; заливка)`. Поэтому линия совпадает с
   // заливкой, пока та ярче пола (L2…L4), а с L5 упирается в `0,45` — пол
-  // `LAYER_LINE_ALPHA_MIN` держит контур на всей глубине до L9.
+  // `LAYER_LINE_ALPHA_MIN` держит контур на всей глубине до L12.
   for (const [level, expected] of FILL_ALPHA_BY_LEVEL) {
     const line = ladder.layerLineAlpha(level);
     const want = Math.max(0.45, expected);
@@ -291,7 +293,7 @@ test('T2: layerLineAlpha — пол заливки 0,45 и ноль вне ди�
       );
     }
   }
-  for (const level of [0, 1, 10, -1]) {
+  for (const level of [0, 1, 13, -1]) {
     assert.equal(ladder.layerLineAlpha(level), 0, `L${level}: линии быть не должно`);
   }
 });
