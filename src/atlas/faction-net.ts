@@ -43,25 +43,18 @@
  */
 
 import { NEUTRAL_FACTION_LABEL, parseHexColor } from './config.ts';
+import { layerFillAlpha } from './level-ladder.ts';
 import type { FactionColor } from './config.ts';
 
 /* --------------------------------------------------------------- уровни слоя */
 
-/**
- * Слой баблов активен на уровнях территорий (`L2…L9`, §8.1) — тот же диапазон,
- * что `TERRITORY_LEVELS` в `sector-scene.ts`. `L2…L9`: с `Z-4b` глубина лестницы
- * девять, слой больше не обрезается на `L6`. Массив объявлен здесь независимо
- * (совпадение закреплено тестом `faction-net.test.mjs`): рантайм-импорт сцены
- * создал бы цикл, когда слой сетей монтируется внутрь кадра.
- */
-export const NET_LAYER_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
-
-/** Живёт ли слой сетей на уровне лестницы (`L2…L9`). */
+/** Диапазон слоя сетей (`L2…L12`, §8.1) выводится из лестницы `level-ladder.ts`. */
+/** Живёт ли слой сетей на уровне лестницы (`L2…L12`). */
 export function isNetLayerLevel(level: number): boolean {
-  return NET_LAYER_LEVELS.includes(level);
+  return layerFillAlpha(level) > 0;
 }
 
-/** Сети для кадра: на обзоре (`L0…L1`) и вне `L2…L9` слой не рисуется. */
+/** Сети для кадра: на обзоре (`L0…L1`) и вне `L2…L12` слой не рисуется. */
 export function netsAtLevel(
   nets: readonly FactionNet[],
   level: number,
