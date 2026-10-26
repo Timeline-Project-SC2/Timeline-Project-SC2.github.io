@@ -36,6 +36,7 @@
 |---|---|---|
 | [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | принята 26.10.2026 (PR #300); исполнение — [`F-1-execution.md`](wave_cards/F-1-execution.md), вердикт — [`wave_cards/F-1-execution.md`](wave_cards/F-1-execution.md) |
 | [`wave_cards/F-2.md`](wave_cards/F-2.md) | `F-2` · `Z-4e`: территории на глубине до `L12`, `faction-net` без `NET_LAYER_LEVELS`, диапазон от `layerFillAlpha` | принята 26.10.2026 (PR #308, PASS); исполнение и вердикт — [`F-2-execution.md`](wave_cards/F-2-execution.md) |
+| [`wave_cards/F-3.md`](wave_cards/F-3.md) | `F-3` · `Z-4f`: фактическая сетка, тиры `T6/T7`, `gridTiersFor(scale)`, удаление `.map-grid-overlay` | выдана 26.10.2026, кодовых PR нет; шаги, гейты и журнал — [`F-3-execution.md`](wave_cards/F-3-execution.md) |
 
 ## Как пользоваться
 
