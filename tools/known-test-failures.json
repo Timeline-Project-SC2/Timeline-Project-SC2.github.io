@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах",
+    "file": "tests/local-map-stage8.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "Stage-8.5"
+  },
+  {
+    "name": "Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)",
+    "file": "tests/local-map-stage8.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "Stage-8.10b ×2"
+  },
+  {
+    "name": "Stage-8.10b: ленивый чанк выставляет API глобуса и генерирует golden-ответ",
+    "file": "tests/local-map-stage8.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "Stage-8.10b ×2"
+  },
+  {
+    "name": "A-17 diagnostic: числа стыка и берега для #43533…#43537",
+    "file": "tests/local-map-stage8.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "A-17 ×2"
+  },
+  {
+    "name": "стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке",
+    "file": "tests/local-map-stand.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "A-17 ×2"
+  },
+  {
+    "name": "W26b п.2: m.14 (measureLodConsistency) сравнивает одинаковый span — 0 м на константном поле и ≤ 2 м на реальном",
+    "file": "tests/local-map-stand.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "W26b ×2"
+  },
+  {
+    "name": "W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference",
+    "file": "tests/local-map-stand.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "W26b ×2"
+  },
+  {
+    "name": "Stage-8.10b: контракт не тащит ядро на верхнем уровне, константы — из constants-модуля",
+    "file": "tests/local-map.test.mjs",
+    "contour": "планетарный",
+    "knownSince": "контракт ядра"
+  }
+]
