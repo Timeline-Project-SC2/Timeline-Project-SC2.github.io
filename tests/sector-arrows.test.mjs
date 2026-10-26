@@ -21,28 +21,28 @@ const golden = [
   worldPoint('dorian', 'Дориан', -102, -57),
 ];
 
-test('golden для Корхала L4: пять систем ранжируются по расстоянию и углу, подписи 0,088…0,117 св.г.', () => {
+test('golden для Корхала L4: пять систем ранжируются по расстоянию и углу, подписи 88,4 / 90,8 / 108 / 116 / 117 св.г.', () => {
   const result = selectSectorArrows(golden, 0, 0);
   assert.deepEqual(result.arrows.map((item) => item.name), ['Райдин', 'Мистафф', 'Джонтур', 'Норрис', 'Дориан']);
   assert.deepEqual(result.arrows.map((item) => Math.round(item.distance * 10) / 10), [88.4, 90.8, 108.1, 116.3, 116.8]);
   assert.deepEqual(
     result.arrows.map((item) => distanceLabel(item.distance)),
     [
-      `0,088${NBSP}св.г.`,
-      `0,091${NBSP}св.г.`,
-      `0,108${NBSP}св.г.`,
-      `0,116${NBSP}св.г.`,
-      `0,117${NBSP}св.г.`,
+      `88,4${NBSP}св.г.`,
+      `90,8${NBSP}св.г.`,
+      `108${NBSP}св.г.`,
+      `116${NBSP}св.г.`,
+      `117${NBSP}св.г.`,
     ],
   );
   assert.deepEqual(
     [88.4, 90.8, 108.07, 116.32, 116.76].map((distance) => distanceLabel(distance)),
     [
-      `0,088${NBSP}св.г.`,
-      `0,091${NBSP}св.г.`,
-      `0,108${NBSP}св.г.`,
-      `0,116${NBSP}св.г.`,
-      `0,117${NBSP}св.г.`,
+      `88,4${NBSP}св.г.`,
+      `90,8${NBSP}св.г.`,
+      `108${NBSP}св.г.`,
+      `116${NBSP}св.г.`,
+      `117${NBSP}св.г.`,
     ],
   );
   const angles = result.arrows.map((item) => Math.round(item.angle * 1800 / Math.PI) / 10);
@@ -74,7 +74,7 @@ test('набор Слейна оставляет четыре направлен
   assert.equal(result.arrows.length, 4);
   assert.equal(result.omitted, 6);
   assert.equal(result.nextDistance, 2152);
-  assert.equal(distanceLabel(result.nextDistance), `2,2${NBSP}св.г.`);
+  assert.equal(distanceLabel(result.nextDistance), `2${NBSP}152${NBSP}св.г.`);
 });
 
 test('видимость сохраняется как состояние цели, но не меняет расстояние ранжирования', () => {

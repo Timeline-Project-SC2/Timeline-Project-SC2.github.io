@@ -25,20 +25,20 @@ const fit = ladder.fitScaleFor(VIEWPORT, MAP_SIZE, FIT_INSET);
 
 test('C10: readout: «0,28 св.г. до границы» и процент 1891 % на пределе зума по полной ширине', () => {
   const maxScale = ladder.maxScaleForTargetWidth(VIEWPORT, MAP_SIZE, FIT_INSET);
-  assert.equal(maxScale, 1.92);
+  assert.equal(maxScale, 500);
   assert.ok(Math.abs(fit - 0.10152) < 1e-12);
   const text = readout.zoomReadoutText(VIEWPORT, maxScale, fit);
-  assert.equal(text.percent, '1891%');
-  assert.equal(text.edge, units.formatDistanceLy(ladder.edgeDistance(VIEWPORT, maxScale), 'full') + ' до границы');
-  assert.equal(text.edge, '0,28' + NBSP + 'св.г. до границы');
+  assert.equal(text.percent, '492514%');
+  assert.equal(text.edge, units.formatDistanceLy(ladder.edgeDistance(VIEWPORT, maxScale), 'full') + ' до границы (справочно)');
+  assert.equal(text.edge, '1,08' + NBSP + 'св.г. до границы (справочно)');
 });
 
 test('readout: на «вся карта» процент 100 и расстояние считается по короткой оси в св.г.', () => {
   const text = readout.zoomReadoutText(VIEWPORT, fit, fit);
   assert.equal(text.percent, '100%');
   const expected = ladder.edgeDistance(VIEWPORT, fit);
-  assert.equal(text.edge, units.formatDistanceLy(expected, 'full') + ' до границы');
-  assert.equal(text.edge, '5,32' + NBSP + 'св.г. до границы');
+  assert.equal(text.edge, units.formatDistanceLy(expected, 'full') + ' до границы (справочно)');
+  assert.equal(text.edge, '5 319,15' + NBSP + 'св.г. до границы (справочно)');
 });
 
 test('readout: расстояние до границы считается по короткой оси и не зависит от поворота экрана', () => {
@@ -118,24 +118,23 @@ test('ссылка ?at=: на телефоне 390×844 lw=39 остаётся �
   assert.ok(Math.abs(phone.h / scale - 84.4) < 0.05, String(phone.h / scale));
 });
 
-test('ссылка ?at=: на упоре клампа кадр 1000 × 562,5 ед = 1,00 × 0,56 св.г. (полная ширина)', () => {
+test('ссылка ?at=: на упоре клампа кадр 3,84 × 2,16 св.г. (полная ширина)', () => {
   // Кламп живёт в рендерере: `centerOn()` ограничивает масштаб до `maxScale()`,
-  // равного `viewport.w / 1000` — на упоре полная ширина кадра ровно
-  // `1` св.г. (`lyToUnits(1)` единиц), высота — из пропорций экрана.
+  // равного 500 px/св.г. — на упоре полная ширина равна `viewport.w × 0,002` св.г.
   const requested = readout.scaleForVisibleWidth(VIEWPORT, 0.5);
   assert.equal(requested, 1920 / 0.5);
   const maxScale = ladder.maxScaleForTargetWidth(VIEWPORT, MAP_SIZE, FIT_INSET);
   const applied = Math.min(requested, maxScale);
-  assert.equal(applied, 1.92);
+  assert.equal(applied, 500);
   const widthUnits = readout.visibleWidthOf(VIEWPORT, applied);
   const heightUnits = VIEWPORT.h / applied;
-  assert.equal(Math.round(widthUnits), 1000);
-  assert.ok(Math.abs(heightUnits - 562.5) < 1e-9);
-  assert.ok(Math.abs(units.unitsToLy(widthUnits) - 1) < 1e-12, String(units.unitsToLy(widthUnits)));
-  assert.ok(Math.abs(units.unitsToLy(heightUnits) - 0.5625) < 1e-12);
-  // Полная ширина на упоре — номинальная ширина L9.
-  assert.equal(ladder.levelForWidth(widthUnits), 9);
-  assert.ok(Math.abs(widthUnits - ladder.visibleWidthForLevel(9)) < 1e-9);
+  assert.ok(Math.abs(widthUnits - 3.84) < 1e-12);
+  assert.ok(Math.abs(heightUnits - 2.16) < 1e-12);
+  assert.ok(Math.abs(units.unitsToLy(widthUnits) - 3.84) < 1e-12);
+  assert.ok(Math.abs(units.unitsToLy(heightUnits) - 2.16) < 1e-12);
+  // Упор при viewport 1920 даёт 3,84 св.г. и остаётся на L12.
+  assert.equal(ladder.levelForWidth(widthUnits), 12);
+  assert.ok(widthUnits < ladder.visibleWidthForLevel(12));
 });
 
 test('G9: полный адрес точки осмотра — formatAddress(addressOf(x, y)), строка «осмотр L8 · адрес · 16 ед»', () => {
@@ -189,10 +188,10 @@ test('карточка точки: координаты с одним знако
 
 test('карточка точки: уровень и номинальная видимая ширина в св.г.', () => {
   assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(7)), 'L7 · ' + units.formatDistanceLy(ladder.visibleWidthLyForLevel(7), 'short'));
-  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(7)), 'L7 · 1,7' + NBSP + 'св.г.');
-  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(2)), 'L2 · 6,0' + NBSP + 'св.г.');
-  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(0)), 'L0 · ' + units.formatDistanceLy(10, 'short'));
-  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(0)), 'L0 · 10,0' + NBSP + 'св.г.');
+  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(7)), 'L7 · 104,2' + NBSP + 'св.г.');
+  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(2)), 'L2 · 2' + NBSP + '714,4' + NBSP + 'св.г.');
+  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(0)), 'L0 · ' + units.formatDistanceLy(10000, 'short'));
+  assert.equal(dossier.levelCaption(ladder.visibleWidthForLevel(0)), 'L0 · ≥ 10' + NBSP + '000' + NBSP + 'св.г.');
 });
 
 test('карточка точки: ближайшая система считается только по системам с координатами', () => {
@@ -209,18 +208,18 @@ test('карточка точки: ближайшая система счита�
   const nearest = dossier.nearestSystemTo(systems, explicit, 5720, 6257);
   assert.equal(nearest.name, 'Мистафф');
   assert.ok(Math.abs(nearest.distance - Math.hypot(80, 43)) < 1e-9);
-  assert.equal(units.formatDistanceLy(units.unitsToLy(nearest.distance), 'full'), '0,09' + NBSP + 'св.г.');
+  assert.equal(units.formatDistanceLy(units.unitsToLy(nearest.distance), 'full'), '90,82' + NBSP + 'св.г.');
   assert.equal(dossier.nearestSystemTo([systems[2]], explicit, 5720, 6257), null);
 });
 
-test('карточка точки: «от ядра сектора» переводится через unitsToLy и formatDistanceLy (3,67 св.г.)', () => {
+test('карточка точки: «от ядра сектора» переводится через unitsToLy и formatDistanceLy (3 672,41 св.г.)', () => {
   // Проверочный вектор §17.23: от (6014, 5856) до (8395.9, 3060.8) = 3672,41 ед -> «3,67 св.г.».
   assert.equal(Math.round(Math.hypot(8395.9 - 6014, 3060.8 - 5856)), 3672);
-  assert.equal(dossier.sectorCoreDistanceText(8395.9, 3060.8), '3,67' + NBSP + 'св.г.');
+  assert.equal(dossier.sectorCoreDistanceText(8395.9, 3060.8), '3' + NBSP + '672,41' + NBSP + 'св.г.');
 
   // Корхал `(5720; 6257)` — `497` ед = `0,50 св.г.` от центра ядра `(6014; 5856)`.
   assert.equal(Math.round(Math.hypot(5720 - 6014, 6257 - 5856)), 497);
-  assert.equal(dossier.sectorCoreDistanceText(5720, 6257), '0,50' + NBSP + 'св.г.');
+  assert.equal(dossier.sectorCoreDistanceText(5720, 6257), '497,23' + NBSP + 'св.г.');
 
   // Проверка разметки самой карточки точки (`openPointCard`) без реального браузера.
   const savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -255,11 +254,10 @@ test('карточка точки: «от ядра сектора» перево
       },
     };
     dossier.openPointCard(kernel, { world: { x: 8395.9, y: 3060.8 }, screen: { x: 200, y: 200 } });
-    assert.ok(createdRoot.innerHTML.includes(`от ядра сектора: 3,67${NBSP}св.г.`), createdRoot.innerHTML);
-    assert.ok(createdRoot.innerHTML.includes(`Сосед · 0,09${NBSP}св.г.`), createdRoot.innerHTML);
-    // Полная ширина при масштабе фикстуры: 1920 / 0,54 = 3555,56 ед. — по
-    // новой лестнице это L4 с номиналом 3,59 св.г. («3,6 св.г.»).
-    assert.ok(createdRoot.innerHTML.includes(`L4 · 3,6${NBSP}св.г.`), createdRoot.innerHTML);
+    assert.ok(createdRoot.innerHTML.includes(`от ядра сектора: 3${NBSP}672,41${NBSP}св.г.`), createdRoot.innerHTML);
+    assert.ok(createdRoot.innerHTML.includes(`Сосед · 90,82${NBSP}св.г.`), createdRoot.innerHTML);
+    // Полная ширина при масштабе фикстуры: 1920 / 0,54 = 3555,56 св.г.; ближайший номинал — L1.
+    assert.ok(createdRoot.innerHTML.includes(`L1 · 5${NBSP}210,0${NBSP}св.г.`), createdRoot.innerHTML);
   } finally {
     if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow);
     else delete globalThis.window;

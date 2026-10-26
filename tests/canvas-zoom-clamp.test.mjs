@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const { CONFIG } = require('../src/atlas/config.ts');
 const { createCanvasRenderer } = require('../src/atlas/canvas-renderer.ts');
 const {
-  TARGET_WIDTH_LY,
+  MAX_SCALE,
   edgeDistance,
   fitScaleFor,
   maxScaleForTargetWidth,
@@ -17,13 +17,13 @@ const { unitsToLy } = require('../src/atlas/sector-units.ts');
 const MAP_SIZE = 10000;
 const EPS = 1e-9;
 
-/** Пять viewport из §17.23 с точными значениями maxScale = w / 1000 (px/ед). */
+/** Пять viewport: фиксированный предел 500 px/св.г. и справочное edgeDistance. */
 const PLAN_VIEWPORTS = [
-  { label: '1920×1080', w: 1920, h: 1080, expectedMaxScale: 1.92, expectedEdge: 0.28125 },
-  { label: '1366×768', w: 1366, h: 768, expectedMaxScale: 1.366, expectedEdge: 768 / 2732 },
-  { label: '2560×1440', w: 2560, h: 1440, expectedMaxScale: 2.56, expectedEdge: 0.28125 },
-  { label: '390×844', w: 390, h: 844, expectedMaxScale: 0.39, expectedEdge: 0.5 },
-  { label: '844×390', w: 844, h: 390, expectedMaxScale: 0.844, expectedEdge: 390 / 1688 },
+  { label: '1920×1080', w: 1920, h: 1080, expectedMaxScale: 500, expectedEdge: 1.08 },
+  { label: '1366×768', w: 1366, h: 768, expectedMaxScale: 500, expectedEdge: 0.768 },
+  { label: '2560×1440', w: 2560, h: 1440, expectedMaxScale: 500, expectedEdge: 1.44 },
+  { label: '390×844', w: 390, h: 844, expectedMaxScale: 500, expectedEdge: 0.39 },
+  { label: '844×390', w: 844, h: 390, expectedMaxScale: 500, expectedEdge: 0.39 },
 ];
 
 /** Целевые точки внутри сектора: геометрический центр и реальная столица (Тарсонис). */
@@ -211,8 +211,8 @@ test('CONFIG.view.maxFactor удалён из конфигурации и не �
   }
 });
 
-test('maxScale и minScale на пяти плановых viewport: 1,92 / 1,366 / 2,56 / 0,39 / 0,844 и расчётное расстояние до границы', () => {
-  assert.equal(TARGET_WIDTH_LY, 1);
+test('maxScale = 500 px/св.г. и minScale на пяти плановых viewport', () => {
+  assert.equal(MAX_SCALE, 500);
 
   for (const spec of PLAN_VIEWPORTS) {
     const h = createRendererHarness(spec);
@@ -221,7 +221,7 @@ test('maxScale и minScale на пяти плановых viewport: 1,92 / 1,366
       const min = h.renderer.minScale();
       const max = h.renderer.maxScale();
 
-      // 1. Точное совпадение с §17.23: maxScale = w / 1000 (1,92 / 1,366 / 2,56 / 0,39 / 0,844).
+      // 1. Предел — фиксированные 500 px/св.г. на любом viewport.
       assert.equal(max, spec.expectedMaxScale, `${spec.label}: maxScale`);
       assert.equal(
         max,
@@ -281,7 +281,7 @@ test('clampView, zoomAt и centerOn упираются в предел по по
         );
         // По длинной оси расстояние также проверяется точно, без ослабления допуска.
         assert.ok(
-          Math.abs(afterCenter.farthest - Math.max(spec.w, spec.h) / (2000 * spec.expectedMaxScale)) <= EPS,
+          Math.abs(afterCenter.farthest - Math.max(spec.w, spec.h) / (2 * spec.expectedMaxScale)) <= EPS,
           `${spec.label} (${target.name}): расстояние по длинной оси соответствует масштабу`,
         );
 
@@ -329,18 +329,18 @@ test('нижний упор minScale и пересчёт потолка при �
     assert.equal(h.state.view.scale, expectedMin);
     assert.ok(h.state.view.scale < h.renderer.maxScale());
 
-    // 2. Выход на потолок 2560×1440 (maxScale = 2,56), затем ресайз в 1366×768 (maxScale = 1,366).
+    // 2. Выход на потолок 2560×1440 (maxScale = 500), затем ресайз в 1366×768 (maxScale = 500).
     const target = { x: 5000, y: 5000 };
     h.renderer.centerOn(target.x, target.y, 1e6);
     h.flushAnimationFrame(performance.now() + CONFIG.view.animate + 50);
-    assert.equal(h.state.view.scale, 2.56);
+    assert.equal(h.state.view.scale, 500);
 
     h.state.viewport = { w: 1366, h: 768 };
-    h.state.view.tx = 1366 / 2 - target.x * 1.366;
-    h.state.view.ty = 768 / 2 - target.y * 1.366;
+    h.state.view.tx = 1366 / 2 - target.x * 500;
+    h.state.view.ty = 768 / 2 - target.y * 500;
     h.renderer.clampView();
-    assert.equal(h.state.view.scale, 1.366);
-    assert.ok(Math.abs(edgeDistance(h.state.viewport, h.state.view.scale) - 768 / 2732) <= EPS);
+    assert.equal(h.state.view.scale, 500);
+    assert.ok(Math.abs(edgeDistance(h.state.viewport, h.state.view.scale) - 0.768) <= EPS);
 
     // 3. Поворот экрана 390×844 ↔ 844×390 меняет потолок по полной ширине.
     for (const rotated of [
@@ -348,25 +348,25 @@ test('нижний упор minScale и пересчёт потолка при �
       { w: 844, h: 390 },
     ]) {
       h.state.viewport = rotated;
-      h.state.view.scale = 10;
-      h.state.view.tx = rotated.w / 2 - target.x * (rotated.w / 1000);
-      h.state.view.ty = rotated.h / 2 - target.y * (rotated.w / 1000);
+      h.state.view.scale = 1000;
+      h.state.view.tx = rotated.w / 2 - target.x * 500;
+      h.state.view.ty = rotated.h / 2 - target.y * (500);
       h.renderer.clampView();
-      assert.equal(h.renderer.maxScale(), rotated.w / 1000);
-      assert.equal(h.state.view.scale, rotated.w / 1000);
+      assert.equal(h.renderer.maxScale(), 500);
+      assert.equal(h.state.view.scale, 500);
 
       const distances = targetToEdgeDistances(h.renderer, rotated, target);
-      assert.ok(Math.abs(distances.nearest - Math.min(rotated.w, rotated.h) / (2 * rotated.w)) <= EPS);
+      assert.ok(Math.abs(distances.nearest - Math.min(rotated.w, rotated.h) / 1000) <= EPS);
       if (rotated.w < rotated.h) {
-        // Портрет 390×844: ближайшие границы — левая и правая (0,5 св.г.).
-        assert.ok(Math.abs(distances.left - 0.5) <= EPS);
-        assert.ok(Math.abs(distances.right - 0.5) <= EPS);
-        assert.ok(distances.top > 1 && distances.bottom > 1);
+        // Портрет 390×844: ближайшие границы — левая и правая (0,39 св.г.).
+        assert.ok(Math.abs(distances.left - 0.39) <= EPS);
+        assert.ok(Math.abs(distances.right - 0.39) <= EPS);
+        assert.ok(Math.abs(distances.top - 0.844) <= EPS && Math.abs(distances.bottom - 0.844) <= EPS);
       } else {
-        // Альбом 844×390: ближайшие границы — верхняя и нижняя (расчётное расстояние).
-        assert.ok(Math.abs(distances.top - 390 / 1688) <= EPS);
-        assert.ok(Math.abs(distances.bottom - 390 / 1688) <= EPS);
-        assert.ok(distances.left > 0.49 && distances.right > 0.49);
+        // Альбом 844×390: ближайшие границы — верхняя и нижняя (0,39 св.г.).
+        assert.ok(Math.abs(distances.top - 0.39) <= EPS);
+        assert.ok(Math.abs(distances.bottom - 0.39) <= EPS);
+        assert.ok(distances.left > 0.39 && distances.right > 0.39);
       }
     }
   } finally {

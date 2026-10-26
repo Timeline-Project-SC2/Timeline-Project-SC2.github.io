@@ -37,12 +37,15 @@ import {
   LEVELS,
   MAX_VISIBLE_WIDTH,
   MIN_VISIBLE_WIDTH,
+  LEVEL_STEP,
+  MAX_SCALE,
+  maxScaleForTargetWidth,
   levelForWidth,
   levelSpec,
   markerDiameter,
   visibleWidthForLevel,
 } from '../src/atlas/level-ladder.ts';
-import { NBSP, formatAngleDeg, formatDistanceLy, pluralYears } from '../src/atlas/sector-units.ts';
+import { NBSP, TARGET_LY_PER_PX, UNITS_PER_LY, formatAngleDeg, formatDistanceLy, pluralYears } from '../src/atlas/sector-units.ts';
 
 const verbose = process.argv.includes('--verbose');
 const fails = [];
@@ -57,20 +60,18 @@ function check(condition, message) {
 }
 
 const near = (a, b, tolerance) => Math.abs(a - b) <= tolerance;
-// Адресные буквы секторных уровней: L0…L9 закреплены таблицей, глубже L9 — всегда 5.
-const sectorLetterCounts = [0, 1, 2, 2, 3, 3, 4, 4, 5, 5];
+// Число адресных букв по таблице L0…L12; тип адреса остаётся ограничен 0…5.
+const sectorLetterCounts = [0, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5];
 
-// Лестница разбирается по кадрам, а не по «ровно 13 записей»: глубина может расти
-// (SW-3 добавляет L10…L12 по требованию «1 св.г. от цели до границы», §17.15), и гейт
-// не должен требовать правки при каждом новом уровне. Проверяются структура и числа ядра.
+// Лестница F-1 закреплена на тринадцати секторных уровнях L0…L12 и S0…S2.
 const sectorLevels = LEVELS.filter((spec) => spec.frame === 'S');
 const systemLevels = LEVELS.filter((spec) => spec.frame === 'O');
 const deepestSector = sectorLevels.length - 1;
 
 // 1. Лестница: порядок, три системных уровня в конце, точная геометрия порогов.
 check(
-  sectorLevels.length >= 10,
-  `секторных уровней ${sectorLevels.length}, ожидалось не меньше 10 (L0…L9)`,
+  sectorLevels.length === 13,
+  `секторных уровней ${sectorLevels.length}, ожидалось 13 (L0…L12)`,
 );
 check(
   sectorLevels.map((spec) => spec.id).join(',') === sectorLevels.map((_spec, index) => `L${index}`).join(','),
@@ -88,8 +89,8 @@ for (let level = 0; level <= deepestSector; level += 1) {
   const spec = sectorLevels[level];
   if (spec === undefined) continue;
   check(
-    near(spec.visibleWidth, MAX_VISIBLE_WIDTH / 10 ** (level / 9), 1e-9),
-    `${spec.id}: порог ${spec.visibleWidth} не равен 10 000 / 10^(${level}/9)`,
+    near(spec.visibleWidth, MAX_VISIBLE_WIDTH / LEVEL_STEP ** level, 1e-9),
+    `${spec.id}: порог ${spec.visibleWidth} не равен 10 000 / 1,9194^${level}`,
   );
 }
 
@@ -118,27 +119,24 @@ for (let level = 0; level <= deepestSector; level += 1) {
   if (spec === undefined) continue;
   const delta = Math.abs(markerDiameter(visibleWidthForLevel(level)) - spec.markerPx);
   if (delta > worstMarkerDelta.delta) worstMarkerDelta = { delta, id: spec.id };
-  check(delta <= 0.06, `${spec.id}: markerPx ${spec.markerPx} против формулы ${markerDiameter(spec.visibleWidth).toFixed(3)}`);
+  check(delta <= 0.05, `${spec.id}: markerPx ${spec.markerPx} против формулы ${markerDiameter(spec.visibleWidth).toFixed(3)}`);
 }
 
 // 4. Контрольные векторы и гистерезис.
-check(levelForWidth(19.53125) === 9, `levelForWidth(19,53125) = ${levelForWidth(19.53125)} вместо 9`);
-check(levelForWidth(19.53) === 9, `levelForWidth(19,53) = ${levelForWidth(19.53)} вместо 9`);
-check(levelForWidth(100) === 9, `levelForWidth(100) = ${levelForWidth(100)} вместо 9`);
+check(levelForWidth(3.84) === 12, `levelForWidth(3,84) = ${levelForWidth(3.84)} вместо 12`);
+check(levelForWidth(3.999577) === 12, `levelForWidth(3,999577) = ${levelForWidth(3.999577)} вместо 12`);
 check(levelForWidth(10000) === 0, `levelForWidth(10 000) = ${levelForWidth(10000)} вместо 0`);
 check(levelForWidth(20000) === 0, `levelForWidth(20 000) = ${levelForWidth(20000)} вместо 0`);
 check(MIN_VISIBLE_WIDTH === 16000, `MIN_VISIBLE_WIDTH = ${MIN_VISIBLE_WIDTH} вместо 16 000`);
 check(MAX_VISIBLE_WIDTH === 10000, `MAX_VISIBLE_WIDTH = ${MAX_VISIBLE_WIDTH} вместо 10 000`);
 check(near(HYSTERESIS, 0.12, 1e-12), `гистерезис ${HYSTERESIS} вместо 0,12`);
 
-// Вход в L9 асимметричен: полная ширина 1000 единиц, без гистерезиса.
-const enterFloorWidth = visibleWidthForLevel(9);
-check(
-  near(enterFloorWidth, 1000, 1e-9),
-  `порог достижимости L9 ${enterFloorWidth} вместо 1000`,
-);
-check(near(visibleWidthForLevel(8) * (1 - HYSTERESIS), 1136.5637052130978, 1e-9),
-  'симметричный порог L8 должен быть 1136,563705…');
+// Вход на L12 асимметричен; на 1920px при 500px/св.г. видимая ширина 3,84 св.г.
+const enterFloorWidth = visibleWidthForLevel(12);
+check(near(enterFloorWidth, 3.999577480075393, 1e-12), `ширина L12 ${enterFloorWidth} вместо 3,999577480075393`);
+check(levelForWidth(1920 * TARGET_LY_PER_PX) === 12, 'упор 1920 × 0,002 не остаётся на L12');
+check(near(visibleWidthForLevel(11) * (1 - HYSTERESIS), 6.755573, 0.001),
+  'симметричный порог входа L11 не совпадает с лестницей');
 const deepestFloorWidth = visibleWidthForLevel(deepestSector);
 let level = 0;
 let switchesIn = 0;
@@ -165,6 +163,19 @@ for (let width = deepestFloorWidth; width < MAX_VISIBLE_WIDTH; width *= 1.005) {
 }
 check(backLevel === 0, `отъезд остановился на уровне ${backLevel} вместо 0`);
 check(switchesOut === deepestSector, `смен уровня при отъезде ${switchesOut} вместо ${deepestSector}`);
+
+
+// 4a. Единица карты и фиксированный предел пикселя — одинаковы на пяти viewport.
+check(UNITS_PER_LY === 1, `UNITS_PER_LY = ${UNITS_PER_LY} вместо 1`);
+check(TARGET_LY_PER_PX === 0.002, `TARGET_LY_PER_PX = ${TARGET_LY_PER_PX} вместо 0,002`);
+check(MAX_SCALE === 500, `MAX_SCALE = ${MAX_SCALE} вместо 500`);
+for (const viewport of [
+  { w: 1366, h: 768 }, { w: 1920, h: 1080 }, { w: 2560, h: 1440 },
+  { w: 390, h: 844 }, { w: 844, h: 390 },
+]) {
+  const maxScale = maxScaleForTargetWidth(viewport, 10000, 0.94);
+  check(maxScale === 500, `maxScale ${viewport.w}×${viewport.h} = ${maxScale} вместо 500`);
+}
 
 // 5. Тиры адреса.
 check(ADDRESS_TIERS.length === 6, `тиров ${ADDRESS_TIERS.length} вместо 6`);
@@ -229,7 +240,7 @@ check(worstCenterOffset <= 3.2 * Math.SQRT2 / 2 + 1e-9, `отклонение ц
 check(worstCenterOffset <= 2.27, `адрес грубее допуска 2,27 св.г.: ${worstCenterOffset.toFixed(4)}`);
 
 // Префиксы уровней лестницы обязаны быть началом полного адреса.
-for (let level = 0; level < 10; level += 1) {
+for (let level = 0; level <= deepestSector; level += 1) {
   const spec = levelSpec(level);
   if (spec === undefined) continue;
   const prefix = formatAddress(prefixOf(5720, 6257, spec.addressLetters));
