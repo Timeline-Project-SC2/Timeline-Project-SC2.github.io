@@ -1,7 +1,10 @@
 export const NBSP = '\u00A0';
 
-/** Единица длины карты (§17.23): `1000` единиц = `1` световой год. */
-export const UNITS_PER_LY = 1000;
+/** Единица длины карты: `1` единица = `1` световой год. */
+export const UNITS_PER_LY = 1;
+
+/** Предел приближения: световых лет на CSS-пиксель. */
+export const TARGET_LY_PER_PX = 0.002;
 
 export type DistanceMode = 'full' | 'short' | 'label';
 
@@ -11,13 +14,13 @@ function validateDistance(value: number): void {
   }
 }
 
-/** Переводит единицы карты в световые годы (`u / 1000`). */
+/** Переводит единицы карты в световые годы (`u / UNITS_PER_LY`). */
 export function unitsToLy(u: number): number {
   validateDistance(u);
   return u / UNITS_PER_LY;
 }
 
-/** Переводит световые годы в единицы карты (`ly * 1000`). */
+/** Переводит световые годы в единицы карты (`ly * UNITS_PER_LY`). */
 export function lyToUnits(ly: number): number {
   validateDistance(ly);
   return ly * UNITS_PER_LY;
