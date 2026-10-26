@@ -29,6 +29,8 @@ test('кодек адреса: тиры и 11 golden vectors', () => {
     ['T3', 'Субсектор', 80],
     ['T4', 'Ячейка', 16],
     ['T5', 'Узел', 3.2],
+    ['T6', 'Точка', 0.64],
+    ['T7', 'Пята', 0.128],
   ]);
   for (const [x, y, expected] of goldenVectors) {
     assert.equal(formatAddress(addressOf(x, y)), expected, `${x},${y}`);
@@ -104,8 +106,45 @@ test('кодек адреса: парсер принимает варианты 
   }
 });
 
+test('кодек адреса: парсер принимает глубинную запись 6 и 7 букв (T6/T7, §7.2)', () => {
+  for (const letters of ['REQHCM', 'REQHCMX']) {
+    assert.deepEqual(parseAddress(`KP·${letters}`), { sector: 'KP', letters }, letters);
+    assert.deepEqual(parseAddress(`kp-${letters}`), { sector: 'KP', letters }, letters);
+    assert.deepEqual(parseAddress(letters), { sector: 'KP', letters }, letters);
+  }
+  // Канон адреса не сдвинулся: addressOf по-прежнему выдаёт ровно 5 букв.
+  assert.equal(addressOf(5720, 6257).letters.length, 5);
+});
+
+test('кодек адреса: прямоугольник и центр глубинного адреса — 0,64 и 0,128 св.г. (§7.6)', () => {
+  const address6 = prefixOf(5720, 6257, 6);
+  const rect6 = rectOf(address6);
+  const center6 = centerOf(address6);
+  assert.equal(rect6.size, 0.64);
+  assert.equal(center6.x, rect6.x + 0.32);
+  assert.equal(center6.y, rect6.y + 0.32);
+  assert.ok(5720 >= rect6.x && 5720 < rect6.x + rect6.size);
+  assert.ok(6257 >= rect6.y && 6257 < rect6.y + rect6.size);
+
+  const address7 = prefixOf(5720, 6257, 7);
+  const rect7 = rectOf(address7);
+  const center7 = centerOf(address7);
+  assert.equal(rect7.size, 0.128);
+  assert.equal(center7.x, rect7.x + 0.064);
+  assert.equal(center7.y, rect7.y + 0.064);
+  assert.ok(5720 >= rect7.x && 5720 < rect7.x + rect7.size);
+  assert.ok(6257 >= rect7.y && 6257 < rect7.y + rect7.size);
+
+  // Глубинный адрес — продолжение канонического: пять первых букв совпадают.
+  const canonical = addressOf(5720, 6257).letters;
+  assert.equal(address6.letters.slice(0, 5), canonical);
+  assert.equal(address7.letters.slice(0, 6), address6.letters);
+  // Разбор глубинного адреса возвращает его же (round-trip).
+  assert.equal(formatAddress(parseAddress(formatAddress(address7))), formatAddress(address7));
+});
+
 test('кодек адреса: парсер отвергает пустой ввод, мусор, чужие сектора и неверную длину', () => {
-  for (const input of ['', '   ', 'не адрес', 'KP·', 'KP·ABCD', 'KP·ABCDEF', 'KP·AZAAA', 'XX·ABCDE', 'ABCDE!']) {
+  for (const input of ['', '   ', 'не адрес', 'KP·', 'KP·ABCD', 'KP·ABCDEFGH', 'KP·AZAAA', 'XX·ABCDE', 'ABCDE!']) {
     assert.equal(parseAddress(input), null, JSON.stringify(input));
   }
 });
