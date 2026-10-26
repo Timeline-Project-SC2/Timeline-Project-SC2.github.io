@@ -13,12 +13,12 @@ test('длительность полёта следует матрице §6.4 
   assert.throws(() => flight.flightDuration(-1), RangeError);
 });
 
-test('планы клика и стрелки достигают L9 и используют абсолютную разницу уровней', () => {
+test('планы клика и стрелки нацелены на L12 и используют абсолютную разницу уровней', () => {
   const start = { x: 500, y: 600, level: 4 };
   const target = { x: 700, y: 800, level: 9, id: 'goal' };
   const click = flight.planClickFlight(start, target);
   const arrow = flight.planArrowTrip({ x: 0, y: 0, level: 2 }, target);
-  assert.deepEqual([click.delta, click.duration, click.targetScaleLevel], [5, 1160, 9]);
+  assert.deepEqual([click.delta, click.duration, click.targetScaleLevel], [5, 1160, 12]);
   assert.deepEqual([arrow.delta, arrow.duration], [7, 1320]);
   assert.equal(click.to.id, 'goal');
 });

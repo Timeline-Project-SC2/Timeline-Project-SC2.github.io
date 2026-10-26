@@ -99,17 +99,17 @@ test('режим label содержит три ступени точности (
   assert.throws(() => units.formatDistanceLy(88.4, 'unknown'), RangeError);
 });
 
-test('UNITS_PER_LY = 1000, unitsToLy и lyToUnits: перевод, round-trip и валидация', () => {
-  assert.equal(units.UNITS_PER_LY, 1000);
-  assert.equal(units.unitsToLy(1000), 1);
-  assert.equal(units.unitsToLy(88.4), 0.0884);
+test('UNITS_PER_LY = 1, unitsToLy и lyToUnits: перевод, round-trip и валидация', () => {
+  assert.equal(units.UNITS_PER_LY, 1);
+  assert.equal(units.unitsToLy(1), 1);
+  assert.equal(units.unitsToLy(88.4), 88.4);
   assert.equal(units.unitsToLy(0), 0);
-  assert.equal(units.unitsToLy(10000), 10);
+  assert.equal(units.unitsToLy(10000), 10000);
 
   assert.equal(units.lyToUnits(0), 0);
-  assert.equal(units.lyToUnits(0.5), 500);
-  assert.equal(units.lyToUnits(1), 1000);
-  assert.equal(units.lyToUnits(10), 10000);
+  assert.equal(units.lyToUnits(0.5), 0.5);
+  assert.equal(units.lyToUnits(1), 1);
+  assert.equal(units.lyToUnits(10), 10);
 
   for (const u of [0, 0.5, 88.4, 90.8, 108.07, 116.32, 116.76, 990.4, 1000, 3672.4, 10000]) {
     assert.ok(Math.abs(units.lyToUnits(units.unitsToLy(u)) - u) <= 1e-9, `round-trip ед→св.г.→ед для ${u}`);

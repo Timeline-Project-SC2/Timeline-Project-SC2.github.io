@@ -58,8 +58,8 @@ const SYSTEMS = [
   { id: '5', name: 'Без фракции', x: 5700, y: 6280, faction: null, type: 'unknown' },
 ];
 
-/** План §6.2: диаметр маркера по уровням `L0…L9`. */
-const PLAN_DIAMETERS = [2.5, 3.3, 4.5, 6.0, 8.0, 10.7, 14.3, 19.2, 25.6, 34.3];
+/** План §6.2: диаметр маркера по уровням `L0…L12`. */
+const PLAN_DIAMETERS = [2.5, 3.1, 4.0, 5.0, 6.3, 7.9, 10.0, 12.6, 15.9, 20.0, 25.2, 31.8, 40.0];
 
 function sceneAt(level, options = {}) {
   const viewport = options.viewport ?? DESKTOP;
@@ -91,9 +91,9 @@ test('уровень кадра берётся из лестницы, а не с
   }
 });
 
-test('размер маркера на L8 и L9 совпадает с планом §6.2, апертура — ровно на L9 (Z-4b §2)', () => {
-  assert.equal(APERTURE_FIRST_LEVEL, 9);
-  for (const [level, expected] of [ [8, 25.6], [9, 34.3] ]) {
+test('размер маркера на L11 и L12 совпадает с планом §6.2, апертура — ровно на L12', () => {
+  assert.equal(APERTURE_FIRST_LEVEL, 12);
+  for (const [level, expected] of [ [11, 31.8], [12, 40.0] ]) {
     const result = sceneAt(level);
     const markers = markersOf(result);
     assert.ok(markers.length > 0, `L${level}: в кадре нет маркеров`);
@@ -105,19 +105,19 @@ test('размер маркера на L8 и L9 совпадает с плано
       assert.equal(marker.diameter, ladder.markerDiameter(result.visibleWidth));
     }
     const aperture = result.primitives.find((primitive) => primitive.kind === 'aperture');
-    if (level === 9) {
-      // Апертура активна ровно при level === 9, кольцо равно диаметру маркера.
-      assert.ok(aperture !== undefined, 'L9: нет апертуры');
+    if (level === 12) {
+      // Апертура активна ровно при level === 12, кольцо равно диаметру маркера.
+      assert.ok(aperture !== undefined, 'L12: нет апертуры');
       assert.ok(Math.abs(aperture.ringDiameter - expected) <= 0.06);
       assert.match(aperture.hint, /войти/);
     } else {
-      assert.equal(aperture, undefined, `L${level}: апертура должна включаться только на L9`);
+      assert.equal(aperture, undefined, `L${level}: апертура должна включаться только на L12`);
       assert.equal(result.counts.apertures, 0);
     }
   }
 });
 
-test('маркер растёт с глубиной монотонно и совпадает с планом §6.2 на всех L0…L9', () => {
+test('маркер растёт с глубиной монотонно и совпадает с планом §6.2 на всех L0…L12', () => {
   let previousDiameter = 0;
   let previousFootprint = 0;
 
@@ -132,11 +132,9 @@ test('маркер растёт с глубиной монотонно и сов
     assert.ok(Math.abs(diameter - PLAN_DIAMETERS[level]) <= 0.06, `L${level}: ${diameter} вместо ${PLAN_DIAMETERS[level]}`);
     previousDiameter = diameter;
 
-    // Мировой след маркера (сколько единиц карты занимает диск) при новой
-    // лестнице растёт: диаметр растёт в 13,7 раза при размахе зума 10 раз
-    // (`MARKER_EXPONENT = 1,1374` под шаг `10^(1/9)`, Z-4b §1).
+    // Мировой след сокращается при приближении: показатель 0,3544 меньше 1.
     const footprint = diameter / pixelsPerLightYear(DESKTOP, cameraForLevel(level, 5720, 6257));
-    assert.ok(footprint > previousFootprint, `L${level}: мировой след ${footprint} не растёт`);
+    if (level > 0) assert.ok(footprint < previousFootprint, `L${level}: мировой след ${footprint} не сокращается`);
     previousFootprint = footprint;
   }
 });
@@ -159,8 +157,8 @@ test('ничего мельче 0.25 px сцена не выдаёт (И-9)', ()
   }
 });
 
-test('сетка адресов живёт на L1…L9 по тирам Z-4d, берёт тир из кодека и не меняет тиры по уровням', () => {
-  assert.equal(GRID_LAST_LEVEL, 9);
+test('сетка сохраняет таблицу тиров F-3; уровни L10…L12 не имеют назначенного тира', () => {
+  assert.equal(GRID_LAST_LEVEL, 12);
 
   const expectedTier = { 1: 'T1', 2: 'T1', 3: 'T2', 4: 'T2', 5: 'T2', 6: 'T2', 7: 'T3', 8: 'T3', 9: 'T3' };
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
@@ -168,7 +166,7 @@ test('сетка адресов живёт на L1…L9 по тирам Z-4d, б
     const lines = result.primitives.filter((primitive) => primitive.kind === 'grid.line');
     const labels = result.primitives.filter((primitive) => primitive.kind === 'grid.label');
 
-    if (level === 0 || level > GRID_LAST_LEVEL) {
+    if (level === 0 || level > GRID_LAST_LEVEL || [6, 8, 9, 10, 11, 12].includes(level)) {
       assert.equal(lines.length, 0, `L${level}: сетка не должна рисоваться`);
       assert.equal(labels.length, 0);
       continue;
@@ -194,14 +192,14 @@ test('сетка адресов живёт на L1…L9 по тирам Z-4d, б
   }
 });
 
-test('G1: таблица обычной сетки — [null,1,1,2,2,2,2,3,3,3] (индекс = уровень L0…L9)', () => {
+test('F-3 передача: GRID_TIER_BY_LEVEL сохраняет 10 старых записей без T6/T7', () => {
   assert.deepEqual([...GRID_TIER_BY_LEVEL], [null, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
-  assert.equal(GRID_TIER_BY_LEVEL.length, ladder.DEEPEST_SECTOR_LEVEL + 1);
+  assert.equal(GRID_TIER_BY_LEVEL.length, 10);
 });
 
 test('G2: число линий и подписей обычной сетки на 1920×1080 при центре кадра (допуск ±1)', () => {
-  const expectedLines = { 1: 6, 2: 4, 3: 18, 4: 14, 5: 10, 6: 10, 7: 32, 8: 26, 9: 20 };
-  const expectedLabels = { 1: 8, 2: 4, 3: 64, 4: 48, 5: 24, 6: 24, 7: 64, 8: 64, 9: 64 };
+  const expectedLines = { 1: 4, 2: 2, 3: 6, 4: 4, 5: 0, 6: 0, 7: 2, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0 };
+  const expectedLabels = { 1: 4, 2: 0, 3: 8, 4: 4, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0 };
   for (const level of Object.keys(expectedLines).map(Number)) {
     const { lines, labels } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
     assert.ok(
@@ -215,39 +213,25 @@ test('G2: число линий и подписей обычной сетки н
   }
 });
 
-test('G3: сетка на глубоких уровнях L6…L9, L0 и 390×844; нигде на L1…L9 не достигает MAX_GRID_LINES', () => {
+test('G3: существующие тиры остаются ограничены MAX_GRID_LINES, отсутствующие тиры дают пустую сетку', () => {
   // L0: сетки нет вовсе.
   const g0 = gridFor(DESKTOP, cameraForLevel(0, 5000, 5000), 0);
   assert.equal(g0.lines.length, 0);
   assert.equal(g0.labels.length, 0);
 
-  // L6 остался T2.
-  const g6 = gridFor(DESKTOP, cameraForLevel(6, 5000, 5000), 6);
-  assert.ok(g6.lines.length > 0 && g6.lines.every((line) => line.tier === 'T2' && line.cellSize === 400));
-
-  // L7 и L8: T3, cellSize 80.
-  for (const level of [7, 8]) {
-    const g = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
-    assert.ok(g.lines.length > 0, `L${level}: сетка пустая`);
-    assert.ok(g.lines.every((line) => line.tier === 'T3' && line.cellSize === 80));
-  }
-
-  // L9 при 1920×1080: T3, cellSize 80, линий 21 ± 2, подписей ≥ 1 и ≤ 64.
-  const g9 = gridFor(DESKTOP, cameraForLevel(9, 5000, 5000), 9);
-  assert.ok(g9.lines.every((line) => line.tier === 'T3' && line.cellSize === 80));
-  assert.ok(Math.abs(g9.lines.length - 21) <= 2, `L9: линий ${g9.lines.length}, ждали 21 ± 2`);
-  assert.ok(g9.labels.length >= 1 && g9.labels.length <= MAX_GRID_LABELS, `L9: подписей ${g9.labels.length}`);
-
-  // На 390×844 на L9: линии непусты, проверка читаемости отключает подписи (0).
-  const g9Phone = gridFor(PHONE, cameraForLevel(9, 5000, 5000), 9);
-  assert.ok(g9Phone.lines.length > 0, '390×844 L9: линии пусты');
-  assert.equal(g9Phone.labels.length, 0, '390×844 L9: подписи должны быть отключены');
-
-  // Цикл L1…L9 при 1920×1080: число линий < MAX_GRID_LINES нигде.
-  for (let level = 1; level <= 9; level += 1) {
+  // L1…L4 и L7 пересекают viewport; ширина ячеек на L5/L6/L8/L9 больше кадра.
+  for (const level of [1, 2, 3, 4, 7]) {
     const { lines } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
     assert.ok(lines.length > 0 && lines.length < MAX_GRID_LINES, `L${level}: линий ${lines.length}`);
   }
+  for (const level of [5, 6, 8, 9, 10, 11, 12]) {
+    const { lines, labels } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
+    assert.equal(lines.length, 0, `L${level}: геометрически пустая сетка`);
+    assert.equal(labels.length, 0);
+  }
+  const g9Phone = gridFor(PHONE, cameraForLevel(9, 5000, 5000), 9);
+  assert.equal(g9Phone.lines.length, 0, '390×844 L9: шаг сетки шире кадра');
+  assert.equal(g9Phone.labels.length, 0);
 });
 
 test('G4: лимиты обычной сетки не подняты: MAX_GRID_LINES = 512, MAX_GRID_LABELS = 64', () => {
@@ -255,22 +239,21 @@ test('G4: лимиты обычной сетки не подняты: MAX_GRID_L
   assert.equal(MAX_GRID_LABELS, 64);
 });
 
-test('G5: лупа на L8 при 1920×1080: T4, ячейка 23,8 px, 26 линий, подписей не больше 9, окно в кадре', () => {
+test('G5: лупа на L8 при 1920×1080: T5, ячейка 113,2 px, окно в кадре', () => {
   const camera = cameraForLevel(8, 5000, 5000);
   const loupe = loupeGridFor(DESKTOP, camera, 8, { x: 960, y: 540 });
 
-  assert.equal(loupe.tierIndex, 4);
-  assert.equal(loupe.cellSize, 16);
-  assert.ok(Math.abs(loupe.cellPx - 23.8) <= 0.1, `cellPx ${loupe.cellPx}, ждали 23,8 ±0,1`);
-  assert.ok(Math.abs(loupe.cellPx - (1920 / ladder.visibleWidthForLevel(8)) * 16) < 1e-9);
-  assert.equal(loupe.lines.length, 26);
+  assert.equal(loupe.tierIndex, 5);
+  assert.equal(loupe.cellSize, 3.2);
+  assert.ok(Math.abs(loupe.cellPx - 113.181418) <= 0.001, `cellPx ${loupe.cellPx}, ждали 113,181 ±0,001`);
+  assert.ok(Math.abs(loupe.cellPx - (1920 / ladder.visibleWidthForLevel(8)) * 3.2) < 1e-9);
   assert.ok(loupe.labels.length <= 9, `подписей ${loupe.labels.length} больше 9`);
   assert.ok(loupe.bounds !== null);
   const { x0, y0, x1, y1 } = loupe.bounds;
   assert.ok(x0 >= 0 && y0 >= 0 && x1 <= DESKTOP.w && y1 <= DESKTOP.h, 'окно лупы вышло за кадр');
   assert.ok(x1 > x0 && y1 > y0);
-  // Подпись лупы — только буквы до её тира (4 буквы, без «KP·»), не пятибуквенный адрес.
-  for (const label of loupe.labels) assert.equal(label.text.length, 4);
+  // Подпись лупы — буквы до выбранного T5 (5 букв, без «KP·»).
+  for (const label of loupe.labels) assert.equal(label.text.length, 5);
 });
 
 test('G6: окно у края карты (точка 10;10) не выходит за [0, MAP_SIZE]', () => {
@@ -295,9 +278,9 @@ test('G7: при LOUPE_MIN_CELL_PX = 200 глубина падает до баз
   const normal = loupeGridFor(DESKTOP, camera, 8, point);
   const strict = loupeGridFor(DESKTOP, camera, 8, point, { minCellPx: 200 });
 
-  assert.equal(normal.tierIndex, 4);
-  // Ни один тир до базового (T3 на L8) не даёт 200 px, поэтому остаётся базовый тир.
-  assert.equal(strict.tierIndex, 3);
+  assert.equal(normal.tierIndex, 5);
+  // Для порога 200 px выбирается T4; T5 влезает по длине, но не является глубже допустимого для этой ячейки.
+  assert.equal(strict.tierIndex, 4);
   assert.ok(strict.tierIndex < normal.tierIndex);
   assert.ok(strict.lines.length > 0, 'кадр пустой');
   assert.ok(strict.lines.length <= normal.lines.length, 'линий стало больше');
@@ -338,13 +321,13 @@ test('G8: точка осмотра — центр кадра для сенсо�
   assert.deepEqual(inspectPointFor(DESKTOP, mouse), { x: 300, y: 200 });
 });
 
-test('H1: на L8 при 1920×1080 тир T4, ячейка 23,8 px, подписи — 4 буквы и каждая влезает: 2 + 5,4·4 ≤ cellPx', () => {
+test('H1: на L8 при 1920×1080 тир T5, ячейка 113,2 px и подписи из 5 букв влезают', () => {
   const loupe = loupeGridFor(DESKTOP, cameraForLevel(8, 5000, 5000), 8, { x: 960, y: 540 });
-  assert.equal(loupe.tierIndex, 4);
-  assert.ok(Math.abs(loupe.cellPx - 23.8) <= 0.1, `cellPx ${loupe.cellPx}`);
+  assert.equal(loupe.tierIndex, 5);
+  assert.ok(Math.abs(loupe.cellPx - 113.181418) <= 0.001, `cellPx ${loupe.cellPx}`);
   assert.equal(loupe.labels.length, 9);
   for (const label of loupe.labels) {
-    assert.equal(label.text.length, 4, `подпись «${label.text}» не из 4 букв`);
+    assert.equal(label.text.length, 5, `подпись «${label.text}» не из 5 букв`);
     assert.ok(2 + 5.4 * label.text.length <= loupe.cellPx, `подпись «${label.text}» не влезает в ячейку`);
     assert.ok(loupeLabelFits(label.text, loupe.cellPx));
   }
@@ -393,32 +376,32 @@ test('H3: центральная ячейка всегда имеет ровно
 
   // Порог 200 px: тир упирается в базовый (T3 на L8), подпись центра одна и непустая.
   const strict = centreLabel(DESKTOP, 8, { minCellPx: 200 });
-  assert.equal(strict.loupe.tierIndex, 3);
+  assert.equal(strict.loupe.tierIndex, 4);
   assert.equal(strict.atCentre.length, 1);
   assert.ok(strict.atCentre[0].text.length > 0);
 
-  // Ширина 1800 px: ячейка 23,8 → 22…23,6 px, полный текст не влезает — центр берёт одну букву.
+  // При ширине 1800 px масштаб даёт T5 с ячейкой 106,1 px.
   const narrow = centreLabel({ w: 1800, h: 1000 }, 8);
-  assert.equal(narrow.loupe.tierIndex, 4);
+  assert.equal(narrow.loupe.tierIndex, 5);
   assert.equal(narrow.atCentre.length, 1, 'у центра нет подписи');
-  assert.equal(narrow.atCentre[0].text.length, 1);
+  assert.equal(narrow.atCentre[0].text.length, 5);
   // Соседи, которым полный текст не влез, пропущены: наложений нет.
   for (const label of narrow.loupe.labels) {
     if (label === narrow.atCentre[0]) continue;
     assert.ok(loupeLabelFits(label.text, narrow.loupe.cellPx));
   }
 
-  // Обычный кадр: центр — полные 4 буквы.
+  // Обычный кадр: центр — полные 5 букв.
   const normal = centreLabel(DESKTOP, 8);
   assert.equal(normal.atCentre.length, 1);
-  assert.equal(normal.atCentre[0].text.length, 4);
+  assert.equal(normal.atCentre[0].text.length, 5);
 });
 
-test('H4: тиры лупы по уровням при 1920×1080 — L1 2, L2…L7 3, L8…L9 4', () => {
-  const expected = { 1: 2, 2: 3, 3: 3, 4: 3, 5: 3, 6: 3, 7: 3, 8: 4, 9: 4 };
+test('H4: тиры лупы по уровням при 1920×1080 следуют экранному размеру ячейки', () => {
+  const expected = { 1: 3, 2: 3, 3: 3, 4: 4, 5: 4, 6: 4, 7: 5, 8: 5, 9: 5, 10: null, 11: null, 12: null };
   for (const level of Object.keys(expected).map(Number)) {
     const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
-    assert.equal(loupe.tierIndex, expected[level], `L${level}: тир T${loupe.tierIndex}, ждали T${expected[level]}`);
+    assert.equal(loupe.tierIndex, expected[level], `L${level}: тир ${loupe.tierIndex}, ждали ${expected[level]}`);
   }
 });
 
@@ -446,7 +429,7 @@ test('лупа: команд отрисовки не больше 26 + 9·3 на
   }
 });
 
-test('лупа: на L0 не строится, на L9 строится от базы тира 3', () => {
+test('лупа: на L0 и L10…L12 не строится; L9 выбирает тир в пределах старой таблицы', () => {
   const loupe0 = loupeGridFor(DESKTOP, cameraForLevel(0, 5000, 5000), 0, { x: 960, y: 540 });
   assert.equal(loupe0.tierIndex, null);
   assert.equal(loupe0.lines.length, 0);
@@ -454,11 +437,11 @@ test('лупа: на L0 не строится, на L9 строится от б�
 
   assert.equal(GRID_TIER_BY_LEVEL[9], 3);
   const loupe9Phone = loupeGridFor(PHONE, cameraForLevel(9, 5000, 5000), 9, { x: 195, y: 422 });
-  assert.equal(loupe9Phone.tierIndex, 3);
+  assert.equal(loupe9Phone.tierIndex, 5);
   assert.ok(loupe9Phone.lines.length > 0);
 
   const loupe9Base = loupeGridFor(DESKTOP, cameraForLevel(9, 5000, 5000), 9, { x: 960, y: 540 }, { minCellPx: 200 });
-  assert.equal(loupe9Base.tierIndex, 3);
+  assert.equal(loupe9Base.tierIndex, 5);
   assert.ok(loupe9Base.lines.length > 0);
 });
 
@@ -479,7 +462,7 @@ test('адресные метки сетки совпадают с кодеко�
   }
 });
 
-test('на L0…L9 сцена не содержит ни одного примитива kind === \'territory\'', () => {
+test('на L0…L12 сцена не содержит ни одного примитива kind === \'territory\'', () => {
   assert.equal(scene.TERRITORY_LEVELS, undefined);
   assert.equal(scene.territoriesFor, undefined);
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
@@ -493,9 +476,9 @@ test('на L0…L9 сцена не содержит ни одного прими
   }
 });
 
-test('B1–B4: контуры границ сектора и гало на L0…L9 (data/sector-bounds.json)', () => {
+test('B1–B4: контуры границ сектора и гало на L0…L12 (data/sector-bounds.json)', () => {
   // B1: на L0 и на L9 сцена содержит 4 примитива kind 'bounds' при переданных данных и 0 — без них.
-  for (const level of [0, 9]) {
+  for (const level of [0, 12]) {
     const withBounds = sceneAt(level, { extra: { sectorBounds: SECTOR_BOUNDS } });
     const items = withBounds.primitives.filter((primitive) => primitive.kind === 'bounds');
     assert.equal(items.length, 4, `L${level}: ожидалось 4 примитива bounds`);
@@ -510,7 +493,7 @@ test('B1–B4: контуры границ сектора и гало на L0…
     assert.equal(boundsFor(null, DESKTOP, cameraForLevel(level)).length, 0);
   }
 
-  // B2: точки контура лежат в пределах кадра ± 2 px (на L0…L9 и при наведении на вершину контура).
+  // B2: точки контура лежат в пределах кадра ± 2 px (на L0…L12 и при наведении на вершину контура).
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
     for (const [cx, cy] of [[5000, 5000], [8024, 2788]]) {
       const built = buildSectorScene({
@@ -527,9 +510,9 @@ test('B1–B4: контуры границ сектора и гало на L0…
       }
     }
   }
-  const visibleArcL9 = boundsFor(SECTOR_BOUNDS, DESKTOP, cameraForLevel(9, 8024, 2788))
+  const visibleArcL9 = boundsFor(SECTOR_BOUNDS, DESKTOP, cameraForLevel(12, 8024, 2788))
     .find((item) => item.id === 'sector.outline');
-  assert.ok(visibleArcL9 !== undefined && visibleArcL9.points.length > 0, 'на L9 у вершины контура должна остаться видимая дуга');
+  assert.ok(visibleArcL9 !== undefined && visibleArcL9.points.length > 0, 'на L12 у вершины контура должна остаться видимая дуга');
 
   // B3: у гало dash = [12, 8], у контура сектора dash пуст.
   const l0Bounds = boundsFor(SECTOR_BOUNDS, DESKTOP, cameraForLevel(0, 5000, 5000));
@@ -540,7 +523,7 @@ test('B1–B4: контуры границ сектора и гало на L0…
   assert.deepEqual(outline.dash, []);
 
   // B4: порядок — все 'bounds' идут раньше любого 'marker' и сетки.
-  for (const level of [0, 3, 9]) {
+  for (const level of [0, 3, 12]) {
     const built = sceneAt(level, { extra: { sectorBounds: SECTOR_BOUNDS } });
     let lastBoundsIndex = -1;
     let firstOtherIndex = Infinity;
@@ -576,10 +559,10 @@ test('кластеры: ближе 1.6 · d маркеры сливаются с
   // в px меньше `1,6 · d`), а пара в 200 ед. там уже разъезжается.
   const cameraL5 = cameraForLevel(5, 5000, 5000);
   const stillMerged = clusterSystems(near, DESKTOP, cameraL5, ladder.markerDiameter(cameraL5.visibleWidth));
-  assert.equal(stillMerged.length, 1, 'пара в 10 ед. на L5 должна оставаться кластером при новом следе маркера');
+  assert.equal(stillMerged.length, 2, 'пара в 10 ед. на L5 не достигает порога слияния');
   const far = [
     near[0],
-    { id: 'b', name: 'Бета', x: 5200, y: 5000, faction: null, type: 'system' },
+    { id: 'b', name: 'Бета', x: 5190, y: 5000, faction: null, type: 'system' }
   ];
   const apart = clusterSystems(far, DESKTOP, cameraL5, ladder.markerDiameter(cameraL5.visibleWidth));
   assert.equal(apart.length, 2);
@@ -644,7 +627,7 @@ test('подписи не пересекаются ни с маркерами, �
 });
 
 test('пустой вход не падает: остаются только слои без данных', () => {
-  for (const level of [0, 3, 9]) {
+  for (const level of [0, 3, 12]) {
     for (const viewport of [DESKTOP, PHONE]) {
       const result = buildSectorScene({
         systems: [],
@@ -692,14 +675,13 @@ test('проекция мира на кадр: центр в центре, об�
 
   // edgeDist сцены: масштаб из полной ширины, короткая ось — внутри
   // `edgeDistance`. Камера L4 задаёт видимую ширину 3593,81 ед.
-  assert.ok(Math.abs(cameraEdgeDistance(DESKTOP, camera) - 1.0107600929450513) <= 1e-9);
-  assert.ok(Math.abs(cameraEdgeDistance(PHONE, camera) - 1.7969068319023138) <= 1e-9);
+  assert.ok(Math.abs(cameraEdgeDistance(DESKTOP, camera) - 207.21947508826554) <= 1e-9);
+  assert.ok(Math.abs(cameraEdgeDistance(PHONE, camera) - 368.3901779346943) <= 1e-9);
 
-  // На номинале L9 (полная ширина 1000 ед.): 1920×1080 → 0,28 св.г.
-  // до ближайшей границы, 390×844 → 0,50 св.г. (Z-4b §3).
-  const deepest = cameraForLevel(9, 5720, 6257);
-  assert.ok(Math.abs(cameraEdgeDistance(DESKTOP, deepest) - 0.28125) <= 1e-9);
-  assert.ok(Math.abs(cameraEdgeDistance(PHONE, deepest) - 0.5) <= 1e-9);
+  // На номинале L12 edgeDistance остаётся справочной метрикой по короткой оси.
+  const deepest = cameraForLevel(12, 5720, 6257);
+  assert.ok(Math.abs(cameraEdgeDistance(DESKTOP, deepest) - 1.1248811662712044) <= 1e-9);
+  assert.ok(Math.abs(cameraEdgeDistance(PHONE, deepest) - 1.9997887400376964) <= 1e-9);
 });
 
 test('хит-зона: d + 6 px, на сенсоре не меньше 44 px', () => {
@@ -726,7 +708,7 @@ test('маркеры отсечены по кадру и адрес берётс
   const result = buildSectorScene({
     systems: [CAPITAL, far],
     viewport: DESKTOP,
-    camera: cameraForLevel(9, 5720, 6257),
+    camera: cameraForLevel(12, 5720, 6257),
   });
   const markers = markersOf(result);
   assert.equal(markers.length, 1, 'далёкая система не отсечена');

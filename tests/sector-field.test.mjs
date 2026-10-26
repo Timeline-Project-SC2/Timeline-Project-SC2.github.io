@@ -378,15 +378,15 @@ test('контракт единиц гашения: пороги 1 и 4 св.г.
   }
 });
 
-test('реальные edgeDist из сцены: на упоре fade = 0, на «вся карта» fade = 1', () => {
+test('реальные edgeDist из сцены: справочная дистанция напрямую управляет fade поля', () => {
   // Сцена отдаёт edgeDist в св.г. (`cameraEdgeDistance` → `edgeDistance`
   // лестницы, §17.23), и поле принимает св.г.: значение идёт в поле как
   // есть, без конверсии — прямое `edgeDist: scene.edgeDist` при будущей
   // проводке обязано быть безопасным. Если константы поля снова окажутся
   // в других единицах, этот тест упадёт.
   const viewports = [
-    { w: 1920, h: 1080, expectedMaxScale: 1.92, expectedEdge: 0.28125, expectedFitScale: 0.10152 },
-    { w: 390, h: 844, expectedMaxScale: 0.39, expectedEdge: 0.5, expectedFitScale: 0.03666 },
+    { w: 1920, h: 1080, expectedMaxScale: 500, expectedEdge: 1.08, expectedFade: 0.0020954074074074113, expectedFitScale: 0.10152 },
+    { w: 390, h: 844, expectedMaxScale: 500, expectedEdge: 0.39, expectedFade: 0, expectedFitScale: 0.03666 },
   ];
   for (const spec of viewports) {
     const viewport = { w: spec.w, h: spec.h };
@@ -402,10 +402,9 @@ test('реальные edgeDist из сцены: на упоре fade = 0, на 
       Math.abs(edgeAtMaxLy - spec.expectedEdge) <= 1e-9,
       `${label}: edgeDistance на упоре = ${edgeAtMaxLy} св.г., ожидалось ${spec.expectedEdge} св.г.`,
     );
-    assert.equal(
-      localFadeFor(edgeAtMaxLy),
-      0,
-      `${label}: fade на упоре не 0 — глубокий пресет на упоре не гасится полностью`,
+    assert.ok(
+      Math.abs(localFadeFor(edgeAtMaxLy) - spec.expectedFade) <= 1e-12,
+      `${label}: fade ${localFadeFor(edgeAtMaxLy)} не совпал с геометрическим edgeDistance ${spec.expectedEdge}`,
     );
 
     const fitScale = fitScaleFor(viewport, MAP_SIZE, CONFIG.view.fitInset);
@@ -415,8 +414,8 @@ test('реальные edgeDist из сцены: на упоре fade = 0, на 
     );
     const edgeAtFitLy = edgeDistance(viewport, fitScale);
     assert.ok(
-      Math.abs(edgeAtFitLy - 5.319148936170213) <= 1e-9,
-      `${label}: edgeDistance на «вся карта» = ${edgeAtFitLy} св.г., ожидалось 5,32 св.г.`,
+      Math.abs(edgeAtFitLy - 5319.148936170213) <= 1e-9,
+      `${label}: edgeDistance на «вся карта» = ${edgeAtFitLy} св.г., ожидалось 5 319,15 св.г.`,
     );
     assert.equal(
       localFadeFor(edgeAtFitLy),

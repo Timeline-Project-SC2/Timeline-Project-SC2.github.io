@@ -43,7 +43,7 @@ export const LEVELS: readonly LevelSpec[] = Object.freeze([
   Object.freeze({ level: 8, id: 'L8', frame: 'S', visibleWidth: sectorWidth(8), addressLetters: 5, markerPx: 15.9, frameBudgetMs: 16 }),
   Object.freeze({ level: 9, id: 'L9', frame: 'S', visibleWidth: sectorWidth(9), addressLetters: 5, markerPx: 20.0, frameBudgetMs: 16 }),
   Object.freeze({ level: 10, id: 'L10', frame: 'S', visibleWidth: sectorWidth(10), addressLetters: 5, markerPx: 25.2, frameBudgetMs: 16 }),
-  Object.freeze({ level: 11, id: 'L11', frame: 'S', visibleWidth: sectorWidth(11), addressLetters: 5, markerPx: 31.7, frameBudgetMs: 16 }),
+  Object.freeze({ level: 11, id: 'L11', frame: 'S', visibleWidth: sectorWidth(11), addressLetters: 5, markerPx: 31.8, frameBudgetMs: 16 }),
   Object.freeze({ level: 12, id: 'L12', frame: 'S', visibleWidth: sectorWidth(12), addressLetters: 5, markerPx: 40.0, frameBudgetMs: 16 }),
   Object.freeze({ level: 13, id: 'S0', frame: 'O', visibleWidth: 100, addressLetters: 5, markerPx: 0, frameBudgetMs: 16 }),
   Object.freeze({ level: 14, id: 'S1', frame: 'O', visibleWidth: 16, addressLetters: 5, markerPx: 0, frameBudgetMs: 16 }),
