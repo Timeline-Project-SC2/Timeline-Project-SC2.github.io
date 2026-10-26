@@ -90,9 +90,12 @@
   `npm run build`, `npm run verify:publish`, `npm run verify:address`, `npm run verify:sector-core`,
   `npm run verify:no-raster`.
 - `npm test` — сравнение с базой из §4 по **именам** падений, а не по счётчику.
-- Job «Скрипты сайта» красный на всех PR из-за тех же восьми падений: шаги после `npm test`
-  в `check.yml` не выполняются (решение №14 `F-1`, правка `check.yml` — отдельная микрозадача).
-  Поэтому `lint` и `check:planet-core` гонять локально.
+- С **26.10.2026 (CI-1, PR #316, `e798eff`)** джоба «Скрипты сайта» больше не красная:
+  монолитный `run:`-блок распилен на 9 именованных шагов, `lint` и `check:planet-core`
+  исполняются в CI всегда, а 8 планетарных падений изолированы стражем
+  `tools/check_test_baseline.mjs` + `tools/known-test-failures.json`. Зелёный страж = ровно
+  базовые 8; новое падение, устаревание базы или крэш — красный шаг с именами. Локальный
+  прогон линта остаётся допустимым, но больше не единственный способ его выполнить.
 - Слияние: `gh pr merge <N> --squash --admin` (или REST-мерж с `merge_method`). `BLOCKED`
   в `gh pr view` — ожидаемое состояние ruleset, а не запрет: подробности —
   [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
