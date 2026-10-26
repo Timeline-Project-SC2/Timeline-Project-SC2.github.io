@@ -451,8 +451,8 @@ test('лупа: команд отрисовки не больше 26 + 9·3 на
 });
 
 test('лупа строится на всех L0…L12: null-тира больше нет, окно не пусто', () => {
-  // Раньше лупа возвращала null на L0 и L10…L12 (таблица GRID_TIER_BY_LEVEL обрывалась
-  // на T3). После F3-5 база — gridTiersFor(scale).primary, поэтому тир есть всегда.
+  // Раньше лупа возвращала null на L0 и L10…L12: таблица «уровень → тир» обрывалась
+  // на T3. После F3-5 база — gridTiersFor(scale).primary, поэтому тир есть всегда.
   for (let level = 0; level <= GRID_LAST_LEVEL; level++) {
     const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
     assert.notEqual(loupe.tierIndex, null, `L${level}: лупа не построена`);
