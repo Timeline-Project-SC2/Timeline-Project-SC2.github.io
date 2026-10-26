@@ -9,6 +9,7 @@
 | [`waves/`](waves/protocol.md) | Сами разделы по волнам: `protocol`, `stage-6-dx`, `stage-8`, `sw-1`, `sw-2*`, `z-3`, `unit-*`, `f` |
 | [`worker_instruction_on_splitwork.md`](worker_instruction_on_splitwork.md) | Что делает **Воркер** в параллельной тройке: `OWNED_FILES`, самопроверка, формат отчёта |
 | [`external_agency_agents_audit.md`](external_agency_agents_audit.md) | Откуда взяты карточки ролей: аудит внешнего набора `agency-agents`, что взято, что отброшено и почему |
+| [`external_ci_gate_audit_2026-10-26.md`](external_ci_gate_audit_2026-10-26.md) | Внешний аудит CI-гейта: «привычно красный» `check.yml`, решения E1…E6, карточка [`CI-1`](wave_cards/CI-1.md) |
 | [`role_cards/`](role_cards/) | **Что считать готовым** в конкретной зоне: восемь режимов работы одного агента |
 | [`wave_cards/`](wave_cards/) | **Выданная карточка волны**: матрица файлов, контракт до буквы, шаги, гейты и журнал решений для конкретного воркера |
 | [`shift_handoff.md`](shift_handoff.md) | **Передача смены Гайдлайнера**: где мы стоим, что читать, что делать первым, чего не повторять |
@@ -37,6 +38,7 @@
 | [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | принята 26.10.2026 (PR #300); исполнение — [`F-1-execution.md`](wave_cards/F-1-execution.md), вердикт — [`wave_cards/F-1-execution.md`](wave_cards/F-1-execution.md) |
 | [`wave_cards/F-2.md`](wave_cards/F-2.md) | `F-2` · `Z-4e`: территории на глубине до `L12`, `faction-net` без `NET_LAYER_LEVELS`, диапазон от `layerFillAlpha` | принята 26.10.2026 (PR #308, PASS); исполнение и вердикт — [`F-2-execution.md`](wave_cards/F-2-execution.md) |
 | [`wave_cards/F-3.md`](wave_cards/F-3.md) | `F-3` · `Z-4f`: фактическая сетка, тиры `T6/T7`, `gridTiersFor(scale)`, удаление `.map-grid-overlay` | принята 26.10.2026 (PR #313, PASS, squash `59f8f3a`); исполнение, журнал F3-1…F3-13 и вердикт — [`F-3-execution.md`](wave_cards/F-3-execution.md) |
+| [`wave_cards/CI-1.md`](wave_cards/CI-1.md) | `CI-1` · инфраструктура: бинарный CI-гейт — страж базы 8 падений, линт `tools/tests`, planet-core отдельным шагом | выдана 26.10.2026, кодовых PR нет; аудит-основание — [`external_ci_gate_audit_2026-10-26.md`](external_ci_gate_audit_2026-10-26.md); шаги и журнал — [`CI-1-execution.md`](wave_cards/CI-1-execution.md) |
 
 ## Как пользоваться
 
