@@ -32,7 +32,6 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 #mapCanvas.dragging { cursor: grabbing; }
 #mapCanvas.marker-hover { cursor: pointer; }
 .map-vignette { position: absolute; inset: 0; pointer-events: none; z-index: 1; background: radial-gradient(ellipse at 53% 47%, transparent 46%, rgba(2,5,10,.12) 82%, rgba(2,5,10,.42) 100%); }
-.map-grid-overlay { position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: .12; background-image: linear-gradient(rgba(174,199,228,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(174,199,228,.12) 1px, transparent 1px); background-size: 80px 80px; mix-blend-mode: screen; }
 .coordinates-label { position: absolute; z-index: 2; left: 50%; top: 80px; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; color: rgba(219,230,244,.40); font: 9px/1 var(--mono); letter-spacing: .16em; pointer-events: none; white-space: nowrap; }
 .coordinates-label span + span { color: rgba(219,230,244,.67); }
 
@@ -326,7 +325,6 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
   .detail-panel:not([hidden]) ~ .map-notice { display: none; }
   .map-controls { right: 8px; bottom: calc(min(42vh, 340px) + 20px); }
   .map-hint { bottom: calc(min(42vh, 340px) + 22px); left: 12px; transform: none; font-size: 7px; }
-  .map-grid-overlay { background-size: 56px 56px; }
   .modal-backdrop { padding: 10px; }
   .info-modal { max-height: 90vh; }
   .modal-head { min-height: 65px; padding: 11px 14px; }

@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  ADDRESS_TIERS,
   addressOf,
   centerOf,
   formatAddress,
+  parseAddress,
+  prefixOf,
   rectOf,
 } from '../src/atlas/sector-address.ts';
 
@@ -111,8 +114,10 @@ function main() {
     errors.push(`Ожидалось 173 системы, найдено ${systems.length}.`);
   }
 
+  const DEEP_POINTS = 1000;
   const addresses = new Set();
   let maxRoundTrip = 0;
+  let deepChecked = 0;
   for (const system of systems) {
     if (!Number.isFinite(system.x) || !Number.isFinite(system.y)) {
       errors.push(`У системы «${system.name}» некорректные координаты.`);
@@ -144,6 +149,48 @@ function main() {
     errors.push(`Адреса не уникальны: ${addresses.size} уникальных для ${systems.length} систем.`);
   }
 
+  // Глубина кодека (версия 4.0, §7.9): round-trip 6 и 7 букв на `1 000` детерминированных
+  // точках. Формула без `Math.random`: шаги 7 919 и 104 729 взаимно просты с 100 000,
+  // поэтому точки равномерно покрывают поле и повторяются только через весь период.
+  for (let index = 0; index < DEEP_POINTS; index += 1) {
+    const x = ((index * 7919 + 13) % 100000) / 10;
+    const y = ((index * 104729 + 7) % 100000) / 10;
+    const canonical = formatAddress(addressOf(x, y));
+    for (const letters of [6, 7]) {
+      const deep = prefixOf(x, y, letters);
+      const compact = formatAddress(deep);
+      const parsed = parseAddress(compact);
+      if (parsed === null || formatAddress(parsed) !== compact) {
+        errors.push(`Глубина ${letters} букв: разбор «${compact}» не вернул тот же адрес.`);
+        continue;
+      }
+      if (parsed.letters.length !== letters) {
+        errors.push(`Глубина ${letters} букв: длина адреса «${compact}» не ${letters}.`);
+      }
+      if (!compact.startsWith(canonical)) {
+        errors.push(`Глубина ${letters} букв: «${compact}» не продолжает канон «${canonical}».`);
+      }
+      const rect = rectOf(deep);
+      const center = centerOf(deep);
+      const size = ADDRESS_TIERS[letters].cellSize;
+      if (Math.abs(rect.size - size) > 1e-12) {
+        errors.push(`Глубина ${letters} букв: размер ячейки ${rect.size} вместо ${size}.`);
+      }
+      if (x < rect.x - 1e-9 || x >= rect.x + rect.size + 1e-9
+        || y < rect.y - 1e-9 || y >= rect.y + rect.size + 1e-9) {
+        errors.push(`Глубина ${letters} букв: точка (${x}; ${y}) вне прямоугольника «${compact}».`);
+      }
+      const centerError = Math.max(Math.abs(center.x - (rect.x + rect.size / 2)), Math.abs(center.y - (rect.y + rect.size / 2)));
+      if (centerError > 1e-9) {
+        errors.push(`Глубина ${letters} букв: центр «${compact}» смещён на ${centerError}.`);
+      }
+      deepChecked += 1;
+    }
+  }
+  // Пятибуквенный канон не ослаблен: глубина не подменяет `addressOf`.
+  if (addressOf(5720, 6257).letters.length !== 5) {
+    errors.push('addressOf перестал выдавать пятибуквенный канон.');
+  }
   let matchingGoldens = 0;
   for (const vector of GOLDEN_VECTORS) {
     if (formatAddress(addressOf(vector.x, vector.y)) === vector.address) {
@@ -165,7 +212,8 @@ function main() {
   }
 
   console.log(`Проверка адресов пройдена: ${systems.length} систем, ${addresses.size} уникальных адресов; `
-    + `максимум round-trip ${maxRoundTrip} св.г.; golden vectors ${matchingGoldens}/${GOLDEN_VECTORS.length}.`);
+    + `максимум round-trip ${maxRoundTrip} св.г.; golden vectors ${matchingGoldens}/${GOLDEN_VECTORS.length}; `
+    + `глубина T6/T7: ${deepChecked} round-trip на ${DEEP_POINTS} точках.`);
 }
 
 main();

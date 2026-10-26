@@ -608,10 +608,84 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
+  /*
+   * Фейд смены тира сетки (§17.3 п. 9): 160 мс. Состояние перехода живёт только
+   * здесь — без новых слоёв, второго canvas и DOM-узлов (F3-7). Прозрачности
+   * `0,16`/`0,07` приходят из сцены полем `line.alpha` (F3-9); рендерер хранит
+   * лишь прогресс перехода к текущей цели, своих чисел прозрачности не вводит.
+   *
+   * Ключ — тир сетки. Тиры сменяются парами (например `T3/T4` → `T4/T5`): тир,
+   * который был вложенным, становится старшим, и его цель меняется `0,07 → 0,16`.
+   * Переход считается от текущего значения к новой цели, поэтому такая смена
+   * тоже идёт 160 мс, без скачка. Исчезнувший тир сцена больше не содержит —
+   * гасить нечего, его запись снимается без рисования.
+   */
+  const GRID_FADE_MS = 160;
+  var gridFadeEntries = new Map<string, { from: number; to: number; start: number }>();
+  var gridFadeFactors = new Map<string, number>();
+  var gridFadePrimed = false;
+
+  /** Значение перехода в момент `nowMs`: линейно от `from` к `to` за `GRID_FADE_MS`. */
+  function gridFadeValue(entry: { readonly from: number; readonly to: number; readonly start: number }, nowMs: number): number {
+    var progress = (nowMs - entry.start) / GRID_FADE_MS;
+    var clamped = progress <= 0 ? 0 : progress >= 1 ? 1 : progress;
+
+    return entry.from + (entry.to - entry.from) * clamped;
+  }
+
+  /** Множитель фейда тира `0…1`: `1` — штатная прозрачность `line.alpha`. */
+  function gridFadeFactor(tier: string): number {
+    return gridFadeFactors.get(tier) ?? 1;
+  }
+
+  /**
+   * Шаг фейда за кадр: у каждого тира кадра своя цель — его `line.alpha` из сцены.
+   * При `prefers-reduced-motion` переход не заводится вовсе (мгновенно). Пока
+   * хотя бы один тир не дошёл до цели, рендерер просит следующий кадр.
+   */
+  function updateGridFade(scene: SectorScene, nowMs: number): void {
+    var targets = new Map<string, number>();
+    for (var index = 0; index < scene.primitives.length; index += 1) {
+      var primitive = scene.primitives[index]!;
+      if (primitive.kind === 'grid.line') targets.set(primitive.tier, primitive.alpha);
+    }
+
+    var reduced = reducedMotion();
+    var animating = false;
+    gridFadeFactors.clear();
+    targets.forEach(function (target: number, tier: string): void {
+      var previous = gridFadeEntries.get(tier);
+      var from = !gridFadePrimed || reduced
+        ? target
+        : previous === undefined
+          ? 0
+          : gridFadeValue(previous, nowMs);
+      var entry = previous !== undefined && previous.to === target && gridFadePrimed && !reduced
+        ? previous
+        : { from: from, to: target, start: nowMs };
+      gridFadeEntries.set(tier, entry);
+
+      var value = gridFadeValue(entry, nowMs);
+      var factor = target > 0 ? Math.min(1, Math.max(0, value / target)) : 0;
+      gridFadeFactors.set(tier, factor);
+      if (factor < 1) animating = true;
+    });
+    gridFadeEntries.forEach(function (_entry, tier: string): void {
+      if (!targets.has(tier)) gridFadeEntries.delete(tier);
+    });
+    gridFadePrimed = true;
+
+    if (animating && !runtime.renderQueued) requestRender();
+  }
+
+  /** Линия сетки: всегда `1 px`, прозрачность — из примитива (`line.alpha`). */
   function drawGridLine(line: SceneGridLine): void {
     const ctx = kernel.ctx!;
+    var alpha = line.alpha * gridFadeFactor(line.tier);
+    if (!(alpha > 0)) return;
     ctx.save();
-    ctx.strokeStyle = 'rgba(150,180,215,.10)';
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = 'rgb(150,180,215)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(Math.round(line.x1) + 0.5, Math.round(line.y1) + 0.5);
@@ -620,12 +694,22 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
+  /**
+   * Подпись ячейки сетки: сперва тёмный контур `strokeText` `2 px`, затем заливка
+   * `fillText` — вместо плашки (§17.3 п. 6). Позиция `+3/+3` прежняя.
+   */
   function drawGridLabel(label: SceneGridLabel): void {
     const ctx = kernel.ctx!;
+    var alpha = gridFadeFactor(label.tier);
+    if (!(alpha > 0)) return;
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.font = '9px ' + theme.mono;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(6,10,18,.85)';
+    ctx.strokeText(label.text, label.x + 3, label.y + 3);
     ctx.fillStyle = 'rgba(160,186,216,.42)';
     ctx.fillText(label.text, label.x + 3, label.y + 3);
     ctx.restore();
@@ -1480,6 +1564,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     // Отдельный проход каналов: ленты идут поверх заливки баблов, но под адресной
     // сеткой и маркерами, поэтому стоят между двумя проходами примитивов сцены.
     drawNetChannels(scene.level);
+    // Смена тира гасит/проявляет линии 160 мс (§17.3 п. 9); порядок проходов тот же.
+    updateGridFade(scene, nowMs);
     for (index = 0; index < scene.primitives.length; index += 1) {
       primitive = scene.primitives[index]!;
       if (primitive.kind === 'grid.line') drawGridLine(primitive);

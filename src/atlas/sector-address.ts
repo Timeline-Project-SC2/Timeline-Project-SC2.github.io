@@ -1,4 +1,4 @@
-export type AddressLetters = 0 | 1 | 2 | 3 | 4 | 5;
+export type AddressLetters = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface AddressTier {
   readonly id: string;
@@ -22,6 +22,11 @@ export const ADDRESS_TIERS: readonly AddressTier[] = Object.freeze([
   Object.freeze({ id: 'T3', name: 'Субсектор', cellSize: 80 }),
   Object.freeze({ id: 'T4', name: 'Ячейка', cellSize: 16 }),
   Object.freeze({ id: 'T5', name: 'Узел', cellSize: 3.2 }),
+  // Версия 4.0 (§7.2): ряд `5×` продолжен без правки старших тиров — адреса
+  // `T1…T5` и golden vectors остаются прежними. `T6`/`T7` живут только на
+  // глубине: подпись ячейки фактической сетки на `L11…L12` и лупа.
+  Object.freeze({ id: 'T6', name: 'Точка', cellSize: 0.64 }),
+  Object.freeze({ id: 'T7', name: 'Пята', cellSize: 0.128 }),
 ]);
 
 /** Вычисляет канонический адрес точки в поле Копрулу. */
@@ -31,8 +36,8 @@ export function addressOf(x: number, y: number): SectorAddress {
 
 /** Возвращает адрес заданного уровня, перенося остаток координат между тирами. */
 export function prefixOf(x: number, y: number, letters: AddressLetters): SectorAddress {
-  if (!Number.isInteger(letters) || letters < 0 || letters > 5) {
-    throw new TypeError('Уровень адреса должен быть целым числом от 0 до 5.');
+  if (!Number.isInteger(letters) || letters < 0 || letters > 7) {
+    throw new TypeError('Уровень адреса должен быть целым числом от 0 до 7.');
   }
   if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= MAP_SIZE || y >= MAP_SIZE) {
     throw new TypeError('Координаты должны находиться в пределах поля [0, 10000).');
@@ -62,7 +67,7 @@ export function prefixOf(x: number, y: number, letters: AddressLetters): SectorA
 
 const RESERVED_SECTORS: readonly string[] = Object.freeze(['TS', 'UJ', 'CH', 'AY', 'SL', 'SH']);
 
-/** Возвращает левый верхний угол узла T5 и размер его ячейки. */
+/** Возвращает левый верхний угол ячейки адреса и её размер (`ADDRESS_TIERS[длина]`). */
 export function rectOf(address: SectorAddress | string): { readonly x: number; readonly y: number; readonly size: number } {
   const parsed = typeof address === 'string' ? parseAddress(address) : address;
   if (parsed === null || !isValidFullAddress(parsed)) {
@@ -84,10 +89,15 @@ export function rectOf(address: SectorAddress | string): { readonly x: number; r
     y += row * tier.cellSize;
   }
 
-  return { x, y, size: ADDRESS_TIERS[5]!.cellSize };
+  const sizeTier = ADDRESS_TIERS[parsed.letters.length];
+  if (sizeTier === undefined) {
+    throw new TypeError('Адрес содержит некорректный уровень.');
+  }
+
+  return { x, y, size: sizeTier.cellSize };
 }
 
-/** Возвращает центр узла T5. */
+/** Возвращает центр ячейки адреса: `T5` для пяти букв, `T6`/`T7` для шести и семи (§7.6). */
 export function centerOf(address: SectorAddress | string): { readonly x: number; readonly y: number } {
   const rect = rectOf(address);
   return { x: rect.x + rect.size / 2, y: rect.y + rect.size / 2 };
@@ -113,8 +123,10 @@ export function parseAddress(text: string): SectorAddress | null {
     lettersText = remainder;
   }
 
+  // Канон адреса остаётся пятибуквенным; 6–7 букв принимаем только как
+  // глубинную запись сетки и лупы (§7.2, §7.3).
   const letters = lettersText.replace(/[·\-\s]/g, '');
-  if (letters.length !== 5 || !/^[A-Y]{5}$/.test(letters)) {
+  if (letters.length < 5 || letters.length > 7 || !/^[A-Y]{5,7}$/.test(letters)) {
     return null;
   }
   return { sector, letters };
@@ -134,6 +146,7 @@ export function formatAddress(address: SectorAddress, style: 'compact' | 'expand
 
 function isValidFullAddress(address: SectorAddress): boolean {
   return (address.sector === SECTOR_CODE || RESERVED_SECTORS.includes(address.sector))
-    && address.letters.length === 5
-    && /^[A-Y]{5}$/.test(address.letters);
+    && address.letters.length >= 5
+    && address.letters.length <= 7
+    && /^[A-Y]{5,7}$/.test(address.letters);
 }

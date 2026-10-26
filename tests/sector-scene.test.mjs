@@ -12,8 +12,10 @@ const { parseBounds } = require('../src/atlas/sector-bounds.ts');
 
 const {
   APERTURE_FIRST_LEVEL,
+  GRID_FIRST_LEVEL,
   GRID_LAST_LEVEL,
-  GRID_TIER_BY_LEVEL,
+  GRID_LINE_ALPHA_NESTED,
+  GRID_LINE_ALPHA_PRIMARY,
   LABEL_PRIORITY,
   LOUPE_CHAR_PX,
   LOUPE_LABEL_PAD_PX,
@@ -29,6 +31,7 @@ const {
   cameraForLevel,
   clusterSystems,
   gridFor,
+  gridTiersFor,
   hitRadiusFor,
   inspectOf,
   inspectOnPointer,
@@ -157,32 +160,42 @@ test('ничего мельче 0.25 px сцена не выдаёт (И-9)', ()
   }
 });
 
-test('сетка сохраняет таблицу тиров F-3; уровни L10…L12 не имеют назначенного тира', () => {
+test('сетка L0…L12: два тира по gridTiersFor, L0 больше не пуст (G7.13, F3-4)', () => {
+  assert.equal(GRID_FIRST_LEVEL, 0);
   assert.equal(GRID_LAST_LEVEL, 12);
-
-  const expectedTier = { 1: 'T1', 2: 'T1', 3: 'T2', 4: 'T2', 5: 'T2', 6: 'T2', 7: 'T3', 8: 'T3', 9: 'T3' };
+  // Пары тиров — следствие правила §17.3 п. 5 при 1920×1080, а не таблица уровней:
+  // scale = 1920 / visibleWidth(L); старший — минимальный i ≥ 1 с ячейкой ≤ 450 px,
+  // вложенный — i+1, пока его ячейка ≥ 16 px. Числа: L0 T1 384 px + T2 76,8;
+  // L3 T3 108,6 + T4 21,7; L8 T5 113,2 + T6 22,6; L12 T6 307,2 + T7 61,4.
+  const expectedPairs = {
+    0: ['T1', 'T2'], 1: ['T2', 'T3'], 2: ['T2', 'T3'], 3: ['T3', 'T4'],
+    4: ['T3', 'T4'], 5: ['T3', 'T4'], 6: ['T4', 'T5'], 7: ['T4', 'T5'],
+    8: ['T5', 'T6'], 9: ['T5', 'T6'], 10: ['T5', 'T6'], 11: ['T6', 'T7'],
+    12: ['T6', 'T7'],
+  };
+  const tierIndex = (id) => address.ADDRESS_TIERS.findIndex((tier) => tier.id === id);
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
     const result = sceneAt(level);
     const lines = result.primitives.filter((primitive) => primitive.kind === 'grid.line');
     const labels = result.primitives.filter((primitive) => primitive.kind === 'grid.label');
+    const pair = expectedPairs[level];
 
-    if (level === 0 || level > GRID_LAST_LEVEL || [6, 8, 9, 10, 11, 12].includes(level)) {
-      assert.equal(lines.length, 0, `L${level}: сетка не должна рисоваться`);
-      assert.equal(labels.length, 0);
-      continue;
-    }
-
-    assert.ok(lines.length > 0, `L${level}: нет линий сетки`);
-    const tierId = expectedTier[level];
+    assert.ok(lines.length > 0, `L${level}: сетка пуста`);
+    const seen = [...new Set(lines.map((line) => line.tier))].sort();
+    assert.deepEqual(seen, [...pair].sort(), `L${level}: тиры ${seen.join('/')} вместо ${pair.join('/')}`);
     for (const line of lines) {
-      assert.equal(line.tier, tierId, `L${level}: тир ${line.tier} вместо ${tierId}`);
+      const expectedAlpha = line.tier === pair[0] ? GRID_LINE_ALPHA_PRIMARY : GRID_LINE_ALPHA_NESTED;
+      assert.equal(line.alpha, expectedAlpha, `L${level}: ${line.tier} с alpha ${line.alpha}`);
+      assert.equal(line.cellSize, address.ADDRESS_TIERS[tierIndex(line.tier)].cellSize);
       assert.ok(line.x1 >= -1e-9 && line.x1 <= DESKTOP.w + 1e-9);
       assert.ok(line.y1 >= -1e-9 && line.y1 <= DESKTOP.h + 1e-9);
     }
+
+    assert.ok(labels.length > 0, `L${level}: подписи сетки не построены`);
+    const letters = tierIndex(pair[0]);
     for (const label of labels) {
-      assert.equal(label.tier, tierId);
+      assert.equal(label.tier, pair[0], `L${level}: подпись не на старшем тире`);
       assert.ok(label.text.startsWith('KP·'), `адресная метка «${label.text}» без префикса сектора`);
-      const letters = ladder.levelSpec(level).addressLetters;
       assert.equal(label.text.length, 'KP·'.length + letters, `L${level}: метка «${label.text}» не той длины`);
       // Буквы — из алфавита кодека адреса, а не из сцены.
       for (const letter of label.text.slice('KP·'.length)) {
@@ -192,46 +205,32 @@ test('сетка сохраняет таблицу тиров F-3; уровни 
   }
 });
 
-test('F-3 передача: GRID_TIER_BY_LEVEL сохраняет 10 старых записей без T6/T7', () => {
-  assert.deepEqual([...GRID_TIER_BY_LEVEL], [null, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
-  assert.equal(GRID_TIER_BY_LEVEL.length, 10);
-});
-
-test('G2: число линий и подписей обычной сетки на 1920×1080 при центре кадра (допуск ±1)', () => {
-  const expectedLines = { 1: 4, 2: 2, 3: 6, 4: 4, 5: 0, 6: 0, 7: 2, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0 };
-  const expectedLabels = { 1: 4, 2: 0, 3: 8, 4: 4, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0 };
-  for (const level of Object.keys(expectedLines).map(Number)) {
+test('G2: сетка и подписи не пусты на L0…L12 и держатся в предохранителях 512/64', () => {
+  // Число линий — только из правила §17.3 (эталон 52…65, максимум 171 на L3);
+  // точная сверка таблицы §17.3 — в tests/sector-grid.test.mjs. Здесь — границы.
+  for (let level = 0; level <= GRID_LAST_LEVEL; level++) {
     const { lines, labels } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
-    assert.ok(
-      Math.abs(lines.length - expectedLines[level]) <= 1,
-      `L${level}: линий ${lines.length}, ждали ${expectedLines[level]} ±1`,
-    );
-    assert.ok(
-      Math.abs(labels.length - expectedLabels[level]) <= 1,
-      `L${level}: подписей ${labels.length}, ждали ${expectedLabels[level]} ±1`,
-    );
+    assert.ok(lines.length > 0, `L${level}: нет линий сетки`);
+    assert.ok(lines.length <= MAX_GRID_LINES, `L${level}: линий ${lines.length} больше ${MAX_GRID_LINES}`);
+    assert.ok(labels.length > 0, `L${level}: нет подписей сетки`);
+    assert.ok(labels.length <= MAX_GRID_LABELS, `L${level}: подписей ${labels.length} больше ${MAX_GRID_LABELS}`);
+  }
+  // За пределами L0…L12 сетки нет.
+  for (const level of [-1, 13]) {
+    const outside = gridFor(DESKTOP, cameraForLevel(0, 5000, 5000), level);
+    assert.equal(outside.lines.length, 0, `L${level}: сетка вне диапазона`);
+    assert.equal(outside.labels.length, 0);
   }
 });
 
-test('G3: существующие тиры остаются ограничены MAX_GRID_LINES, отсутствующие тиры дают пустую сетку', () => {
-  // L0: сетки нет вовсе.
-  const g0 = gridFor(DESKTOP, cameraForLevel(0, 5000, 5000), 0);
-  assert.equal(g0.lines.length, 0);
-  assert.equal(g0.labels.length, 0);
-
-  // L1…L4 и L7 пересекают viewport; ширина ячеек на L5/L6/L8/L9 больше кадра.
-  for (const level of [1, 2, 3, 4, 7]) {
-    const { lines } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
-    assert.ok(lines.length > 0 && lines.length < MAX_GRID_LINES, `L${level}: линий ${lines.length}`);
-  }
-  for (const level of [5, 6, 8, 9, 10, 11, 12]) {
-    const { lines, labels } = gridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level);
-    assert.equal(lines.length, 0, `L${level}: геометрически пустая сетка`);
-    assert.equal(labels.length, 0);
-  }
-  const g9Phone = gridFor(PHONE, cameraForLevel(9, 5000, 5000), 9);
-  assert.equal(g9Phone.lines.length, 0, '390×844 L9: шаг сетки шире кадра');
-  assert.equal(g9Phone.labels.length, 0);
+test('G3: предохранитель MAX_GRID_LINES не поднят: при превышении остаётся один тир', () => {
+  // 12 000 × 8 000 на L5: T5 (100 px) даёт 202 линии, вложенный T6 (20 px) — ещё 1 002;
+  // в сумме 1 204 > 512, поэтому по §17.3 п. 8 в кадре остаётся только старший тир.
+  const big = { w: 12000, h: 8000 };
+  const { lines } = gridFor(big, cameraForLevel(5, 5000, 5000), 5);
+  const tiers = [...new Set(lines.map((line) => line.tier))];
+  assert.deepEqual(tiers, ['T5'], `остались тиры ${tiers.join('/')} вместо одного старшего`);
+  assert.ok(lines.length > 0 && lines.length <= MAX_GRID_LINES, `линий ${lines.length}`);
 });
 
 test('G4: лимиты обычной сетки не подняты: MAX_GRID_LINES = 512, MAX_GRID_LABELS = 64', () => {
@@ -239,21 +238,27 @@ test('G4: лимиты обычной сетки не подняты: MAX_GRID_L
   assert.equal(MAX_GRID_LABELS, 64);
 });
 
-test('G5: лупа на L8 при 1920×1080: T5, ячейка 113,2 px, окно в кадре', () => {
+test('G5: лупа на L8 при 1920×1080: T6, ячейка 22,6 px, окно в кадре', () => {
   const camera = cameraForLevel(8, 5000, 5000);
   const loupe = loupeGridFor(DESKTOP, camera, 8, { x: 960, y: 540 });
 
-  assert.equal(loupe.tierIndex, 5);
-  assert.equal(loupe.cellSize, 3.2);
-  assert.ok(Math.abs(loupe.cellPx - 113.181418) <= 0.001, `cellPx ${loupe.cellPx}, ждали 113,181 ±0,001`);
-  assert.ok(Math.abs(loupe.cellPx - (1920 / ladder.visibleWidthForLevel(8)) * 3.2) < 1e-9);
+  // База — gridTiersFor(35,369).primary = T5 (113,2 px); порог LOUPE_MIN_CELL_PX = 22 px
+  // пропускает T6 (0,64 · 35,369 = 22,636 px) и отсекает T7 (4,527 px).
+  assert.equal(loupe.tierIndex, 6);
+  assert.equal(loupe.cellSize, 0.64);
+  assert.ok(Math.abs(loupe.cellPx - 22.636284) <= 0.001, `cellPx ${loupe.cellPx}, ждали 22,636 ±0,001`);
+  assert.ok(Math.abs(loupe.cellPx - (1920 / ladder.visibleWidthForLevel(8)) * 0.64) < 1e-9);
   assert.ok(loupe.labels.length <= 9, `подписей ${loupe.labels.length} больше 9`);
   assert.ok(loupe.bounds !== null);
   const { x0, y0, x1, y1 } = loupe.bounds;
   assert.ok(x0 >= 0 && y0 >= 0 && x1 <= DESKTOP.w && y1 <= DESKTOP.h, 'окно лупы вышло за кадр');
   assert.ok(x1 > x0 && y1 > y0);
-  // Подпись лупы — буквы до выбранного T5 (5 букв, без «KP·»).
-  for (const label of loupe.labels) assert.equal(label.text.length, 5);
+  // Шесть букв T6 (2 + 5,4 · 6 = 34,4 px) в ячейку 22,6 px не влезают: у центра
+  // подпись сокращается до одной последней буквы, остальные пропускаются.
+  for (const label of loupe.labels) {
+    assert.ok(label.text.length <= 1, `подпись «${label.text}» не влезла бы в ячейку`);
+    assert.ok(loupeLabelFits(label.text, loupe.cellPx));
+  }
 });
 
 test('G6: окно у края карты (точка 10;10) не выходит за [0, MAP_SIZE]', () => {
@@ -271,17 +276,18 @@ test('G6: окно у края карты (точка 10;10) не выходит
   assert.ok(loupe.lines.length > 0);
 });
 
-test('G7: при LOUPE_MIN_CELL_PX = 200 глубина падает до базового тира, линий меньше, кадр не пуст', () => {
+test('G7: при LOUPE_MIN_CELL_PX = 200 глубина падает до базового тира, кадр не пуст', () => {
   assert.equal(LOUPE_MIN_CELL_PX, 22);
   const camera = cameraForLevel(8, 5000, 5000);
   const point = { x: 960, y: 540 };
   const normal = loupeGridFor(DESKTOP, camera, 8, point);
   const strict = loupeGridFor(DESKTOP, camera, 8, point, { minCellPx: 200 });
+  const base = gridTiersFor(1920 / ladder.visibleWidthForLevel(8)).primary;
 
-  assert.equal(normal.tierIndex, 5);
-  // Для порога 200 px выбирается T4; T5 влезает по длине, но не является глубже допустимого для этой ячейки.
-  assert.equal(strict.tierIndex, 4);
-  assert.ok(strict.tierIndex < normal.tierIndex);
+  assert.equal(base, 5);
+  assert.equal(normal.tierIndex, 6);
+  // Ни T5 (113,2 px), ни более мелкие тиры не достигают 200 px — остаётся база T5.
+  assert.equal(strict.tierIndex, base);
   assert.ok(strict.lines.length > 0, 'кадр пустой');
   assert.ok(strict.lines.length <= normal.lines.length, 'линий стало больше');
 });
@@ -321,13 +327,16 @@ test('G8: точка осмотра — центр кадра для сенсо�
   assert.deepEqual(inspectPointFor(DESKTOP, mouse), { x: 300, y: 200 });
 });
 
-test('H1: на L8 при 1920×1080 тир T5, ячейка 113,2 px и подписи из 5 букв влезают', () => {
-  const loupe = loupeGridFor(DESKTOP, cameraForLevel(8, 5000, 5000), 8, { x: 960, y: 540 });
-  assert.equal(loupe.tierIndex, 5);
-  assert.ok(Math.abs(loupe.cellPx - 113.181418) <= 0.001, `cellPx ${loupe.cellPx}`);
+test('H1: на L10 при 1920×1080 тир T6, ячейка 83,4 px и подписи из 6 букв влезают', () => {
+  const loupe = loupeGridFor(DESKTOP, cameraForLevel(10, 5000, 5000), 10, { x: 960, y: 540 });
+  // База L10 — T5 (417,0 px); порог 22 px пропускает вложенный T6 (0,64 · 130,30 = 83,394 px)
+  // и отсекает T7 (16,679 px). Подпись глубиной 6 букв: 2 + 5,4 · 6 = 34,4 ≤ 83,4.
+  assert.equal(loupe.tierIndex, 6);
+  assert.equal(loupe.cellSize, 0.64);
+  assert.ok(Math.abs(loupe.cellPx - 83.394250) <= 0.001, `cellPx ${loupe.cellPx}`);
   assert.equal(loupe.labels.length, 9);
   for (const label of loupe.labels) {
-    assert.equal(label.text.length, 5, `подпись «${label.text}» не из 5 букв`);
+    assert.equal(label.text.length, 6, `подпись «${label.text}» не из 6 букв`);
     assert.ok(2 + 5.4 * label.text.length <= loupe.cellPx, `подпись «${label.text}» не влезает в ячейку`);
     assert.ok(loupeLabelFits(label.text, loupe.cellPx));
   }
@@ -362,7 +371,7 @@ test('H2: подписи лупы не пересекаются ни на одн
   }
 });
 
-test('H3: центральная ячейка всегда имеет ровно одну непустую подпись — и при 200 px (базовый тир), и при нехватке места', () => {
+test('H3: центральная ячейка всегда имеет ровно одну непустую подпись — и на базовом тире, и при нехватке места', () => {
   const centreLabel = (viewport, level, options) => {
     const camera = cameraForLevel(level, 5000, 5000);
     const point = { x: viewport.w / 2, y: viewport.h / 2 };
@@ -374,13 +383,14 @@ test('H3: центральная ячейка всегда имеет ровно
     return { loupe, atCentre };
   };
 
-  // Порог 200 px: тир упирается в базовый (T3 на L8), подпись центра одна и непустая.
+  // Порог 200 px на L8: глубже базы T5 (113,2 px) не идём — подпись центра одна и непустая.
   const strict = centreLabel(DESKTOP, 8, { minCellPx: 200 });
-  assert.equal(strict.loupe.tierIndex, 4);
+  assert.equal(strict.loupe.tierIndex, 5);
   assert.equal(strict.atCentre.length, 1);
   assert.ok(strict.atCentre[0].text.length > 0);
 
-  // При ширине 1800 px масштаб даёт T5 с ячейкой 106,1 px.
+  // {1800×1000} на L8: база T5 (3,2 · 33,16 = 106,1 px), T6 = 21,2 px ниже порога 22 —
+  // в ячейку влезают полные 5 букв.
   const narrow = centreLabel({ w: 1800, h: 1000 }, 8);
   assert.equal(narrow.loupe.tierIndex, 5);
   assert.equal(narrow.atCentre.length, 1, 'у центра нет подписи');
@@ -391,16 +401,27 @@ test('H3: центральная ячейка всегда имеет ровно
     assert.ok(loupeLabelFits(label.text, narrow.loupe.cellPx));
   }
 
-  // Обычный кадр: центр — полные 5 букв.
+  // DESKTOP L8: лупа уходит на T6 (22,6 px); шесть букв (34,4 px) не влезают —
+  // центральная подпись сокращается до одной последней буквы.
   const normal = centreLabel(DESKTOP, 8);
+  assert.equal(normal.loupe.tierIndex, 6);
   assert.equal(normal.atCentre.length, 1);
-  assert.equal(normal.atCentre[0].text.length, 5);
+  assert.equal(normal.atCentre[0].text.length, 1);
 });
 
-test('H4: тиры лупы по уровням при 1920×1080 следуют экранному размеру ячейки', () => {
-  const expected = { 1: 3, 2: 3, 3: 3, 4: 4, 5: 4, 6: 4, 7: 5, 8: 5, 9: 5, 10: null, 11: null, 12: null };
+test('H4: тиры лупы по уровням при 1920×1080 — база gridTiersFor плюс до двух шагов, потолок T7', () => {
+  // Вывод по уровням (1920×1080): база = gridTiersFor(scale).primary (L0 T1, L1–L2 T2,
+  // L3–L5 T3, L6–L7 T4, L8–L10 T5, L11–L12 T6), глубина — самый мелкий тир ≤ base+2
+  // с ячейкой ≥ 22 px, иначе база. T7 (0,128) при base T6 — единственный шаг, влезающий
+  // в потолок min(base+2, 7) = 7. Старые null на L10…L12 удалены осознанно (F3-5):
+  // в кодеке есть T6/T7, и база на этих уровнях существует.
+  const expectedBase = { 0: 1, 1: 2, 2: 2, 3: 3, 4: 3, 5: 3, 6: 4, 7: 4, 8: 5, 9: 5, 10: 5, 11: 6, 12: 6 };
+  const expected = { 0: 2, 1: 3, 2: 3, 3: 3, 4: 4, 5: 4, 6: 5, 7: 5, 8: 6, 9: 6, 10: 6, 11: 7, 12: 7 };
   for (const level of Object.keys(expected).map(Number)) {
     const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
+    const base = gridTiersFor(1920 / ladder.visibleWidthForLevel(level)).primary;
+    assert.equal(base, expectedBase[level], `L${level}: база T${base} вместо T${expectedBase[level]}`);
+    assert.ok(loupe.tierIndex >= base && loupe.tierIndex <= Math.min(base + 2, 7), `L${level}: вне коридора базы`);
     assert.equal(loupe.tierIndex, expected[level], `L${level}: тир ${loupe.tierIndex}, ждали ${expected[level]}`);
   }
 });
@@ -429,17 +450,23 @@ test('лупа: команд отрисовки не больше 26 + 9·3 на
   }
 });
 
-test('лупа: на L0 и L10…L12 не строится; L9 выбирает тир в пределах старой таблицы', () => {
-  const loupe0 = loupeGridFor(DESKTOP, cameraForLevel(0, 5000, 5000), 0, { x: 960, y: 540 });
-  assert.equal(loupe0.tierIndex, null);
-  assert.equal(loupe0.lines.length, 0);
-  assert.equal(loupe0.bounds, null);
+test('лупа строится на всех L0…L12: null-тира больше нет, окно не пусто', () => {
+  // Раньше лупа возвращала null на L0 и L10…L12: таблица «уровень → тир» обрывалась
+  // на T3. После F3-5 база — gridTiersFor(scale).primary, поэтому тир есть всегда.
+  for (let level = 0; level <= GRID_LAST_LEVEL; level++) {
+    const loupe = loupeGridFor(DESKTOP, cameraForLevel(level, 5000, 5000), level, { x: 960, y: 540 });
+    assert.notEqual(loupe.tierIndex, null, `L${level}: лупа не построена`);
+    assert.ok(loupe.cellSize > 0, `L${level}: размер ячейки лупы 0`);
+    assert.ok(loupe.lines.length > 0, `L${level}: нет линий лупы`);
+    assert.ok(loupe.bounds !== null, `L${level}: нет окна лупы`);
+  }
 
-  assert.equal(GRID_TIER_BY_LEVEL[9], 3);
+  // 390×844 на L9: база T4 (220,6 px), T5 (44,1 px) — выше порога 22 px.
   const loupe9Phone = loupeGridFor(PHONE, cameraForLevel(9, 5000, 5000), 9, { x: 195, y: 422 });
   assert.equal(loupe9Phone.tierIndex, 5);
   assert.ok(loupe9Phone.lines.length > 0);
 
+  // Порог 200 px на 1920×1080 L9 упирается в базу T5 (217,2 px).
   const loupe9Base = loupeGridFor(DESKTOP, cameraForLevel(9, 5000, 5000), 9, { x: 960, y: 540 }, { minCellPx: 200 });
   assert.equal(loupe9Base.tierIndex, 5);
   assert.ok(loupe9Base.lines.length > 0);
@@ -451,13 +478,17 @@ test('адресные метки сетки совпадают с кодеко�
   const { labels } = gridFor(DESKTOP, camera, level);
   assert.ok(labels.length > 0);
 
+  // Старший тир кадра — из gridTiersFor, а не из таблицы уровней: на L3 это T3 (80 св.г.),
+  // значит и ячейка подписи 80, и букв в адресе три («KP·REQ»).
+  const tiers = gridTiersFor(DESKTOP.w / ladder.visibleWidthForLevel(level));
+  const cellSize = address.ADDRESS_TIERS[tiers.primary].cellSize;
+  assert.equal(cellSize, 80);
   for (const label of labels) {
     // Угол ячейки → её центр в мире → адрес по кодеку.
     const corner = screenToWorld(DESKTOP, camera, label.x, label.y);
-    const cellSize = address.ADDRESS_TIERS[2].cellSize;
     const centerX = (Math.floor(corner.x / cellSize) + 0.5) * cellSize;
     const centerY = (Math.floor(corner.y / cellSize) + 0.5) * cellSize;
-    const expected = address.formatAddress(address.prefixOf(centerX, centerY, ladder.levelSpec(level).addressLetters));
+    const expected = address.formatAddress(address.prefixOf(centerX, centerY, tiers.primary));
     assert.equal(label.text, expected, 'метка сетки не совпала с кодеком адреса');
   }
 });
@@ -642,7 +673,8 @@ test('пустой вход не падает: остаются только с�
       for (const primitive of result.primitives) {
         assert.ok(primitive.kind === 'grid.line' || primitive.kind === 'grid.label');
       }
-      if (level === 0) assert.deepEqual(result.primitives, []);
+      // L0 больше не пуст: сетка живёт с L0 (G7.13, F3-4), данных у неё нет — только линии.
+      if (level === 0) assert.ok(result.counts.gridLines > 0, 'L0: сетка пуста');
     }
   }
 

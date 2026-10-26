@@ -83,7 +83,6 @@ html, body, .app-shell { background: #030303; }
 .map-stage { inset: 64px 0 0 0; --panel-inset: 300px; overflow: visible; background: #030303; }
 .map-stage.wide { --panel-inset: 0px; }
 .map-vignette { background: radial-gradient(ellipse at 54% 47%, transparent 48%, rgba(0,0,0,.10) 82%, rgba(0,0,0,.47) 100%); }
-.map-grid-overlay { opacity: .09; background-image: linear-gradient(rgba(215,159,45,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(215,159,45,.12) 1px, transparent 1px); }
 .coordinates-label { top: auto; left: calc(var(--panel-inset, 0px) + 18px); right: auto; bottom: 35px; transform: none; color: rgba(226,210,177,.48); font-size: 8px; transition: left .23s ease; }
 .coordinates-label span + span { color: #d39518; }
 .map-page-intro {
