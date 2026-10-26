@@ -4,7 +4,7 @@
 > Источник: [`docs/prompts/planet-seeds-from-reference.md`](../planet-seeds-from-reference.md) · строки 391–516.
 > Назад: [карта документации](../../README.md) · [индекс документации](../../README.md).
 
-### 12. Сдача
+## 12. Сдача
 
 ```bash
 git diff --check

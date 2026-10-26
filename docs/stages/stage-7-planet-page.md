@@ -11,10 +11,10 @@
 |---|---|
 | Маршруты и данные | [`routing-and-data.md`](stage-07/notes/routing-and-data.md) |
 | Замещение, prefetch, инспектор | [`transition-prefetch-inspector.md`](stage-07/notes/transition-prefetch-inspector.md) |
-| Журнал этапа | [`journal-stage-7.md`](stage-07/notes/journal-stage-7.md) |
+| Журнал этапа | [`journal-stage-7.md`](stage-07/plan.md) |
 
 ## Регистры этапа
 
-- [План](stage-07/plan.md) · [Ошибки](stage-07/errors.md) · [Баги](stage-07/bugs.md) · [Решения](stage-07/decisions.md) · [TODO](stage-07/todo.md)
+- [План](stage-07/plan.md) · [Ошибки](stage-07/plan.md) · [Баги](stage-07/plan.md) · [Решения](stage-07/plan.md) · [TODO](stage-07/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

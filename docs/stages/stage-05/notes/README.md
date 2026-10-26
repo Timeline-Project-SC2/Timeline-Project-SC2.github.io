@@ -10,13 +10,13 @@
 | [`biomes-validation-bench.md`](biomes-validation-bench.md) | Реки, горные швы, биомы, валидация и G3 |
 | [`flow-lakes-catchments.md`](flow-lakes-catchments.md) | Сток, впадины, озёра и водосборы |
 | [`hydrology-core.md`](hydrology-core.md) | Гидрология: версии и выходные данные |
-| [`journal-stage-5.md`](journal-stage-5.md) | Журнал Этапа 5 |
+| [`journal-stage-5.md`](../plan.md) | Журнал Этапа 5 |
 
 ## Приложенные данные
 
-- [`plan-source.md`](plan-source.md) — исходный раздел плана этапа без изменений.
+- [`plan-source.md`](../plan.md) — исходный раздел плана этапа без изменений.
 
 ## Связи
 
-- [План](../plan.md) · [Ошибки](../errors.md) · [Баги](../bugs.md) · [Решения](../decisions.md) · [TODO](../todo.md).
+- [План](../plan.md) · [Ошибки](../plan.md) · [Баги](../plan.md) · [Решения](../plan.md) · [TODO](../plan.md).
 - [Ошибки системные](../../../registers/errors-systemic.md) · [регистры](../../../registers/README.md).

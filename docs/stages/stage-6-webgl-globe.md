@@ -11,10 +11,10 @@
 |---|---|
 | Модули, воркер, CPU-гейт | [`globe-implementation.md`](stage-06/notes/globe-implementation.md) |
 | Телефонная приёмка и пробелы | [`phone-acceptance-and-gaps.md`](stage-06/notes/phone-acceptance-and-gaps.md) |
-| Журнал этапа | [`journal-stage-6.md`](stage-06/notes/journal-stage-6.md) |
+| Журнал этапа | [`journal-stage-6.md`](stage-06/plan.md) |
 
 ## Регистры этапа
 
-- [План](stage-06/plan.md) · [Ошибки](stage-06/errors.md) · [Баги](stage-06/bugs.md) · [Решения](stage-06/decisions.md) · [TODO](stage-06/todo.md)
+- [План](stage-06/plan.md) · [Ошибки](stage-06/plan.md) · [Баги](stage-06/plan.md) · [Решения](stage-06/plan.md) · [TODO](stage-06/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

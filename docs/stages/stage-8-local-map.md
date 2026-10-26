@@ -11,11 +11,11 @@
 |---|---|
 | Patch7 и постройки | [`patch7-and-structures.md`](stage-08/notes/patch7-and-structures.md) |
 | Dive-in и гейт G4 | [`divein-and-g4.md`](stage-08/notes/divein-and-g4.md) |
-| Эволюция волн 8.1–8.6 | [`waves-evolution.md`](stage-08/notes/waves-evolution.md) |
-| Журнал этапа | [`journal-stage-8.md`](stage-08/notes/journal-stage-8.md) |
+| Эволюция волн 8.1–8.6 | [`waves-evolution.md`](stage-08/notes/waves-evolution-and-urbanism-rfc.md) |
+| Журнал этапа | [`journal-stage-8.md`](stage-08/plan.md) |
 
 ## Регистры этапа
 
-- [План](stage-08/plan.md) · [Ошибки](stage-08/errors.md) · [Баги](stage-08/bugs.md) · [Решения](stage-08/decisions.md) · [TODO](stage-08/todo.md)
+- [План](stage-08/plan.md) · [Ошибки](stage-08/plan.md) · [Баги](stage-08/plan.md) · [Решения](stage-08/plan.md) · [TODO](stage-08/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

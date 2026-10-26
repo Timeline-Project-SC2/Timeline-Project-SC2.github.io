@@ -19,4 +19,4 @@
 | [`v4-edits.md`](v4-edits.md) | Версия 4.0: последние правки по сектору |
 | [`appendices.md`](appendices.md) | Сектор: приложения A–C |
 | [`sector-journal.md`](sector-journal.md) | Журнал волн сектора 09–12 |
-| [`plan-source.md`](plan-source.md) | Этапы 9–12 (сектор) — исходный проект под-уровня |
+| [`plan-source.md`](../plan.md) | Этапы 9–12 (сектор) — исходный проект под-уровня |

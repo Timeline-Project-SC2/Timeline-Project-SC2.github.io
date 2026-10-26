@@ -21,6 +21,6 @@
 
 ## Регистры этапа
 
-- [План](stage-09/plan.md) · [Ошибки](stage-09/errors.md) · [Баги](stage-09/bugs.md) · [Решения](stage-09/decisions.md) · [TODO](stage-09/todo.md)
+- [План](stage-09/plan.md) · [Ошибки](stage-09/plan.md) · [Баги](stage-09/plan.md) · [Решения](stage-09/plan.md) · [TODO](stage-09/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

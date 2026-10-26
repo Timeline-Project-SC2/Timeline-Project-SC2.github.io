@@ -10,17 +10,17 @@
 
 | Этап | Файл |
 |---|---|
-| 0 — планы и спецификация | [`journal-stage-0.md`](stage-00/notes/journal-stage-0.md) |
+| 0 — планы и спецификация | [`journal-stage-0.md`](stage-00/plan.md) |
 | 1 — спайк гексагонального глобуса | [`journal-spike-build.md`](stage-01/notes/spike-overview-and-feedback.md) |
-| 2 — данные, синк, каркас | [`journal-stage-2.md`](stage-02/notes/journal-stage-2.md) |
-| 3 — ядро `goldberg-gp-v1` | [`journal-stage-3.md`](stage-03/notes/journal-stage-3.md) |
-| 4 — поля и `c100-soft` | [`journal-stage-4.md`](stage-04/notes/journal-stage-4.md) |
-| 5 — гидрология и биомы | [`journal-stage-5.md`](stage-05/notes/journal-stage-5.md) |
-| 6 — боевой WebGL2-глобус | [`journal-stage-6.md`](stage-06/notes/journal-stage-6.md) |
-| 7 — страница планеты | [`journal-stage-7.md`](stage-07/notes/journal-stage-7.md) |
-| 8 — локальная карта и горизонт | [`journal-stage-8.md`](stage-08/notes/journal-stage-8.md) |
+| 2 — данные, синк, каркас | [`journal-stage-2.md`](stage-02/plan.md) |
+| 3 — ядро `goldberg-gp-v1` | [`journal-stage-3.md`](stage-03/plan.md) |
+| 4 — поля и `c100-soft` | [`journal-stage-4.md`](stage-04/plan.md) |
+| 5 — гидрология и биомы | [`journal-stage-5.md`](stage-05/plan.md) |
+| 6 — боевой WebGL2-глобус | [`journal-stage-6.md`](stage-06/plan.md) |
+| 7 — страница планеты | [`journal-stage-7.md`](stage-07/plan.md) |
+| 8 — локальная карта и горизонт | [`journal-stage-8.md`](stage-08/plan.md) |
 | 9 — проектирование атласа | [`journal-design.md`](stage-09/notes/verdict-gates-and-webp.md) |
-| 10 — оценка страницы системы | [`journal-stage-10.md`](stage-10/notes/journal-stage-10.md) |
+| 10 — оценка страницы системы | [`journal-stage-10.md`](stage-10/plan.md) |
 | CR-01, PR 6.1, DX-1 | [`journal.md`](../plan/cr-01/implementation-and-results.md) |
 
 ## Журналы сектора (Этапы 9–12)

@@ -46,7 +46,7 @@ golden-хэш A-17, W26b `m.11`/`m.14`, диагностика стыка/бер
 `fa18ef4` — те же 172/180.
 **Что делать.** Не добавлять чек в обязательные, пока тесты не починены.
 Не пересчитывать golden вслепую.
-**Источник.** [`stages/stage-08/bugs.md`](../stages/stage-08/bugs.md),
+**Источник.** [`stages/stage-08/bugs.md`](../stages/stage-08/plan.md),
 [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ### B-C02 · Переезд `ubuntu-latest` на 26.04
@@ -75,7 +75,7 @@ Pillow зафиксирован `pillow>=13,<14` (колёса под 3.12–3.1
 останавливает блок.
 **Что сделано.** Верификаторы сектора перенесены **до** `npm test`; решение
 №14 F-1 — отдельная микрозадача по `check.yml`.
-**Источник.** [`stages/stage-09-12-sector/decisions.md`](../stages/stage-09-12-sector/decisions.md),
+**Источник.** [`stages/stage-09-12-sector/decisions.md`](../stages/stage-09-12-sector/plan.md),
 F-1 §11.
 
 ### B-C05 · Тест проходит отдельно и падает в общем прогоне
@@ -177,7 +177,7 @@ F-1 §11.
 **Что сделано.** Сброс статистики ровно при подмене; удержание адаптера во
 время генерации/заливки; страница объявляет готовность после фактической
 подмены.
-**Источник.** [`stages/stage-06/bugs.md`](../stages/stage-06/bugs.md).
+**Источник.** [`stages/stage-06/bugs.md`](../stages/stage-06/plan.md).
 
 ### B-S09 · Скрытые GPU-бандлы конкурируют с LOD
 

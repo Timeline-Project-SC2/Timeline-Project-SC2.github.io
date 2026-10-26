@@ -21,10 +21,10 @@
 | Обратная связь владельца | [`journal-owner-feedback.md`](stage-01/notes/spike-overview-and-feedback.md) |
 | Открытые вопросы спайка | [`journal-open-questions.md`](stage-01/notes/customization-and-planet-lab.md) |
 | Лаборатория планет | [`planet-lab.md`](stage-01/notes/customization-and-planet-lab.md) |
-| RFC урбанистики | [`urbanism-rfc.md`](stage-01/notes/urbanism-rfc.md) |
+| RFC урбанистики | [`urbanism-rfc.md`](stage-08/notes/waves-evolution-and-urbanism-rfc.md) |
 
 ## Регистры этапа
 
-- [План](stage-01/plan.md) · [Ошибки](stage-01/errors.md) · [Баги](stage-01/bugs.md) · [Решения](stage-01/decisions.md) · [TODO](stage-01/todo.md)
+- [План](stage-01/plan.md) · [Ошибки](stage-01/plan.md) · [Баги](stage-01/plan.md) · [Решения](stage-01/plan.md) · [TODO](stage-01/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

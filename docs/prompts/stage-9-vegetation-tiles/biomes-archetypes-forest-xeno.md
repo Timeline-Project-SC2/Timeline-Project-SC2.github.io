@@ -4,7 +4,7 @@
 
 Архетипы тайлов растительности T5–T7: хвойный и лиственный пологи, чужеродная биомасса Копрулу.
 
-### T5. `Boreal Conifer Canopy & Needle Litter` — хвойный полог тайги
+## T5. `Boreal Conifer Canopy & Needle Litter` — хвойный полог тайги
 
 **Биом:** 6 `boreal_forest`. **Амплитуда `Height`:** `22 м`.
 **Период:** `1,25 км` (крупный план — на этой ступени полог уже читается) /
@@ -38,7 +38,7 @@ snow on trees`.
 
 ---
 
-### T6. `Temperate & Rainforest Multi-Layer Canopy` — сомкнутый лиственный полог
+## T6. `Temperate & Rainforest Multi-Layer Canopy` — сомкнутый лиственный полог
 **Биомы:** 7 `temperate_forest` и 8 `rainforest` (один архетип, разные
 `cov`/тинт).
 **Амплитуда `Height`:** `28 м` (умеренный) / `35 м` (тропический).
@@ -70,7 +70,7 @@ visible, no ground visible except in the smallest gaps
 
 ---
 
-### T7. `Xeno-Flora / Jungle & Mycelial Mat` — чужеродная биомасса Копрулу
+## T7. `Xeno-Flora / Jungle & Mycelial Mat` — чужеродная биомасса Копрулу
 
 **Назначение:** опциональный спец-тайл для миров Бель'Шир, Зерус, Шакурас;
 используется как оверлей к базовому архетипу (обычно `T6` или `T4`) с весом

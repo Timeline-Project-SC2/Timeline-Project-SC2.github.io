@@ -4,7 +4,7 @@
 
 Архетипы тайлов растительности T1–T4: луговой и степной дерн, кустарники, тундра и водно-болотные кочки.
 
-### T1a. `Grassland / Dense Meadow Turf` — густой луговой дерн
+## T1a. `Grassland / Dense Meadow Turf` — густой луговой дерн
 
 **Биом:** 9 `grassland` (влажная половина `midMoistScore > 0,55`).
 **Амплитуда `Height`:** `0,45 м`. **Период:** `312 м` (крупный план) /
@@ -39,7 +39,7 @@ dominating, lawn stripes`.
 
 ---
 
-### T1b. `Grassland / Dry Steppe Turf with Soil Veins` — сухая злаковая степь
+## T1b. `Grassland / Dry Steppe Turf with Soil Veins` — сухая злаковая степь
 
 **Биом:** 9 `grassland` (сухая половина, `midMoistScore < 0,45`).
 **Амплитуда `Height`:** `0,35 м`. **Период:** `312 м` / `1,25 км`.
@@ -68,7 +68,7 @@ litter between tussocks, homogeneous distribution of tussocks across the frame
 
 ---
 
-### T2. `Shrubland / Arid Scrub Clumps` — кустарниковые куртины и саванна
+## T2. `Shrubland / Arid Scrub Clumps` — кустарниковые куртины и саванна
 
 **Биом:** 10 `shrubland`. **Амплитуда `Height`:** `1,8 м`.
 **Период:** `312 м` / `1,25 км`.
@@ -98,7 +98,7 @@ between adjacent clumps, evenly distributed clump sizes, no continuous canopy
 
 ---
 
-### T3. `Tundra Bryophyte & Dwarf Shrub Mat` — мохово-лишайниковый покров
+## T3. `Tundra Bryophyte & Dwarf Shrub Mat` — мохово-лишайниковый покров
 
 **Биом:** 5 `tundra`. **Амплитуда `Height`:** `0,5 м`.
 **Период:** `312 м` / `1,25 км`.
@@ -128,7 +128,7 @@ snow, ice`.
 
 ---
 
-### T4. `Wetland Sedge, Hummocks & Marsh Flora` — кочки, осока и ряска
+## T4. `Wetland Sedge, Hummocks & Marsh Flora` — кочки, осока и ряска
 
 **Биом:** 15 `wetland` (+ дельты `deltaWeight`).
 **Амплитуда `Height`:** `0,8 м`. **Период:** `312 м` / `1,25 км`.

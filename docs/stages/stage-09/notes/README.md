@@ -14,4 +14,4 @@
 | [`biomes-matrix-open-and-wetland.md`](biomes-matrix-open-and-wetland.md) | Матрица биомов: открытые, водно-болотные и переходы |
 | [`pipeline.md`](pipeline.md) | Пайплайн `build_vegetation` и контракт воркера |
 | [`audit.md`](audit.md) | Аудит рендера, воркера, контракта и сборки |
-| [`plan-source.md`](plan-source.md) | Этап 9 — исходный план атласа текстур |
+| [`plan-source.md`](../plan.md) | Этап 9 — исходный план атласа текстур |

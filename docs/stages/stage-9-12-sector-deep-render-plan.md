@@ -30,6 +30,6 @@
 
 ## Регистры этапа
 
-- [План](stage-09-12-sector/plan.md) · [Ошибки](stage-09-12-sector/errors.md) · [Баги](stage-09-12-sector/bugs.md) · [Решения](stage-09-12-sector/decisions.md) · [TODO](stage-09-12-sector/todo.md)
+- [План](stage-09-12-sector/plan.md) · [Ошибки](stage-09-12-sector/plan.md) · [Баги](stage-09-12-sector/plan.md) · [Решения](stage-09-12-sector/plan.md) · [TODO](stage-09-12-sector/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

@@ -18,4 +18,4 @@
 
 - Проект гибридного атласа: [`stage-9-vegetation-atlas.md`](../stages/stage-9-vegetation-atlas.md).
 - Пайплайн сборки и контракт воркера: [`pipeline.md`](../stages/stage-09/notes/pipeline.md).
-- Ошибки и решения этапа: [`errors.md`](../stages/stage-09/errors.md), [`decisions.md`](../stages/stage-09/decisions.md).
+- Ошибки и решения этапа: [`errors.md`](../stages/stage-09/plan.md), [`decisions.md`](../stages/stage-09/plan.md).
