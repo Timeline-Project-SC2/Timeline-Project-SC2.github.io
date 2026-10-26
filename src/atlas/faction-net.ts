@@ -19,9 +19,7 @@
  *      баблами; `null`, если сети не соседние (критерий — `BRIDGE_GAP_FACTOR`).
  *   6. `flaresFor` — «всполохи» в сторону конфронтующей сети; число и
  *      направление детерминированы данными сети, без случайности.
- *   7. Слой живёт на уровнях территорий `L2…L9` (`NET_LAYER_LEVELS`, тот же
- *      диапазон, что `TERRITORY_LEVELS` сцены, §8.1): с `Z-4b` глубина лестницы
- *      девять, поэтому слой не обрезается на `L6`; альфа слоя убывает по
+ *   7. Слой живёт на уровнях территорий `L2…L12` (§8.1); диапазон задаёт
  *      `layerFillAlpha` / `layerLineAlpha` из `level-ladder.ts` (`Z-3.9`).
  *   8. `channelsFor` — каналы между сетями из колонки `net_confront_id`
  *      (карточка `Z-3.8`): узкая лента «свой-чужой» между двумя системами,
@@ -43,25 +41,20 @@
  */
 
 import { NEUTRAL_FACTION_LABEL, parseHexColor } from './config.ts';
+import { layerFillAlpha } from './level-ladder.ts';
 import type { FactionColor } from './config.ts';
 
 /* --------------------------------------------------------------- уровни слоя */
 
 /**
- * Слой баблов активен на уровнях территорий (`L2…L9`, §8.1) — тот же диапазон,
- * что `TERRITORY_LEVELS` в `sector-scene.ts`. `L2…L9`: с `Z-4b` глубина лестницы
- * девять, слой больше не обрезается на `L6`. Массив объявлен здесь независимо
- * (совпадение закреплено тестом `faction-net.test.mjs`): рантайм-импорт сцены
- * создал бы цикл, когда слой сетей монтируется внутрь кадра.
+ * Живёт ли слой сетей на уровне лестницы `L2…L12` (§8.1): диапазон выводится
+ * из лестницы `level-ladder.ts`, собственной таблицы уровней в модуле нет.
  */
-export const NET_LAYER_LEVELS: readonly number[] = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
-
-/** Живёт ли слой сетей на уровне лестницы (`L2…L9`). */
 export function isNetLayerLevel(level: number): boolean {
-  return NET_LAYER_LEVELS.includes(level);
+  return layerFillAlpha(level) > 0;
 }
 
-/** Сети для кадра: на обзоре (`L0…L1`) и вне `L2…L9` слой не рисуется. */
+/** Сети для кадра: на обзоре (`L0…L1`) и вне `L2…L12` слой не рисуется. */
 export function netsAtLevel(
   nets: readonly FactionNet[],
   level: number,

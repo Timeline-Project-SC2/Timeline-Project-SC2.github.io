@@ -28,7 +28,7 @@ const {
   MAX_CHANNELS_PER_FRAME,
   NET_CONFRONT_MIN_ID,
   NET_CONFRONT_MIN_PARTS,
-  NET_LAYER_LEVELS,
+  isNetLayerLevel,
   bubbleFor,
   bubblePath,
   channelsFor,
@@ -654,8 +654,13 @@ test('отрисовка: отдельный проход после бабло�
   assert.ok(markerAt > channelsAt, 'каналы рисуются после маркеров');
   assert.ok(/isNetLayerLevel\(level\)/.test(source), 'каналы не ограничены уровнями слоя сетей');
   assert.ok(/channelsFor\(/.test(source), 'рендерер не использует channelsFor из faction-net.ts');
-  // Z-3.9 (С3): с Z-4b глубина лестницы девять, слой не обрезается на L6.
-  assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
+  // Z-3.9 (С3): диапазон слоя сетей определяется лестницей до L12.
+  for (const level of [0, 1, 13, 14, 15]) {
+    assert.equal(isNetLayerLevel(level), false, `L${level} вне диапазона слоя сетей`);
+  }
+  for (let level = 2; level <= 12; level += 1) {
+    assert.equal(isNetLayerLevel(level), true, `L${level} входит в диапазон слоя сетей`);
+  }
 });
 
 

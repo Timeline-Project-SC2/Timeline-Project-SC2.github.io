@@ -1451,7 +1451,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     }
   }
 
-  /** Каналы живут на уровнях слоя сетей (`L2…L9`) — тот же диапазон, что баблы. */
+  /** Каналы живут на уровнях слоя сетей (`L2…L12`) — тот же диапазон, что баблы. */
   function drawNetChannels(level: number): void {
     if (!isNetLayerLevel(level)) return;
     var channels = netChannels();
