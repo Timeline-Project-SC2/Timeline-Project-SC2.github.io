@@ -92,9 +92,8 @@ export function visibleWidthOf(viewport: { readonly w: number; readonly h: numbe
  * Масштаб (px/ед), при котором ширина кадра равна `lw` единиц карты.
  *
  * Сверху масштаб клампит `centerOn()` рендерера (`[minScale, maxScale]`), поэтому
- * на `lw` меньше `1000` единиц кадр упирается в предел зума по полной ширине
- * (Z-4b: `maxScale = viewport.w / lyToUnits(1)`, полная ширина на упоре —
- * `1` св.г.) и ширина выходит больше заказанной. Ограничения здесь нет
+ * на `lw` меньше фактической видимой ширины на пределе кадр упирается в
+ * `maxScale = 500` px/св.г. и ширина выходит больше заказанной. Ограничения здесь нет
  * намеренно: одна граница — у рендерера.
  */
 export function scaleForVisibleWidth(viewport: { readonly w: number; readonly h: number }, lw: number): number | null {
@@ -112,7 +111,7 @@ export interface ZoomReadoutText {
  * кадра до ближайшей границы. Вторая строка намеренно не «ширина кадра»:
  * она задана метрикой `edgeDistance` по короткой оси. Предел зума при этом
  * задан полной шириной (Z-4b), поэтому на упоре `1920×1080` читается
- * `1891%` и `0,28 св.г. до границы`, а не прежние `532%` / `1,00 св.г.`
+ * edge остаётся справочным расстоянием до границы, а предел показан отдельно.
  */
 export function zoomReadoutText(
   viewport: { readonly w: number; readonly h: number },
@@ -122,8 +121,8 @@ export function zoomReadoutText(
   if (!(scale > 0) || !(fit > 0) || !(viewport.w > 0) || !(viewport.h > 0)) return null;
   return {
     percent: Math.round(scale / fit * 100) + '%',
-    // Два знака: на пределе приближения строка обязана читаться как «0,28 св.г.» (`1920×1080`).
-    edge: formatDistanceLy(edgeDistance({ w: viewport.w, h: viewport.h }, scale), 'full') + ' до границы',
+    // Метрика до кромки справочная и не обозначает предел приближения.
+    edge: formatDistanceLy(edgeDistance({ w: viewport.w, h: viewport.h }, scale), 'full') + ' до границы (справочно)',
   };
 }
 
@@ -194,6 +193,7 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
       el.zoomPercent.textContent = text.percent;
       var edgeNode = edgeDistanceNode();
       if (edgeNode) edgeNode.textContent = text.edge;
+      zoomLimitNode();
     }
     updateInspectReadout();
   }
@@ -207,6 +207,7 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
     var percent = el.zoomPercent;
     if (!percent) return null;
     edgeDistanceNode();
+    zoomLimitNode();
     var existingButton = doc.getElementById('inspectToggle') as HTMLButtonElement | null;
     var existingLine = doc.getElementById('inspectReadout');
     if (existingButton && existingLine) return { button: existingButton, line: existingLine };
@@ -278,7 +279,7 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
   }
 
   /**
-   * Строка «0,28 св.г. до границы» (`1920×1080` на упоре) под процентом зума.
+   * Справочная строка расстояния от центра до ближайшей границы под процентом зума.
    *
    * Узел создаётся здесь, а не в шаблоне: разметка `.zoom-readout` общая для всех
    * вариантов атласа, и правка шаблона задела бы чужие экраны. Вставка аддитивная
@@ -295,6 +296,27 @@ export function createCoordsReadout(kernel: AtlasKernel): CoordsReadoutApi {
     node.id = 'zoomEdgeDistance';
     node.className = 'zoom-edge-distance';
     node.title = 'Расстояние от цели в центре кадра до ближайшей границы кадра';
+    node.style.fontSize = '8px';
+    node.style.lineHeight = '1.25';
+    node.style.textAlign = 'center';
+    node.style.opacity = '.72';
+    container.appendChild(node);
+    return node;
+  }
+
+  /** Узел фиксированного предела приближения; общий шаблон не меняется. */
+  function zoomLimitNode(): HTMLElement | null {
+    var percent = el.zoomPercent;
+    if (!percent) return null;
+    var existing = doc.getElementById('zoomLimit');
+    if (existing) return existing;
+    var container = percent.parentElement;
+    if (!container) return null;
+    var node = doc.createElement('span');
+    node.id = 'zoomLimit';
+    node.className = 'zoom-edge-distance';
+    node.textContent = '0,002 св.г./px';
+    node.title = 'Предел приближения: 500 px/св.г.';
     node.style.fontSize = '8px';
     node.style.lineHeight = '1.25';
     node.style.textAlign = 'center';

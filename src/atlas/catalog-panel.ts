@@ -117,7 +117,7 @@ export function createCatalogPanel(kernel: AtlasKernel): CatalogPanelApi {
       kernel.dossier.clearDetail();
       // Адрес — это узел сетки: ведём к нему на предельное приближение, иначе
       // переход на «×2,6 от обзора» показывает точку, но не её адресный контекст.
-      // Потолок берётся у рендерера (`maxScale()` — кламп «1 св.г. до границы»),
+      // Потолок берётся у рендерера (`maxScale()` — предел 500 px/св.г.),
       // своих коэффициентов вместо него не вводим.
       var isAddress = entry.id.indexOf('address:') === 0;
       kernel.renderer.centerOn(entry.x, entry.y, isAddress

@@ -535,7 +535,7 @@ export function requestedSystemFrame(kernel: AtlasKernel): SystemFrameRequest | 
 const SECTOR_CORE = Object.freeze({ x: 6014, y: 5856 });
 
 export interface PointCardTarget {
-  /** Мировые координаты точки в единицах карты. */
+  /** Мировые координаты точки (единица карты равна одному световому году). */
   world: MapPoint;
   /** Координаты указателя внутри холста карты, px. */
   screen: MapPoint;
