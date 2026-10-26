@@ -2,7 +2,7 @@
 
 Этот файл — **корневой источник истины (SSoT)** по общим правилам репозитория
 `Timeline-Project-SC2.github.io`. Перед началом работы прочитайте этот документ,
-актуальный срез состояния в [`docs/handoff/status.md`](docs/handoff/status-and-state.md) (хаб — [`docs/HANDOFF.md`](docs/HANDOFF.md)) и доменный `AGENTS.md`
+актуальный срез состояния в [`docs/handoff/status-and-state.md`](docs/handoff/status-and-state.md) (хаб — [`docs/HANDOFF.md`](docs/HANDOFF.md)) и доменный `AGENTS.md`
 той директории, в которой вы вносите изменения. Если исторические заметки противоречат
 текущему коду в `main`, приоритет у кода в `main` и явных указаний пользователя;
 после завершения работы обновите документацию согласно регламенту режима.
@@ -74,7 +74,7 @@ npm run lint                                    # проверка ESLint по �
 npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
 
 # Модульные и интеграционные тесты (Node.js и Python)
-npm test                                        # явный прогон всех 13 тестовых файлов Node (--test, последовательно: --test-concurrency=1)
+npm test                                        # явный прогон всех 35 тестовых файлов Node (--test, последовательно: --test-concurrency=1)
 npm run test:py                                 # прогон Python-тестов (unittest discover -s tests -p 'test_*.py')
 
 # Верификация публикации, контракта планет и синхронизации данных

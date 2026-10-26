@@ -160,7 +160,7 @@ export const LAYER_LINE_ALPHA_MIN = 0.45;
 /** Первый уровень, на котором живут слои территорий и сетей (`L2`). */
 export const DEEP_LAYER_FIRST_LEVEL = 2;
 
-/** Альфа заливки слоя на уровне: `0` вне `L2…L9`, иначе `max(0,25; 0,75^(n−2))`. */
+/** Альфа заливки слоя на уровне: `0` вне `L2…L12`, иначе `max(0,25; 0,75^(n−2))`. */
 export function layerFillAlpha(level: number): number {
   if (!(level >= DEEP_LAYER_FIRST_LEVEL) || level > DEEPEST_SECTOR_LEVEL) return 0;
 
@@ -168,7 +168,7 @@ export function layerFillAlpha(level: number): number {
 }
 
 /**
- * Альфа линии слоя на уровне: `0` вне `L2…L9`, иначе не меньше альфы заливки,
+ * Альфа линии слоя на уровне: `0` вне `L2…L12`, иначе не меньше альфы заливки,
  * но и не меньше `0,45` — контур переживает затухание заливки.
  */
 export function layerLineAlpha(level: number): number {
