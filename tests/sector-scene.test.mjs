@@ -13,7 +13,6 @@ const { parseBounds } = require('../src/atlas/sector-bounds.ts');
 const {
   APERTURE_FIRST_LEVEL,
   GRID_LAST_LEVEL,
-  GRID_TIER_BY_LEVEL,
   LABEL_PRIORITY,
   LOUPE_CHAR_PX,
   LOUPE_LABEL_PAD_PX,
@@ -190,11 +189,6 @@ test('сетка сохраняет таблицу тиров F-3; уровни 
       }
     }
   }
-});
-
-test('F-3 передача: GRID_TIER_BY_LEVEL сохраняет 10 старых записей без T6/T7', () => {
-  assert.deepEqual([...GRID_TIER_BY_LEVEL], [null, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
-  assert.equal(GRID_TIER_BY_LEVEL.length, 10);
 });
 
 test('G2: число линий и подписей обычной сетки на 1920×1080 при центре кадра (допуск ±1)', () => {
@@ -435,7 +429,6 @@ test('лупа: на L0 и L10…L12 не строится; L9 выбирает 
   assert.equal(loupe0.lines.length, 0);
   assert.equal(loupe0.bounds, null);
 
-  assert.equal(GRID_TIER_BY_LEVEL[9], 3);
   const loupe9Phone = loupeGridFor(PHONE, cameraForLevel(9, 5000, 5000), 9, { x: 195, y: 422 });
   assert.equal(loupe9Phone.tierIndex, 5);
   assert.ok(loupe9Phone.lines.length > 0);

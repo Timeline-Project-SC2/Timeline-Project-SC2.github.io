@@ -239,16 +239,6 @@ body { text-shadow: 0 0 12px rgba(37, 234, 219, .03); }
 .map-stage { inset: 68px 0 0 0; --panel-inset: 300px; background: #010605; }
 .map-stage.wide { --panel-inset: 0px; }
 .map-vignette { background: radial-gradient(ellipse at 53% 46%, transparent 40%, rgba(0,8,7,.16) 74%, rgba(0,3,3,.67) 100%); }
-.map-grid-overlay {
-  opacity: .28;
-  background-image:
-    linear-gradient(rgba(28, 221, 206, .14) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(28, 221, 206, .14) 1px, transparent 1px),
-    linear-gradient(rgba(28, 221, 206, .045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(28, 221, 206, .045) 1px, transparent 1px);
-  background-size: 96px 96px, 96px 96px, 12px 12px, 12px 12px;
-  mix-blend-mode: screen;
-}
 .coordinates-label { color: rgba(110, 220, 211, .43); }
 .coordinates-label span + span { color: #2ad8cb; }
 .map-page-intro { border-bottom-color: rgba(46,245,230,.54); background: linear-gradient(90deg, rgba(1,8,7,.92), rgba(1,8,7,.48) 75%, transparent); }
