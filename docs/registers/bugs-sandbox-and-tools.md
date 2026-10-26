@@ -11,7 +11,7 @@
 **Причина.** Песочница эфемерна; `/tmp` не входит в снапшот.
 **Правило.** Коммит + push после каждого шага. Крупные данные и эталоны —
 в Git, не в `/tmp`.
-**Источник.** [`errors-systemic.md`](errors-systemic.md) E-01, HANDOFF §7.
+**Источник.** [`errors-systemic.md`](errors-systemic.md) E-01, [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-S02 · Параллельная запись и чтение файла
 
@@ -31,7 +31,7 @@
 `document.elementFromPoint` в центре возвращает сам элемент. Скриншот на
 глубоком зуме снимать с остановленным временем (подмена `performance.now`,
 `rAF`, таймеров).
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-S04 · Курсор не виден в headless-браузере
 
@@ -42,7 +42,7 @@
 Стоимость — CDP `Performance.getMetrics`.
 **Нюанс.** `?cursor=off` запоминается; следующую страницу открывать с
 `?cursor=auto`.
-**Источник.** HANDOFF §8.
+**Источник.** [`handoff/checks.md`](../handoff/checks.md).
 
 ## B-S05 · UI-счётчик изменённых строк врёт
 
@@ -68,7 +68,7 @@
 архива.
 **Что делать.** Проверить `chmod +x` на `chrome`/`headless_shell`; путь к
 `libs` задавать абсолютным.
-**Источник.** локальная практика проверок, HANDOFF §7.
+**Источник.** локальная практика проверок, [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-S08 · Долгий первый кадр и ложный HUD
 

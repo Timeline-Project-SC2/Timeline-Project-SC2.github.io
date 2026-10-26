@@ -18,7 +18,7 @@ merge_method=merge` (или `squash`/`rebase`); либо `gh pr merge <N> --squa
 --admin`.
 **Вывод.** `BLOCKED` в `gh pr view` — ожидаемое состояние, не доказательство
 запрета. Решает ответ REST.
-**Источник.** HANDOFF §7 (историческая редакция).
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md) (историческая редакция).
 
 ## B-M02 · Классическая branch protection выключена
 
@@ -29,7 +29,7 @@ merge_method=merge` (или `squash`/`rebase`); либо `gh pr merge <N> --squa
 **Что делать.** Причины блокировки смотреть в UI: PR → «Merging is blocked» →
 Details; `Settings → Branches`; `Settings → Rules` (Repository и Organization).
 Не пытаться менять политику из агента.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-C01 · Чек «Скрипты сайта» красный на всех PR
 
@@ -41,7 +41,7 @@ golden-хэш A-17, W26b `m.11`/`m.14`, диагностика стыка/бер
 **Что делать.** Не добавлять чек в обязательные, пока тесты не починены.
 Не пересчитывать golden вслепую.
 **Источник.** [`stages/stage-08/bugs.md`](../stages/stage-08/bugs.md),
-HANDOFF §7.
+[`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-C02 · Переезд `ubuntu-latest` на 26.04
 
@@ -50,7 +50,7 @@ Ubuntu 26.04 (actions/runner-images#14748); системный Python там 3.1
 **Что сделано.** `check.yml` собирает на `ubuntu-24.04` и `ubuntu-26.04`;
 Pillow зафиксирован `pillow>=13,<14` (колёса под 3.12–3.14).
 **План Б.** В `pages.yml` поставить `runs-on: ubuntu-24.04`.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-C03 · Версии GitHub Actions на Node 24
 
@@ -59,7 +59,7 @@ Pillow зафиксирован `pillow>=13,<14` (колёса под 3.12–3.1
 `configure-pages@v6`, `upload-pages-artifact@v5`, `deploy-pages@v5`,
 `upload-artifact@v7`. Ниже `upload-artifact@v5` и `configure-pages@v5` не
 опускаться.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-C04 · Красный `npm test` обрывает последующие шаги CI
 
@@ -80,7 +80,7 @@ F-1 §11.
 изолирует модульный кэш).
 **Что делать.** Считать известным дефектом, не «прятать» перестановкой;
 чинить изоляцию в отдельной задаче.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-C06 · `npm run build` как единственная проверка документации
 

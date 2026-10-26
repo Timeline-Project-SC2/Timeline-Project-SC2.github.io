@@ -19,7 +19,7 @@
 `git push -u origin HEAD`. После каждого логического шага — коммит и пуш.
 Проверка сохранности только через `git status --short`, `git log` и
 `git rev-parse HEAD` = `origin/<ветка>`.
-**Источник.** [`AGENTS.md` §6](../../AGENTS.md), HANDOFF §7.
+**Источник.** [`AGENTS.md` §6](../../AGENTS.md), [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## E-02 · Гонка инструментов записи
 
@@ -31,7 +31,7 @@
 файла.
 **Правило.** Зависимые шаги — строго разными сообщениями. Не смешивать
 `write_file`/`edit_file` с `bash`, который читает этот файл, в одном блоке.
-**Источник.** HANDOFF §7, AGENTS.md §6.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md), AGENTS.md §6.
 
 ## E-03 · Доверие индикаторам UI вместо Git
 
@@ -39,7 +39,7 @@
 впечатление потери данных.
 **Причина.** UI-индикатор не является транзакционным источником правды.
 **Правило.** Только `git status`, `git diff --name-only`, `git log`.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## E-04 · Слепое доверие сплющенным логам старых сессий
 
@@ -49,7 +49,7 @@
 искажают имена.
 **Правило.** Эталоны брать из репозитория, а не из `/tmp`; extracted-код
 резать по смыслу и валидировать `tsc` + побитовым FULL EQ.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## E-05 · «Эффект Франкенштейна»: параллельные реализации
 
@@ -82,7 +82,7 @@ renderV, а не по канону.
 **Правило.** Новый UI-слой добавляется отдельным узлом и не замещает
 существующую разметку; на каждое такое вмешательство — DOM-тест.
 **Источник.** [`stages/stage-08/errors.md`](../stages/stage-08/errors.md),
-HANDOFF §1.
+[`handoff/status.md`](../handoff/status.md).
 
 ## E-08 · Документация отстаёт от кода и начинает противоречить
 
@@ -103,7 +103,7 @@ HANDOFF §1.
 **Правило.** Сначала измерение и объяснение дрейфа, потом решение.
 Пересчёт golden — отдельный коммит с доказательством.
 **Источник.** [`stages/stage-08/bugs.md`](../stages/stage-08/bugs.md),
-HANDOFF §7.
+[`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## E-10 · Смешение уровней документа: план, отчёт и журнал в одном файле
 

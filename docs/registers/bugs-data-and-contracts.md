@@ -13,7 +13,7 @@
 `build_assets.py` (`mapSize`, `assets.hasRaster`, версии).
 **Правило.** Каждый скрипт меняет только свои ключи; общий merge, не
 перезапись файла целиком.
-**Источник.** HANDOFF §7.
+**Источник.** [`handoff/infra-pitfalls.md`](../handoff/infra-pitfalls.md).
 
 ## B-D02 · Синк применяет данные частично
 
