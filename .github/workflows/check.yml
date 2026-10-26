@@ -35,7 +35,7 @@ jobs:
         run: |
           python tools/planet_generation.py validate
           python -m unittest discover -s tests -p 'test_*.py'
-      - name: Документация: лимит 200 строк и битые ссылки
+      - name: Документация — лимит 200 строк и битые ссылки
         run: python tools/check_docs.py
       - name: Собрать картинки
         run: |
