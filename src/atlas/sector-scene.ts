@@ -15,8 +15,8 @@
  *   — слияние ближе `1,6 · d` — §6.2 п. 3; хит-зона `d + 6 px` и `≥ 44 px`
  *     на сенсорном экране — §6.2 п. 5;
  *   — бюджет кадра уровня — `frameBudgetMs` из `LEVELS` (§6, §8.4);
- *   — границы сектора и гало `L0…L9`, сетка адресов `L1…L9`, апертура ровно
- *     на `L9` — §8.1, Z-4b §2, Z-4d;
+ *   — границы сектора и гало `L0…L9`, сетка адресов `L0…L12` по `gridTiersFor`
+ *     (два тира, `alpha 0,16`/`0,07`), апертура ровно на `L12` — §8.1, §17.3, Z-4d;
  *   — подпись на уровне — колонка «Подпись» таблицы §6.2, приоритет
  *     «столица → фракция → плотность» — §8.1;
  *   — бюджет подписей `120` — `LABEL_BUDGET` из `label-layout.ts` (§6, §8.1).
@@ -82,11 +82,13 @@ export interface SceneBounds {
   readonly points: readonly { readonly x: number; readonly y: number }[];
 }
 
-/** Линия сетки адреса (§8.1, уровни `L1…L9`). */
+/** Линия сетки адреса (§8.1, `L0…L12`, два тира по `gridTiersFor`). */
 export interface SceneGridLine {
   readonly kind: 'grid.line';
   readonly tier: string;
   readonly cellSize: number;
+  /** Прозрачность линии из сцены (§17.3 п. 3): `0,16` старший тир, `0,07` вложенный. */
+  readonly alpha: number;
   readonly x1: number;
   readonly y1: number;
   readonly x2: number;
@@ -192,8 +194,8 @@ export const MIN_DRAWABLE_PX = 0.25;
 /** Апертура системы активна ровно на предельном `L12`. */
 export const APERTURE_FIRST_LEVEL = 12;
 
-/** Сетка адресов живёт на `L1…L12`; пустые тиры вне таблицы ожидаемы. */
-export const GRID_FIRST_LEVEL = 1;
+/** Сетка адресов живёт на `L0…L12` (G7.13): тир считает `gridTiersFor`, а не таблица. */
+export const GRID_FIRST_LEVEL = 0;
 export const GRID_LAST_LEVEL = 12;
 
 /** Приоритеты подписей по §8.1: столица → фракция → плотность. */
@@ -205,12 +207,57 @@ export const MAX_GRID_LINES = 512;
 /** Предохранитель: больше адресных подписей за кадр не строим. */
 export const MAX_GRID_LABELS = 64;
 
+/** Старший тир сетки: ячейка на экране не шире `450 px` (§17.3 п. 5). */
+export const GRID_CELL_MAX_PX = 450;
+
+/** Вложенный тир сетки: его ячейка на экране не уже `16 px` (§17.3 п. 5). */
+export const GRID_CELL_MIN_PX = 16;
+
+/** Прозрачность линий старшего тира (§17.3 п. 3). */
+export const GRID_LINE_ALPHA_PRIMARY = 0.16;
+
+/** Прозрачность линий вложенного тира: глубже старшего не ярче никогда (§17.3 п. 3). */
+export const GRID_LINE_ALPHA_NESTED = 0.07;
+
+/** Пара тиров кадра: индексы в `ADDRESS_TIERS`. */
+export interface GridTiers {
+  /** Старший тир (подсвечен, `alpha 0,16`). */
+  readonly primary: number;
+  /** Вложенный тир (`alpha 0,07`); равен `primary`, когда сетка из одного тира. */
+  readonly nested: number;
+}
+
 /**
- * L1…L2 — T1, L3…L6 — T2, L7…L9 — T3 (80 ед); на L0 сетки нет.
+ * Тир сетки от масштаба, а не от номера уровня (§17.3 п. 5, `И-8`).
+ *
+ * Старший тир `t` — минимальный индекс `i ≥ 1`, у которого ячейка на экране не
+ * шире `GRID_CELL_MAX_PX` (450 px); вложенный — `t + 1`, пока он есть в кодеке и
+ * его ячейка не уже `GRID_CELL_MIN_PX` (16 px). Если ячейка даже самого мелкого
+ * тира шире кадра (масштаб за пределом `MAX_SCALE`), сетка деградирует до одного
+ * тира `T7`; если вложенная ячейка мельче 16 px — до одного старшего тира.
+ * В обоих случаях `nested === primary`.
  */
-export const GRID_TIER_BY_LEVEL: readonly (number | null)[] = Object.freeze([
-  null, 1, 1, 2, 2, 2, 2, 3, 3, 3,
-]);
+export function gridTiersFor(scale: number): GridTiers {
+  const currentScale = requirePositive(scale, 'Масштаб сетки (scale)');
+  const deepest = ADDRESS_TIERS.length - 1;
+
+  let primary = -1;
+  for (let index = 1; index <= deepest; index += 1) {
+    const cellSize = ADDRESS_TIERS[index]?.cellSize ?? 0;
+    if (cellSize * currentScale <= GRID_CELL_MAX_PX) {
+      primary = index;
+      break;
+    }
+  }
+  if (primary < 0) primary = deepest;
+
+  const nestedCellSize = ADDRESS_TIERS[primary + 1]?.cellSize ?? 0;
+  const nested = primary + 1 <= deepest && nestedCellSize * currentScale >= GRID_CELL_MIN_PX
+    ? primary + 1
+    : primary;
+
+  return { primary, nested };
+}
 
 /**
  * Режим осмотра (Z-4c §2): мельче этого размера ячейки на экране не строим тир.
@@ -241,7 +288,7 @@ export const MAX_LOUPE_LABELS = 9;
 /** Лупа не глубже базового тира уровня + этот шаг. */
 export const LOUPE_MAX_TIER_STEP = 2;
 
-/** Индекс самого мелкого тира `ADDRESS_TIERS` (`T5`, узел): глубже лупа не идёт. */
+/** Индекс самого мелкого тира `ADDRESS_TIERS` (`T7`, пята, версия 4.0): глубже лупа не идёт. */
 const DEEPEST_ADDRESS_TIER = ADDRESS_TIERS.length - 1;
 
 function requirePositive(value: number, what: string): number {
@@ -503,21 +550,19 @@ function visibleWorldBounds(
   };
 }
 
-/** Сетка адресов уровня: линии тира и адресные префиксы на гранях ячеек (§8.1). */
-export function gridFor(
-  viewport: FrameViewport,
-  camera: SceneCamera,
-  level: number,
-): { readonly lines: readonly SceneGridLine[]; readonly labels: readonly SceneGridLabel[] } {
-  if (level < GRID_FIRST_LEVEL || level > GRID_LAST_LEVEL) return { lines: [], labels: [] };
-  const tierIndex = GRID_TIER_BY_LEVEL[level] ?? null;
-  if (tierIndex === null) return { lines: [], labels: [] };
-
-  const frame = resolveViewport(viewport);
-  const cam = resolveCamera(camera);
-  const spec = levelSpec(level);
+/**
+ * Линии одного тира в кадре. Геометрия — по границам ячеек `ADDRESS_TIERS` в
+ * мировых координатах, проекция на экран; прозрачность берётся из правила
+ * §17.3 п. 3 и приходит аргументом (сцена — единственный источник чисел).
+ */
+function gridLinesForTier(
+  frame: FrameViewport,
+  cam: SceneCamera,
+  tierIndex: number,
+  alpha: number,
+): readonly SceneGridLine[] {
   const tierInfo = addressTierAt(tierIndex);
-  if (tierInfo === undefined) return { lines: [], labels: [] };
+  if (tierInfo === undefined) return [];
 
   const { cellSize } = tierInfo;
   const columns = Math.round(MAP_SIZE / cellSize);
@@ -526,9 +571,6 @@ export function gridFor(
   const lastCol = Math.min(columns - 1, Math.floor(bounds.x1 / cellSize));
   const firstRow = Math.max(0, Math.floor(bounds.y0 / cellSize));
   const lastRow = Math.min(columns - 1, Math.floor(bounds.y1 / cellSize));
-
-  const lineCount = (lastCol - firstCol + 2) + (lastRow - firstRow + 2);
-  if (lineCount > MAX_GRID_LINES) return { lines: [], labels: [] };
 
   const lines: SceneGridLine[] = [];
   for (let col = firstCol; col <= lastCol + 1; col += 1) {
@@ -540,6 +582,7 @@ export function gridFor(
       kind: 'grid.line',
       tier: tierInfo.id,
       cellSize,
+      alpha,
       x1: point.x,
       y1: 0,
       x2: point.x,
@@ -555,6 +598,7 @@ export function gridFor(
       kind: 'grid.line',
       tier: tierInfo.id,
       cellSize,
+      alpha,
       x1: 0,
       y1: point.y,
       x2: frame.w,
@@ -562,10 +606,50 @@ export function gridFor(
     });
   }
 
+  return lines;
+}
+
+/**
+ * Сетка адресов уровня: линии двух тиров и адресные префиксы на гранях ячеек
+ * старшего тира (§17.3 п. 2, 6). В кадре ровно два тира: `t` и `t + 1`; при
+ * превышении `MAX_GRID_LINES` остаётся один старший тир (§17.3 п. 8).
+ */
+export function gridFor(
+  viewport: FrameViewport,
+  camera: SceneCamera,
+  level: number,
+): { readonly lines: readonly SceneGridLine[]; readonly labels: readonly SceneGridLabel[] } {
+  if (level < GRID_FIRST_LEVEL || level > GRID_LAST_LEVEL) return { lines: [], labels: [] };
+
+  const frame = resolveViewport(viewport);
+  const cam = resolveCamera(camera);
+  const scale = frame.w / cam.visibleWidth;
+  const tiers = gridTiersFor(scale);
+  const primaryTier = addressTierAt(tiers.primary);
+  if (primaryTier === undefined) return { lines: [], labels: [] };
+
+  const primaryLines = gridLinesForTier(frame, cam, tiers.primary, GRID_LINE_ALPHA_PRIMARY);
+  let lines: readonly SceneGridLine[] = primaryLines;
+  if (tiers.nested !== tiers.primary) {
+    const nestedLines = gridLinesForTier(frame, cam, tiers.nested, GRID_LINE_ALPHA_NESTED);
+    lines = primaryLines.length + nestedLines.length <= MAX_GRID_LINES
+      ? [...primaryLines, ...nestedLines]
+      : primaryLines;
+  }
+  // Даже один тир не влез в предохранитель — сетку не рисуем вовсе.
+  if (lines.length > MAX_GRID_LINES) return { lines: [], labels: [] };
+
   const labels: SceneGridLabel[] = [];
-  const letters = spec.addressLetters;
+  const letters = tiers.primary as AddressLetters;
+  const { cellSize } = primaryTier;
+  const columns = Math.round(MAP_SIZE / cellSize);
+  const bounds = visibleWorldBounds(frame, cam);
+  const firstCol = Math.max(0, Math.floor(bounds.x0 / cellSize));
+  const lastCol = Math.min(columns - 1, Math.floor(bounds.x1 / cellSize));
+  const firstRow = Math.max(0, Math.floor(bounds.y0 / cellSize));
+  const lastRow = Math.min(columns - 1, Math.floor(bounds.y1 / cellSize));
   const probe = estimateLabelSize(`KP·${'X'.repeat(letters)}`);
-  const readable = cellSize * (frame.w / cam.visibleWidth) >= probe.width + LABEL_GAP * 2;
+  const readable = cellSize * scale >= probe.width + LABEL_GAP * 2;
   if (letters > 0 && readable) {
     for (let row = firstRow; row <= lastRow && labels.length < MAX_GRID_LABELS; row += 1) {
       for (let col = firstCol; col <= lastCol && labels.length < MAX_GRID_LABELS; col += 1) {
@@ -576,7 +660,7 @@ export function gridFor(
         if (corner.x < 0 || corner.y < 0 || corner.x > frame.w || corner.y > frame.h) continue;
         labels.push({
           kind: 'grid.label',
-          tier: tierInfo.id,
+          tier: primaryTier.id,
           text: formatAddress(prefixOf(centerX, centerY, letters)),
           x: corner.x,
           y: corner.y,
@@ -724,12 +808,30 @@ function buildLoupe(
   for (let k = kx0; k <= kx1; k += 1) {
     const x = worldToScreen(frame, cam, k * cellSize, 0).x;
     if (x < left || x > right) continue;
-    lines.push({ kind: 'grid.line', tier: tier.id, cellSize, x1: x, y1: top, x2: x, y2: bottom });
+    lines.push({
+      kind: 'grid.line',
+      tier: tier.id,
+      cellSize,
+      alpha: GRID_LINE_ALPHA_PRIMARY,
+      x1: x,
+      y1: top,
+      x2: x,
+      y2: bottom,
+    });
   }
   for (let k = ky0; k <= ky1; k += 1) {
     const y = worldToScreen(frame, cam, 0, k * cellSize).y;
     if (y < top || y > bottom) continue;
-    lines.push({ kind: 'grid.line', tier: tier.id, cellSize, x1: left, y1: y, x2: right, y2: y });
+    lines.push({
+      kind: 'grid.line',
+      tier: tier.id,
+      cellSize,
+      alpha: GRID_LINE_ALPHA_PRIMARY,
+      x1: left,
+      y1: y,
+      x2: right,
+      y2: y,
+    });
   }
 
   // Подписи: 3 × 3 ячейки вокруг ячейки точки. Текст — только буквы адреса до тира
@@ -781,7 +883,8 @@ function buildLoupe(
 export function loupeGridFor(
   viewport: FrameViewport,
   camera: SceneCamera,
-  level: number,
+  /** Уровень сохранён в сигнатуре ради вызовов; тир больше не зависит от него (F3-5). */
+  _level: number,
   point: { readonly x: number; readonly y: number },
   options: LoupeOptions = {},
 ): LoupeGrid {
@@ -792,10 +895,11 @@ export function loupeGridFor(
   }
   const minCellPx = requirePositive(options.minCellPx ?? LOUPE_MIN_CELL_PX, 'Порог ячейки лупы (minCellPx)');
 
-  const base = GRID_TIER_BY_LEVEL[level] ?? null;
-  if (base === null) return { tierIndex: null, cellSize: 0, cellPx: 0, lines: [], labels: [], bounds: null };
-
+  // База лупы — старший тир фактической сетки (§17.3 п. 5, решение F3-5), а не
+  // удалённая таблица «уровень → тир»: на L10…L12 база тоже существует (T5/T6),
+  // поэтому null-тира у лупы больше нет.
   const scale = frame.w / cam.visibleWidth;
+  const base = gridTiersFor(scale).primary;
   const deepest = Math.min(base + LOUPE_MAX_TIER_STEP, DEEPEST_ADDRESS_TIER);
   let tierIndex = base;
   for (let index = deepest; index >= base; index -= 1) {
