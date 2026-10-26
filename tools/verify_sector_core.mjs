@@ -240,7 +240,7 @@ check(worstCenterOffset <= 3.2 * Math.SQRT2 / 2 + 1e-9, `отклонение ц
 check(worstCenterOffset <= 2.27, `адрес грубее допуска 2,27 св.г.: ${worstCenterOffset.toFixed(4)}`);
 
 // Префиксы уровней лестницы обязаны быть началом полного адреса.
-for (let level = 0; level < 10; level += 1) {
+for (let level = 0; level <= deepestSector; level += 1) {
   const spec = levelSpec(level);
   if (spec === undefined) continue;
   const prefix = formatAddress(prefixOf(5720, 6257, spec.addressLetters));
