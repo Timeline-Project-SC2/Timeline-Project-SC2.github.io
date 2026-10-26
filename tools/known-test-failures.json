@@ -1,50 +1,74 @@
-[
-  {
-    "name": "Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах",
-    "file": "tests/local-map-stage8.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "Stage-8.5"
+{
+  "meta": {
+    "purpose": "намеренный временный карантин восьми планетарных падений этапа 8 (S8-Q1): тесты не удалены и не помечены в исходниках, а отфильтровываются на уровне раннера по этому реестру",
+    "decision": "решение владельца от 2026-10-26, карточка CI-2 (редакция CI2-7)",
+    "date": "2026-10-26",
+    "stage": "Этап 8 — локальная карта и 3D-конструктор",
+    "references": [
+      "docs/stages/stage-08/todo.md#S8-Q1",
+      "docs/agents_task_orchestration/wave_cards/CI-2.md"
+    ],
+    "guard": "tools/check_test_baseline.mjs — два прогона: целостность без skip-флагов и карантин с 8 якорными флагами",
+    "rawRun": "npm run test:raw — полный прогон без флагов, аварийный люк, показывает те же 8 падений",
+    "removal": "условие снятия: объяснить дрейф, починить тест, удалить его запись из tests[] тем же PR и закрыть пункт S8-Q1; молча удалить запись нельзя — прогон 1 стража покраснеет секцией «НОВЫЕ ПАДЕНИЯ»",
+    "note": "расширять реестр без отдельного решения владельца запрещено"
   },
-  {
-    "name": "Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)",
-    "file": "tests/local-map-stage8.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "Stage-8.10b ×2"
-  },
-  {
-    "name": "Stage-8.10b: ленивый чанк выставляет API глобуса и генерирует golden-ответ",
-    "file": "tests/local-map-stage8.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "Stage-8.10b ×2"
-  },
-  {
-    "name": "A-17 diagnostic: числа стыка и берега для #43533…#43537",
-    "file": "tests/local-map-stage8.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "A-17 ×2"
-  },
-  {
-    "name": "стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке",
-    "file": "tests/local-map-stand.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "A-17 ×2"
-  },
-  {
-    "name": "W26b п.2: m.14 (measureLodConsistency) сравнивает одинаковый span — 0 м на константном поле и ≤ 2 м на реальном",
-    "file": "tests/local-map-stand.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "W26b ×2"
-  },
-  {
-    "name": "W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference",
-    "file": "tests/local-map-stand.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "W26b ×2"
-  },
-  {
-    "name": "Stage-8.10b: контракт не тащит ядро на верхнем уровне, константы — из constants-модуля",
-    "file": "tests/local-map.test.mjs",
-    "contour": "планетарный",
-    "knownSince": "контракт ядра"
-  }
-]
+  "tests": [
+    {
+      "name": "Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах",
+      "file": "tests/local-map-stage8.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "Stage-8.5",
+      "reason": "Дрейф рельефа юбки: гребни появляются на азимутах, где подъём не подтверждён каноническими ячейками."
+    },
+    {
+      "name": "Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)",
+      "file": "tests/local-map-stage8.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "Stage-8.10b ×2",
+      "reason": "Golden-хэш и ленивый чанк разошлись после правок генератора карты и API глобуса: эталон не перефиксирован."
+    },
+    {
+      "name": "Stage-8.10b: ленивый чанк выставляет API глобуса и генерирует golden-ответ",
+      "file": "tests/local-map-stage8.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "Stage-8.10b ×2",
+      "reason": "Golden-хэш и ленивый чанк разошлись после правок генератора карты и API глобуса: эталон не перефиксирован."
+    },
+    {
+      "name": "A-17 diagnostic: числа стыка и берега для #43533…#43537",
+      "file": "tests/local-map-stage8.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "A-17 ×2",
+      "reason": "Диагностика стыка гексов и речные метрики не сходятся с окружением: числа #43533…#43537 и измерения мира A-17 устарели."
+    },
+    {
+      "name": "стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке",
+      "file": "tests/local-map-stand.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "A-17 ×2",
+      "reason": "Диагностика стыка гексов и речные метрики не сходятся с окружением: числа #43533…#43537 и измерения мира A-17 устарели."
+    },
+    {
+      "name": "W26b п.2: m.14 (measureLodConsistency) сравнивает одинаковый span — 0 м на константном поле и ≤ 2 м на реальном",
+      "file": "tests/local-map-stand.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "W26b ×2",
+      "reason": "Метрики LOD (m.14) и гипсометрии (m.11) считают дрейфующий span и долю суши: ожидания 0/≤ 2 м и гейт 20…35 % не выполнены."
+    },
+    {
+      "name": "W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference",
+      "file": "tests/local-map-stand.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "W26b ×2",
+      "reason": "Метрики LOD (m.14) и гипсометрии (m.11) считают дрейфующий span и долю суши: ожидания 0/≤ 2 м и гейт 20…35 % не выполнены."
+    },
+    {
+      "name": "Stage-8.10b: контракт не тащит ядро на верхнем уровне, константы — из constants-модуля",
+      "file": "tests/local-map.test.mjs",
+      "contour": "планетарный",
+      "knownSince": "контракт ядра",
+      "reason": "Контракт ядра Stage-8.10b нарушен: тест ядра подтягивается на верхнем уровне вместо constants-модуля."
+    }
+  ]
+}

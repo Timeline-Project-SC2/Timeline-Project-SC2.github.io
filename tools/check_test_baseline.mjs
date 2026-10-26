@@ -1,36 +1,46 @@
 #!/usr/bin/env node
 /**
- * Страж базы известных падений — карточка `CI-1`, решение `E2`.
+ * Страж карантина планетарных падений — карточки `CI-1` (решение `E2`) и `CI-2` (редакция `CI2-7`).
  *
  * Зачем: полный `npm test` содержит 8 известных падений планетарного контура
- * (`И-11`, контур `rc-02`), поэтому джоба `scripts` исторически была «привычно красной»:
- * девятое падение выглядело точно так же, как восемь базовых, и норму «девятое
- * блокирует» держала только дисциплина приёмки. Страж делает гейт бинарным:
- * тесты **не** скипаются и **не** маркируются `todo`, исполняется тот же самый
- * список файлов, а в `tools/known-test-failures.json` явно назван долг.
+ * (`И-11`, контур `rc-02`). Решением владельца от 26.10.2026 (`S8-Q1`) они переведены
+ * в намеренный временный карантин **на уровне раннера**: тесты не удалены и не помечены
+ * в исходниках, а отфильтровываются skip-флагами, построенными из
+ * `tools/known-test-failures.json`. Страж держит карантин точечным: маскировка нового
+ * падения и «мёртвая» запись реестра одинаково краснят шаг.
  *
- * Правила (карточка `CI-1` §4.2):
- *   1. Список тестов не дублируется: берём `scripts.test` из `package.json`
- *      и добавляем `--test-reporter=tap`. Единственный источник — `package.json`.
- *   2. Падения читаются из строк `not ok N - …` с учётом вложенности подтестов.
- *   3. Совпало с базой — выход `0` и строка «известные падения: N/N по базе, новых нет».
- *   4. Падение вне базы — выход `1`, секция «НОВЫЕ ПАДЕНИЯ:» с именами.
- *   5. Имя из базы больше не падает (починка или переименование) — выход `1`,
- *      секция «БАЗА УСТАРЕЛА:» с требованием обновить JSON в этом же PR:
- *      «молчаливое» позеленение скрыло бы и починку, и переименование, и регрессию
- *      внутри самого теста.
- *   6. Крэш прогона (нет TAP-итогов или процесс убит) — выход `1`, отдельное
- *      сообщение: под базу такое состояние не маскируется.
+ * Факт шага 0 (эскалация воркера → редакция `CI2-7`): в Node 22/24 `--test-skip*`
+ * отфильтровывает тест **до исполнения** — TAP-строк `# SKIP` не возникает, счётчик
+ * `skipped` остаётся нулевым, совпавшие тесты просто исчезают из вывода. Поэтому
+ * семантика «пропущено» проверяется не по TAP-директиве, а двумя прогонами одной и той
+ * же команды:
  *
- * Имена сравниваются в раскодированном виде: TAP экранирует `#` (`\#43533`),
- * а в исходнике теста и в базе имя записано как `#43533`. Экранирование —
- * транспортная деталь формата, а не часть имени подтеста.
+ *   Прогон 1 — без skip-флагов (целостность реестра). Код выхода процесса сигналом не
+ *   служит: восемь падений ожидаемы. Сравниваются множества имён `not ok` и реестра.
+ *   Падение вне реестра → «НОВЫЕ ПАДЕНИЯ:»; имя реестра не падает (починка, переименование,
+ *   удаление) → «КАРАНТИН НЕ ПРИМЕНЁН: устаревшие имена …». Запоминается число тестов `N1`.
  *
- * Ограничения: без сети, без `Math.random` и времени — прогон детерминирован.
+ *   Прогон 2 — та же команда плюс по одному якорному флагу на каждое имя реестра. Требования:
+ *   код выхода `0`, ноль строк `not ok`, число тестов `N2 = N1 − 8`. Арифметика доказывает,
+ *   что отфильтрованы ровно реестровые тесты и ни один другой; невыполнение → секция
+ *   «КАРАНТИН НЕ ПРИМЕНЁН:» с несошедшейся арифметикой или именами.
  *
- * Запуск: `node tools/check_test_baseline.mjs` (в CI — шаг «Тесты node:test со стражем базы»).
- * Код возврата: `0` — набор падений совпал с базой, `1` — новое падение,
- * устаревшая база или крэш прогона, `2` — ошибка окружения (нет package.json/базы).
+ *   Зелёный `0` — только при согласии обоих прогонов. Крэш любого процесса без TAP-итогов
+ *   краснит отдельным сообщением: под реестр такое состояние не маскируется.
+ *
+ * Имя skip-флага не хардкодится: оно определяется в рантайме по `node --help`
+ * (предпочтение `--test-skip`, откат `--test-skip-pattern`; сегодняшние Node 22/24 знают
+ * только второе). Нет ни одного — ошибка окружения с понятным сообщением.
+ *
+ * Имена сравниваются в раскодированном виде: TAP экранирует `#` (`\#43533`), а в исходнике
+ * теста и в реестре имя записано как `#43533`. Экранирование — транспортная деталь формата.
+ *
+ * Ограничения: без сети, без `Math.random` и обращений к часам — прогон детерминирован.
+ *
+ * Запуск: `node tools/check_test_baseline.mjs` (в CI — шаг «Тесты node:test с карантином
+ * этапа 8 (страж целостности)»). Код возврата: `0` — карантин применён точечно, новых
+ * падений нет; `1` — новое падение, устаревшее имя реестра, `not ok`/сломанная арифметика
+ * во втором прогоне или крэш; `2` — ошибка окружения (нет package.json/реестра/флага).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -43,8 +53,13 @@ const ROOT = path.resolve(HERE, '..');
 
 /** Путь к `package.json`: единственный источник списка тестов. */
 export const PACKAGE_PATH = path.join(ROOT, 'package.json');
-/** Путь к базе известных падений. */
+/** Путь к реестру карантина. */
 export const BASELINE_PATH = path.join(HERE, 'known-test-failures.json');
+
+/** Скрипт, чью команду страж разбирает: свой список файлов вести запрещено. */
+export const RAW_SCRIPT = 'test:raw';
+/** Флаги skip-паттерна в порядке предпочтения (какой знает рантайм — определяется по `node --help`). */
+export const SKIP_FLAGS = ['--test-skip', '--test-skip-pattern'];
 
 const TAP_REPORTER = '--test-reporter=tap';
 /** Файл теста в списке аргументов: нужен только для человеческих сообщений. */
@@ -53,21 +68,48 @@ const TEST_FILE = /\.(?:test|spec)\.(?:[cm]?[jt]s)$/;
 const FILE_NAME = /\.(?:[cm]?[jt]s)$/;
 
 /**
- * Разбирает `scripts.test` из `package.json` и добавляет TAP-репортёр.
+ * Экранирует имя теста в regex-литерал полного совпадения: `^…$`.
+ * Экранируются все метасимволы JS-regex, включая `(`, `)`, `#`, `·`, `≤`, `%`;
+ * кириллица в `u`-безопасном виде остаётся как есть (regex-метасимволами она не является).
+ *
+ * @param {string} name полное TAP-имя теста
+ * @returns {string} паттерн вида `^escaped-name$`
+ */
+export function escapeTapPattern(name) {
+  return `^${String(name).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`;
+}
+
+/**
+ * Определяет имя skip-флага по выводу `node --help` (автодетект, без хардкода версии).
+ *
+ * @param {string} helpText
+ * @returns {{flag: string|null, known: string[]}}
+ */
+export function detectSkipFlag(helpText) {
+  const text = String(helpText);
+  const flag = SKIP_FLAGS.find((candidate) => new RegExp(`(?:^|\\s)${candidate}=`, 'm').test(text)) ?? null;
+  return { flag, known: SKIP_FLAGS };
+}
+
+/**
+ * Разбирает команду из `scripts["test:raw"]` и добавляет TAP-репортёр.
  * Список файлов при этом не дублируется: аргументы берутся из скрипта как есть.
  *
  * @param {{scripts?: Record<string, string>}} packageJson
  * @returns {{command: string, args: string[]}}
  */
 export function buildTestCommand(packageJson) {
-  const script = packageJson?.scripts?.test;
+  const script = packageJson?.scripts?.[RAW_SCRIPT];
   if (typeof script !== 'string' || !script.trim()) {
-    throw new Error('в package.json нет строки scripts.test — список тестов брать неоткуда');
+    throw new Error(
+      `в package.json нет строки scripts["${RAW_SCRIPT}"] — список тестов брать неоткуда ` +
+      '(единственный источник списка файлов, карточка CI-2 §4.1)'
+    );
   }
   const [command, ...args] = script.trim().split(/\s+/);
   const testIndex = args.indexOf('--test');
   if (testIndex === -1) {
-    throw new Error('scripts.test не запускает `node --test`: TAP-отчёт получить не из чего');
+    throw new Error(`scripts["${RAW_SCRIPT}"] не запускает \`node --test\`: TAP-отчёт получить не из чего`);
   }
   // `--test-reporter=<вид>` и `--test-reporter <вид>` одинаково перекрываются своим TAP-видом.
   const inline = args.findIndex((arg) => arg.startsWith('--test-reporter='));
@@ -90,8 +132,30 @@ export function testFiles(args) {
 }
 
 /**
+ * Аргументы карантинного прогона: та же команда плюс по одному якорному skip-флагу на имя.
+ *
+ * Флаги вставляются **до первого позиционного аргумента**: всё, что стоит после списка
+ * файлов, раннер считает аргументами тестового процесса, и skip-паттерн молча не работает
+ * (проверено на шаге 2: флаги в хвосте дали тот же TAP, что и полный прогон).
+ *
+ * @param {string[]} args
+ * @param {string[]} names
+ * @param {string} flag
+ * @returns {string[]}
+ */
+export function buildSkipArgs(args, names, flag) {
+  const firstPositional = args.findIndex((arg) => !arg.startsWith('-'));
+  const at = firstPositional === -1 ? args.length : firstPositional;
+  return [
+    ...args.slice(0, at),
+    ...names.map((name) => `${flag}=${escapeTapPattern(name)}`),
+    ...args.slice(at)
+  ];
+}
+
+/**
  * Раскодирует TAP-экранирование: `\#` → `#`, `\\` → `\`.
- * Нужно, чтобы имя совпадало с базой независимо от того, экранировал его раннер или нет.
+ * Нужно, чтобы имя совпадало с реестром независимо от того, экранировал его раннер или нет.
  *
  * @param {string} raw
  * @returns {string}
@@ -125,6 +189,7 @@ function fullName(parts) {
  * @returns {{
  *   failures: string[],
  *   passed: string[],
+ *   skipped: string[],
  *   totals: {tests: number|null, pass: number|null, fail: number|null, skipped: number|null, todo: number|null},
  *   plan: number|null,
  *   complete: boolean
@@ -133,6 +198,7 @@ function fullName(parts) {
 export function parseTap(text) {
   const failures = [];
   const passed = [];
+  const skipped = [];
   const totals = { tests: null, pass: null, fail: null, skipped: null, todo: null };
   let plan = null;
   /** @type {{indent: number, name: string}[]} */
@@ -161,7 +227,9 @@ export function parseTap(text) {
       const isSkip = /#\s+(?:SKIP|TODO)\b/i.test(result[4]);
       if (result[2] === 'not ok') {
         failures.push(name);
-      } else if (!isSkip) {
+      } else if (isSkip) {
+        skipped.push(name);
+      } else {
         passed.push(name);
       }
       continue;
@@ -178,11 +246,21 @@ export function parseTap(text) {
   }
 
   const complete = (totals.tests !== null && totals.fail !== null) || plan !== null;
-  return { failures, passed, totals, plan, complete };
+  return { failures, passed, skipped, totals, plan, complete };
 }
 
 /**
- * Сверяет фактические падения с базой.
+ * Число тестов прогона: TAP-итог `# tests N`, иначе план `1..N`.
+ *
+ * @param {{totals: {tests: number|null}, plan: number|null}} parsed
+ * @returns {number|null}
+ */
+export function testCount(parsed) {
+  return parsed?.totals?.tests ?? parsed?.plan ?? null;
+}
+
+/**
+ * Сверяет падения прогона 1 с реестром.
  *
  * @param {string[]} failures
  * @param {{name: string}[]} baseline
@@ -202,147 +280,278 @@ export function compareWithBaseline(failures, baseline) {
 }
 
 /**
- * Полный вердикт стража по результату прогона: чистая функция, покрыта
- * `tests/check-test-baseline.test.mjs` на синтетическом TAP.
+ * Вердикт стража по двум TAP-потокам: чистая функция, покрыта
+ * `tests/check-test-baseline.test.mjs` на синтетических фикстурах.
  *
- * @param {{exitCode: number|null, tapText: string, baseline: {name: string, file?: string, knownSince?: string}[], command?: string, signal?: string|null}} input
- * @returns {{code: number, text: string, failures: string[], newFailures: string[], staleBaseline: string[]}}
+ * @param {{
+ *   baseline: {name: string, file?: string, knownSince?: string}[],
+ *   run1: {exitCode: number|null, tapText: string, signal?: string|null},
+ *   run2: {exitCode: number|null, tapText: string, signal?: string|null},
+ *   commands?: {run1?: string, run2?: string}
+ * }} input
+ * @returns {{code: number, text: string, failures: string[], newFailures: string[], staleBaseline: string[], n1: number|null, n2: number|null}}
  */
-export function evaluateRun({ exitCode, tapText, baseline, command = '', signal = null }) {
-  const parsed = parseTap(tapText);
-  const header = command ? [`команда: ${command}`] : [];
-  const lines = [];
+export function evaluateGuard({ baseline, run1, run2, commands = {} }) {
+  const expected = baseline.map((entry) => decodeTapName(entry.name));
+  const parsed1 = parseTap(run1?.tapText ?? '');
+  const parsed2 = parseTap(run2?.tapText ?? '');
+  const header = [
+    ...(commands.run1 ? [`прогон 1 (целостность, без skip-флагов): ${commands.run1}`] : []),
+    ...(commands.run2 ? [`прогон 2 (карантин, ${expected.length} skip-флагов): ${commands.run2}`] : [])
+  ];
+  const totalsLine = (tag, parsed) => `${tag}: тестов ${testCount(parsed) ?? '?'}, pass ${parsed.totals.pass ?? '?'}, ` +
+    `fail ${parsed.totals.fail ?? '?'}, skipped ${parsed.totals.skipped ?? '?'}, todo ${parsed.totals.todo ?? '?'}`;
 
-  // 1. Крэш прогона: итогов TAP нет или процесс убит сигналом.
-  if (signal || !parsed.complete) {
-    lines.push(
-      'СТРАЖ: КРАСНЫЙ — прогон тестов не дошёл до TAP-итогов',
-      'КРЭШ ПРОГОНА ТЕСТОВ: тесты упали не падением теста, а падением процесса.',
-      `  код возврата: ${exitCode === null ? 'нет (процесс убит)' : exitCode}` +
-        (signal ? `, сигнал: ${signal}` : ''),
+  /** @type {string[]} */
+  const sections = [];
+  const crash = (tag, run, parsed) => {
+    sections.push(
+      `КРЭШ ПРОГОНА ТЕСТОВ (${tag}): процесс умер, не дойдя до TAP-итогов.`,
+      `  код возврата: ${run?.exitCode === null || run?.exitCode === undefined ? 'нет (процесс убит)' : run.exitCode}` +
+        (run?.signal ? `, сигнал: ${run.signal}` : ''),
       `  TAP-итогов нет: не найдено ни строки «# tests N», ни плана «1..N»; распознано падений: ${parsed.failures.length}`,
-      '  Под базу это состояние не маскируется: чините причину, а не базу.'
+      '  Под реестр карантина это состояние не маскируется: чините причину, а не реестр.'
     );
     if (parsed.failures.length) {
-      lines.push('  Успели упасть до обрыва:', ...parsed.failures.map((name) => `    - ${name}`));
+      sections.push('  Успели упасть до обрыва:', ...parsed.failures.map((name) => `    - ${name}`));
     }
-    return { code: 1, text: [...header, ...lines].join('\n'), failures: parsed.failures, newFailures: parsed.failures, staleBaseline: [] };
-  }
+  };
 
-  const comparison = compareWithBaseline(parsed.failures, baseline);
-  const { totals } = parsed;
-  const total = `TAP-итоги: тестов ${totals.tests ?? '?'}, pass ${totals.pass ?? '?'}, ` +
-    `fail ${totals.fail ?? '?'}, skipped ${totals.skipped ?? '?'}, todo ${totals.todo ?? '?'}`;
-
-  // 2. Новое падение вне базы.
-  if (comparison.newFailures.length) {
-    lines.push(
-      'СТРАЖ: КРАСНЫЙ — есть падения вне базы',
-      'НОВЫЕ ПАДЕНИЯ:',
-      ...comparison.newFailures.map((name) => `  ✗ ${name}`),
-      `известные падения базы: ${comparison.matched}/${baseline.length} на месте`
-    );
-    return { code: 1, text: [...header, total, ...lines].join('\n'), failures: parsed.failures, ...comparison };
-  }
-
-  // 3. База устарела: базовое имя больше не падает.
-  if (comparison.staleBaseline.length) {
-    lines.push(
-      'СТРАЖ: КРАСНЫЙ — база устарела',
-      'БАЗА УСТАРЕЛА:',
-      ...comparison.staleBaseline.map((name) => `  · ${name}`),
-      'Эти имена больше не падают (починка или переименование теста).',
-      'Обновите tools/known-test-failures.json в этом же PR: устаревшая база скрыла бы регрессию.'
-    );
-    return { code: 1, text: [...header, total, ...lines].join('\n'), failures: parsed.failures, ...comparison };
-  }
-
-  // 4. Падений в TAP нет, а процесс всё равно упал: это не «зелёный», а поломка прогона.
-  if (!parsed.failures.length && exitCode !== 0) {
+  // 1. Крэш любого прогона — первым и отдельным сообщением.
+  const crashes = [];
+  if (run1?.signal || !parsed1.complete) crashes.push(['прогон 1 из 2', run1, parsed1]);
+  if (run2?.signal || !parsed2.complete) crashes.push(['прогон 2 из 2', run2, parsed2]);
+  if (crashes.length) {
+    for (const [tag, run, parsed] of crashes) crash(tag, run, parsed);
     return {
       code: 1,
-      text: [...header, total, 'СТРАЖ: КРАСНЫЙ — прогон завершился с ошибкой, но падений в TAP нет',
-        `  код возврата: ${exitCode}; такой прогон под базу не подводится.`].join('\n'),
-      failures: parsed.failures,
-      ...comparison
+      text: [...header, 'СТРАЖ: КРАСНЫЙ — прогон тестов не дошёл до TAP-итогов', ...sections].join('\n'),
+      failures: parsed1.failures,
+      newFailures: parsed1.failures,
+      staleBaseline: [],
+      n1: testCount(parsed1),
+      n2: testCount(parsed2)
     };
   }
 
-  // 5. Тот же набор падений, что в базе (процесс завершается не нулём — это ожидаемо).
-  lines.push(
-    `известные падения: ${baseline.length}/${baseline.length} по базе, новых нет`,
-    ...baseline.map((entry) => `  ✓ ${entry.name} [${entry.file}, ${entry.knownSince}]`),
-    'СТРАЖ: ОК — набор падений совпал с базой, регрессий нет'
-  );
+  const comparison = compareWithBaseline(parsed1.failures, baseline);
+  const n1 = testCount(parsed1);
+  const n2 = testCount(parsed2);
+  const run2Failures = [...new Set(parsed2.failures)];
+  const totals = [totalsLine('прогон 1', parsed1), totalsLine('прогон 2', parsed2)];
 
-  return { code: 0, text: [...header, total, ...lines].join('\n'), failures: parsed.failures, ...comparison };
+  const red = (blocks) => {
+    const lines = blocks.flatMap((block) => [block.title, ...block.body]);
+    return {
+      code: 1,
+      text: [...header, ...totals, 'СТРАЖ: КРАСНЫЙ — карантин не держит', ...lines].join('\n'),
+      failures: parsed1.failures,
+      ...comparison,
+      run2Failures,
+      n1,
+      n2
+    };
+  };
+
+  // 2. Расхождение множества падений прогона 1 с реестром. Обе секции печатаются вместе:
+  //    переименование теста даёт одновременно «новое» имя и «мёртвую» запись реестра,
+  //    и увидеть надо обе половины картины, а не только первую.
+  const mismatch = [];
+  if (comparison.newFailures.length) {
+    mismatch.push({
+      title: 'НОВЫЕ ПАДЕНИЯ:',
+      body: [
+        ...comparison.newFailures.map((name) => `  · ${name}`),
+        'Этих имён нет в tools/known-test-failures.json: карантин не расширяется, падение чинится.',
+        'Расширять реестр без отдельного решения владельца запрещено (карточка CI-2 §2).'
+      ]
+    });
+  }
+  if (comparison.staleBaseline.length) {
+    mismatch.push({
+      title: 'КАРАНТИН НЕ ПРИМЕНЁН: устаревшие имена реестра',
+      body: [
+        ...comparison.staleBaseline.map((name) => `  · ${name}`),
+        'Эти имена есть в реестре, но в полном прогоне не падают (починка, переименование, удаление).',
+        'Обновите tools/known-test-failures.json в этом же PR: мёртвая запись сделала бы карантин фиктивным.'
+      ]
+    });
+  }
+  if (mismatch.length) return red(mismatch);
+
+  // 3. Падений в TAP нет, а процесс полного прогона упал: это поломка прогона, не «зелёный».
+  if (!parsed1.failures.length && run1?.exitCode !== 0) {
+    return red([{
+      title: 'КАРАНТИН НЕ ПРИМЕНЁН: полный прогон завершился с ошибкой без падений в TAP',
+      body: [`  код возврата прогона 1: ${run1?.exitCode}; такой прогон под реестр не подводится.`]
+    }]);
+  }
+
+  // 4. Карантинный прогон обязан быть чистым и короче полного ровно на реестр.
+  const problems = [];
+  if (run2Failures.length) {
+    problems.push(
+      '  not ok в карантинном прогоне (skip-паттерн не сматчился или слишком узкий):',
+      ...run2Failures.map((name) => `    · ${name}`)
+    );
+  }
+  if (n1 !== null && n2 !== null && n2 !== n1 - expected.length) {
+    problems.push(
+      `  арифметика не сошлась: N1 = ${n1}, N2 = ${n2}, ожидалось N2 = N1 − ${expected.length} = ${n1 - expected.length}.`,
+      '    Лишняя фильтрация или сломавшийся паттерн: проверьте экранирование и якоря ^…$.'
+    );
+  }
+  if (run2?.exitCode !== 0) {
+    problems.push(`  код возврата прогона 2: ${run2?.exitCode}, ожидался 0.`);
+  }
+  if (problems.length) {
+    return red([{ title: 'КАРАНТИН НЕ ПРИМЕНЁН: карантинный прогон не сошёлся', body: problems }]);
+  }
+
+  // 6. Оба прогона согласны: карантин применён точечно, новых падений нет.
+  const filtered = n1 !== null && n2 !== null ? n1 - n2 : expected.length;
+  const lines = [
+    `карантин этапа 8: прогон 1 — ${comparison.matched}/${expected.length} реестровых падений; ` +
+      `прогон 2 — отфильтровано ${filtered}, not ok 0; новых падений нет`,
+    ...baseline.map((entry) => `  ✓ ${entry.name} [${entry.file}, ${entry.knownSince}]`),
+    'СТРАЖ: ОК — карантин применён к реестру точечно, регрессий нет'
+  ];
+  return {
+    code: 0,
+    text: [...header, ...totals, ...lines].join('\n'),
+    failures: parsed1.failures,
+    ...comparison,
+    run2Failures,
+    n1,
+    n2
+  };
 }
 
 /**
- * Читает базу и валидирует её форму: массив объектов с `name`/`file`/`contour`/`knownSince`.
+ * Читает и валидирует реестр карантина: объект `{meta, tests[]}`.
+ * Форма `meta` обязательна (намеренность, дата, ссылки, условие снятия) — иначе карантин
+ * без срока и владельца.
  *
  * @param {string} [baselinePath]
- * @returns {{name: string, file: string, contour: string, knownSince: string}[]}
+ * @returns {{meta: Record<string, unknown>, tests: {name: string, file: string, contour: string, knownSince: string, reason: string}[]}}
  */
-export function loadBaseline(baselinePath = BASELINE_PATH) {
+export function loadRegistry(baselinePath = BASELINE_PATH) {
   const parsed = JSON.parse(readFileSync(baselinePath, 'utf8'));
-  if (!Array.isArray(parsed)) throw new Error(`${baselinePath}: ожидался массив объектов`);
-  parsed.forEach((entry, index) => {
-    for (const field of ['name', 'file', 'contour', 'knownSince']) {
+  if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null) {
+    throw new Error(`${baselinePath}: ожидался объект с полями meta и tests (схема карточки CI-2 §4.3)`);
+  }
+  const meta = parsed.meta;
+  if (typeof meta !== 'object' || meta === null) throw new Error(`${baselinePath}: нет блока meta`);
+  for (const field of ['purpose', 'date', 'removal']) {
+    if (typeof meta[field] !== 'string' || !meta[field].trim()) {
+      throw new Error(`${baselinePath}: meta без поля ${field}`);
+    }
+  }
+  if (!Array.isArray(meta.references) || !meta.references.length) {
+    throw new Error(`${baselinePath}: meta.references должен ссылаться на S8-Q1 и карточку CI-2`);
+  }
+  if (!Array.isArray(parsed.tests)) throw new Error(`${baselinePath}: tests должен быть массивом`);
+  parsed.tests.forEach((entry, index) => {
+    for (const field of ['name', 'file', 'contour', 'knownSince', 'reason']) {
       if (typeof entry?.[field] !== 'string' || !entry[field].trim()) {
         throw new Error(`${baselinePath}: запись ${index} без поля ${field}`);
       }
     }
   });
-  return parsed;
+  return { meta, tests: parsed.tests };
 }
 
-function main() {
-  let baseline;
-  let command;
-  try {
-    baseline = loadBaseline();
-    const pkg = JSON.parse(readFileSync(PACKAGE_PATH, 'utf8'));
-    command = buildTestCommand(pkg);
-  } catch (error) {
-    process.stderr.write(`ОШИБКА ОКРУЖЕНИЯ: ${error.message}\n`);
-    process.exit(2);
-  }
+/**
+ * Список записей реестра — то, что нужно сверке и построению флагов.
+ *
+ * @param {string} [baselinePath]
+ * @returns {{name: string, file: string, contour: string, knownSince: string, reason: string}[]}
+ */
+export function loadBaseline(baselinePath = BASELINE_PATH) {
+  return loadRegistry(baselinePath).tests;
+}
 
-  const printable = `${command.command} ${command.args.join(' ')}`;
-  const files = testFiles(command.args);
-  process.stdout.write(
-    `Страж базы известных падений: ${path.relative(ROOT, BASELINE_PATH)}\n` +
-    `  список файлов взят из package.json: ${files.length} шт., --test-reporter=tap\n`
-  );
-
-  const result = spawnSync(command.command === 'node' ? process.execPath : command.command, command.args, {
+/**
+ * Запускает команду тестов и возвращает TAP и код выхода.
+ *
+ * @param {string} command
+ * @param {string[]} args
+ * @returns {{exitCode: number|null, signal: string|null, tapText: string, error: Error|null}}
+ */
+function runTests(command, args) {
+  const result = spawnSync(command === 'node' ? process.execPath : command, args, {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
     env: { ...process.env, NO_COLOR: '1' }
   });
-  if (result.error) {
-    process.stdout.write(
-      `СТРАЖ: КРАСНЫЙ — прогон тестов не запустился\n` +
-      `КРЭШ ПРОГОНА ТЕСТОВ: ${result.error.message}\n`
+  return {
+    exitCode: result.status,
+    signal: result.signal ?? null,
+    tapText: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+    error: result.error ?? null
+  };
+}
+
+function main() {
+  let baseline;
+  let command;
+  let skipFlag;
+  try {
+    baseline = loadBaseline();
+    const pkg = JSON.parse(readFileSync(PACKAGE_PATH, 'utf8'));
+    command = buildTestCommand(pkg);
+    const help = runTests('node', ['--help']);
+    skipFlag = detectSkipFlag(help.tapText).flag;
+  } catch (error) {
+    process.stderr.write(`ОШИБКА ОКРУЖЕНИЯ: ${error.message}\n`);
+    process.exit(2);
+  }
+  if (!skipFlag) {
+    process.stderr.write(
+      'ОШИБКА ОКРУЖЕНИЯ: рантайм не знает ни одного skip-флага для node:test ' +
+      `(проверены ${SKIP_FLAGS.join(', ')} по выводу node --help).\n` +
+      '  Карантин на уровне раннера невозможен; маскировать отсутствие флага запрещено (карточка CI-2 §4.2).\n'
     );
+    process.exit(2);
+  }
+
+  const files = testFiles(command.args);
+  const run1Args = command.args;
+  const run2Args = buildSkipArgs(command.args, baseline.map((entry) => entry.name), skipFlag);
+  const printable1 = `${command.command} ${run1Args.join(' ')}`;
+  const printable2 = `${command.command} ${run2Args.join(' ')}`;
+
+  process.stdout.write(
+    `Страж карантина этапа 8 (два прогона): ${path.relative(ROOT, BASELINE_PATH)}\n` +
+    `  список файлов взят из package.json scripts["${RAW_SCRIPT}"]: ${files.length} шт.\n` +
+    `  skip-флаг определён по node --help: ${skipFlag}; записей в реестре: ${baseline.length}\n`
+  );
+
+  const first = runTests(command.command, run1Args);
+  if (first.error) {
+    process.stdout.write(`СТРАЖ: КРАСНЫЙ — прогон 1 не запустился\nКРЭШ ПРОГОНА ТЕСТОВ (прогон 1 из 2): ${first.error.message}\n`);
+    process.exit(1);
+  }
+  const second = runTests(command.command, run2Args);
+  if (second.error) {
+    process.stdout.write(`СТРАЖ: КРАСНЫЙ — прогон 2 не запустился\nКРЭШ ПРОГОНА ТЕСТОВ (прогон 2 из 2): ${second.error.message}\n`);
     process.exit(1);
   }
 
-  const tapText = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-  const verdict = evaluateRun({
-    exitCode: result.status,
-    signal: result.signal,
-    tapText,
+  const verdict = evaluateGuard({
     baseline,
-    command: printable
+    run1: first,
+    run2: second,
+    commands: { run1: printable1, run2: printable2 }
   });
 
   if (verdict.code !== 0) {
-    // Диагностика провала: полный лог прогона, иначе по именам не починить.
-    process.stdout.write('\n--- полный лог прогона ---\n');
-    process.stdout.write(tapText.trimEnd() + '\n--- конец лога ---\n\n');
+    // Диагностика провала: полные логи обоих прогонов, иначе по именам не починить.
+    process.stdout.write('\n--- полный лог прогона 1 (без skip-флагов) ---\n');
+    process.stdout.write(first.tapText.trimEnd() + '\n--- конец лога прогона 1 ---\n');
+    process.stdout.write('\n--- полный лог прогона 2 (карантин) ---\n');
+    process.stdout.write(second.tapText.trimEnd() + '\n--- конец лога прогона 2 ---\n\n');
   }
   process.stdout.write(verdict.text + '\n');
   process.exit(verdict.code);
