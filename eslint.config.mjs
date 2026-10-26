@@ -3,10 +3,15 @@
 // к необъявленной переменной. Так сломалось перетаскивание карты сектора: после
 // чистки кода в обработчике осталась ссылка на удалённую переменную point.
 //
-// Локально (typescript@6 нужен только парсеру: typescript-eslint пока не
-// поддерживает TypeScript 7 из package.json; после lint npm ci вернёт TS 7):
-//   npm install --no-save --no-package-lock --legacy-peer-deps eslint@10 globals@17 @typescript-eslint/parser@8 typescript@6
-//   npx eslint site src/atlas
+// Карточка CI-1 (решение E3): тем же единственным правилом покрыты `tools/**` и
+// `tests/**` — там 21 верификатор и 36 тестов, которые до этого проверялись только
+// исполнением в нужной ветке. Новые стилевые правила не вводятся, ослаблять
+// no-undef (off/warn) запрещено: находку чинят точечно.
+//
+// Локально ничего доустанавливать не нужно: `npm ci` кладёт `typescript` 6.х из
+// алиаса `npm:@typescript/typescript6` — именно его подхватывает парсер
+// typescript-eslint, хотя `npx tsc` в репозитории — нативный TypeScript 7.
+//   npx eslint site src tools tests
 import globals from 'globals';
 import tsParser from '@typescript-eslint/parser';
 
@@ -54,6 +59,49 @@ export default [
         ParentNode: 'readonly',
         Transferable: 'readonly'
       }
+    },
+    rules: {
+      'no-undef': 'error'
+    }
+  },
+  {
+    // Инструменты и тесты — Node ESM: `test`/`assert` в них всегда импортированы
+    // явно (проверено на шаге 0 карточки CI-1), поэтому globals.nodeTest не нужен.
+    files: ['tools/**/*.mjs', 'tests/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: globals.node
+    },
+    rules: {
+      'no-undef': 'error'
+    }
+  },
+  {
+    // tools/bench_planet_baseline.mjs — единственный файл, чьи колбэки уходят в
+    // страницу через puppeteer `page.evaluate`: window/document/navigator и
+    // requestAnimationFrame исполняются в браузере, а не в Node. Глобалы
+    // объявлены по фактическому контексту исполнения; правило no-undef для
+    // Node-части файла остаётся в силе (опечатка в теле самого скрипта ловится).
+    files: ['tools/bench_planet_baseline.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.browser
+      }
+    },
+    rules: {
+      'no-undef': 'error'
+    }
+  },
+  {
+    // tests/travel-planner.test.js — CommonJS-скрипт (require + IIFE, без import/export),
+    // поэтому sourceType здесь 'script', а не 'module'.
+    files: ['tests/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      globals: globals.node
     },
     rules: {
       'no-undef': 'error'
