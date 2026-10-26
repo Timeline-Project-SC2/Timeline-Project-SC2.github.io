@@ -18,4 +18,4 @@
 ## Связи
 
 - Профили и контракт данных: [`docs/plan/data-profiles.md`](../plan/data-profiles.md).
-- Ошибки этапа по данным: [`docs/stages/stage-02/errors.md`](../stages/stage-02/plan.md).
+- Ошибки этапа по данным: [секция «Ошибки» `stage-02/plan.md`](../stages/stage-02/plan.md).
