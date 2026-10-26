@@ -178,9 +178,9 @@ for (const viewport of [
 }
 
 // 5. Тиры адреса.
-check(ADDRESS_TIERS.length === 6, `тиров ${ADDRESS_TIERS.length} вместо 6`);
+check(ADDRESS_TIERS.length === 8, `тиров ${ADDRESS_TIERS.length} вместо 8`);
 check(
-  ADDRESS_TIERS.map((tier) => tier.cellSize).join(',') === '10000,2000,400,80,16,3.2',
+  ADDRESS_TIERS.map((tier) => tier.cellSize).join(',') === '10000,2000,400,80,16,3.2,0.64,0.128',
   `размеры тиров: ${ADDRESS_TIERS.map((tier) => tier.cellSize).join(',')}`,
 );
 check(MAP_SIZE === 10000, `MAP_SIZE = ${MAP_SIZE} вместо 10 000`);
