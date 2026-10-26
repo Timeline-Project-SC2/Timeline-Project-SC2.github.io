@@ -9,9 +9,9 @@
 
 | Тема | Файл |
 |---|---|
-| Что реализовано | [`report-overview.md`](stage-02/notes/report-overview.md) |
-| Контракт 37 колонок, пресеты, PG1 | [`contract.md`](stage-02/notes/contract.md) |
-| Двухфазный синк и живой лист | [`sync-gate.md`](stage-02/notes/sync-gate.md) |
+| Что реализовано | [`report-overview.md`](stage-02/notes/data-contract.md) |
+| Контракт 37 колонок, пресеты, PG1 | [`contract.md`](stage-02/notes/data-contract.md) |
+| Двухфазный синк и живой лист | [`sync-gate.md`](stage-02/notes/sync-gate-and-live-sheet.md) |
 | Журнал этапа | [`journal-stage-2.md`](stage-02/notes/journal-stage-2.md) |
 
 ## Регистры этапа

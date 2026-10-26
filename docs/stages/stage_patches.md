@@ -11,7 +11,7 @@
 | Этап | Файл |
 |---|---|
 | 0 — планы и спецификация | [`journal-stage-0.md`](stage-00/notes/journal-stage-0.md) |
-| 1 — спайк гексагонального глобуса | [`journal-spike-build.md`](stage-01/notes/journal-spike-build.md) |
+| 1 — спайк гексагонального глобуса | [`journal-spike-build.md`](stage-01/notes/spike-overview-and-feedback.md) |
 | 2 — данные, синк, каркас | [`journal-stage-2.md`](stage-02/notes/journal-stage-2.md) |
 | 3 — ядро `goldberg-gp-v1` | [`journal-stage-3.md`](stage-03/notes/journal-stage-3.md) |
 | 4 — поля и `c100-soft` | [`journal-stage-4.md`](stage-04/notes/journal-stage-4.md) |

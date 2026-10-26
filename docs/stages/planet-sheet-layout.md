@@ -9,8 +9,8 @@
 
 | Тема | Файл |
 |---|---|
-| Решение и связи | [`sheet-layout-1.md`](stage-02/notes/sheet-layout-1.md) |
-| Правила, колонки, словари | [`sheet-layout-2.md`](stage-02/notes/sheet-layout-2.md) |
+| Решение и связи | [`sheet-layout-1.md`](stage-02/notes/sheet-layout-decision.md) |
+| Правила, колонки, словари | [`sheet-layout-2.md`](stage-02/notes/sheet-layout-rules.md) |
 
 ## Регистры этапа
 

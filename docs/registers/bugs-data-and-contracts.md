@@ -22,7 +22,7 @@
 **Что сделано.** Двухфазный синк: скачать и проверить всё в памяти, затем
 атомарно заменить снимки; при сбое — восстановить прежние файлы.
 **Источник.** [`stages/stage-02/plan.md`](../stages/stage-02/plan.md),
-[`stages/stage-02/notes/sync-gate.md`](../stages/stage-02/notes/sync-gate.md).
+[`stages/stage-02/notes/sync-gate.md`](../stages/stage-02/notes/sync-gate-and-live-sheet.md).
 
 ## B-D03 · Workflow Sync всегда чекаутит `main`
 

@@ -11,8 +11,8 @@
 |---|---|
 | Плотность v=128 и что закрывает этап | [`core-and-density.md`](stage-03/notes/core-and-density.md) |
 | Адрес, SoA-топология, chunk | [`address-topology-chunk.md`](stage-03/notes/address-topology-chunk.md) |
-| Бинарный кэш | [`binary-cache.md`](stage-03/notes/binary-cache.md) |
-| Bench, совместимость, ограничения | [`bench-and-compat.md`](stage-03/notes/bench-and-compat.md) |
+| Бинарный кэш | [`binary-cache.md`](stage-03/notes/cache-bench-and-compat.md) |
+| Bench, совместимость, ограничения | [`bench-and-compat.md`](stage-03/notes/cache-bench-and-compat.md) |
 | Журнал этапа | [`journal-stage-3.md`](stage-03/notes/journal-stage-3.md) |
 
 ## Регистры этапа

@@ -11,8 +11,8 @@
 |---|---|
 | Поля и seed | [`fields-and-seed.md`](stage-04/notes/fields-and-seed.md) |
 | Море, плиты, C100 | [`ocean-plates-c100.md`](stage-04/notes/ocean-plates-c100.md) |
-| Пресеты и калибровка | [`presets-and-calibration.md`](stage-04/notes/presets-and-calibration.md) |
-| Гейт G2 и ограничения | [`ensembles-gate-limits.md`](stage-04/notes/ensembles-gate-limits.md) |
+| Пресеты и калибровка | [`presets-and-calibration.md`](stage-04/notes/presets-calibration-and-g2.md) |
+| Гейт G2 и ограничения | [`ensembles-gate-limits.md`](stage-04/notes/presets-calibration-and-g2.md) |
 | Журнал этапа | [`journal-stage-4.md`](stage-04/notes/journal-stage-4.md) |
 
 ## Регистры этапа

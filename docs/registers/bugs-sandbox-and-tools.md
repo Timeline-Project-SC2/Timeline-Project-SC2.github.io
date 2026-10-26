@@ -88,4 +88,4 @@
 **Причина.** Несколько цепочек подготовки геометрии работают одновременно.
 **Что сделано.** Речек LOD-планировщика, мгновенный LOD-commit, отсечение
 устаревших ответов токеном генерации.
-**Источник.** [`stages/stage-01/notes/lod-planner-recheck.md`](../stages/stage-01/notes/lod-planner-recheck.md).
+**Источник.** [`stages/stage-01/notes/lod-planner-recheck.md`](../stages/stage-01/notes/mobile-lod-and-gpu-bundles.md).

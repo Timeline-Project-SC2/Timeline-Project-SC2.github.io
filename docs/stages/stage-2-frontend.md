@@ -9,7 +9,7 @@
 
 | Тема | Файл |
 |---|---|
-| Что сделано и TODO | [`frontend-skeleton.md`](stage-02/notes/frontend-skeleton.md) |
+| Что сделано и TODO | [`frontend-skeleton.md`](stage-02/notes/data-contract.md) |
 | Исходный план | [`plan-source.md`](stage-02/notes/plan-source.md) |
 
 ## Регистры этапа

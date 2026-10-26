@@ -9,7 +9,7 @@
 
 | Тема | Файл |
 |---|---|
-| Автосинк и открытые вопросы | [`autosync-skeleton.md`](stage-02/notes/autosync-skeleton.md) |
+| Автосинк и открытые вопросы | [`autosync-skeleton.md`](stage-02/notes/sync-gate-and-live-sheet.md) |
 
 ## Регистры этапа
 
