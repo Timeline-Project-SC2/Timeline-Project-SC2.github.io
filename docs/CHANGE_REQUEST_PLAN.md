@@ -1,7 +1,7 @@
 # CHANGE_REQUEST_PLAN (CR-01) — навигация
 
 План модернизации языкового стека, модульной архитектуры и вычислительного
-ядра. С 26.10.2026 разделён по контексту в [`plan/cr-01/`](plan/cr-01/overview.md);
+ядра. С 26.10.2026 разделён по контексту в [`plan/cr-01/`](plan/cr-01/overview-and-audit.md);
 старый путь сохранён для ссылок.
 
 Назад: [документация](README.md) · [паспорт проекта](plan/passport.md).
@@ -10,13 +10,14 @@
 
 | Тема | Документ |
 |---|---|
-| Зачем нужен CR-01, краткое резюме | [`plan/cr-01/overview.md`](plan/cr-01/overview.md) |
-| Аудит кода и семь инцидентов Этапов 4–6 | [`plan/cr-01/audit.md`](plan/cr-01/audit.md) |
+| Зачем нужен CR-01, краткое резюме | [`plan/cr-01/overview.md`](plan/cr-01/overview-and-audit.md) |
+| Аудит кода и семь инцидентов Этапов 4–6 | [`plan/cr-01/audit.md`](plan/cr-01/overview-and-audit.md) |
 | Выбор стека и инварианты `И-1…И-6` | [`plan/cr-01/stack-selection.md`](plan/cr-01/stack-selection.md) |
-| Примеры на узлах проекта и референсы | [`plan/cr-01/examples.md`](plan/cr-01/examples.md) |
-| План из пяти PR | [`plan/cr-01/implementation.md`](plan/cr-01/implementation.md) |
-| Подводные камни и развилки | [`plan/cr-01/pitfalls.md`](plan/cr-01/pitfalls.md) |
-| Факт выполнения: PR #130–#139, 6.1, DX-1 | [`plan/cr-01/results.md`](plan/cr-01/results.md) |
+| Примеры на узлах проекта и референсы | [`plan/cr-01/examples.md`](plan/cr-01/overview-and-audit.md) |
+| План из пяти PR | [`plan/cr-01/implementation.md`](plan/cr-01/implementation-and-results.md) |
+| Подводные камни и развилки | [`plan/cr-01/pitfalls.md`](plan/cr-01/implementation-and-results.md) |
+| Факт выполнения: PR #130–#139, 6.1, DX-1 | [`plan/cr-01/results.md`](plan/cr-01/implementation-and-results.md) |
+| Журнал работ CR-01 | [`plan/cr-01/journal.md`](plan/cr-01/implementation-and-results.md) |
 
 ## Соответствие старым разделам
 

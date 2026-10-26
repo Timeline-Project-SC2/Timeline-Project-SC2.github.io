@@ -9,11 +9,11 @@
 
 | Тема | Файл |
 |---|---|
-| Журнал этапа | [`journal-stage-0.md`](stage-00/notes/journal-stage-0.md) |
-| Исходный план | [`plan-source.md`](stage-00/notes/plan-source.md) |
+| Журнал этапа | [`journal-stage-0.md`](stage-00/plan.md) |
+| Исходный план | [`plan-source.md`](stage-00/plan.md) |
 
 ## Регистры этапа
 
-- [План](stage-00/plan.md) · [Ошибки](stage-00/errors.md) · [Баги](stage-00/bugs.md) · [Решения](stage-00/decisions.md) · [TODO](stage-00/todo.md)
+- [План](stage-00/plan.md) · [Ошибки](stage-00/plan.md) · [Баги](stage-00/plan.md) · [Решения](stage-00/plan.md) · [TODO](stage-00/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

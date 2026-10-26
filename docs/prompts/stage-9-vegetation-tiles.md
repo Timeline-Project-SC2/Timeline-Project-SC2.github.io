@@ -10,12 +10,12 @@
 | Тема | Файл |
 |---|---|
 | Жёсткие инварианты: разрешение, бесшовность, альбедо, формат | [`invariants.md`](stage-9-vegetation-tiles/invariants.md) |
-| Промпты по морфологическим архетипам, часть 1 | [`biomes-1.md`](stage-9-vegetation-tiles/biomes-1.md) |
-| Промпты по морфологическим архетипам, часть 2 | [`biomes-2.md`](stage-9-vegetation-tiles/biomes-2.md) |
+| Промпты по морфологическим архетипам, часть 1 | [`biomes-1.md`](stage-9-vegetation-tiles/biomes-archetypes-turf-tundra-wetland.md) |
+| Промпты по морфологическим архетипам, часть 2 | [`biomes-2.md`](stage-9-vegetation-tiles/biomes-archetypes-forest-xeno.md) |
 | Приёмка, постобработка, чек-лист сдачи | [`acceptance.md`](stage-9-vegetation-tiles/acceptance.md) |
 
 ## Связи
 
 - Проект гибридного атласа: [`stage-9-vegetation-atlas.md`](../stages/stage-9-vegetation-atlas.md).
 - Пайплайн сборки и контракт воркера: [`pipeline.md`](../stages/stage-09/notes/pipeline.md).
-- Ошибки и решения этапа: [`errors.md`](../stages/stage-09/errors.md), [`decisions.md`](../stages/stage-09/decisions.md).
+- Ошибки и решения этапа: [`errors.md`](../stages/stage-09/plan.md), [`decisions.md`](../stages/stage-09/plan.md).

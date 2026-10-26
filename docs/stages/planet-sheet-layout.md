@@ -9,11 +9,11 @@
 
 | Тема | Файл |
 |---|---|
-| Решение и связи | [`sheet-layout-1.md`](stage-02/notes/sheet-layout-1.md) |
-| Правила, колонки, словари | [`sheet-layout-2.md`](stage-02/notes/sheet-layout-2.md) |
+| Решение и связи | [`sheet-layout-1.md`](stage-02/notes/sheet-layout-decision.md) |
+| Правила, колонки, словари | [`sheet-layout-2.md`](stage-02/notes/sheet-layout-rules.md) |
 
 ## Регистры этапа
 
-- [План](stage-02/plan.md) · [Ошибки](stage-02/errors.md) · [Баги](stage-02/bugs.md) · [Решения](stage-02/decisions.md) · [TODO](stage-02/todo.md)
+- [План](stage-02/plan.md) · [Ошибки](stage-02/plan.md) · [Баги](stage-02/plan.md) · [Решения](stage-02/plan.md) · [TODO](stage-02/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

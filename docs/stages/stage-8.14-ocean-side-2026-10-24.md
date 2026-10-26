@@ -9,11 +9,11 @@
 
 | Тема | Файл |
 |---|---|
-| Методика и доли | [`w28a-ocean-1.md`](stage-08/notes/w28a-ocean-1.md) |
-| Локальный размах и вывод | [`w28a-ocean-2.md`](stage-08/notes/w28a-ocean-2.md) |
+| Методика и доли | [`w28a-ocean-1.md`](stage-08/notes/w28a-ocean-method-and-shares.md) |
+| Локальный размах и вывод | [`w28a-ocean-2.md`](stage-08/notes/w28a-ocean-relief-and-control.md) |
 
 ## Регистры этапа
 
-- [План](stage-08/plan.md) · [Ошибки](stage-08/errors.md) · [Баги](stage-08/bugs.md) · [Решения](stage-08/decisions.md) · [TODO](stage-08/todo.md)
+- [План](stage-08/plan.md) · [Ошибки](stage-08/plan.md) · [Баги](stage-08/plan.md) · [Решения](stage-08/plan.md) · [TODO](stage-08/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

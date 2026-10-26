@@ -16,7 +16,7 @@
 
 | Карточка | Зона | Основные волны |
 |---|---|---|
-| [`rc-01-sector-render.md`](role_cards/rc-01-sector-render.md) | Сектор: процедурное поле, лестница глубины `L0…L9`, маркеры, полёт камеры, стрелки | `SW-1`…`SW-4` |
+| [`rc-01-sector-render.md`](role_cards/rc-01-sector-render.md) | Сектор: процедурное поле, лестница глубины `L0…L12`, маркеры, полёт камеры, стрелки | `SW-1`…`SW-4` |
 | [`rc-02-planetary-contour.md`](role_cards/rc-02-planetary-contour.md) | Планетарный контур: `src/local-map/*`, `src/planet/*`, Wasm-ядро, горизонт | вне волн 9–12 (`И-11`) |
 | [`rc-03-cartography-ui.md`](role_cards/rc-03-cartography-ui.md) | Картография, подписи, цвет, состояния экрана, финиш-гейт интерфейса | `SW-3`…`SW-4` |
 | [`rc-04-qa-evidence.md`](role_cards/rc-04-qa-evidence.md) | Проверки и доказательства: что проверено, чем и с каким результатом | все |
@@ -33,7 +33,7 @@
 
 | Карточка | Волна | Статус |
 |---|---|---|
-| [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | принята 26.10.2026 (PR #300); исполнение — [`F-1-execution.md`](wave_cards/F-1-execution.md), вердикт — [`F-1-verdict.md`](wave_cards/F-1-verdict.md) |
+| [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | принята 26.10.2026 (PR #300); исполнение — [`F-1-execution.md`](wave_cards/F-1-execution.md), вердикт — [`F-1-verdict.md`](wave_cards/F-1-execution.md) |
 
 ## Как пользоваться
 

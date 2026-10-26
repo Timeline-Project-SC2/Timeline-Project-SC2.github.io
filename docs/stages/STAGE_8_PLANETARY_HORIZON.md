@@ -10,13 +10,13 @@
 | Тема | Файл |
 |---|---|
 | 8.1–8.3: юбка, купол, панорама | [`horizon-8-1-8-3.md`](stage-08/notes/horizon-8-1-8-3.md) |
-| 8.4: 10 колец и камера | [`horizon-8-4.md`](stage-08/notes/horizon-8-4.md) |
+| 8.4: 10 колец и камера | [`horizon-8-4.md`](stage-08/notes/horizon-rings-and-navigation.md) |
 | 8.5: масштаб гекса | [`horizon-8-5.md`](stage-08/notes/horizon-8-5.md) |
-| 8.6: синхронизация и реки (части 1/2) | [`horizon-8-6-1.md`](stage-08/notes/horizon-8-6-1.md) |
-| 8.7: переход и квик-навигация | [`horizon-8-7.md`](stage-08/notes/horizon-8-7.md) |
+| 8.6: синхронизация и реки (части 1/2) | [`horizon-8-6-1.md`](stage-08/notes/horizon-8-6-terrain-sync.md) |
+| 8.7: переход и квик-навигация | [`horizon-8-7.md`](stage-08/notes/horizon-rings-and-navigation.md) |
 
 ## Регистры этапа
 
-- [План](stage-08/plan.md) · [Ошибки](stage-08/errors.md) · [Баги](stage-08/bugs.md) · [Решения](stage-08/decisions.md) · [TODO](stage-08/todo.md)
+- [План](stage-08/plan.md) · [Ошибки](stage-08/plan.md) · [Баги](stage-08/plan.md) · [Решения](stage-08/plan.md) · [TODO](stage-08/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

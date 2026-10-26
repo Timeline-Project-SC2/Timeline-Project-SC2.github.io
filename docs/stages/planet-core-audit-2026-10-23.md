@@ -11,13 +11,13 @@
 |---|---|
 | Вердикт и backlog | [`audit-verdict.md`](stage-08/notes/audit-verdict.md) |
 | A-6: радиус и предел | [`audit-radius-a6.md`](stage-08/notes/audit-radius-a6.md) |
-| Второй проход 1 | [`audit-second-pass-1.md`](stage-08/notes/audit-second-pass-1.md) |
-| Второй проход 2 | [`audit-second-pass-2.md`](stage-08/notes/audit-second-pass-2.md) |
-| Второй проход 3 | [`audit-second-pass-3.md`](stage-08/notes/audit-second-pass-3.md) |
-| Второй проход 4 | [`audit-second-pass-4.md`](stage-08/notes/audit-second-pass-4.md) |
+| Второй проход 1 | [`audit-second-pass-1.md`](stage-08/notes/audit-generation-and-geometry.md) |
+| Второй проход 2 | [`audit-second-pass-2.md`](stage-08/notes/audit-threshold-and-packaging.md) |
+| Второй проход 3 | [`audit-second-pass-3.md`](stage-08/notes/audit-a16-a18-checkpoints.md) |
+| Второй проход 4 | [`audit-second-pass-4.md`](stage-08/notes/audit-transition-measurements.md) |
 
 ## Регистры этапа
 
-- [План](stage-08/plan.md) · [Ошибки](stage-08/errors.md) · [Баги](stage-08/bugs.md) · [Решения](stage-08/decisions.md) · [TODO](stage-08/todo.md)
+- [План](stage-08/plan.md) · [Ошибки](stage-08/plan.md) · [Баги](stage-08/plan.md) · [Решения](stage-08/plan.md) · [TODO](stage-08/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

@@ -11,12 +11,12 @@
 |---|---|
 | Поля и seed | [`fields-and-seed.md`](stage-04/notes/fields-and-seed.md) |
 | Море, плиты, C100 | [`ocean-plates-c100.md`](stage-04/notes/ocean-plates-c100.md) |
-| Пресеты и калибровка | [`presets-and-calibration.md`](stage-04/notes/presets-and-calibration.md) |
-| Гейт G2 и ограничения | [`ensembles-gate-limits.md`](stage-04/notes/ensembles-gate-limits.md) |
-| Журнал этапа | [`journal-stage-4.md`](stage-04/notes/journal-stage-4.md) |
+| Пресеты и калибровка | [`presets-and-calibration.md`](stage-04/notes/presets-calibration-and-g2.md) |
+| Гейт G2 и ограничения | [`ensembles-gate-limits.md`](stage-04/notes/presets-calibration-and-g2.md) |
+| Журнал этапа | [`journal-stage-4.md`](stage-04/plan.md) |
 
 ## Регистры этапа
 
-- [План](stage-04/plan.md) · [Ошибки](stage-04/errors.md) · [Баги](stage-04/bugs.md) · [Решения](stage-04/decisions.md) · [TODO](stage-04/todo.md)
+- [План](stage-04/plan.md) · [Ошибки](stage-04/plan.md) · [Баги](stage-04/plan.md) · [Решения](stage-04/plan.md) · [TODO](stage-04/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

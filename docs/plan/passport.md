@@ -24,8 +24,8 @@
 
 | Раздел | Документ |
 |---|---|
-| Текущее состояние репозитория | [`current-state.md`](current-state.md) |
-| Целевой продукт и границы | [`product.md`](product.md) |
+| Текущее состояние репозитория | [`current-state.md`](product-and-roadmap.md) |
+| Целевой продукт и границы | [`product.md`](product-and-roadmap.md) |
 | Разбор и обоснование решений | [`decisions-rationale.md`](decisions-rationale.md) |
 | Геодезическая сетка и топология | [`geodesic-grid.md`](geodesic-grid.md) |
 | Географическая модель C100-soft | [`c100-soft.md`](c100-soft.md) |
@@ -33,12 +33,12 @@
 | Данные `planet_generation` и процентили | [`data-profiles.md`](data-profiles.md) |
 | Ключ фиксации и derived-ключи | [`generation-key.md`](generation-key.md) |
 | Архитектура отображения | [`display-architecture.md`](display-architecture.md) |
-| Нагрузка и бюджеты | [`budgets.md`](budgets.md) |
-| Валидация и гейты | [`quality-gates.md`](quality-gates.md) |
-| Дорожная карта этапов | [`roadmap.md`](roadmap.md) |
-| Оценки времени и MVP | [`estimates.md`](estimates.md) |
-| Риски и альтернативы | [`risks.md`](risks.md) |
-| Открытые решения | [`open-decisions.md`](open-decisions.md) |
+| Нагрузка и бюджеты | [`budgets.md`](budgets-and-gates.md) |
+| Валидация и гейты | [`quality-gates.md`](budgets-and-gates.md) |
+| Дорожная карта этапов | [`roadmap.md`](product-and-roadmap.md) |
+| Оценки времени и MVP | [`estimates.md`](estimates-risks-decisions.md) |
+| Риски и альтернативы | [`risks.md`](estimates-risks-decisions.md) |
+| Открытые решения | [`open-decisions.md`](estimates-risks-decisions.md) |
 | Приложения и глоссарий | [`appendices.md`](appendices.md) |
 
 ## 1. Краткий вердикт

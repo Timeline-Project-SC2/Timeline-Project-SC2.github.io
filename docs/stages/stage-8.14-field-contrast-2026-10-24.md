@@ -9,11 +9,11 @@
 
 | Тема | Файл |
 |---|---|
-| Механизм и замер | [`w28-contrast.md`](stage-08/notes/w28-contrast.md) |
-| Результаты и верификация | [`w28-results.md`](stage-08/notes/w28-results.md) |
+| Механизм и замер | [`w28-contrast.md`](stage-08/notes/w28-field-contrast.md) |
+| Результаты и верификация | [`w28-results.md`](stage-08/notes/w28-field-results.md) |
 
 ## Регистры этапа
 
-- [План](stage-08/plan.md) · [Ошибки](stage-08/errors.md) · [Баги](stage-08/bugs.md) · [Решения](stage-08/decisions.md) · [TODO](stage-08/todo.md)
+- [План](stage-08/plan.md) · [Ошибки](stage-08/plan.md) · [Баги](stage-08/plan.md) · [Решения](stage-08/plan.md) · [TODO](stage-08/todo.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.

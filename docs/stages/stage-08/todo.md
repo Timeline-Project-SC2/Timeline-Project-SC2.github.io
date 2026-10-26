@@ -22,5 +22,5 @@
 
 ## Регистры этапа
 
-- [Ошибки](errors.md) · [Баги](bugs.md) · [Решения](decisions.md) · [TODO](todo.md)
-- [Приложения](notes/README.md) · [Исходный план §12](notes/plan-source.md)
+- [Ошибки](plan.md) · [Баги](plan.md) · [Решения](plan.md) · [TODO](todo.md)
+- [Приложения](notes/README.md) · [Исходный план §12](plan.md)

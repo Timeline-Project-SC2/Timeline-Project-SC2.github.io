@@ -12,10 +12,10 @@
 | Версии и выходные данные | [`hydrology-core.md`](stage-05/notes/hydrology-core.md) |
 | Сток, озёра, водосборы | [`flow-lakes-catchments.md`](stage-05/notes/flow-lakes-catchments.md) |
 | Биомы, валидация, G3 | [`biomes-validation-bench.md`](stage-05/notes/biomes-validation-bench.md) |
-| Журнал этапа | [`journal-stage-5.md`](stage-05/notes/journal-stage-5.md) |
+| Журнал этапа | [`journal-stage-5.md`](stage-05/plan.md) |
 
 ## Регистры этапа
 
-- [План](stage-05/plan.md) · [Ошибки](stage-05/errors.md) · [Баги](stage-05/bugs.md) · [Решения](stage-05/decisions.md) · [TODO](stage-05/todo.md)
+- [План](stage-05/plan.md) · [Ошибки](stage-05/plan.md) · [Баги](stage-05/plan.md) · [Решения](stage-05/plan.md) · [TODO](stage-05/plan.md)
 
 > Полный исходный текст сохранён в Git-истории до коммита разукрупнения.
