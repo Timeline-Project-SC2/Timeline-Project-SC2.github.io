@@ -610,66 +610,70 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
 
   /*
    * Фейд смены тира сетки (§17.3 п. 9): 160 мс. Состояние перехода живёт только
-   * здесь — без новых слоёв, второго canvas и DOM-узлов (F3-7). Числа прозрачности
-   * приходят из сцены полем `line.alpha` (F3-9), рендерер их только читает.
-   * Появление нового тира плавное; исчезнувший тир сцена больше не содержит,
-   * поэтому его множитель просто снимается (гасить нечего — геометрии в кадре нет).
+   * здесь — без новых слоёв, второго canvas и DOM-узлов (F3-7). Прозрачности
+   * `0,16`/`0,07` приходят из сцены полем `line.alpha` (F3-9); рендерер хранит
+   * лишь прогресс перехода к текущей цели, своих чисел прозрачности не вводит.
+   *
+   * Ключ — тир сетки. Тиры сменяются парами (например `T3/T4` → `T4/T5`): тир,
+   * который был вложенным, становится старшим, и его цель меняется `0,07 → 0,16`.
+   * Переход считается от текущего значения к новой цели, поэтому такая смена
+   * тоже идёт 160 мс, без скачка. Исчезнувший тир сцена больше не содержит —
+   * гасить нечего, его запись снимается без рисования.
    */
   const GRID_FADE_MS = 160;
+  var gridFadeEntries = new Map<string, { from: number; to: number; start: number }>();
   var gridFadeFactors = new Map<string, number>();
-  var gridFadeLastMs = 0;
+  var gridFadePrimed = false;
 
-  /** Множитель фейда тира: `1` — штатная прозрачность `line.alpha`. */
+  /** Значение перехода в момент `nowMs`: линейно от `from` к `to` за `GRID_FADE_MS`. */
+  function gridFadeValue(entry: { readonly from: number; readonly to: number; readonly start: number }, nowMs: number): number {
+    var progress = (nowMs - entry.start) / GRID_FADE_MS;
+    var clamped = progress <= 0 ? 0 : progress >= 1 ? 1 : progress;
+
+    return entry.from + (entry.to - entry.from) * clamped;
+  }
+
+  /** Множитель фейда тира `0…1`: `1` — штатная прозрачность `line.alpha`. */
   function gridFadeFactor(tier: string): number {
     return gridFadeFactors.get(tier) ?? 1;
   }
 
   /**
-   * Шаг фейда за кадр: тиры, которые есть в кадре, идут к `1`, отсутствующие — к `0`.
-   * При `prefers-reduced-motion` множители выставляются мгновенно. Пока переход
-   * идёт, рендерер просит следующий кадр — новых таймеров и слоёв нет.
+   * Шаг фейда за кадр: у каждого тира кадра своя цель — его `line.alpha` из сцены.
+   * При `prefers-reduced-motion` переход не заводится вовсе (мгновенно). Пока
+   * хотя бы один тир не дошёл до цели, рендерер просит следующий кадр.
    */
   function updateGridFade(scene: SectorScene, nowMs: number): void {
-    var present = new Set<string>();
+    var targets = new Map<string, number>();
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
-      if (primitive.kind === 'grid.line') present.add(primitive.tier);
+      if (primitive.kind === 'grid.line') targets.set(primitive.tier, primitive.alpha);
     }
 
     var reduced = reducedMotion();
-    var step = 0;
-    if (gridFadeFactors.size === 0) {
-      // Первый кадр: сетка появляется сразу, без фейда «из пустоты».
-      step = 1;
-    } else if (reduced) {
-      step = 1;
-    } else {
-      var delta = gridFadeLastMs === 0 ? GRID_FADE_MS : nowMs - gridFadeLastMs;
-      step = Math.max(0, Math.min(1, delta / GRID_FADE_MS));
-    }
-    gridFadeLastMs = nowMs;
-
     var animating = false;
-    present.forEach(function (tier: string): void {
-      var current = gridFadeFactors.get(tier) ?? 0;
-      var next = reduced || step >= 1 ? 1 : Math.min(1, current + step);
-      gridFadeFactors.set(tier, next);
-      if (next < 1) animating = true;
+    gridFadeFactors.clear();
+    targets.forEach(function (target: number, tier: string): void {
+      var previous = gridFadeEntries.get(tier);
+      var from = !gridFadePrimed || reduced
+        ? target
+        : previous === undefined
+          ? 0
+          : gridFadeValue(previous, nowMs);
+      var entry = previous !== undefined && previous.to === target && gridFadePrimed && !reduced
+        ? previous
+        : { from: from, to: target, start: nowMs };
+      gridFadeEntries.set(tier, entry);
+
+      var value = gridFadeValue(entry, nowMs);
+      var factor = target > 0 ? Math.min(1, Math.max(0, value / target)) : 0;
+      gridFadeFactors.set(tier, factor);
+      if (factor < 1) animating = true;
     });
-    var stale: string[] = [];
-    gridFadeFactors.forEach(function (factor: number, tier: string): void {
-      if (present.has(tier)) return;
-      if (reduced || step >= 1) {
-        stale.push(tier);
-        return;
-      }
-      var next = Math.max(0, factor - step);
-      if (next <= 0) stale.push(tier);
-      else gridFadeFactors.set(tier, next);
+    gridFadeEntries.forEach(function (_entry, tier: string): void {
+      if (!targets.has(tier)) gridFadeEntries.delete(tier);
     });
-    for (var staleIndex = 0; staleIndex < stale.length; staleIndex += 1) {
-      gridFadeFactors.delete(stale[staleIndex]!);
-    }
+    gridFadePrimed = true;
 
     if (animating && !runtime.renderQueued) requestRender();
   }
