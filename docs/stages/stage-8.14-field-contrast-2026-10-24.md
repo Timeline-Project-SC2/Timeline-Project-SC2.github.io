@@ -9,8 +9,8 @@
 
 | Тема | Файл |
 |---|---|
-| Механизм и замер | [`w28-contrast.md`](stage-08/notes/w28-contrast.md) |
-| Результаты и верификация | [`w28-results.md`](stage-08/notes/w28-results.md) |
+| Механизм и замер | [`w28-contrast.md`](stage-08/notes/w28-field-contrast.md) |
+| Результаты и верификация | [`w28-results.md`](stage-08/notes/w28-field-results.md) |
 
 ## Регистры этапа
 

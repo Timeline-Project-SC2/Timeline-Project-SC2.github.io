@@ -9,8 +9,8 @@
 
 | Тема | Файл |
 |---|---|
-| Методика и доли | [`w28a-ocean-1.md`](stage-08/notes/w28a-ocean-1.md) |
-| Локальный размах и вывод | [`w28a-ocean-2.md`](stage-08/notes/w28a-ocean-2.md) |
+| Методика и доли | [`w28a-ocean-1.md`](stage-08/notes/w28a-ocean-method-and-shares.md) |
+| Локальный размах и вывод | [`w28a-ocean-2.md`](stage-08/notes/w28a-ocean-relief-and-control.md) |
 
 ## Регистры этапа
 

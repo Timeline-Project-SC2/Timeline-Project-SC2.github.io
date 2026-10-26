@@ -9,21 +9,21 @@
 
 | Тема | Файл |
 |---|---|
-| Вердикт | [`verdict.md`](stage-09-12-sector/notes/verdict.md) |
+| Вердикт | [`verdict.md`](stage-09-12-sector/notes/verdict-and-calculation-base.md) |
 | Границы и инвентарь | [`boundaries-inventory.md`](stage-09-12-sector/notes/boundaries-inventory.md) |
-| Расчётная база | [`calculation-base.md`](stage-09-12-sector/notes/calculation-base.md) |
-| Три кадра | [`three-frames.md`](stage-09-12-sector/notes/three-frames.md) |
+| Расчётная база | [`calculation-base.md`](stage-09-12-sector/notes/verdict-and-calculation-base.md) |
+| Три кадра | [`three-frames.md`](stage-09-12-sector/notes/scale-and-system-frames.md) |
 | 13 уровней и маркер | [`levels-and-marker.md`](stage-09-12-sector/notes/levels-and-marker.md) |
 | Полёт и стрелки | [`flight-and-arrows.md`](stage-09-12-sector/notes/flight-and-arrows.md) |
 | Адрес KP·REQHC | [`address.md`](stage-09-12-sector/notes/address.md) |
-| Процедурное поле | [`procedural-field.md`](stage-09-12-sector/notes/procedural-field.md) |
-| Системный кадр | [`system-frame.md`](stage-09-12-sector/notes/system-frame.md) |
-| Модули и тесты | [`modules-and-tests.md`](stage-09-12-sector/notes/modules-and-tests.md) |
-| Гейты G7 | [`gates.md`](stage-09-12-sector/notes/gates.md) |
-| Волна F | [`wave-f.md`](stage-09-12-sector/notes/wave-f.md) |
-| Риски и решения | [`risks-decisions.md`](stage-09-12-sector/notes/risks-decisions.md) |
-| Целевое состояние | [`target-checklist.md`](stage-09-12-sector/notes/target-checklist.md) |
-| Сверка документов | [`doc-sync.md`](stage-09-12-sector/notes/doc-sync.md) |
+| Процедурное поле | [`procedural-field.md`](stage-09-12-sector/notes/procedural-field-and-modules.md) |
+| Системный кадр | [`system-frame.md`](stage-09-12-sector/notes/scale-and-system-frames.md) |
+| Модули и тесты | [`modules-and-tests.md`](stage-09-12-sector/notes/procedural-field-and-modules.md) |
+| Гейты G7 | [`gates.md`](stage-09-12-sector/notes/gates-roadmap-and-wave-f.md) |
+| Волна F | [`wave-f.md`](stage-09-12-sector/notes/gates-roadmap-and-wave-f.md) |
+| Риски и решения | [`risks-decisions.md`](stage-09-12-sector/notes/risks-decisions-and-sync.md) |
+| Целевое состояние | [`target-checklist.md`](stage-09-12-sector/notes/gates-roadmap-and-wave-f.md) |
+| Сверка документов | [`doc-sync.md`](stage-09-12-sector/notes/risks-decisions-and-sync.md) |
 | Версия 4.0: единица и лестница | [`v4-units-and-ladder.md`](stage-09-12-sector/notes/v4-units-and-ladder.md) |
 | Версия 4.0: правки | [`v4-edits.md`](stage-09-12-sector/notes/v4-edits.md) |
 | Приложения | [`appendices.md`](stage-09-12-sector/notes/appendices.md) |
