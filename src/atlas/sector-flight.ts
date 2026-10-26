@@ -1,7 +1,7 @@
 /* Полёт между системами сектора (§6.4): единый владелец покадрового перехода. */
 
 import type { AtlasKernel, SystemRecord } from './config.ts';
-import { levelForWidth, visibleWidthForLevel } from './level-ladder.ts';
+import { DEEPEST_SECTOR_LEVEL, levelForWidth, visibleWidthForLevel } from './level-ladder.ts';
 
 export interface FlightPoint {
   readonly x: number;
@@ -15,7 +15,7 @@ export interface FlightPlan {
   readonly to: FlightPoint;
   readonly delta: number;
   readonly duration: number;
-  readonly targetScaleLevel: 9;
+  readonly targetScaleLevel: number;
 }
 
 /**
@@ -83,7 +83,7 @@ function makePlan(fromValue: FlightPoint | SystemRecord, toValue: FlightPoint | 
   const from = pointOf(fromValue);
   const to = pointOf(toValue);
   const delta = Math.abs(from.level - to.level);
-  return Object.freeze({ from, to, delta, duration: flightDuration(delta), targetScaleLevel: 9 as const });
+  return Object.freeze({ from, to, delta, duration: flightDuration(delta), targetScaleLevel: DEEPEST_SECTOR_LEVEL });
 }
 
 export function planClickFlight(from: FlightPoint | SystemRecord, to: FlightPoint | SystemRecord): FlightPlan {
@@ -160,9 +160,9 @@ export function createFlight(kernel: AtlasKernel): FlightApi {
       kernel.state.view.ty = kernel.state.viewport.h / 2 - y * kernel.state.view.scale;
       kernel.renderer.clampView();
     };
-    const width = Math.min(kernel.state.viewport.w, kernel.state.viewport.h);
+    const width = kernel.state.viewport.w;
     const duration = reduced.matches ? 120 : plan.duration;
-    const endScale = Math.max(kernel.renderer.minScale(), Math.min(kernel.renderer.maxScale(), width / visibleWidthForLevel(9)));
+    const endScale = Math.max(kernel.renderer.minScale(), Math.min(kernel.renderer.maxScale(), width / visibleWidthForLevel(DEEPEST_SECTOR_LEVEL)));
     const beginScale = kernel.state.view.scale;
     const beginCenter = kernel.renderer.toWorld(kernel.state.viewport.w / 2, kernel.state.viewport.h / 2);
     const overlay = kernel.el.mapStage.ownerDocument.createElement('div');

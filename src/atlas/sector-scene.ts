@@ -189,12 +189,12 @@ export const TOUCH_TARGET_PX = 44;
 /** Ниже этого размера сектор ничего не рисует (И-9). */
 export const MIN_DRAWABLE_PX = 0.25;
 
-/** Апертура системы активна ровно на предельном `L9` (Z-4b §2). */
-export const APERTURE_FIRST_LEVEL = 9;
+/** Апертура системы активна ровно на предельном `L12`. */
+export const APERTURE_FIRST_LEVEL = 12;
 
-/** Сетка адресов живёт на `L1…L9` (§8.1, Z-4d). */
+/** Сетка адресов живёт на `L1…L12`; пустые тиры вне таблицы ожидаемы. */
 export const GRID_FIRST_LEVEL = 1;
-export const GRID_LAST_LEVEL = 9;
+export const GRID_LAST_LEVEL = 12;
 
 /** Приоритеты подписей по §8.1: столица → фракция → плотность. */
 export const LABEL_PRIORITY = Object.freeze({ capital: 100, faction: 50, system: 10 });
