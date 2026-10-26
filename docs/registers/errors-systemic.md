@@ -82,7 +82,7 @@ renderV, а не по канону.
 **Правило.** Новый UI-слой добавляется отдельным узлом и не замещает
 существующую разметку; на каждое такое вмешательство — DOM-тест.
 **Источник.** [`stages/stage-08/errors.md`](../stages/stage-08/errors.md),
-[`handoff/status.md`](../handoff/status.md).
+[`handoff/status.md`](../handoff/status-and-state.md).
 
 ## E-08 · Документация отстаёт от кода и начинает противоречить
 

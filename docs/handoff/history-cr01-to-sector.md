@@ -1,7 +1,90 @@
-# История 22–23.10: Stage-8.x, Stage-7, DX-1, PR 6.1
+# История: от CR-01 и волн к сектору
 
-> Источник: `docs/HANDOFF.md`, строки 53–88 (редакция до разукрупнения).
-> Назад: [конспект](../HANDOFF.md) · [этапы](../stages/README.md) · [документация](../README.md).
+> Назад: [документация](../README.md) · [шаг 0 консолидации](../consolidation/README.md)
+
+## CR-01
+
+- CR-01 PR 6 (22.10, ветка `arena/4e8296a0-…`, [PR #139](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/139);
+  **слит в `main` 22.10**).
+  Финальный оптимизационный PR плана `docs/CHANGE_REQUEST_PLAN.md` (добивка скорости
+  генерации планеты v=128 до гейта ≥3× / ≤855 мс от baseline 2 564,7 мс при 100 %
+  побитовой эквивалентности FULL EQ), 5 шагов с коммитом и пушем после каждого
+  (`1fbaeaf`, `384eef2`, `9b86b35`, `d7dc179`, `c4ab968`):
+  1. Подключены Wasm `getCore().radixOrderF32` / `radixOrderF64` в `makeWeightedQuantiles`
+     и `chooseSeeds` (`site/shared/planet-geography.ts`), а также в `makeWeightedQuantiles`
+     и `orderAsc` (`site/shared/planet-surface.ts`) с сохранением строгого tie-break
+     `(a - b)` (И-2).
+  2. Ускорено построение геодезической сетки `GeodesicGrid.build(v)` в ~3,7–4,1×
+     (`442,9 мс → 100,1–125,8 мс` на `v=128`): модульный пул буферов `ensureRawScratch(163842)`,
+     плоский `Int32Array` вместо `Map` на грань, пропуск `.toFixed(9)`/`byKey` на внутренних
+     вершинах грани (`i > 0 && j > 0 && i + j < v`), монотонный Diamond Angle вместо `Math.atan2`,
+     counting bucket sort с `sortKeys` в `reorderCells` и однопроходный `attachChunks`.
+  3. Расширены и ускорены ядра `src/planet/assembly/kernels.ts` и хост
+     `src/planet/planet-core-host.ts` (полное ядро 42 039 Б, noise 3 703 Б): 2-канальный
+     `f64x2` SIMD (`simplex3x2`, `sampleCellPair`) в `sampleFieldsBatch`, ленивые JS-шумы
+     в `createFieldSampler`, синглтон `getSharedPlanetCore()` с ареной 24 МиБ, удержание
+     `putGrid` и `balArenaEnd` между `buildContinents` и `buildOceanBasins`, пакетные
+     `balanceRegionsTopTwo` и `biomeWeightsAndSmooth`, сквозная арена гидрологии,
+     непрерывные `candX/candY/candZ/candScoreNorm` в `chooseSeedsKernel`, гибрид кучи + FIFO
+     в `coastDistance`, insertion+merge sort упакованных `u64(cell, label)` в `dialGatherSort`,
+     интрузивный список `Int32Array(n)` в `buildDrainageRegions`, обход только `landCells`
+     в `computeSurface`/`connectedComponents`/`computeMountains` и фиксированные V8 Map
+     у `GeographyResult` и `SurfaceResult`.
+  4. Пройдены все проверки: `185/185` побитовых хэшей FULL EQ (SHA-256 всех 45 массивов
+     географии и поверхности + CRC32C сетки на `v=16, 24, 32, 64, 128`), `tsc --noEmit`,
+     `npx eslint site src`, `npm run build`, `verify:publish`, `verify:contract`,
+     `node --test` (44/44), `python3 -m unittest` (28/28).
+  5. Итоговые метрики `bench_planet_stage5.mjs --seeds=5` (v=128):
+     `meshMedian = 125,8–139,1 мс`, `surfaceMedian = 691,3–724,5 мс` (`min = 601,0–617,3 мс`),
+     **`totalMedian = 812,1–852,7 мс <= 855,0 мс` (`3,01×–3,16×` к baseline `2 564,7 мс`)**.
+     Все 6 PR плана **CR-01** завершены.
+- CR-01 PR 5 (21.10, ветка `arena/37e6e1a9-…`, PR #138; **слит в `main` 22.10**). Финальный PR миграции по
+  `docs/CHANGE_REQUEST_PLAN.md` (И-3, И-5, И-6, раздел 6.2), 5 шагов, коммит
+  после каждого (`a9dc170`, `cf20f9c`, `c1cd5dc`, `63c9990` + документация):
+  1. `site/shared/temp_code_structures.js` (1 176 строк) распилен на 4 строго
+     типизированных модуля `src/local-map/` (М1 mesh-библиотека 12 инстансных
+     модулей и ролей, М2 генерация+wire-протокол, М3 StructureRenderer с
+     подсветкой опорных точек, М4 GLSL-шейдеры); свалка удалена (И-5).
+  2. Контракт сшивки патча из 7 канонических ячеек глобуса (И-3):
+     `src/local-map/local-map-contract.ts` (`local-map-patch-v1`), единый
+     3D-сэмплер полей, filledElevation c100-soft-v2, реки через общие рёбра
+     (flowReceiver + streamWeight/flowAccumulationKm2), buildingSpawnMask;
+     `tests/local-map.test.mjs` (6 тестов) подключён в `check.yml`.
+  3. `site/planet-globe/planet-globe.js` (778 строк) → строгий
+     `site/planet-globe/planet-globe.ts` (пресеты CSV, прокси→финал, 2D
+     fallback, сводка/выбор ячейки — поведение сохранено); уникальные
+     экспериментальные режимы стенда вынесены в опциональный модуль
+     `src/planet/planet-globe-fx.ts` (взрыв осколков Шакураса uSep —
+     shardTransform по текстуре 64×4 RGBA32F с «потерянными» a=1.35/b=0.75,
+     анимация только юниформом 2400/1500 мс; диагностические палитры
+     uPalette 0…6, декоративные фактуры uTexMode 1…5, hueRotate,
+     randomFxTheme). В `planet-globe.ts` — необязательный сокет
+     `PlanetGlobeFxHooks` (поле `fx`): без плагина рендер не меняется.
+     Протокол воркера типизирован (`WorkerMessage`/`WorkerResponse`).
+  4. `/planet-test/` переведён на общее боевое ядро тонкой обёрткой
+     `site/planet-test/planet-test.ts` (planet-globe + planet-globe-fx +
+     общий `planet-globe-worker`); удалены дубли `planet-test.js`
+     (2 929 строк) и `planet-worker.js` (И-5). Маршрут `/planet-test/`
+     жив и публикуется (`verify:publish` OK). Всего за PR удалено ≈5,2 тыс.
+     строк легаси-JS, параллельных реализаций не осталось (И-5), экспорт
+     и контрактные поля сверены (И-6).
+  5. Документация (AGENTS.md, HANDOFF.md, CHANGELOG.md) и полный прогон:
+     tsc strict, ESLint site+src, `node --test` (42/42, включая
+     `tests/local-map.test.mjs`), `npm run build`, `verify:publish`,
+     `verify:contract`, `build_planet_core.mjs --check`, `check.yml` 4/4.
+- CR-01 PR 4 (21.10, [PR #137](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/137);
+  **слит в `main` 21.10**; владелец перед этим держал merge запрещённым до
+  отдельной команды — исключение из общего «создайте PR и слейте сразу» в
+  AGENTS.md). Реализация старой сессии погибла
+  незакоммиченной вместе с песочницей (казус и протокол — §7 и AGENTS.md
+  «Сохранность работы»); восстановлена на ветке `arena/07852140-…` по логам
+  владельца (`commands.txt`, `dialog (6).txt`) цепочкой коммитов с FULL EQ
+  после каждого модуля. Итоги и цифры — в `CHANGELOG.md` (запись CR-01 PR 4)
+  и в комментарии PR #137. После merge — телефонная проверка глобуса
+  владельцем пройдена (скрины Redmi Note 10 от 21.10: генерация и финал
+  v=64 проходят). Открытый хвост: решение владельца по гейту 3×.
+
+## Волны 22–23.10
 
 Что изменено (подробно — в `CHANGELOG.md`, правила — в `AGENTS.md`, `site/AGENTS.md`, `src/AGENTS.md`, `tools/AGENTS.md`):
 
@@ -39,3 +122,77 @@
   1. **Воркер 1 (FX-геометрия, объём осколков и ядро Шакураса):** перенос клеточной раскладки осколков в строгий TypeScript (`computeShardLayout` с режимами `equal`/`power`/`lognormal`, параметрами `shardThick`, `shardJag`, `shardLoss` и назначением осколка строго по ячейке `vertexCellId` вместо вершинного `fxShardIndex`), удаление последнего легаси-модуля `site/shared/planet-geometry.js` по Инварианту И-5, возврат 3D-объёма осколков (`VS_VOLUME/FS_VOLUME`: боковые стенки разломов и закрытая нижняя оболочка) и светящегося ядра Шакураса (`VS_CORE/FS_CORE` с дефолтным `coreScale=0.55`) в `src/planet/planet-globe-fx.ts` через хуки `PlanetGlobeFxHooks` (`onGeometryUploaded`, `onAfterSurfaceDraw`, `onDispose`), а также тесты `tests/planet-globe-fx.test.mjs`.
   2. **Воркер 2 (Каскадная сборка, центробежное замещение и UI `/planet-test/`):** восстановление в `site/shared/planet-globe.ts` каскадной сборки глобуса от полюса к полюсу (`uBuild`) и двухслойного центробежного замещения прокси-шара детальным слоем (`uHide`, `uCenterGrow`), подключение расширенных FX-хуков жизненного цикла геометрии и восстановление полного набора контролов (`#panelToggle`, `#spinBtn` + `Space`, `#bordersBtn`, `buildSec`/`buildBtn`/`buildAnimBtn`, `coreScale`, `shardDist`, `shardThick`, `shardJag`, `shardLoss`) и скользящего 10-сек окна телеметрии кадра (`p50/p95/p99`, `>50ms`, `>100ms`, `worst5`, адрес выбранной ячейки) в `site/planet-test/*`.
   3. **Воркер 3 (Мастер-план и сводная документация волны):** актуализация `docs/PREPARATION_PLAN.md` (Раздел 1–2 и Этапы 3–6 под стек `.ts` + гибридный Wasm `planet-core` с фактическими таймингами PR 6 `> 3,0×` при 100 % FULL EQ и единым ядром глобуса + `planet-globe-fx.ts`; Этап 7 дополнен требованиями `uBuild`, двухслойного `uHide`/`uCenterGrow`, `intent-based worker prefetch` и контрактом сшивки 7 ячеек `local-map-patch-v1` по И-3; Этап 8 дополнен 4 модулями `src/local-map/*`, `buildingSpawnMask` по И-3.4 и требованием порционной staged GPU-догрузки `StructureRenderer` без фризов и без пересоздания VAO) + сводная запись волны в `docs/HANDOFF.md` и `CHANGELOG.md`.
+
+## Этап 9
+
+#### Этап 9 — проектирование атласа растительности (23.10.2026)
+
+Стадия проектирования (read-only аудит, код рантайма не менялся). Созданы:
+
+- [`stages/stage-9-vegetation-atlas.md`](../stages/stage-9-vegetation-atlas.md) —
+  аудит фактического состояния (`TERRAIN_FRAGMENT_SHADER` без текстур, воркер без
+  климата/биомов, `build_assets.py` без растительного пайплайна), инженерное
+  сравнение трёх методов смены местности и растительности (палитра / уникальный
+  тайл на биом / гибрид), матрица растительных биомов `tundra`, `boreal_forest`,
+  `temperate_forest`, `rainforest`, `grassland`, `shrubland`, `wetland` с точными
+  коэффициентами скоринга из `biomeWeights`, состав каналов тайла
+  (Albedo + `Height/FoliageMask/Roughness/AO`), формулы `heightBlend` и подавления
+  тайлинга, UV-лестница `25 км / 6,25 км / 1,25 км / 312 м` и бюджеты
+  (`≈ 15,9 МБ` публикации, `32…64 МиБ` видеопамяти).
+- [`prompts/stage-9-vegetation-tiles.md`](../prompts/stage-9-vegetation-tiles.md) —
+  пакет из 8 промптов (T1a, T1b, T2…T7) с техническими инвариантами
+  (`nadir orthographic`, `delit`, `--tile`, читаемость `512²`, отделение
+  `FoliageMask`), негативным промптом и критериями приёмки швов и масок.
+
+Найдено для будущих правок: `image_version()` в `tools/build_assets.py` обходит
+только верхний уровень `assets/src/` (`SRC.iterdir()`), поэтому поддиректория
+`assets/src/terrain/` не попадёт в `imageVersion` — требуется `rglob`; кэш
+`pages.yml` и `.gitignore` должны получить `assets/veg/` и `assets/veg-atlas.json`.
+
+## Под-уровень сектора
+
+#### Под-уровень Этапов 9–12 — глубинный секториальный рендер (24.10.2026)
+
+Стадия проектирования в параллельном режиме: планетарный контур отложен и не менялся,
+код рантайма сектора тоже не менялся. Создан
+[`stages/stage-9-12-sector-deep-render-plan.md`](../stages/stage-9-12-sector-deep-render-plan.md)
+(≈ 50 КБ) и обновлены `PREPARATION_PLAN.md` §12, `PREPARATION_PLAN_ADMINS.md` и `CHANGELOG.md`.
+
+- **Проверка расчётной базы владельца.** Матрица расстояний между восемью столицами
+  подтверждена `28/28` (макс. расхождение `0,78` св.г.). Пересчитаны: `173` системы вместо
+  `186`; минимальная пара — `Орна ↔ Зеф` `50,0` (не Мория ↔ Веридия `65,3`); медиана
+  ближайшего соседа `101` св.г. (не ~`350`); соседи Корхала (`Райдин 88,4`), Айура
+  (пропущены Самику и Мехлус), Чара (`Игнус 132,6`, `Эрик 230,8`); радиус Умоджи `553`
+  (Джарбан), Тал-даримов `5 776` (Атриас); «`R = 1 200`» заменён на `R_core / R_sector /
+  периферию` (вне `2 500` — `7` систем).
+- **Корректировки `C-01…C-13`.** 13 уровней = `L0…L9` + `S0…S2`; `1 000 px/св.г.` не
+  достигается и не нужен; пороги — в видимой ширине кадра (не в `px/св.г.`), чтобы
+  мобильный и десктоп видели одинаковую лестницу; адрес не заменяет `x`,`y` в данных,
+  а заменяет их в интерфейсе. По уточнению владельца 24.10: **растр удаляется сразу,
+  без растрового ориентира и переходных стадий** (эталон кратно размыт на глубине,
+  а его пирамида — миллионы файлов), `Shift+клик` становится «карточкой точки»,
+  маркер получает размер в пикселях по глубине, на телефоне разрешён отъезд до `16 000` св.г.
+- **Адресация.** `KP·REQHC` — сектор `KP` + пять тиров `5 × 5` с алфавитом `A…Y`
+  (`2 000 / 400 / 80 / 16 / 3,2` св.г.), суффикс тела `/c`, сокет планетарного контура
+  `/cell=…`. Уникальность на тире `16` св.г. доказана (диагональ ячейки `22,6` <
+  минимальной пары `50,0`). Golden vectors восьми столиц и контрольных точек — в §7.5.
+- **Рендер.** Двухслойная сцена: WebGL2-поле (туманность, пыль, звёздная пыль,
+  `≤ 40 000` инстансов) + Canvas2D (территории, адресная сетка, системы, подписи,
+  апертура, прицел полёта, стрелки). Детерминизм `xxHash32("KP")`, дизеринг,
+  `prefers-reduced-motion` (полёт → кроссфейд `120 мс`).
+- **Навигация (новое, 24.10).** `sector-flight.ts` — единственный владелец камеры во время
+  анимации (`И-13`), фазы `anticipation / frame / stages / settle`, не более `3` вложенных
+  кадров, лог-интерполяция видимой ширины, отмена любым вводом за `≤ 1` кадра.
+  `sector-arrows.ts` — отбор до `5` систем строго по расстоянию от центра свободной области
+  (видимость в кадре не влияет: цель в кадре получает «внутреннюю» стрелку `0,6`),
+  угол `θ = atan2(Δy, Δx)`, слияние при угле `< 24°` и по лимиту в счётчик `+n`,
+  хит-зона `≥ 44 px`, `Tab`/`Enter`, `aria-label`, подпись «имя · расстояние» без `hover`.
+  Полёт со стрелки: `240 + 160 + 300 + 800` мс. Решения владельца 24.10: кадров `≤ 3`
+  (цель `≤ 2`), подписи всегда видимы, отъезд `×25` основной (`×4` — режим `?recede=levels`).
+- **Системный кадр.** `S0…S2` — каркас с честным пустым состоянием: в снимке
+  `data/places.csv` всего `7` записей, тела заявлены у `6` систем из `173`; наполнение —
+  отдельная редакционная задача, процедурный лор не выдумывается.
+- **Гейты и волны.** `G7.1…G7.9` (адрес, лестница, «ноль растра», производительность,
+  точность `≤ 0,5 px`, детерминизм кадра, доступность, совместимость URL, системный кадр);
+  волны `SW-1…SW-6` с матрицей `OWNED_FILES` и инвариантом `И-11` (планетарный контур
+  вне зоны правок).

@@ -45,10 +45,10 @@
 | Мультиагентная разработка | [`agents_task_orchestration/README.md`](agents_task_orchestration/README.md), [волны](agents_task_orchestration/agents_task_orchestration.md) |
 | Работа с ИИ-агентами «от и до» (опрос, план, тесты до кода) | [`ai-workflow.md`](ai-workflow.md) |
 | Консолидация документации после аудита PR #302 (вердикт, промпт, не запущена) | [`consolidation-plan.md`](consolidation-plan.md), [шаг 0 — инвентарная карта](consolidation/README.md) |
-| История агентских сессий (бывший `HANDOFF.md`) | [`handoff/status.md`](handoff/status.md) |
+| История агентских сессий (бывший `HANDOFF.md`) | [`handoff/status.md`](handoff/status-and-state.md) |
 | Планетные промпты и Зерус | [`prompts/`](prompts/planet-seeds-from-reference.md), [`zerus/README.md`](zerus/README.md) |
 | Журнал изменений (append-only) | [`../CHANGELOG.md`](../CHANGELOG.md) |
-| Вводная для агента | [`HANDOFF.md`](HANDOFF.md), [`handoff/checks.md`](handoff/checks.md), [`../AGENTS.md`](../AGENTS.md) |
+| Вводная для агента | [`HANDOFF.md`](HANDOFF.md), [`handoff/checks.md`](handoff/repo-zoom-and-rules.md), [`../AGENTS.md`](../AGENTS.md) |
 
 ## 3. Правила ведения
 

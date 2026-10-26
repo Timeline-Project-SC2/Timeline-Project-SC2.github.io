@@ -12,26 +12,26 @@
 
 | Вопрос | Файл |
 |---|---|
-| Что сделано в последних волнах и чем это закончилось | [`handoff/status.md`](handoff/status.md) |
-| Что вообще есть в репозитории и где что лежит | [`handoff/repo-map.md`](handoff/repo-map.md) |
-| Что сделано по частям (тайлы, атлас, сектор) | [`handoff/done-parts.md`](handoff/done-parts.md) |
-| Состояние данных, синка и живых листов | [`handoff/data-state.md`](handoff/data-state.md) |
-| Что осталось проверить владельцу глазами | [`handoff/visual-checks.md`](handoff/visual-checks.md) |
-| Как устроен прицел и переход по областям | [`handoff/zoom-logic.md`](handoff/zoom-logic.md) |
+| Что сделано в последних волнах и чем это закончилось | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Что вообще есть в репозитории и где что лежит | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
+| Что сделано по частям (тайлы, атлас, сектор) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Состояние данных, синка и живых листов | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Что осталось проверить владельцу глазами | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Как устроен прицел и переход по областям | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
 | Известные ловушки среды и снапшотов | [`handoff/infra-pitfalls.md`](handoff/infra-pitfalls.md) |
-| Команды проверки перед PR | [`handoff/checks.md`](handoff/checks.md) |
+| Команды проверки перед PR | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
 | Правила пользователя (язык, ветки, merge) | [`handoff/rules.md`](handoff/rules.md) |
 
 ## История по волнам
 
 | Период | Файл |
 |---|---|
-| 22–23.10: Stage-8.x, Stage-7, DX-1, PR 6.1 | [`handoff/history-waves-2026-10-22-23.md`](handoff/history-waves-2026-10-22-23.md) |
-| 21–22.10: CR-01, PR 4–6 | [`handoff/history-cr-01.md`](handoff/history-cr-01.md) |
-| 19.10: Этапы 1–2 планет | [`handoff/history-planets-1-2.md`](handoff/history-planets-1-2.md) |
-| 18.10: галактика, Копрула, системный курсор | [`handoff/history-galaxy-and-cursor.md`](handoff/history-galaxy-and-cursor.md) |
-| 24.10: под-уровень Этапов 9–12 | [`handoff/history-sector-sublevel.md`](handoff/history-sector-sublevel.md) |
-| 23.10: проектирование Этапа 9 | [`handoff/history-stage-9.md`](handoff/history-stage-9.md) |
+| 22–23.10: Stage-8.x, Stage-7, DX-1, PR 6.1 | [`handoff/history-cr01-to-sector.md`](handoff/history-cr01-to-sector.md) |
+| 21–22.10: CR-01, PR 4–6 | [`handoff/history-cr01-to-sector.md`](handoff/history-cr01-to-sector.md) |
+| 19.10: Этапы 1–2 планет | [`handoff/history-early.md`](handoff/history-early.md) |
+| 18.10: галактика, Копрула, системный курсор | [`handoff/history-early.md`](handoff/history-early.md) |
+| 24.10: под-уровень Этапов 9–12 | [`handoff/history-cr01-to-sector.md`](handoff/history-cr01-to-sector.md) |
+| 23.10: проектирование Этапа 9 | [`handoff/history-cr01-to-sector.md`](handoff/history-cr01-to-sector.md) |
 
 ## Где актуальный статус, а не история
 

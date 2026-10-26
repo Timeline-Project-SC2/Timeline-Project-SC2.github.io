@@ -21,7 +21,7 @@
 | 8 — локальная карта и горизонт | [`journal-stage-8.md`](stage-08/notes/journal-stage-8.md) |
 | 9 — проектирование атласа | [`journal-design.md`](stage-09/notes/verdict-gates-and-webp.md) |
 | 10 — оценка страницы системы | [`journal-stage-10.md`](stage-10/notes/journal-stage-10.md) |
-| CR-01, PR 6.1, DX-1 | [`journal.md`](../plan/cr-01/journal.md) |
+| CR-01, PR 6.1, DX-1 | [`journal.md`](../plan/cr-01/implementation-and-results.md) |
 
 ## Журналы сектора (Этапы 9–12)
 

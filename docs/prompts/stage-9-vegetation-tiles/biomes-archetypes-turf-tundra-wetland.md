@@ -1,8 +1,8 @@
-# Промпты тайлов по морфологическим архетипам — часть 1
+# Промпты тайлов: дерн, тундра и болота (T1–T4)
 
-> Часть 1/2.
-> Источник: [`docs/prompts/stage-9-vegetation-tiles.md`](../stage-9-vegetation-tiles.md) · строки 149–402.
-> Назад: [карта документации](../../README.md) · [индекс документации](../../README.md).
+> Назад: [шаг 0 консолидации](../../consolidation/README.md) · [документация](../../README.md)
+
+Архетипы тайлов растительности T1–T4: луговой и степной дерн, кустарники, тундра и водно-болотные кочки.
 
 ### T1a. `Grassland / Dense Meadow Turf` — густой луговой дерн
 
@@ -157,39 +157,3 @@ green and near-black mud palette, no dry ground, no sand
 **Негатив-акцент:** `dry grass, desert, sandy beach, clear blue water, waves`.
 
 ---
-
-### T5. `Boreal Conifer Canopy & Needle Litter` — хвойный полог тайги
-
-**Биом:** 6 `boreal_forest`. **Амплитуда `Height`:** `22 м`.
-**Период:** `1,25 км` (крупный план — на этой ступени полог уже читается) /
-`6,25 км`.
-**Целевая сомкнутость:** `0,75…0,95` (зрелый массив), `0,40…0,60` (опушка,
-реализуется отдельным seed-ом).
-
-**EN-промпт:**
-
-```text
-[PREFIX], mature boreal conifer forest canopy seen directly from above, star-shaped
-spruce and fir crowns with radial branch whorls, dense needle texture, crowns four to
-twelve percent of the image, tightly interlocking with narrow dark gaps between them,
-nearly closed canopy with only a few glimpses of dark forest floor, sparse dry needle
-litter and thin dead lower branches visible in the gaps, deep cold green and almost
-black shadow pockets, uniform crown size distribution, no deciduous broadleaf crowns,
-no large open clearings
-```
-
-**RU-пояснение.** Звёздчатая форма кроны (радиальные мутовки) — главный
-морфологический маркер тайги и отличается от куполов `T6` even на `mip 3`.
-Тёмные «карманы» между кронами важны: они дают `OpticalDepth ≈ 1` и позволяют
-`heightBlend` строить границу по опушке, а не по цвету.
-
-**Параметры:** `1024 × 1024`, `--tile`, 4 seed; отдельные 2 seed с
-`30…40 %` открытых прогалин для опушки (сохраняются как `t5_open` — в атласе
-это та же карта, но с иным `coverageBase`).
-
-**Негатив-акцент:** `round deciduous crowns, palm trees, tropical, autumn colours,
-snow on trees`.
-
----
-
-### T6. `Temperate & Rainforest Multi-Layer Canopy` — сомкнутый лиственный полог

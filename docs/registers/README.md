@@ -7,8 +7,8 @@
 | Файл | Что внутри | Лимит |
 |---|---|---|
 | [`errors-systemic.md`](errors-systemic.md) | Систематические ошибки проектирования и процесса. Единственный документ без лимита строк (решение владельца) | без лимита |
-| [`bugs-merge-and-ci.md`](bugs-merge-and-ci.md) | Мерж, rulesets, GitHub Actions, красные проверки, образы раннеров | 200 |
-| [`bugs-sandbox-and-tools.md`](bugs-sandbox-and-tools.md) | Песочница, потеря работы, гонка инструментов, headless-браузер, UI-индикаторы | 200 |
+| [`bugs-merge-and-ci.md`](bugs-infra-ci-and-sandbox.md) | Мерж, rulesets, GitHub Actions, красные проверки, образы раннеров | 200 |
+| [`bugs-sandbox-and-tools.md`](bugs-infra-ci-and-sandbox.md) | Песочница, потеря работы, гонка инструментов, headless-браузер, UI-индикаторы | 200 |
 | [`bugs-data-and-contracts.md`](bugs-data-and-contracts.md) | Google Sheets, `sync.py`, `meta.json`, растр, типы мест, единицы измерения | 200 |
 | [`decisions.md`](decisions.md) | Индекс сквозных решений (`И-*`, `A-*`, `D-*`, `Z-*`, `SW-*`, `F-*`) со ссылками на этапы | 200 |
 | [`todo.md`](todo.md) | Общая очередь работ, разблокировки и зависимости | 200 |

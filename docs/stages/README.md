@@ -43,8 +43,8 @@
 ## Сквозные регистры
 
 - [Систематические ошибки](../registers/errors-systemic.md)
-- [Баги: мерж и CI](../registers/bugs-merge-and-ci.md)
-- [Баги: песочница и инструменты](../registers/bugs-sandbox-and-tools.md)
+- [Баги: мерж и CI](../registers/bugs-infra-ci-and-sandbox.md)
+- [Баги: песочница и инструменты](../registers/bugs-infra-ci-and-sandbox.md)
 - [Баги: данные и контракты](../registers/bugs-data-and-contracts.md)
 - [Решения](../registers/decisions.md)
 - [Общий TODO](../registers/todo.md)

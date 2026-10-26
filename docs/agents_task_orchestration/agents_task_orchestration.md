@@ -41,7 +41,7 @@
 | Роли агентов `rc-01…rc-08` | [`role_cards/`](role_cards/) |
 | Волна `F-1` (`Z-5`) — основная часть | [`wave_cards/F-1.md`](wave_cards/F-1.md) |
 | Волна `F-1` — исполнение, гейты, приёмка | [`wave_cards/F-1-execution.md`](wave_cards/F-1-execution.md) |
-| Волна `F-1` — вердикт приёмки | [`wave_cards/F-1-verdict.md`](wave_cards/F-1-verdict.md) |
+| Волна `F-1` — вердикт приёмки | [`wave_cards/F-1-verdict.md`](wave_cards/F-1-execution.md) |
 
 ## Действующие правила (краткая выжимка)
 
