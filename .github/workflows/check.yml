@@ -73,31 +73,44 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # Джоба бинарная: каждая проверка — отдельный шаг со своим success/failure
+      # в API прогона. Раньше всё лежало в одном run:-блоке, красный npm test
+      # обрывал его на середине, и шаги ниже (lint, check:planet-core)
+      # не исполнялись вообще — «привычно красный CI» скрывал и новые падения,
+      # и поломки линта (внешний аудит 26.10.2026, решение E1).
+      - name: Установка зависимостей (npm ci)
+        run: npm ci
+      - name: Проверка типов
+        run: npm run typecheck
       # node --check ловит синтаксис, eslint (no-undef) — обращения к необъявленным
       # переменным: такая ошибка после чистки кода сломала перетаскивание карты сектора.
       # Настройки — eslint.config.mjs в корне репозитория.
-      - name: Синтаксис и необъявленные переменные
+      - name: Синтаксис скриптов
         run: |
-          npm ci
-          npm run typecheck
-          # node --check по всем скриптам: страница, инструменты и тесты. Явный
-          # вызов tests/travel-planner.test.js убран — он покрыт циклом по tests.
           find site -type f -name '*.js' -print0 | sort -z | while IFS= read -r -d '' f; do node --check "$f"; done
           find tools -type f -name '*.mjs' -print0 | sort -z | while IFS= read -r -d '' f; do node --check "$f"; done
           find tests -type f \( -name '*.mjs' -o -name '*.js' \) -print0 | sort -z | while IFS= read -r -d '' f; do node --check "$f"; done
-          # Верификаторы ядра сектора стоят ДО npm test намеренно: в этом блоке
-          # шаги выполняются последовательно, и красный npm test (сейчас — 8
-          # известных падений планетарного контура, вне задачи сектора) обрывает
-          # блок, из-за чего стоявшие ниже шаги не выполнялись вообще.
-          npm run verify:address
-          npm run verify:sector-core
-          npm run verify:no-raster
-          npm test
-          # Wasm-ядра planet-core (CR-01 PR 4): закоммиченные байты в
-          # src/planet/planet-core-bytes.ts обязаны совпадать с пересборкой
-          # AssemblyScript-исходников, иначе ускорение молча расходится с кодом.
-          npm run check:planet-core
-          npm run lint
+      - name: "Верификатор: адреса сектора"
+        run: npm run verify:address
+      - name: "Верификатор: ядро сектора"
+        run: npm run verify:sector-core
+      - name: "Верификатор: ноль растра"
+        run: npm run verify:no-raster
+      # Страж базы известных падений (tools/check_test_baseline.mjs). Восемь
+      # планетарных тестов падают и поныне (долг И-11, контур rc-02): их не
+      # скипают и не помечают todo, полный набор исполняется всегда, а имена
+      # долга названы в tools/known-test-failures.json. Красный шаг — только
+      # новое падение, устаревание базы или крэш прогона: норма «девятое
+      # падение блокирует» стала механикой CI, а не устной договорённостью.
+      - name: Тесты node:test со стражем базы
+        run: node tools/check_test_baseline.mjs
+      # Wasm-ядра planet-core (CR-01 PR 4): закоммиченные байты в
+      # src/planet/planet-core-bytes.ts обязаны совпадать с пересборкой
+      # AssemblyScript-исходников, иначе ускорение молча расходится с кодом.
+      - name: "Wasm-ядро planet-core: сверка байтов"
+        run: npm run check:planet-core
+      - name: Линт ESLint (site, src, tools, tests)
+        run: npm run lint
 
   planet-perf:
     name: Planet CPU performance
