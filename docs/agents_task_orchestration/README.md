@@ -40,6 +40,7 @@
 | [`wave_cards/F-3.md`](wave_cards/F-3.md) | `F-3` · `Z-4f`: фактическая сетка, тиры `T6/T7`, `gridTiersFor(scale)`, удаление `.map-grid-overlay` | принята 26.10.2026 (PR #313, PASS, squash `59f8f3a`); исполнение, журнал F3-1…F3-13 и вердикт — [`F-3-execution.md`](wave_cards/F-3-execution.md) |
 | [`wave_cards/CI-1.md`](wave_cards/CI-1.md) | `CI-1` · инфраструктура: бинарный CI-гейт — страж базы 8 падений, линт `tools/tests`, planet-core отдельным шагом | принята 26.10.2026 (PR #316, PASS, squash `e798eff`, CI 4/4); журнал CI1-1…CI1-8 и вердикт — [`CI-1-execution.md`](wave_cards/CI-1-execution.md); аудит — [`external_ci_gate_audit_2026-10-26.md`](external_ci_gate_audit_2026-10-26.md) |
 | [`wave_cards/CI-2.md`](wave_cards/CI-2.md) | `CI-2` · инфраструктура: намеренный карантин 8 планетарных падений на уровне раннера (`--test-skip` от реестра), двухпрогонный страж целостности, `test:raw` | принята 26.10.2026 (PR #320, PASS, squash `34d203a`, CI 4/4); журнал CI2-1…CI2-10 и вердикт — [`CI-2-execution.md`](wave_cards/CI-2-execution.md); пункт этапа [`S8-Q1`](../stages/stage-08/todo.md) |
+| [`wave_cards/ADM-0.md`](wave_cards/ADM-0.md) | `ADM-0` · GitHub-only админка данных: read-only разведка схем, workflows, Pages, Sheets-sync и лимитов предзаполненного issue | выдана 26.10.2026; архитектура и последовательность `ADM-1…ADM-4` — [`waves/admin-github-issues.md`](waves/admin-github-issues.md); код не выдан до отчёта разведки |
 
 ## Как пользоваться
 
