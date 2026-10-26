@@ -16,7 +16,6 @@ const {
   NODE_PX_MIN,
   NODE_RADIUS_BY_TYPE,
   SOLO_PETAL_RADIUS,
-  NET_LAYER_LEVELS,
   bridgesBetween,
   bubbleFor,
   bubblePath,
@@ -232,20 +231,20 @@ test('сети независимы от порядка строк: вход п�
 
 /* --------------------------------------------------------------- уровни слоя */
 
-test('T4: слой живёт на L2…L9 (с Z-4b глубина лестницы 9, в Z-4d пятна TERRITORY_LEVELS убраны)', () => {
-  assert.deepEqual([...NET_LAYER_LEVELS], [2, 3, 4, 5, 6, 7, 8, 9]);
+test('T4: слой живёт на L2…L12 через лестницу (F-2, Z-4e)', () => {
   assert.equal(scene.TERRITORY_LEVELS, undefined);
-  for (const level of [0, 1, 10, 12]) {
+  for (const level of [0, 1, 13, 14, 15, -1]) {
     assert.equal(isNetLayerLevel(level), false, `L${level} не должен включать слой`);
   }
-  for (const level of [2, 3, 4, 5, 6, 7, 8, 9]) {
+  for (let level = 2; level <= 12; level += 1) {
     assert.equal(isNetLayerLevel(level), true, `L${level} обязан включать слой`);
   }
   const nets = parseNetworks(withNet([KORHAL, TARSONIS], 7));
   assert.equal(netsAtLevel(nets, 1).length, 0);
-  assert.equal(netsAtLevel(nets, 2).length, 1);
-  assert.equal(netsAtLevel(nets, 7).length, 1, 'на L7 слой больше не обрезается');
-  assert.equal(netsAtLevel(nets, 9).length, 1, 'на L9 слой больше не обрезается');
+  assert.equal(netsAtLevel(nets, 13).length, 0);
+  for (const level of [2, 9, 10, 11, 12]) {
+    assert.equal(netsAtLevel(nets, level).length, 1, `на L${level} слой обязан жить`);
+  }
 });
 
 /* --------------------------------------------------- затухание слоя (Z-3.9) */
@@ -299,7 +298,7 @@ test('T2: layerLineAlpha — пол заливки 0,45 и ноль вне ди�
 });
 
 test('T3: заливка слоя не растёт с глубиной', () => {
-  for (let level = 2; level < 9; level += 1) {
+  for (let level = 2; level < 12; level += 1) {
     assert.ok(
       ladder.layerFillAlpha(level + 1) <= ladder.layerFillAlpha(level),
       `L${level}→L${level + 1}: альфа заливки выросла`,
