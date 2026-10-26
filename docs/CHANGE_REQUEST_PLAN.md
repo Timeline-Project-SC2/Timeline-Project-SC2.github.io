@@ -17,6 +17,7 @@
 | План из пяти PR | [`plan/cr-01/implementation.md`](plan/cr-01/implementation.md) |
 | Подводные камни и развилки | [`plan/cr-01/pitfalls.md`](plan/cr-01/pitfalls.md) |
 | Факт выполнения: PR #130–#139, 6.1, DX-1 | [`plan/cr-01/results.md`](plan/cr-01/results.md) |
+| Журнал работ CR-01 | [`plan/cr-01/journal.md`](plan/cr-01/journal.md) |
 
 ## Соответствие старым разделам
 

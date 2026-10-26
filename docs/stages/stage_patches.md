@@ -34,6 +34,10 @@
 | `SW-3F` и без-DOM-ядро `SW-5` | [`journal-sw-3f-5.md`](stage-09-12-sector/notes/journal-sw-3f-5.md) |
 | Гайдлайнер 4.0 (26.10) | [`journal-v4-0.md`](stage-09-12-sector/notes/journal-v4-0.md) |
 
+## Заметки этапов 1–2
+
+Тематические заметки, вырезанные из этого же журнала при разукрупнении, индексируются по месту и здесь не дублируются: [заметки этапа 01](stage-01/notes/README.md), [заметки этапа 02](stage-02/notes/README.md).
+
 ## Регистры
 
 - Систематические ошибки: [`errors-systemic.md`](../registers/errors-systemic.md).

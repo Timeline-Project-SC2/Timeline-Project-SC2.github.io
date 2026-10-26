@@ -16,7 +16,7 @@
 
 | Карточка | Зона | Основные волны |
 |---|---|---|
-| [`rc-01-sector-render.md`](role_cards/rc-01-sector-render.md) | Сектор: процедурное поле, лестница глубины `L0…L9`, маркеры, полёт камеры, стрелки | `SW-1`…`SW-4` |
+| [`rc-01-sector-render.md`](role_cards/rc-01-sector-render.md) | Сектор: процедурное поле, лестница глубины `L0…L12`, маркеры, полёт камеры, стрелки | `SW-1`…`SW-4` |
 | [`rc-02-planetary-contour.md`](role_cards/rc-02-planetary-contour.md) | Планетарный контур: `src/local-map/*`, `src/planet/*`, Wasm-ядро, горизонт | вне волн 9–12 (`И-11`) |
 | [`rc-03-cartography-ui.md`](role_cards/rc-03-cartography-ui.md) | Картография, подписи, цвет, состояния экрана, финиш-гейт интерфейса | `SW-3`…`SW-4` |
 | [`rc-04-qa-evidence.md`](role_cards/rc-04-qa-evidence.md) | Проверки и доказательства: что проверено, чем и с каким результатом | все |
