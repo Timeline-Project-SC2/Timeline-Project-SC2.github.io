@@ -179,9 +179,12 @@ test('стенд: ступень кромки сообщает число вер
 test('стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке', async () => {
   // Кросс-проверка измеримости (не порогов): в A-29 врезанного русла на
   // контрольных ячейках может не быть, и тогда все речные строки — честные
-  // N/A. В A-17 топология Patch7 несёт входы русла, поэтому хотя бы один
-  // створ и хотя бы один профиль с carve > 0 обязаны измериться числом.
-  const a17 = await stand.runStand({ world: 'a17', radiusM: 2500 });
+  // N/A. Кросс-проверка идёт по явному списку `A17_CELLS` (река/устье) и НЕ
+  // подменяет основной отчёт A-17 по семи контрольным ячейкам владельца —
+  // UP-1-review §3.3.
+  const a17 = await stand.runStand({ world: 'a17', radiusM: 2500, cells: stand.A17_CELLS });
+  assert.equal(a17.crossCheck, true, 'это кросс-проверка, а не основной отчёт');
+  assert.deepEqual(a17.controlCells, stand.A17_CELLS, 'кросс-проверка идёт по явному списку');
   const continuity = a17.rows.filter((row) => row.metric === 'непрерывность русла через грань');
   assert.ok(
     continuity.some((row) => row.status !== 'N/A' && /^\d+\/\d+ створ/.test(row.valueText)),
@@ -235,6 +238,57 @@ test('стенд: в мире A-17 речные метрики реально и
     assert.equal(row.threshold, '≥ 3 м', `ячейка ${cell}: порог морской ветви`);
     assert.match(row.detail, /морская ветвь/, `ячейка ${cell}: подпись «морская ветвь»`);
   }
+});
+
+test('стенд: основной отчёт идёт по семи контрольным ячейкам, кросс-проверка — отдельно', async () => {
+  // UP-1-review §3.3: список владельца и число строк не подменяются.
+  assert.equal(stand.CONTROL_CELLS.length, 7, 'контрольных ячеек ровно семь');
+  assert.deepEqual(
+    stand.CONTROL_CELLS,
+    [37488, 37518, 37548, 37519, 137363, 137390, 137436],
+    'контрольный список владельца не менялся',
+  );
+  assert.equal(stand.A17_CELLS.length, 9, 'список кросс-проверки — девять ячеек');
+  assert.deepEqual(stand.A17_CELLS, [847, 848, 849, 850, 851, 7, 39, 70, 100], 'состав кросс-проверки');
+  for (const cell of stand.A17_CELLS.slice(5)) {
+    assert.ok(!stand.CONTROL_CELLS.includes(cell), `ячейка кросс-проверки ${cell} не входит в контрольный список`);
+  }
+  assert.equal(new Set(stand.CONTROL_CELLS).size, 7, 'контрольный список без повторов');
+  assert.equal(new Set(stand.A17_CELLS).size, 9, 'список кросс-проверки без повторов');
+
+  const metricsCount = Object.keys(stand.METRIC_TITLES).length;
+  assert.equal(metricsCount, 14, 'метрик стенда четырнадцать');
+  assert.equal(report.rows.length, 7 * metricsCount, 'основной отчёт A-29: 98 строк');
+  assert.equal(report.summary.total, 98, 'сводка A-29: 98 строк');
+  assert.deepEqual(report.controlCells, stand.CONTROL_CELLS, 'controlCells A-29 — контрольный список');
+  assert.equal(report.crossCheck, false, 'A-29 не помечен как кросс-проверка');
+
+  const a17 = await stand.runStand({ world: 'a17', radiusM: 2500 });
+  assert.equal(a17.rows.length, 7 * metricsCount, 'основной отчёт A-17: те же 98 строк');
+  assert.equal(a17.summary.total, 98, 'сводка A-17: 98 строк');
+  assert.deepEqual(a17.controlCells, stand.CONTROL_CELLS, 'controlCells A-17 — контрольный список владельца');
+  assert.equal(a17.crossCheck, false, 'A-17 по умолчанию — основной отчёт, не кросс-проверка');
+  assert.deepEqual(
+    [...new Set(a17.rows.map((row) => row.cell))],
+    [...stand.CONTROL_CELLS],
+    'A-17 мерит ровно семь контрольных ячеек',
+  );
+
+  // Кросс-проверка подключается только явно и даёт 126 строк.
+  const cross = await stand.runStand({ world: 'a17', radiusM: 2500, cells: stand.A17_CELLS });
+  assert.equal(cross.rows.length, 9 * metricsCount, 'кросс-проверка: 126 строк');
+  assert.equal(cross.crossCheck, true, 'кросс-проверка помечена флагом');
+  assert.deepEqual(cross.controlCells, stand.A17_CELLS, 'controlCells кросс-проверки — её собственный список');
+  await assert.rejects(
+    () => stand.runStand({ world: 'a17', cells: [] }),
+    /непустым массивом/,
+    'пустой список запрещён',
+  );
+  await assert.rejects(
+    () => stand.runStand({ world: 'a17', cells: [7, 7] }),
+    /повтор номера ячейки/,
+    'повторы в списке запрещены',
+  );
 });
 
 test('стенд: сводка таблицы согласована с её строками', () => {

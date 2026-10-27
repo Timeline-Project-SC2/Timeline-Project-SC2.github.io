@@ -47,7 +47,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -65,8 +65,57 @@ export const RAW_SCRIPT = 'test:raw';
 export const SKIP_FLAGS = ['--test-skip', '--test-skip-pattern'];
 
 const TAP_REPORTER = '--test-reporter=tap';
-/** Файл теста в списке аргументов: нужен только для человеческих сообщений. */
-const TEST_FILE = /\.(?:test|spec)\.(?:[cm]?[jt]s)$/;
+/**
+ * Имя тестового файла по соглашениям проекта и `node --test`:
+ * `*.test.*`, `*.spec.*`, `*-test.*`, `*_test.*`, `test-*.*`, `test_*.*`, `test.*`.
+ * Расширения — только JS/TS-семейство (`js`, `mjs`, `cjs`, `ts`, `mts`, `cts`),
+ * поэтому питоновские `tests/test_*.py` из `scripts["test:py"]` сюда не
+ * попадают: их ведёт отдельный прогон, и подменять им Node-набор запрещено.
+ */
+export const TEST_FILE = /(?:\.(?:test|spec)|[-_]test)\.(?:[cm]?[jt]s)$/;
+/** Префиксные соглашения: `test-foo.mjs`, `test_foo.mjs`. */
+export const TEST_FILE_PREFIX = /^test[-_].*\.(?:[cm]?[jt]s)$/;
+/** Голое имя `test.mjs` — тоже тест по соглашению `node --test`. */
+export const TEST_FILE_BARE = /^test\.(?:[cm]?[jt]s)$/;
+
+/** Подкаталоги, которые обход тестового дерева не трогает. */
+const SKIP_DIRS = new Set(['node_modules', '.git']);
+
+/** Путь в тестовом дереве всегда в posix-виде: сравнение не зависит от ОС. */
+export function normalizeTestPath(file) {
+  return String(file).split(path.sep).join('/').replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+/** Расширение файла входит в JS/TS-семейство (TS-декларации тестами не считаются). */
+function isTestFileName(name) {
+  const base = path.posix.basename(String(name));
+  if (/\.d\.[cm]?ts$/.test(base)) return false;
+  return TEST_FILE.test(base) || TEST_FILE_PREFIX.test(base) || TEST_FILE_BARE.test(base);
+}
+
+/**
+ * Рекурсивный обход каталога тестов. Возвращает пути **относительно** каталога,
+ * в posix-виде, поэтому файл в подкаталоге (`подкаталог/x.test.mjs`) не может
+ * потеряться из-за того, что обход смотрел только верхний уровень.
+ *
+ * @param {string} dir абсолютный каталог
+ * @param {string} [base] абсолютный корень для относительных путей
+ * @returns {string[]}
+ */
+export function walkTestDirectory(dir, base = dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      out.push(...walkTestDirectory(path.join(dir, entry.name), base));
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      out.push(normalizeTestPath(path.relative(base, path.join(dir, entry.name))));
+    }
+  }
+  return out.sort();
+}
+
+
 /** Служебная обёртка файла в TAP: имя вида `tests/foo.test.mjs` не часть имени подтеста. */
 const FILE_NAME = /\.(?:[cm]?[jt]s)$/;
 
@@ -131,7 +180,29 @@ export function buildTestCommand(packageJson) {
 
 /** Файлы тестов из аргументов команды — для сообщений и счётчика. */
 export function testFiles(args) {
-  return args.filter((arg) => TEST_FILE.test(arg));
+  return args.filter((arg) => !arg.startsWith('-') && isTestFileName(normalizeTestPath(arg)));
+}
+
+/**
+ * Список аргументов → явные тестовые файлы и каталоги.
+ *
+ * `node --test tests/` (каталог) тоже перечисляет файлы — просто неявно:
+ * тогда «в списке» весь каталог, и потерять отдельный файл нельзя. Каталоги
+ * учитываются префиксом, чтобы такая запись не выглядела как потеря теста.
+ *
+ * @param {string[]} args аргументы `scripts["test:raw"]`
+ * @returns {{ files: string[], dirs: string[] }}
+ */
+export function splitListedArgs(args) {
+  const files = [];
+  const dirs = [];
+  for (const arg of args) {
+    if (!arg || arg.startsWith('-')) continue;
+    const rel = normalizeTestPath(arg);
+    if (isTestFileName(rel)) files.push(rel);
+    else dirs.push(rel === '' ? 'tests' : rel);
+  }
+  return { files, dirs };
 }
 
 /**
@@ -148,11 +219,15 @@ export function testFiles(args) {
  * @returns {string[]} имена файлов на диске, которых нет в списке
  */
 export function findUnlistedTestFiles(onDisk, listed) {
-  const listedSet = new Set(listed.map((file) => path.normalize(file)));
+  const { files: listedFiles, dirs: listedDirs } = splitListedArgs(listed);
+  const listedSet = new Set(listedFiles);
+  const prefixes = listedDirs.map((dir) => `${dir.replace(/\/+$/, '')}/`);
   return onDisk
-    .filter((name) => TEST_FILE.test(name))
-    .map((name) => path.normalize(path.join('tests', name)))
+    .map((name) => normalizeTestPath(name))
+    .map((name) => (name.startsWith('tests/') ? name : `tests/${name}`))
+    .filter((relative) => isTestFileName(relative))
     .filter((relative) => !listedSet.has(relative))
+    .filter((relative) => !prefixes.some((prefix) => `${relative}/`.startsWith(prefix)))
     .sort();
 }
 
@@ -541,12 +616,15 @@ function main() {
     process.exit(2);
   }
 
-  const files = testFiles(command.args);
-  // UP-1 §3.2: файл в tests/, которого нет в списке, не выполняется молча.
-  // Проверка стоит до прогонов: потерянный тест хуже красного падения.
+  const { files: listedFiles } = splitListedArgs(command.args);
+  // UP-1 §3.2: файл в tests/ (включая подкаталоги), которого нет в списке, не
+  // выполняется молча. Проверка стоит до прогонов: потерянный тест хуже
+  // красного падения.
   let unlisted = [];
   try {
-    unlisted = findUnlistedTestFiles(readdirSync(path.join(ROOT, 'tests')), files);
+    const testsDir = path.join(ROOT, 'tests');
+    if (!statSync(testsDir).isDirectory()) throw new Error('tests/ не каталог');
+    unlisted = findUnlistedTestFiles(walkTestDirectory(testsDir), command.args);
   } catch (error) {
     process.stderr.write(`ОШИБКА ОКРУЖЕНИЯ: не удалось прочитать tests/: ${error.message}\n`);
     process.exit(2);
@@ -554,10 +632,11 @@ function main() {
   if (unlisted.length) {
     const lines = [
       `Страж карантина этапа 8 (два прогона): ${path.relative(ROOT, BASELINE_PATH)}`,
-      `  список файлов взят из package.json scripts["${RAW_SCRIPT}"]: ${files.length} шт.`,
+      `  список файлов взят из package.json scripts["${RAW_SCRIPT}"]: ${listedFiles.length} шт.`,
       '',
       'СТРАЖ: КРАСНЫЙ — НОВЫЕ ТЕСТОВЫЕ ФАЙЛЫ ВНЕ СПИСКА',
       ...unlisted.map((file) => `  · ${file} — нет в scripts["${RAW_SCRIPT}"]`),
+      '  Обход рекурсивный: подкаталоги tests/ тоже проверяются.',
       '  Раннер выполняет только перечисленные файлы: такой тест не запускается и молча теряется.',
       `  Добавьте файл в scripts["${RAW_SCRIPT}"] (package.json) в этом же PR.`
     ];
@@ -565,14 +644,23 @@ function main() {
     process.exit(1);
   }
   const run1Args = command.args;
-  const run2Args = buildSkipArgs(command.args, baseline.map((entry) => entry.name), skipFlag);
+  // Пустой реестр — законное конечное состояние (S8-Q1 закрыт): карантин снят
+  // целиком, второй прогон был бы побайтово равен первому, поэтому он не
+  // запускается. Так переход к пустому реестру не требует правки стража.
+  const registryEmpty = baseline.length === 0;
+  const run2Args = registryEmpty
+    ? run1Args
+    : buildSkipArgs(command.args, baseline.map((entry) => entry.name), skipFlag);
   const printable1 = `${command.command} ${run1Args.join(' ')}`;
-  const printable2 = `${command.command} ${run2Args.join(' ')}`;
+  const printable2 = registryEmpty
+    ? 'пропущен: реестр пуст, карантин снят целиком'
+    : `${command.command} ${run2Args.join(' ')}`;
 
   process.stdout.write(
     `Страж карантина этапа 8 (два прогона): ${path.relative(ROOT, BASELINE_PATH)}\n` +
-    `  список файлов взят из package.json scripts["${RAW_SCRIPT}"]: ${files.length} шт.\n` +
-    `  skip-флаг определён по node --help: ${skipFlag}; записей в реестре: ${baseline.length}\n`
+    `  список файлов взят из package.json scripts["${RAW_SCRIPT}"]: ${listedFiles.length} шт.\n` +
+    `  skip-флаг определён по node --help: ${skipFlag}; записей в реестре: ${baseline.length}`
+      + `${registryEmpty ? ' (реестр пуст — карантин снят, второй прогон не нужен)' : ''}\n`
   );
 
   const first = runTests(command.command, run1Args);
@@ -580,7 +668,7 @@ function main() {
     process.stdout.write(`СТРАЖ: КРАСНЫЙ — прогон 1 не запустился\nКРЭШ ПРОГОНА ТЕСТОВ (прогон 1 из 2): ${first.error.message}\n`);
     process.exit(1);
   }
-  const second = runTests(command.command, run2Args);
+  const second = registryEmpty ? first : runTests(command.command, run2Args);
   if (second.error) {
     process.stdout.write(`СТРАЖ: КРАСНЫЙ — прогон 2 не запустился\nКРЭШ ПРОГОНА ТЕСТОВ (прогон 2 из 2): ${second.error.message}\n`);
     process.exit(1);

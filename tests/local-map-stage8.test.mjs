@@ -1777,32 +1777,26 @@ test('Stage-8.5: юбка без кругового вала — гребни т
   /**
    * Наибольший непрерывный сектор «равнины» (нижняя четверть размаха), градусы.
    *
-   * UP-1: область измерения — сухая земля (z >= 0, высоты юбки заданы над
-   * уровнем моря), а не всё кольцо. Раньше в «равнину» попадало и морское дно:
-   * на горизонте 11,5·R_patch кольцо пересекает удалённый залив, и его отметки
-   * задавали минимум размаха. Равнина — это суша, а не батиметрия, поэтому
-   * море из полосы «нижней четверти» исключается, а разрыв по воде
-   * прерывает сектор.
-   *
-   * Почему это не ослабление порога: порог 30° и правило «нижняя четверть
-   * размаха» не менялись, изменилась только область. Было → стало на
-   * контрольном кольце (dryPatch, radiusM = 600, j = 84) до и после W28:
-   *   всё кольцо: 45,0° → 25,0° (минимум −50,7 → −102,3 м: море углубилось);
-   *   суша:       35,0° → 32,5° (размах суши 361 м, полоса до 105,7 м).
-   * То есть глубина удалённого моря перестала определять полосу равнины, а
-   * сама проверка «гребни не замкнуты в кольцо на 360°» осталась прежней.
+   * UP-1-review §3.2: область измерения — ПОЛНОЕ кольцо, как в исходной
+   * проверке Stage-8.5. Полоса «нижней четверти» считается от минимума всего
+   * кольца, поэтому в неё входит и морское дно: на горизонте 11,5·R_patch
+   * кольцо пересекает удалённый залив. Это исходная семантика теста, и она
+   * сохранена намеренно: попытка считать «равнину» только по суше (UP-1)
+   * давала 32,5° вместо 25°, но этот сектор сшит руслом — точка русла
+   * (#72, az 180°, z ≈ 16,18 м) соединяет две разные равнины. При разрыве
+   * сектора по маскам воды и русла остаётся 22,5° < 30°, то есть «широкой
+   * равнины» там нет: прежние 45° давало мелкое (до W28) морское дно,
+   * задававшее минимум размаха. Причина падения и вопрос владельцу —
+   * docs/stages/stage-08/todo.md#S8-Q1 и docs/agents_task_orchestration/wave_cards/UP-1-review.md §3.2.
    */
   const plainSectorDeg = (heights) => {
-    const dry = heights.filter((height) => height >= 0);
-    if (dry.length === 0) return 0;
-    const min = Math.min(...dry);
-    const range = Math.max(...dry) - min;
+    const min = Math.min(...heights);
+    const range = rangeOf(heights);
     const total = heights.length;
     let run = 0;
     let best = 0;
     for (let i = 0; i < total + 40; i++) {
-      const height = heights[i % total];
-      if (height >= 0 && height < min + 0.25 * range) {
+      if (heights[i % total] < min + 0.25 * range) {
         run++;
         best = Math.max(best, run);
       } else run = 0;
@@ -1890,6 +1884,141 @@ test('Stage-8.5: юбка без кругового вала — гребни т
     Math.abs(wideSkirt.planetRadiusM - 3.6 * wideSkirt.outerRadiusM) < 1e-3,
     `на масштабе 1250 км действует нижняя граница 3.6·R_outer (${wideSkirt.planetRadiusM} м)`,
   );
+
+  Worker.clearLocalMapCache();
+});
+
+test('Stage-8.5 (дополнительно): сектор равнины по сухой земле учитывает маски воды и русла', async () => {
+  // UP-1-review §3.2: дополнительная проверка, НЕ замена исходной (§проверка
+  // полного кольца выше остаётся как была). Смысл: если мерить равнину только
+  // по суше, вода и русло не должны «сшивать» соседние равнины в один сектор —
+  // сектор обязан рваться по маскам, а не по знаку высоты. Отрицательные
+  // примеры доказывают, что проверка ловит воду и русло ВЫШЕ нуля: там, где
+  // высота положительна, знак ничего не говорит, решение принимает маска.
+
+  /** Наибольший непрерывный сухой сектор (нижняя четверть размаха суши), градусы. */
+  const dryPlainSectorDeg = (heights, waterMask, riverMask) => {
+    const dry = [];
+    for (let i = 0; i < heights.length; i++) {
+      const wet = (waterMask?.[i] ?? 0) >= 128 || (riverMask?.[i] ?? 0) >= 128;
+      if (heights[i] >= 0 && !wet) dry.push(heights[i]);
+    }
+    if (dry.length === 0) return 0;
+    const min = Math.min(...dry);
+    const range = Math.max(...dry) - min;
+    const total = heights.length;
+    let run = 0;
+    let best = 0;
+    for (let i = 0; i < total + 40; i++) {
+      const k = i % total;
+      const wet = (waterMask?.[k] ?? 0) >= 128 || (riverMask?.[k] ?? 0) >= 128;
+      if (heights[k] >= 0 && !wet && heights[k] < min + 0.25 * range) {
+        run++;
+        best = Math.max(best, run);
+      } else run = 0;
+    }
+    return (best * 360) / heights.length;
+  };
+
+  // 1. Отрицательные примеры: вода и русло ВЫШЕ нуля рвут сектор, а знак
+  //    высоты их от суши не отличает.
+  const N = Worker.SKIRT_ANGULAR_SEGMENTS;
+  const plainPlain = (i) => (i * 360) / N < 120;
+  const heights = [];
+  for (let i = 0; i < N; i++) heights.push(plainPlain(i) ? 100 + (i % 7) : 300 + (i % 11));
+  const openDryDeg = dryPlainSectorDeg(heights);
+  assert.ok(openDryDeg >= 30, `без масок равнина открыта: ${openDryDeg.toFixed(1)}° ≥ 30°`);
+
+  // Полоса 25° в середине равнины: сначала вода ВЫШЕ нуля (150 м), затем русло (16 м).
+  const band = (mask) => { for (let i = 10; i < 20; i++) mask[i] = 255; return mask; };
+  const heightsWithLake = heights.slice();
+  for (let i = 10; i < 20; i++) heightsWithLake[i] = 150;
+  // Без маски «озеро» 150 м неотличимо от равнины — именно поэтому маска нужна.
+  assert.equal(
+    dryPlainSectorDeg(heightsWithLake),
+    openDryDeg,
+    'по одной высоте вода выше нуля неотличима от суши — знак высоты не помогает',
+  );
+  const lakeDeg = dryPlainSectorDeg(heightsWithLake, band(new Uint8Array(N)), null);
+  assert.ok(lakeDeg < openDryDeg, `маска воды рвёт сектор: ${lakeDeg.toFixed(1)}° < ${openDryDeg.toFixed(1)}°`);
+
+  // Русло выше нуля (как точка #72 на живой юбке, z ≈ 16 м): по высоте оно
+  // остаётся сушей, поэтому сектор рвёт именно маска русла.
+  const riverDeg = dryPlainSectorDeg(heights, null, band(new Uint8Array(N)));
+  assert.equal(dryPlainSectorDeg(heights), openDryDeg, 'без маски русло не рвёт сектор — оно сухое');
+  assert.ok(riverDeg < openDryDeg, `маска русла рвёт сектор: ${riverDeg.toFixed(1)}° < ${openDryDeg.toFixed(1)}°`);
+  assert.ok(heights[12] > 0, `русло выше нуля (${heights[12]} м) — знак высоты его от суши не отличает`);
+
+  // Вся суша кольца — вода выше нуля: «сухой равнины» нет вовсе, 0°.
+  // Если бы мерили только по знаку высоты, получилось бы 360° — отсюда маска.
+  const allHigh = heights.map((v, i) => 150 + (i % 5));
+  const allWet = new Uint8Array(N).fill(255);
+  assert.ok(dryPlainSectorDeg(allHigh) > 0, 'по одной высоте кольцо целиком «суша» — сектор ненулевой');
+  assert.equal(
+    dryPlainSectorDeg(allHigh, allWet, null),
+    0,
+    'вода выше нуля на всём кольце даёт 0°, а не 100 %',
+  );
+
+  // Море ниже нуля тоже прерывает сухой сектор.
+  const seaHeights = heights.slice();
+  for (let i = 0; i < N; i++) if (plainPlain(i) && i % 2 === 0) seaHeights[i] = -80;
+  assert.ok(
+    dryPlainSectorDeg(seaHeights) < openDryDeg,
+    `море ниже нуля рвёт сухой сектор: ${dryPlainSectorDeg(seaHeights).toFixed(1)}°`,
+  );
+
+  // 2. Живая юбка dryPatch (radiusM = 600): числа, зафиксированные в §3.2 карточки.
+  Worker.clearLocalMapCache();
+  const request = requestFor(dryPatch, { radiusM: 600, patchKey: 'stage85-dry-sector', profile: PROFILE });
+  const local = await Worker.generateLocalMap(request);
+  const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
+  const ringHeights = [];
+  const ringWater = [];
+  const ringRiver = [];
+  const row = Worker.SKIRT_RADIAL_RINGS * (N + 1);
+  for (let i = 0; i < N; i++) {
+    const vertex = row + i;
+    ringHeights.push(skirt.positions[vertex * 3 + 2]);
+    ringWater.push(skirt.waterMask[vertex]);
+    ringRiver.push(skirt.riverMask[vertex]);
+  }
+  const landOnlyDeg = (() => {
+    const dry = ringHeights.filter((h) => h >= 0);
+    const min = Math.min(...dry);
+    const range = Math.max(...dry) - min;
+    let run = 0;
+    let best = 0;
+    for (let i = 0; i < N + 40; i++) {
+      const h = ringHeights[i % N];
+      if (h >= 0 && h < min + 0.25 * range) {
+        run++;
+        best = Math.max(best, run);
+      } else run = 0;
+    }
+    return (best * 360) / N;
+  })();
+  const maskedDeg = dryPlainSectorDeg(ringHeights, ringWater, ringRiver);
+  assert.ok(
+    Math.abs(landOnlyDeg - 32.5) < 0.5,
+    `по одной высоте на внешнем кольце ${landOnlyDeg.toFixed(1)}° (в карточке 32,5°)`,
+  );
+  assert.ok(
+    Math.abs(maskedDeg - 22.5) < 0.5,
+    `с масками воды и русла ${maskedDeg.toFixed(1)}° (в карточке 22,5°): сектор сшит руслом`,
+  );
+  assert.ok(
+    maskedDeg < 30,
+    `широкой сухой равнины на внешнем кольце нет: ${maskedDeg.toFixed(1)}° < 30° — исходная проверка полного кольца остаётся красной по делу`,
+  );
+  const riverVertices = ringRiver.map((v, i) => (v >= 128 ? i : -1)).filter((i) => i >= 0);
+  assert.ok(riverVertices.length >= 1, 'на внешнем кольце есть точка русла');
+  for (const index of riverVertices) {
+    assert.ok(
+      ringHeights[index] > 0,
+      `русло #${index} лежит выше нуля (${ringHeights[index].toFixed(2)} м) — знак высоты его не отличает от суши`,
+    );
+  }
 
   Worker.clearLocalMapCache();
 });

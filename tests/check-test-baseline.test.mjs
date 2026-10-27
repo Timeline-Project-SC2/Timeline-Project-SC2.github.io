@@ -28,7 +28,7 @@
 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,10 +46,12 @@ import {
   evaluateGuard,
   findUnlistedTestFiles,
   loadBaseline,
+  normalizeTestPath,
   loadRegistry,
   parseTap,
   testCount,
-  testFiles
+  testFiles,
+  walkTestDirectory
 } from '../tools/check_test_baseline.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -353,7 +355,10 @@ test('гигиена реестра: блок meta намеренного кар
 
   // UP-1: реестр не расширяется; после починки записи удаляются тем же PR.
   // Верхняя граница — исходные восемь падений S8-Q1, нижняя — текущий долг m.14.
-  assert.ok(baseline.length >= 1, 'в карантине есть хотя бы один подтверждённый долг');
+  // UP-1 §3.4: пустой реестр — законное КОНЕЧНОЕ состояние (S8-Q1 закрыт), но
+  // не способ обнулить долг: сейчас в реестре остаются подтверждённые записи.
+  assert.ok(Array.isArray(registry.tests), 'tests — массив записей');
+  assert.ok(baseline.length >= 2, 'в карантине остаются подтверждённые долги (юбка Stage-8.5 и m.14)');
   assert.ok(baseline.length <= 8, 'реестр не расширен сверх восьми падений S8-Q1');
   assert.equal(registry.meta.progress.length > 0, true, 'в meta отражён прогресс починки');
   for (const entry of baseline) {
@@ -365,6 +370,32 @@ test('гигиена реестра: блок meta намеренного кар
     assert.ok(entry.reason.trim().length > 10, `${entry.name}: поле reason объясняет долг`);
   }
   assert.equal(new Set(baseline.map((entry) => entry.name)).size, baseline.length, 'имена в реестре не повторяются');
+});
+
+test('UP-1: пустой реестр — законное конечное состояние, страж его не ломает', () => {
+  // Переход к пустому реестру не требует правки стража: при tests: [] второй
+  // прогон не запускается, а прогон 1 остаётся полным и без skip-флагов.
+  const emptyPath = path.join(ROOT, 'tests', 'tmp-empty-registry.json');
+  const empty = { meta: registry.meta, tests: [] };
+  writeFileSync(emptyPath, JSON.stringify(empty, null, 2));
+  try {
+    const loaded = loadRegistry(emptyPath);
+    assert.deepEqual(loaded.tests, [], 'пустой список записей читается');
+    assert.deepEqual(loadBaseline(emptyPath), [], 'loadBaseline на пустом реестре — пустой список');
+    assert.ok(loaded.meta.purpose && loaded.meta.removal, 'meta остаётся обязательной и на пустом реестре');
+    const flag = '--test-skip-pattern';
+    assert.deepEqual(
+      buildSkipArgs(['--test', 'tests/a.test.mjs'], [], flag),
+      ['--test', 'tests/a.test.mjs'],
+      'без записей флаги не добавляются',
+    );
+    const tap = 'TAP version 13\n# Subtest: Проходит\nok 1 - Проходит\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
+    const run = { exitCode: 0, signal: null, tapText: tap, error: null };
+    const verdict = evaluateGuard({ baseline: [], run1: run, run2: run, commands: {} });
+    assert.equal(verdict.code, 0, 'пустой реестр + зелёный прогон = страж зелёный');
+  } finally {
+    rmSync(emptyPath, { force: true });
+  }
 });
 
 test('UP-1: новый тестовый файл не теряется — список test:raw обязан покрывать tests/', () => {
@@ -380,6 +411,51 @@ test('UP-1: новый тестовый файл не теряется — сп�
     'файл на диске без строки в test:raw должен попадать в красноту стража',
   );
   assert.deepEqual(findUnlistedTestFiles([], []), [], 'пустой каталог — нечего терять');
+
+  // UP-1 §3.1: обход рекурсивный, соглашения шире одного `.test.mjs`.
+  const nested = findUnlistedTestFiles(
+    ['подкаталог/x.test.mjs', 'test-tmp.mjs', 'tmp_ok.mjs', 'tmp.spec.js', 'q-test.mjs', 'q_test.mjs', 'test.mjs', 'note.txt', 'test_scratch.py', 'd.d.ts'],
+    listed,
+  );
+  assert.deepEqual(
+    nested,
+    [
+      'tests/q-test.mjs',
+      'tests/q_test.mjs',
+      'tests/test-tmp.mjs',
+      'tests/test.mjs',
+      'tests/tmp.spec.js',
+      'tests/подкаталог/x.test.mjs',
+    ],
+    'вложенный файл, `test-*`, `*_test.*`/`*-test.*`, `.spec.*` и `test.mjs` попадают в красноту',
+  );
+  assert.deepEqual(
+    findUnlistedTestFiles(['tmp_ok.mjs', 'note.txt'], listed),
+    [],
+    'посторонние имена (tmp_ok, note.txt) тестами не считаются',
+  );
+  assert.ok(!nested.some((file) => file.endsWith('.py')), 'питоновские тесты ведёт test:py, а не Node-набор');
+  assert.ok(!nested.some((file) => file.endsWith('.d.ts')), 'TS-декларации тестами не считаются');
+  assert.deepEqual(
+    findUnlistedTestFiles(['sub/x.test.mjs', 'sub/deep/y.spec.mjs'], [...listed, 'tests/sub']),
+    [],
+    'каталог в списке (node --test tests/sub) покрывает вложенные файлы',
+  );
+  assert.deepEqual(
+    findUnlistedTestFiles(['sub/x.test.mjs'], [...listed, 'tests/sub/']),
+    [],
+    'каталог с хвостовым слешем тоже покрывает вложенные файлы',
+  );
+  assert.deepEqual(
+    findUnlistedTestFiles(['sub/x.test.mjs'], [...listed, './tests/sub']),
+    [],
+    'запись `./tests/sub` нормализуется',
+  );
+  assert.equal(normalizeTestPath('./tests/sub/'), 'tests/sub', 'путь приводится к posix-виду');
+  const walked = walkTestDirectory(path.join(ROOT, 'tests'));
+  assert.ok(walked.includes('local-map.test.mjs'), 'обход видит файл верхнего уровня');
+  assert.ok(walked.every((file) => !file.includes('\\')), 'обход отдаёт posix-пути');
+  assert.equal(new Set(walked).size, walked.length, 'обход без повторов');
   // Реальный каталог: все файлы .test.* уже учтены в scripts["test:raw"].
   const onDisk = readdirSync(path.join(ROOT, 'tests'));
   assert.ok(onDisk.some((name) => /\.test\.m?js$/.test(name)), 'в tests/ есть тестовые файлы');

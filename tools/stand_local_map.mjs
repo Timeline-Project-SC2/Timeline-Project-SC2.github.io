@@ -184,23 +184,14 @@ const CONTROL_CELLS = [37488, 37518, 37548, 37519, 137363, 137390, 137436];
 const A17_CELLS = [847, 848, 849, 850, 851, 7, 39, 70, 100];
 
 /**
- * Профи мира: профиль + seed сектора (те же значения, что в отчётах A-17/A-29)
- * и список ячеек этого мира. `cells` у A-29 — контрольный список владельца;
- * у A-17 — список кросс-проверки (см. `A17_CELLS`).
+ * Профи мира: профиль + seed сектора (те же значения, что в отчётах A-17/A-29).
+ * Основной отчёт ОБОИХ миров идёт по контрольному списку владельца
+ * `CONTROL_CELLS`; список кросс-проверки `A17_CELLS` подключается только явно
+ * (`cells` в `runStand` или `--cells=cross-check`) и не подменяет отчёт.
  */
 const WORLDS = {
-  a17: {
-    profile: A17_PROFILE,
-    seed: 0x4f9f2cab,
-    label: 'A-17 (korhal-iv)',
-    cells: A17_CELLS,
-  },
-  a29: {
-    profile: A29_PROFILE,
-    seed: 0xa29b2026,
-    label: 'A-29 (a29a29a29a29a29a)',
-    cells: CONTROL_CELLS,
-  },
+  a17: { profile: A17_PROFILE, seed: 0x4f9f2cab, label: 'A-17 (korhal-iv)' },
+  a29: { profile: A29_PROFILE, seed: 0xa29b2026, label: 'A-29 (a29a29a29a29a29a)' },
 };
 
 const PLACE_ID = 2;
@@ -292,6 +283,7 @@ function parseArgs(argv) {
     if (arg === '--gate') options.gate = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--flat-fixture') options.flatFixture = true;
+    else if (arg === '--cells=cross-check') options.crossCheckCells = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg.startsWith('--profile=')) {
       const name = arg.slice('--profile='.length);
@@ -299,6 +291,8 @@ function parseArgs(argv) {
         throw new Error(`Неизвестный профиль: ${name} (доступны: ${Object.keys(WORLDS).join(', ')})`);
       }
       options.world = name;
+    } else if (arg.startsWith('--cells=')) {
+      throw new Error(`Неизвестный список ячеек: ${arg} (доступен только --cells=cross-check)`);
     } else if (arg.startsWith('--radius-m=')) {
       const value = Number(arg.slice('--radius-m='.length));
       if (!Number.isFinite(value) || value <= 0) throw new Error('--radius-m должно быть положительным числом');
@@ -2358,8 +2352,27 @@ export function gateExitCode(summary) {
 }
 
 /**
- * Полный прогон стенда: таблица метрик по всем контрольным ячейкам.
- * Опции: { world: 'a29' | 'a17', radiusM: число, hypsoReferencePct: число | null }.
+ * Проверка явно заданного списка ячеек: положительные целые, без повторов.
+ * Возвращает копию списка либо `null`, если список не задан.
+ */
+function validateCells(cells) {
+  if (cells === undefined || cells === null) return null;
+  if (!Array.isArray(cells) || cells.length === 0) {
+    throw new Error('cells должен быть непустым массивом номеров ячеек');
+  }
+  const seen = new Set();
+  for (const cell of cells) {
+    if (!Number.isInteger(cell) || cell < 0) throw new Error(`cells: неверный номер ячейки ${cell}`);
+    if (seen.has(cell)) throw new Error(`cells: повтор номера ячейки ${cell}`);
+    seen.add(cell);
+  }
+  return [...cells];
+}
+
+/**
+ * Полный прогон стенда: таблица метрик по семи контрольным ячейкам владельца.
+ * Опции: { world: 'a29' | 'a17', radiusM: число, hypsoReferencePct: число | null,
+ *          cells: число[] — явная кросс-проверка вместо основного отчёта }.
  */
 export async function runStand(options = {}) {
   const worldName = options.world ?? 'a29';
@@ -2370,7 +2383,8 @@ export async function runStand(options = {}) {
   const surface = getWorldSurface(worldName);
   const cellCache = new Map();
   const rows = [];
-  const cells = world.cells ?? CONTROL_CELLS;
+  const explicitCells = validateCells(options.cells);
+  const cells = explicitCells ?? CONTROL_CELLS;
   for (const cell of cells) {
     rows.push(...await measureCell(grid, surface, world, cell, radiusM, cellCache, options));
   }
@@ -2385,6 +2399,9 @@ export async function runStand(options = {}) {
     radiusM,
     canonicalV: CANONICAL_V,
     controlCells: [...cells],
+    // true — прогон по явно запрошенному списку кросс-проверки (`A17_CELLS`),
+    // а не основной отчёт по контрольным ячейкам владельца.
+    crossCheck: explicitCells !== null,
     riverCarveSource: RIVER_CARVE_SOURCE,
     thresholds: { ...THRESHOLDS },
     globeVerticalExaggeration,
@@ -2453,7 +2470,7 @@ if (invokedDirectly) {
         hypsoReferencePct: options.hypsoReferencePct,
         gate: options.gate,
       })
-    : await runStand(options);
+    : await runStand(options.crossCheckCells ? { ...options, cells: A17_CELLS } : options);
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));
   } else if (options.flatFixture) {
@@ -2463,7 +2480,8 @@ if (invokedDirectly) {
       console.log(`Красные метрики: ${report.summary.failedMetrics.join(', ')}`);
     }
   } else {
-    console.log(`STAND_LOCAL_MAP мир=${report.worldLabel} radiusM=${report.radiusM} v=${report.canonicalV}`);
+    const mode = report.crossCheck ? ' cells=cross-check' : '';
+    console.log(`STAND_LOCAL_MAP мир=${report.worldLabel}${mode} radiusM=${report.radiusM} v=${report.canonicalV}`);
     console.log(formatTable(report.rows, report.summary));
     if (report.globeVerticalExaggeration) {
       console.log(`Вертикальное преувеличение глобуса (без порога): ${report.globeVerticalExaggeration.detail}`);
