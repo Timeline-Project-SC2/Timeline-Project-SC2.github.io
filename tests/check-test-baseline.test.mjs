@@ -9,11 +9,11 @@
       `--test-reporter=tap` добавляется один раз, список файлов не дублируется
       и совпадает с файлами самого скрипта (единственный источник — package.json).
    2. Зелёная пара прогонов: прогон 1 — ровно реестровые `not ok`; прогон 2 —
-      0 `not ok`, `N2 = N1 − 8`; выход 0 и итоговая строка карантина.
+      0 `not ok`, `N2 = N1 − N` (N — число записей реестра); выход 0 и итоговая строка карантина.
    3. Красный «новое имя» в прогоне 1: выход 1 и секция «НОВЫЕ ПАДЕНИЯ:».
    4. Красный «устаревшее имя реестра»: выход 1 и секция «КАРАНТИН НЕ ПРИМЕНЁН».
    5. Красный «`not ok` в карантинном прогоне»: выход 1, та же секция.
-   6. Красный «арифметика `N2 ≠ N1 − 8`» (широкий/сломанный паттерн): выход 1.
+   6. Красный «арифметика `N2 ≠ N1 − N`» (широкий/сломанный паттерн): выход 1.
    7. Красный «крэш» любого из двух прогонов: выход 1, сообщение с номером прогона.
    8. Экранирование спецсимволов TAP-имён (`()#·≤%`, кириллица) и якоря `^…$`:
       паттерн строится из полного имени и не матчит частичное.
@@ -21,14 +21,14 @@
       `--test-skip-pattern`), отсутствие обоих — `null`, а не молчаливый пропуск.
   10. Форматы TAP: плоский и вложенный; раскодирование `\#43533` → `#43533`.
   11. Гигиена реестра `tools/known-test-failures.json`: блок `meta` (намеренность,
-      дата 2026-10-26, ссылки `S8-Q1`/`CI-2`, условие снятия), 8 записей
+      дата 2026-10-26, ссылки `S8-Q1`/`CI-2`, условие снятия), текущий состав записей
       планетарного контура с `reason`, файлы существуют, имён сектора и атласа нет.
 
    Запуск: node --test tests/check-test-baseline.test.mjs
 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,6 +44,7 @@ import {
   detectSkipFlag,
   escapeTapPattern,
   evaluateGuard,
+  findUnlistedTestFiles,
   loadBaseline,
   loadRegistry,
   parseTap,
@@ -342,7 +343,7 @@ test('сравнение с реестром: matched, новые и устар�
   assert.equal(comparison.matched, 1);
 });
 
-test('гигиена реестра: блок meta намеренного карантина, 8 записей с reason, файлы на месте', () => {
+test('гигиена реестра: блок meta намеренного карантина, записи с reason, файлы на месте', () => {
   assert.match(registry.meta.purpose, /намеренный временный карантин/);
   assert.equal(registry.meta.date, '2026-10-26', 'дата решения владельца');
   assert.ok(registry.meta.references.some((ref) => ref.includes('S8-Q1')), 'ссылка на пункт S8-Q1');
@@ -350,7 +351,11 @@ test('гигиена реестра: блок meta намеренного кар
   assert.match(registry.meta.removal, /починить/);
   assert.match(registry.meta.removal, /S8-Q1/);
 
-  assert.equal(baseline.length, 8, 'в карантине ровно 8 записей');
+  // UP-1: реестр не расширяется; после починки записи удаляются тем же PR.
+  // Верхняя граница — исходные восемь падений S8-Q1, нижняя — текущий долг m.14.
+  assert.ok(baseline.length >= 1, 'в карантине есть хотя бы один подтверждённый долг');
+  assert.ok(baseline.length <= 8, 'реестр не расширен сверх восьми падений S8-Q1');
+  assert.equal(registry.meta.progress.length > 0, true, 'в meta отражён прогресс починки');
   for (const entry of baseline) {
     assert.equal(entry.contour, 'планетарный', `${entry.name}: контур планетарный`);
     assert.ok(existsSync(path.join(ROOT, entry.file)), `${entry.name}: файл ${entry.file} существует`);
@@ -360,4 +365,24 @@ test('гигиена реестра: блок meta намеренного кар
     assert.ok(entry.reason.trim().length > 10, `${entry.name}: поле reason объясняет долг`);
   }
   assert.equal(new Set(baseline.map((entry) => entry.name)).size, baseline.length, 'имена в реестре не повторяются');
+});
+
+test('UP-1: новый тестовый файл не теряется — список test:raw обязан покрывать tests/', () => {
+  const listed = testFiles(buildTestCommand(pkg).args);
+  // Каждый файл из каталога tests/ со суффиксом .test.* присутствует в списке.
+  const unlisted = findUnlistedTestFiles(
+    [...new Set([...listed.map((file) => path.basename(file)), 'tmp-new.test.mjs', 'tmp-new.test.js', 'note.txt'])],
+    listed,
+  );
+  assert.deepEqual(
+    unlisted,
+    [path.normalize('tests/tmp-new.test.js'), path.normalize('tests/tmp-new.test.mjs')],
+    'файл на диске без строки в test:raw должен попадать в красноту стража',
+  );
+  assert.deepEqual(findUnlistedTestFiles([], []), [], 'пустой каталог — нечего терять');
+  // Реальный каталог: все файлы .test.* уже учтены в scripts["test:raw"].
+  const onDisk = readdirSync(path.join(ROOT, 'tests'));
+  assert.ok(onDisk.some((name) => /\.test\.m?js$/.test(name)), 'в tests/ есть тестовые файлы');
+  assert.deepEqual(findUnlistedTestFiles(onDisk, listed), [],
+    'все существующие тестовые файлы перечислены в test:raw');
 });

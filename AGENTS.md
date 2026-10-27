@@ -74,7 +74,8 @@ npm run lint                                    # проверка ESLint по �
 npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
 
 # Модульные и интеграционные тесты (Node.js и Python)
-npm test                                        # явный прогон всех 35 тестовых файлов Node (--test, последовательно: --test-concurrency=1)
+npm test                                        # страж карантина: два прогона 37 файлов Node (--test-concurrency=1), зелёный при точечном карантине
+npm run test:raw                                # тот же полный набор без фильтрации — аварийный люк и единственный список файлов
 npm run test:py                                 # прогон Python-тестов (unittest discover -s tests -p 'test_*.py')
 
 # Верификация публикации, контракта планет и синхронизации данных
@@ -96,7 +97,8 @@ git diff --check                                # проверка отсутс�
    - Держать параллельные `.js`-монолиты или дублирующие реализации рендереров и воркеров запрещено.
 2. **Единые контракты и шаблоны:**
    - Контракт профилей планет (`src/contracts/planet-generation-contract.json`), каноническая
-     сетка `c100-soft-v2` (И-1, И-2), сшивка локальной карты 7 ячеек (И-3) и FX-сокет глобуса (И-5, И-6)
+     сетка `v=128` с полем высот `c100-soft-v3` (И-1, И-2; контракт принимает v1/v2/v3, профили по умолчанию — v2),
+     сшивка локальной карты 7 ячеек (И-3) и FX-сокет глобуса (И-5, И-6)
      подробно регламентированы в [`src/AGENTS.md`](src/AGENTS.md) и [`docs/CHANGE_REQUEST_PLAN.md`](docs/CHANGE_REQUEST_PLAN.md).
    - Общая разметка `/sector/` и `/minimal/` правится только в `templates/atlas-shell.html`,
      а сборочный конвейер `.publish/` — в модулях `tools/vite/*` с контекстом `PublishPipelineState`

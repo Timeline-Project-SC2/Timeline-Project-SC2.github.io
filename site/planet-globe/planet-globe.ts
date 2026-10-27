@@ -18,6 +18,26 @@ import { verifyGenerationKey } from '../shared/planet-generation-contract.ts';
 import type { PlanetGenerationProfileInput } from '../shared/planet-generation-contract.ts';
 import type { GeographyProfileInput } from '../shared/planet-geography.ts';
 import { createLocalMapQuickNav } from './local-map-quick-nav.ts';
+// UP-1 §3.3: чистая логика камеры вынесена в отдельный модуль; страница
+// передаёт ему только числа вёрстки/участка и держит состояние камеры у себя.
+import {
+  LOCAL_HEX_STEP_RATIO,
+  LOCAL_MAP_FOV,
+  LOCAL_REBASE_SETTLE_EPS_M,
+  LOCAL_REBASE_SETTLE_MS,
+  LOCAL_REST_YAW,
+  cameraAnimFrame,
+  cameraDistanceForWidthKm as cameraDistanceForWidthCore,
+  cameraEye,
+  cameraPitchForWidthKm,
+  canvasAspectRatio as localCanvasAspectOf,
+  cloneLocalCameraState,
+  defaultLocalCameraTarget as defaultLocalCameraTargetCore,
+  needsRebaseSettle,
+  rebaseLocalCameraState,
+  rebaseResidualM,
+} from './local-camera.ts';
+import type { LocalCameraAnim, LocalCameraContext, LocalCameraState } from './local-camera.ts';
 import type { LocalMapQuickNav, QuickNavHintInput } from './local-map-quick-nav.ts';
 import type {
   ColorModeMessage,
@@ -56,6 +76,10 @@ import {
   TERRAIN_VERTEX_SHADER,
 } from '../../src/local-map/local-map-shaders.ts';
 
+// Публичные имена страницы сохраняются: ре-бейзинг и шаг гекса ре-экспортируются
+// из чистого модуля камеры (паритет экспортов И-6).
+export { LOCAL_HEX_STEP_RATIO, rebaseLocalCameraState };
+
 type Stage8StructureRenderer = StructureRenderer & {
   enqueueWorkerData?: (data: LocalMapWorkerResponse, budgetMs?: number) => void;
   processPendingUpload?: (budgetMs?: number) => boolean;
@@ -76,38 +100,12 @@ type Stage8StructureRenderer = StructureRenderer & {
 
 export type { LocalMapQuickNav, QuickNavHintInput };
 
-/** Stage-8: анимация локальной камеры (Dive-in, смена масштаба, сглаживание
- *  остатка после ре-бейзинга). Stage-8.7: перелётов между гексами больше нет. */
-interface LocalCameraAnim {
-  startAt: number;
-  durationMs: number;
-  fromYaw: number;
-  toYaw: number;
-  fromPitch: number;
-  toPitch: number;
-  fromDist: number;
-  toDist: number;
-  fromTarget: LocalVec3;
-  toTarget: LocalVec3;
-  /** Stage-8.2: плавная кривая easeInOutCubic для двухфазного спуска
-   *  (по умолчанию — easeOutCubic для перелётов внутри локальной карты). */
-  easeInOut?: boolean;
-}
-
 /** Палитра атмосферы планетарного горизонта (Stage-8.3): светлая дневная горная дымка. */
 const LOCAL_HORIZON_COLOR: readonly [number, number, number] = [0.76, 0.82, 0.88];
 const LOCAL_SKIRT_FOG_COLOR: readonly [number, number, number] = [0.66, 0.74, 0.82];
-/** Рабочий панорамный наклон камеры локальной карты (Stage-8.3: ~17.8°). */
-const LOCAL_REST_PITCH = 0.31;
-/**
- * Stage-8.6: азимут покоя локальной камеры строго на настоящий Север (+Y).
- * Вектор взгляда камеры равен `(-cos(yaw), -sin(yaw))` в координатах
- * `(east, north) = (+X, +Y)`, поэтому при `yaw = -π/2` взгляд направлен в `(0, +1)`:
- * глаз стоит на Юге и смотрит на Север. Верх кадра = Север (`С`), право = Восток (`В`),
- * лево = Запад (`З`), низ = Юг (`Ю`) — экран 1-в-1 совпадает с подписями
- * `С / СВ / В / ЮВ / Ю / ЮЗ / З / СЗ` кнопок «СОСЕДИ PATCH7» и с ориентацией глобуса.
- */
-const LOCAL_REST_YAW = -Math.PI / 2;
+/* Stage-8.3/8.6: наклон покоя (`LOCAL_REST_PITCH`) и азимут покоя
+   (`LOCAL_REST_YAW`, верх кадра = Север) теперь живут в `local-camera.ts`
+   вместе с остальной чистой логикой камеры. */
 /** Stage-8.2: фаза 1 (подлёт глобуса к гексу) удерживается 320 мс, после чего
  *  сцена проявляется и камера начинает спуск до уровня участка. */
 const LOCAL_DIVE_REVEAL_DELAY_MS = 320;
@@ -128,24 +126,10 @@ const LOCAL_DIVE_ANIM_MS = 1150;
  * дистанцией/наклоном камеры; его ступени — доли радиуса участка.
  */
 const LOCAL_PATCH_BASE_RADIUS_M = GLOBE_CELL_SCALE.strategicPatchRadiusM;
-/**
- * Stage-8.7: шаг центров соседних гексов `d_hex = 1.15 · R_patch` — та же
- * величина, что у решётки Patch7/юбки (`SKIRT_HEX_SPACING_RATIO` воркера).
- * W24: отношение берётся из общей таблицы масштабов, чтобы шаг глобуса и
- * шаг локальной карты не разъезжались.
- * Переход между гексами переносит точку прицела ровно на этот шаг, поэтому
- * мировая точка взгляда не смещается.
- */
-export const LOCAL_HEX_STEP_RATIO = GLOBE_CELL_SCALE.strategicHexStepRatio;
-/**
- * Stage-8.7: длительность сглаживания остаточного рассогласования камеры после
- * ре-бейзинга. Точный ре-бейзинг оставляет нулевой остаток, поэтому в штатном
- * переходе камера не двигается вовсе; ограничение в 220 мс гарантирует, что
- * любой ненулевой остаток гасится короткой кривой easeOutCubic, а не перелётом.
- */
-const LOCAL_REBASE_SETTLE_MS = 220;
-/** Stage-8.7: порог остатка (м), ниже которого сглаживание не запускается. */
-const LOCAL_REBASE_SETTLE_EPS_M = 0.25;
+/* Stage-8.7: шаг ре-бейзинга `d_hex = 1.15 · R_patch` (`LOCAL_HEX_STEP_RATIO`),
+   длительность settle-перехода (`LOCAL_REBASE_SETTLE_MS`) и порог остатка
+   (`LOCAL_REBASE_SETTLE_EPS_M`) вынесены в `local-camera.ts`; `LOCAL_HEX_STEP_RATIO`
+   по-прежнему экспортируется страницей (паритет экспортов И-6). */
 
 interface LocalMapPrograms {
   terrainProgram: WebGLProgram;
@@ -442,7 +426,6 @@ function escapeHtml(s: unknown): string {
 }
 
 const LOCAL_MAP_SCALE_STEPS = [1.2, 2.5, 5, 10, 20, 39, 78, 156, 312, 625, 1250] as const;
-const LOCAL_MAP_FOV = 50 * Math.PI / 180;
 type LocalVec3 = [number, number, number];
 type LocalPatchCell = WorkerPatchReadyResponse['patch']['cells'][number];
 
@@ -624,102 +607,74 @@ function resizeLocalMapCanvas(): void {
   if (!gl) return;
   const rect = els.localMapCanvas.getBoundingClientRect();
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.6);
-  const width = Math.max(1, Math.round(rect.width * pixelRatio));
-  const height = Math.max(1, Math.round(rect.height * pixelRatio));
-  if (els.localMapCanvas.width !== width || els.localMapCanvas.height !== height) {
-    els.localMapCanvas.width = width;
-    els.localMapCanvas.height = height;
+  const { width, height } = computeLocalCanvasPixelSize(rect, pixelRatio);
+  setLocalCanvasPixelSize(els.localMapCanvas, width, height, gl);
+}
+
+/** Размер канваса участка в физических пикселях — чистая формула (UP-1 §3.3). */
+function computeLocalCanvasPixelSize(
+  rect: { width: number; height: number },
+  pixelRatio: number,
+): { width: number; height: number } {
+  return {
+    width: Math.max(1, Math.round(rect.width * pixelRatio)),
+    height: Math.max(1, Math.round(rect.height * pixelRatio)),
+  };
+}
+
+/** Переносит размер в DOM-канвас и viewport WebGL, если он реально изменился. */
+function setLocalCanvasPixelSize(
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+  gl: WebGL2RenderingContext,
+): void {
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
     gl.viewport(0, 0, width, height);
   }
 }
 
 /**
- * Stage-8.5.2: равномерная логарифмическая шкала селектора «Видимая ширина»
- * по 11 ступеням (1.2 … 1250 км) — шаги 0.0 … 1.0 без мёртвых зон выше 70 км.
+ * Контекст камеры из вёрстки и активного участка — единственное, что страница
+ * добавляет к чистой логике из `local-camera.ts`. Соотношение сторон читается
+ * на каждом вызове: канвас меняет размер при ресайзе, и дистанция кадра
+ * по-прежнему должна попадать в текущую форму.
  */
-function scaleStep01(widthKm: number): number {
-  const safeKm = Math.max(1.2, Number(widthKm) || 1.2);
-  return clampLocal(Math.log2(safeKm / 1.2) / Math.log2(1250 / 1.2), 0, 1);
-}
-
-/**
- * Stage-8.5.2: дистанция камеры по выбранной видимой ширине `widthKm` без
- * мёртвого потолка на 55 км — каждая из 11 ступеней селектора ощутимо
- * меняет высоту камеры (≈×1.47 за шаг), а максимальная дистанция остаётся
- * ниже localMaxCameraDistance().
- */
-function cameraDistanceForWidthKm(widthKm: number): number {
+function localCameraContext(): LocalCameraContext {
   const rect = els.localMapCanvas.getBoundingClientRect();
   const aspect = rect.height > 0 ? rect.width / rect.height : 1;
-  const fit = Math.max(0.45, Math.min(1, aspect || 1));
-  const u = scaleStep01(widthKm);
-  const baseUnit = (localMapRadiusM * 0.44) / (Math.tan(LOCAL_MAP_FOV / 2) * fit);
-  const minCloseDist = Math.max(localMinCameraDistance(), baseUnit * 0.24); // ~566 м при 1,2 км (внутри долины у построек)
-  const maxOverviewDist = baseUnit * 11.2; // ~26,4 км при 1250 км (весь 10-кольцевой диск в кадре, ниже localMaxCameraDistance = 35 км)
-  return minCloseDist * Math.pow(maxOverviewDist / minCloseDist, u);
+  return {
+    aspect,
+    radiusM: localMapRadiusM,
+    minCloseDistanceM: localMinCameraDistance(),
+  };
 }
 
 /**
- * Stage-8.5.2: целевой наклон камеры по видимой ширине без потолка на 39 км.
- * От LOCAL_REST_PITCH у долины (1.2 км) до 0.76 рада на обзоре 1250 км.
+ * Stage-8.5.2: дистанция камеры по видимой ширине — расчёт целиком в
+ * `cameraDistanceForWidthKm` (`local-camera.ts`), страница подставляет только
+ * соотношение сторон канваса и физический радиус участка.
  */
-function cameraPitchForWidthKm(widthKm: number): number {
-  const u = scaleStep01(widthKm);
-  return LOCAL_REST_PITCH + (0.76 - LOCAL_REST_PITCH) * Math.pow(u, 0.85);
+function cameraDistanceForWidthKm(widthKm: number): number {
+  return cameraDistanceForWidthCore(widthKm, localCameraContext());
 }
 
 /**
- * Stage-8.5.2: каноническая точка прицела локальной камеры — чуть впереди по
- * текущему yaw от центра heightfield и чуть выше уровня долины. Смещение
- * вперёд сужается с ростом ширины, чтобы при удалении камеры прицеливать
- * центр кадра в саму долину, а не за её край.
+ * Stage-8.5.2: каноническая точка прицела — высота центра heightfield читается
+ * из текущих данных участка, вся геометрия смещения считается в модуле.
  */
 function defaultLocalCameraTarget(yaw: number, widthKm = localMapWidthKm): LocalVec3 {
   const hf = localMapData?.heightfield;
   const res = Math.round(Math.sqrt(hf?.length || 0));
   const rawCenterZ = hf && res > 0 ? Number(hf[(res >> 1) * res + (res >> 1)] || 0) : 0;
-  const centerZ = Number.isFinite(rawCenterZ) ? rawCenterZ : 0;
-  const u = scaleStep01(widthKm);
-  const forwardOffset = localMapRadiusM * 0.14 * (1 - 0.65 * u);
-  return [
-    -Math.cos(yaw) * forwardOffset,
-    -Math.sin(yaw) * forwardOffset,
-    centerZ + Math.max(14, localMapRadiusM * 0.025),
-  ];
+  return defaultLocalCameraTargetCore(yaw, widthKm, localMapRadiusM, rawCenterZ);
 }
 
-/**
- * Stage-8.7: ре-бейзинг камеры при подмене патча.
- *
- * Локальная система координат каждого участка привязана к центру своего гекса,
- * поэтому при переходе на соседа меняется начало координат: центр нового гекса
- * лежит в старой системе на расстоянии `d_hex = 1.15 · R_patch` вдоль азимута
- * перехода `azimuth = atan2(east, north)`. Функция переносит состояние камеры в
- * новую систему так, чтобы МИРОВАЯ точка прицела и ракурс остались неизменными:
- * к `target` прибавляется вектор `-d_hex · (sin azimuth, cos azimuth)` (старый
- * центр в координатах нового гекса), а `yaw`/`pitch`/`distance` не меняются —
- * пользовательский ракурс сохраняется непрерывно.
- *
- * Функция чистая (без обращения к состоянию модуля), чтобы её можно было
- * проверить тестом и переиспользовать в обе стороны перехода.
- */
-export function rebaseLocalCameraState(
-  prev: { target: LocalVec3; yaw: number; pitch: number; distance: number },
-  azimuth: number,
-  patchRadiusM: number,
-): { target: LocalVec3; yaw: number; pitch: number; distance: number } {
-  const stepM = LOCAL_HEX_STEP_RATIO * Math.max(0, patchRadiusM);
-  return {
-    target: [
-      prev.target[0] - Math.sin(azimuth) * stepM,
-      prev.target[1] - Math.cos(azimuth) * stepM,
-      prev.target[2],
-    ],
-    yaw: prev.yaw,
-    pitch: prev.pitch,
-    distance: prev.distance,
-  };
-}
+/* Stage-8.7: сам ре-бейзинг (`rebaseLocalCameraState`) живёт в
+   `local-camera.ts` и ре-экспортируется страницей — внешний контракт модуля
+   страницы не меняется, второй реализации нет. */
 
 function resetLocalCamera(): void {
   localCameraYaw = LOCAL_REST_YAW;
@@ -732,19 +687,6 @@ function resetLocalCamera(): void {
   // Stage-8.5: дистанция вычисляется через cameraDistanceForWidthKm() по
   // выбранной видимой ширине localMapWidthKm (физический R гекса фиксирован).
   localCameraDistance = cameraDistanceForWidthKm(localMapWidthKm);
-}
-
-function lerpLocal(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
-}
-
-/** Stage-8.2: симметричная плавная кривая спуска (мягкий вход и выход). */
-function easeInOutCubic(t: number): number {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
 /** Прерывает плавную анимацию камеры (любое ручное действие пользователя). */
@@ -778,21 +720,15 @@ function startLocalDiveInAnim(): void {
   };
 }
 
-/** Снимок состояния локальной камеры (для ре-бейзинга и сглаживания остатка). */
-interface LocalCameraState {
-  target: LocalVec3;
-  yaw: number;
-  pitch: number;
-  distance: number;
-}
-
+/** Снимок состояния локальной камеры (для ре-бейзинга и сглаживания остатка).
+ *  Тип `LocalCameraState` приходит из `local-camera.ts`. */
 function snapshotLocalCameraState(): LocalCameraState {
-  return {
-    target: [localCameraTarget[0], localCameraTarget[1], localCameraTarget[2]],
+  return cloneLocalCameraState({
+    target: localCameraTarget,
     yaw: localCameraYaw,
     pitch: localCameraPitch,
     distance: localCameraDistance,
-  };
+  });
 }
 
 function applyLocalCameraState(state: LocalCameraState): void {
@@ -812,18 +748,8 @@ function applyLocalCameraState(state: LocalCameraState): void {
  * он догоняется коротким сглаживанием вместо перелёта по процедурным точкам.
  */
 function startLocalRebaseSettleAnim(from: LocalCameraState, to: LocalCameraState): void {
-  const deltaTarget = Math.hypot(
-    to.target[0] - from.target[0],
-    to.target[1] - from.target[1],
-    to.target[2] - from.target[2],
-  );
-  const deltaYaw = Math.abs(to.yaw - from.yaw);
-  const deltaPitch = Math.abs(to.pitch - from.pitch);
-  const deltaDist = Math.abs(to.distance - from.distance);
-  if (deltaTarget < LOCAL_REBASE_SETTLE_EPS_M && deltaYaw < 1e-4
-      && deltaPitch < 1e-4 && deltaDist < 1e-3) {
-    return;
-  }
+  // Порог остатка и решение «нужен ли settle» — в `needsRebaseSettle`.
+  if (!needsRebaseSettle(from, to)) return;
   localCameraAnim = {
     startAt: performance.now(),
     durationMs: LOCAL_REBASE_SETTLE_MS,
@@ -890,7 +816,7 @@ function applyLocalCameraRebase(
   applyLocalCameraState(rebased);
   if (!Number.isFinite(prevClearanceM)) return;
   const terrainZ = localTerrainHeightAt(nextData, rebased.target[0], rebased.target[1], patchRadiusM);
-  const residualM = (rebased.target[2] - terrainZ) - prevClearanceM;
+  const residualM = rebaseResidualM(rebased, terrainZ, prevClearanceM);
   if (Math.abs(residualM) <= LOCAL_REBASE_SETTLE_EPS_M) return;
   startLocalRebaseSettleAnim(rebased, {
     target: [rebased.target[0], rebased.target[1], rebased.target[2] - residualM],
@@ -900,40 +826,33 @@ function applyLocalCameraRebase(
   });
 }
 
-/** Применяет очередной кадр анимации; по завершении снимает состояние. */
+/** Применяет очередной кадр анимации; по завершении снимает состояние.
+ *  Кривые и интерполяция — из `cameraAnimFrame` (`local-camera.ts`); страница
+ *  только раскладывает полученное состояние по своим переменным. */
 function applyLocalCameraAnim(now: number): void {
   const anim = localCameraAnim;
   if (!anim) return;
-  const t = clampLocal((now - anim.startAt) / anim.durationMs, 0, 1);
-  const e = anim.easeInOut ? easeInOutCubic(t) : easeOutCubic(t);
-  localCameraYaw = lerpLocal(anim.fromYaw, anim.toYaw, e);
-  localCameraPitch = lerpLocal(anim.fromPitch, anim.toPitch, e);
-  localCameraDistance = lerpLocal(anim.fromDist, anim.toDist, e);
-  localCameraTarget = [
-    lerpLocal(anim.fromTarget[0], anim.toTarget[0], e),
-    lerpLocal(anim.fromTarget[1], anim.toTarget[1], e),
-    lerpLocal(anim.fromTarget[2], anim.toTarget[2], e),
-  ];
-  if (t >= 1) localCameraAnim = null;
+  const frame = cameraAnimFrame(anim, now);
+  localCameraYaw = frame.state.yaw;
+  localCameraPitch = frame.state.pitch;
+  localCameraDistance = frame.state.distance;
+  localCameraTarget = frame.state.target;
+  if (frame.done) localCameraAnim = null;
 }
 
+/** Глаз локальной камеры — `cameraEye` из `local-camera.ts` по текущему состоянию. */
 function localCameraEye(): LocalVec3 {
-  const cosPitch = Math.cos(localCameraPitch);
-  const direction: LocalVec3 = [
-    cosPitch * Math.cos(localCameraYaw),
-    cosPitch * Math.sin(localCameraYaw),
-    Math.sin(localCameraPitch),
-  ];
-  return [
-    localCameraTarget[0] + direction[0] * localCameraDistance,
-    localCameraTarget[1] + direction[1] * localCameraDistance,
-    localCameraTarget[2] + direction[2] * localCameraDistance,
-  ];
+  return cameraEye({
+    yaw: localCameraYaw,
+    pitch: localCameraPitch,
+    distance: localCameraDistance,
+    target: localCameraTarget,
+  });
 }
 
 function localViewProjection(): Float32Array {
   if (!(localCameraDistance > 0)) resetLocalCamera();
-  const aspect = Math.max(0.1, els.localMapCanvas.width / Math.max(1, els.localMapCanvas.height));
+  const aspect = localCanvasAspect();
   const eye = localCameraEye();
   const view = lookAtLocal(eye, localCameraTarget, [0, 0, 1]);
   const near = Math.max(0.1, localMapRadiusM * 0.0001);
@@ -946,6 +865,15 @@ function localViewProjection(): Float32Array {
     localCameraDistance * 6 + localMapRadiusM * 8,
   );
   return multiplyLocalMat4(perspectiveLocal(LOCAL_MAP_FOV, aspect, near, far), view);
+}
+
+/**
+ * Соотношение сторон канваса участка с полом 0,1: при нулевой высоте
+ * (канвас скрыт на старте) проекция обязана оставаться конечной.
+ * Формула — в `localCanvasAspect` (`local-camera.ts`).
+ */
+function localCanvasAspect(): number {
+  return localCanvasAspectOf(els.localMapCanvas.width, els.localMapCanvas.height);
 }
 
 /** Ближайший по азимуту сосед в касательном кадре активного Patch7. */

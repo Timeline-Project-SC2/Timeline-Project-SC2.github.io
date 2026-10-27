@@ -118,7 +118,8 @@ npm run lint                                    # eslint site src
 npm run build                                   # tsc --noEmit + Vite (tools/vite/*) -> .publish/
 npm run verify:publish                          # маршруты, manifest, hashed-ассеты и паритет экспортов
 npm run verify:contract                         # Python ↔ TypeScript: пресеты, манифест, PG1 и оба формата approved_at
-npm test                                        # текущий main: все 11 тестовых файлов Node (--test, 105 тестов)
+npm test                                        # страж карантина S8-Q1: два прогона 37 файлов Node (--test-concurrency=1)
+npm run test:raw                                # полный набор без фильтрации: 445 тестов, 1 реестровое падение (m.14)
 npm run test:py                                 # Python unittest (test_planet_generation.py, test_sync.py)
 python3 tools/sync.py --strict                  # строгая валидация CSV, координат 0..mapSize, places и дублей ID
 python3 tools/build_assets.py --check           # свежесть собранных картинок

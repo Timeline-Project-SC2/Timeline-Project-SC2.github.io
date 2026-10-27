@@ -12,6 +12,7 @@ const { buildGlobeGeometry } = require('../site/shared/planet-globe-pack.ts');
 const LocalMapContract = require('../src/local-map/local-map-contract.ts');
 const LocalMapHeightfield = require('../src/local-map/local-map-heightfield.ts');
 const LocalMapWorker = require('../src/local-map/local-map-worker.ts');
+const LocalCamera = require('../site/planet-globe/local-camera.ts');
 
 const V = 16;
 const grid = GeodesicGrid.build(V);
@@ -692,12 +693,182 @@ test('W24: упаковка геометрии (pack) и CPU-полигоны б
   assert.ok(!/function reliefDelta/.test(packSrc), 'reliefDelta в pack не дублируется');
   assert.ok(!/\* 0\.02/.test(packSrc), 'в pack нет литералов вертикали');
 
-  // Страница берёт радиус участка и шаг камеры из таблицы, а не из литерала.
+  // Страница берёт радиус участка из таблицы, а не из литерала.
   const pageSrc = readFileSync(
     new URL('../site/planet-globe/planet-globe.ts', import.meta.url),
     'utf8',
   );
   assert.match(pageSrc, /const LOCAL_PATCH_BASE_RADIUS_M = GLOBE_CELL_SCALE\.strategicPatchRadiusM;/);
-  assert.match(pageSrc, /export const LOCAL_HEX_STEP_RATIO = GLOBE_CELL_SCALE\.strategicHexStepRatio;/);
   assert.ok(!/LOCAL_PATCH_BASE_RADIUS_M = 2500/.test(pageSrc), 'литерал 2 500 м убран');
+  // UP-1 §3.3: шаг камеры больше не проверяется по тексту страницы — он живёт
+  // в чистом модуле `local-camera.ts`, и там же проверяется числом: шаг
+  // ре-бейзинга равен `стратегический шаг × радиус`, без литерала 1,15.
+  assert.equal(
+    LocalCamera.LOCAL_HEX_STEP_RATIO,
+    GlobeShared.GLOBE_CELL_SCALE.strategicHexStepRatio,
+    'шаг камеры берётся из общей таблицы масштабов',
+  );
+  assert.equal(LocalCamera.LOCAL_HEX_STEP_RATIO, 1.15, 'отношение шага — 1,15');
+});
+
+test('UP-1: чистая камера локальной карты — ре-бейзинг сохраняет ракурс и мировую точку', () => {
+  const ratio = GlobeShared.GLOBE_CELL_SCALE.strategicHexStepRatio;
+  const radiusM = GlobeShared.GLOBE_CELL_SCALE.strategicPatchRadiusM; // 52,1 км
+  const stepM = ratio * radiusM;
+  const start = { target: [10, 20, 100], yaw: -Math.PI / 2, pitch: 0.31, distance: 600 };
+
+  for (const azimuth of [0, Math.PI / 2, Math.PI, -Math.PI / 2, 0.7, -2.4]) {
+    const rebased = LocalCamera.rebaseLocalCameraState(start, azimuth, radiusM);
+    // Ракурс пользователя переносится без изменений.
+    assert.equal(rebased.yaw, start.yaw, 'yaw не меняется');
+    assert.equal(rebased.pitch, start.pitch, 'pitch не меняется');
+    assert.equal(rebased.distance, start.distance, 'дистанция не меняется');
+    // Сдвиг — ровно шаг гекса против азимута перехода.
+    const expected = [
+      start.target[0] - Math.sin(azimuth) * stepM,
+      start.target[1] - Math.cos(azimuth) * stepM,
+      start.target[2],
+    ];
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(rebased.target[i] - expected[i]) < 1e-9,
+        `ось ${i}: сдвиг ${rebased.target[i] - start.target[i]} против ${expected[i] - start.target[i]}`);
+    }
+    // Мировая точка взгляда сохраняется: глаз камеры сдвигается тем же вектором,
+    // поэтому картинка не прыгает — камера просто переезжает в новое начало координат.
+    const eyeBefore = LocalCamera.cameraEye(start);
+    const eyeAfter = LocalCamera.cameraEye(rebased);
+    for (let i = 0; i < 2; i++) {
+      const shift = (i === 0 ? Math.sin(azimuth) : Math.cos(azimuth)) * stepM;
+      assert.ok(Math.abs((eyeAfter[i] + shift) - eyeBefore[i]) < 1e-9, `глаз по оси ${i} сохраняет мир`);
+    }
+    assert.ok(Math.abs(eyeAfter[2] - eyeBefore[2]) < 1e-9, 'высота глаза не меняется');
+    // Шаг совпадает с шагом решётки Patch7/юбки (`SKIRT_HEX_SPACING_RATIO`).
+    const shiftM = Math.hypot(rebased.target[0] - start.target[0], rebased.target[1] - start.target[1]);
+    assert.ok(Math.abs(shiftM - LocalMapWorker.SKIRT_HEX_SPACING_RATIO * radiusM) < 1e-6,
+      `шаг ре-бейзинга ${shiftM} против общего ${LocalMapWorker.SKIRT_HEX_SPACING_RATIO * radiusM}`);
+
+    // Два перехода в противоположные стороны возвращают точку прицела назад.
+    const back = LocalCamera.rebaseLocalCameraState(rebased, azimuth + Math.PI, radiusM);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(back.target[i] - start.target[i]) < 1e-9, `обратный переход по оси ${i}`);
+    }
+  }
+
+  // Нулевой и отрицательный радиус не двигают точку прицела вовсе.
+  for (const r of [0, -1]) {
+    const still = LocalCamera.rebaseLocalCameraState(start, 1.2, r);
+    assert.deepEqual(still.target, start.target, `радиус ${r} не сдвигает прицел`);
+  }
+  // Исходное состояние не мутируется: снимок камеры — копия массива.
+  assert.deepEqual(start.target, [10, 20, 100], 'аргумент ре-бейзинга не изменён');
+  const snapshot = LocalCamera.cloneLocalCameraState(start);
+  snapshot.target[0] = 999;
+  assert.deepEqual(start.target, [10, 20, 100], 'снимок камеры не разделяет массив с состоянием');
+});
+
+test('UP-1: чистая камера локальной карты — кривые перехода, остаток и кадр сцены', () => {
+  // Кривые: края закреплены, направление монотонное, середина easeInOut — 0,5.
+  assert.equal(LocalCamera.easeOutCubic(0), 0);
+  assert.equal(LocalCamera.easeOutCubic(1), 1);
+  assert.equal(LocalCamera.easeInOutCubic(0), 0);
+  assert.equal(LocalCamera.easeInOutCubic(1), 1);
+  assert.equal(LocalCamera.easeInOutCubic(0.5), 0.5);
+  assert.equal(LocalCamera.lerpLocal(10, 20, 0.25), 12.5);
+  let prev = -Infinity;
+  for (let i = 0; i <= 20; i++) {
+    const e = LocalCamera.easeOutCubic(i / 20);
+    assert.ok(e > prev, 'easeOutCubic монотонна');
+    prev = e;
+  }
+
+  // Кадр анимации: края совпадают с ключевыми точками, середина — между ними,
+  // завершение наступает ровно в `startAt + durationMs`.
+  const anim = {
+    startAt: 1000,
+    durationMs: 800,
+    fromYaw: -Math.PI / 2 - 0.24,
+    toYaw: -Math.PI / 2,
+    fromPitch: 1.32,
+    toPitch: 0.31,
+    fromDist: 3120,
+    toDist: 600,
+    fromTarget: [0, 0, 162.5],
+    toTarget: [0, 350, 62.5],
+    easeInOut: true,
+  };
+  const atStart = LocalCamera.cameraAnimFrame(anim, anim.startAt);
+  assert.deepEqual(atStart.state.target, anim.fromTarget);
+  assert.equal(atStart.state.distance, anim.fromDist);
+  assert.equal(atStart.done, false);
+  const mid = LocalCamera.cameraAnimFrame(anim, anim.startAt + anim.durationMs / 2);
+  assert.ok(mid.state.distance < anim.fromDist && mid.state.distance > anim.toDist,
+    'середина спуска между ключевыми дистанциями');
+  assert.ok(mid.state.pitch < anim.fromPitch && mid.state.pitch > anim.toPitch, 'наклон выравнивается');
+  assert.equal(mid.done, false);
+  const atEnd = LocalCamera.cameraAnimFrame(anim, anim.startAt + anim.durationMs);
+  assert.equal(atEnd.done, true, 'анимация завершается на последнем кадре');
+  assert.ok(Math.abs(atEnd.state.distance - anim.toDist) < 1e-9);
+  assert.ok(Math.abs(atEnd.state.yaw - anim.toYaw) < 1e-12);
+  // Время за пределами окна зажимается: кадр не «уезжает» дальше ключевых точек.
+  assert.equal(LocalCamera.cameraAnimFrame(anim, anim.startAt - 500).state.distance, anim.fromDist);
+  assert.equal(LocalCamera.cameraAnimFrame(anim, anim.startAt + 5000).state.distance, anim.toDist);
+
+  // Остаток после подмены патча и решение о сглаживании.
+  const rebased = { target: [0, 0, 100], yaw: 0, pitch: 0.31, distance: 600 };
+  assert.equal(LocalCamera.rebaseResidualM(rebased, 40, 55), 5);
+  assert.equal(LocalCamera.needsRebaseSettle(rebased, LocalCamera.cloneLocalCameraState(rebased)), false,
+    'точный ре-бейзинг не запускает сглаживание');
+  const nudged = LocalCamera.cloneLocalCameraState(rebased);
+  nudged.target[0] += 1;
+  assert.equal(LocalCamera.needsRebaseSettle(rebased, nudged), true, 'остаток 1 м гасится');
+  const tinyDist = LocalCamera.cloneLocalCameraState(rebased);
+  tinyDist.distance += 1e-4;
+  assert.equal(LocalCamera.needsRebaseSettle(rebased, tinyDist), false, 'дрожание дистанции ниже порога');
+  const nudgedDist = LocalCamera.cloneLocalCameraState(rebased);
+  nudgedDist.distance += 0.01;
+  assert.equal(LocalCamera.needsRebaseSettle(rebased, nudgedDist), true, 'сдвиг дистанции выше порога');
+});
+
+test('UP-1: чистая камера локальной карты — шкала ширины, точка прицела и кадр канваса', () => {
+  // Логарифмическая шкала по 11 ступеням 1,2 … 1250 км.
+  assert.equal(LocalCamera.scaleStep01(1.2), 0);
+  assert.equal(LocalCamera.scaleStep01(1250), 1);
+  assert.equal(LocalCamera.scaleStep01(0.4), 0, 'ниже нижней ступени шкала зажата');
+  assert.equal(LocalCamera.scaleStep01(99999), 1, 'выше верхней ступени шкала зажата');
+  const midWidth = Math.sqrt(1.2 * 1250);
+  assert.ok(Math.abs(LocalCamera.scaleStep01(midWidth) - 0.5) < 1e-12,
+    `середина логарифмической шкалы при ${midWidth} км`);
+
+  const context = { aspect: 16 / 9, radiusM: 2500, minCloseDistanceM: 2 };
+  let prevDist = 0;
+  let prevPitch = -Infinity;
+  for (let step = 0; step < 11; step++) {
+    const widthKm = 1.2 * Math.pow(1250 / 1.2, step / 10);
+    const dist = LocalCamera.cameraDistanceForWidthKm(widthKm, context);
+    assert.ok(dist > prevDist, `дистанция растёт на ступени ${step}: ${dist}`);
+    prevDist = dist;
+    const pitch = LocalCamera.cameraPitchForWidthKm(widthKm);
+    assert.ok(pitch > prevPitch, `наклон растёт на ступени ${step}: ${pitch}`);
+    prevPitch = pitch;
+  }
+  assert.ok(Math.abs(LocalCamera.cameraPitchForWidthKm(1.2) - LocalCamera.LOCAL_REST_PITCH) < 1e-12,
+    'у долины наклон равен панорамному');
+  assert.ok(Math.abs(LocalCamera.cameraPitchForWidthKm(1250) - 0.76) < 1e-12, 'на обзоре 0,76 рад');
+
+  // Точка прицела: смещение вперёд по yaw и пол высоты над центром поля.
+  const rest = LocalCamera.defaultLocalCameraTarget(LocalCamera.LOCAL_REST_YAW, 1.2, 2500, 10);
+  assert.ok(Math.abs(rest[0]) < 1e-9, 'на азимуте покоя смещение вперёд идёт на север');
+  assert.ok(rest[1] > 0, 'смещение вперёд положительно по северу');
+  assert.ok(Math.abs(rest[2] - (10 + 62.5)) < 1e-9, 'высота прицела — центр поля плюс пол 2,5 % радиуса');
+  // Нечисловой центр heightfield не ломает прицел.
+  assert.equal(LocalCamera.defaultLocalCameraTarget(LocalCamera.LOCAL_REST_YAW, 1.2, 2500, NaN)[2], 62.5);
+  // Нулевой радиус — смещения вперёд нет, остаётся пол 14 м.
+  const zeroRadius = LocalCamera.defaultLocalCameraTarget(0, 1.2, 0, 0);
+  assert.ok(Math.abs(zeroRadius[0]) < 1e-12 && Math.abs(zeroRadius[1]) < 1e-12, 'нулевой радиус — без сноса');
+  assert.equal(zeroRadius[2], 14, 'нулевой радиус — только пол высоты прицела');
+
+  // Кадр канваса: скрытый канвас (0 × 0) не даёт нулевого отношения сторон.
+  assert.equal(LocalCamera.canvasAspectRatio(0, 0), 0.1);
+  assert.equal(LocalCamera.canvasAspectRatio(1920, 1080), 1920 / 1080);
+  assert.equal(LocalCamera.canvasAspectRatio(50, 1000), 0.1);
 });
