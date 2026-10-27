@@ -40,6 +40,7 @@
 - Систематические ошибки: [`docs/registers/errors-systemic.md`](registers/errors-systemic.md).
 - Баги среды и контрактов: [`docs/registers/README.md`](registers/README.md).
 - Текущая волна: [`docs/agents_task_orchestration/agents_task_orchestration.md`](agents_task_orchestration/agents_task_orchestration.md).
+- Упрощение документации, тестов и кода: [карточка `UP-1`](agents_task_orchestration/wave_cards/UP-1.md) — проект, не запущена.
 
 ## Главное правило
 
