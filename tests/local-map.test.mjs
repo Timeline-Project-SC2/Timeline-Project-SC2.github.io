@@ -325,15 +325,34 @@ test('Stage-8.10b: контракт не тащит ядро на верхнем
     'ядро поднимается динамическим импортом внутри createPatchFieldSampler',
   );
 
+  // Переснято под поле c100-soft-v3 (W28b, PR #235): версия географии поднята
+  // `c100-soft-v1` → `c100-soft-v3` намеренно, контракт
+  // `src/contracts/planet-generation-contract.json` принимает v1/v2/v3,
+  // default остаётся `c100-soft-v2` (docs/stages/stage-08/notes/w28-field-results.md §7).
+  // Смысл проверки не изменился: constants-модуль и объект PlanetGeography
+  // отдают ОДНУ И ТУ ЖЕ действующую версию, а не историческую.
   const constants = require('../site/shared/planet-geography-constants.ts');
   assert.equal(constants.EARTH_CANONICAL_V, 128);
-  assert.equal(constants.GEOGRAPHY_VERSION, 'c100-soft-v1');
+  assert.equal(constants.GEOGRAPHY_VERSION, 'c100-soft-v3');
+  const contractJson = JSON.parse(readFileSync(
+    new URL('../src/contracts/planet-generation-contract.json', import.meta.url),
+    'utf8',
+  ));
+  assert.ok(
+    contractJson.supported_versions.geography_version.includes(constants.GEOGRAPHY_VERSION),
+    'действующая версия географии объявлена в контракте',
+  );
 
   const PlanetGeography = require('../site/shared/planet-geography.ts').default;
   assert.equal(PlanetGeography.EARTH_CANONICAL_V, 128, 'объект по-прежнему отдаёт EARTH_CANONICAL_V');
-  assert.equal(PlanetGeography.GEOGRAPHY_VERSION, 'c100-soft-v1', 'объект по-прежнему отдаёт GEOGRAPHY_VERSION');
+  assert.equal(
+    PlanetGeography.GEOGRAPHY_VERSION,
+    constants.GEOGRAPHY_VERSION,
+    'объект по-прежнему отдаёт действующую GEOGRAPHY_VERSION',
+  );
 
   // Сэмплер через контракт даёт тот же результат (побитово — golden-тест в stage8).
+  // Профиль запрашивает legacy v1: совместимость старых профилей обязана сохраняться.
   const sampler = await LocalMapContract.createPatchFieldSampler({ ...INPUT, geographyVersion: 'c100-soft-v1' });
   const probe = [0.31, -0.52, 0.79];
   const fields = sampler.sampleFields(probe[0], probe[1], probe[2]);

@@ -164,10 +164,43 @@ const A29_PROFILE = {
 /** Контрольные ячейки канонической сетки Земли v=128 (заданы владельцем). */
 const CONTROL_CELLS = [37488, 37518, 37548, 37519, 137363, 137390, 137436];
 
-/** Профи мира: профиль + seed сектора (те же значения, что в отчётах A-17/A-29). */
+/**
+ * Ячейки кросс-проверки мира A-17 — не измерение A-29 и не замена
+ * контрольного списка владельца (`CONTROL_CELLS` выше не менялся).
+ *
+ * Зачем отдельный список: кросс-проверка существует ровно для того, чтобы
+ * доказать измеримость речных метрик (m.1…m.3, m.7) там, где каноническая
+ * топология Patch7 несёт входы/выход русла. В мире A-17 прежние ячейки
+ * `#43533…#43537` после W28 (`c100-soft-v3`) ушли под воду физически —
+ * контраст поля углубил океан, — и все речные строки стали законными N/A,
+ * то есть проверка потеряла предмет измерения.
+ *
+ * `[847…851]` — та же семантика, что была у прежних ячеек: низкая прибрежная
+ * равнина с устьем реки (inlets 1/1/0/2/1, outlet у всех пяти, соседи
+ * «океан/берег/суша/река»). Значения подобраны по действующему полю
+ * `c100-soft-v3` и совпадают с A-17-диагностикой `tests/local-map-stage8.test.mjs`,
+ * где лежит та же пятёрка ячеек.
+ */
+const A17_CELLS = [847, 848, 849, 850, 851, 7, 39, 70, 100];
+
+/**
+ * Профи мира: профиль + seed сектора (те же значения, что в отчётах A-17/A-29)
+ * и список ячеек этого мира. `cells` у A-29 — контрольный список владельца;
+ * у A-17 — список кросс-проверки (см. `A17_CELLS`).
+ */
 const WORLDS = {
-  a17: { profile: A17_PROFILE, seed: 0x4f9f2cab, label: 'A-17 (korhal-iv)' },
-  a29: { profile: A29_PROFILE, seed: 0xa29b2026, label: 'A-29 (a29a29a29a29a29a)' },
+  a17: {
+    profile: A17_PROFILE,
+    seed: 0x4f9f2cab,
+    label: 'A-17 (korhal-iv)',
+    cells: A17_CELLS,
+  },
+  a29: {
+    profile: A29_PROFILE,
+    seed: 0xa29b2026,
+    label: 'A-29 (a29a29a29a29a29a)',
+    cells: CONTROL_CELLS,
+  },
 };
 
 const PLACE_ID = 2;
@@ -2337,7 +2370,8 @@ export async function runStand(options = {}) {
   const surface = getWorldSurface(worldName);
   const cellCache = new Map();
   const rows = [];
-  for (const cell of CONTROL_CELLS) {
+  const cells = world.cells ?? CONTROL_CELLS;
+  for (const cell of cells) {
     rows.push(...await measureCell(grid, surface, world, cell, radiusM, cellCache, options));
   }
   const summary = summarizeRows(rows);
@@ -2350,7 +2384,7 @@ export async function runStand(options = {}) {
     worldLabel: world.label,
     radiusM,
     canonicalV: CANONICAL_V,
-    controlCells: [...CONTROL_CELLS],
+    controlCells: [...cells],
     riverCarveSource: RIVER_CARVE_SOURCE,
     thresholds: { ...THRESHOLDS },
     globeVerticalExaggeration,
@@ -2363,6 +2397,7 @@ export async function runStand(options = {}) {
 
 export {
   CONTROL_CELLS,
+  A17_CELLS,
   THRESHOLDS,
   WORLDS,
   METRIC_TITLES,

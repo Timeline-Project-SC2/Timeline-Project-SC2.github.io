@@ -223,7 +223,13 @@ test('стенд: в мире A-17 речные метрики реально и
   }
   // Известный ответ карточки 18c: четыре океанские ячейки A-17 с входом
   // русла измеряются морской ветвью (глубина моря, а не каньон вреза).
-  for (const cell of [37488, 37518, 137363, 137436]) {
+  // Переснято под поле c100-soft-v3 (W28, PR #235): прежние #37488/#37518/
+  // #137363/#137436 в мире A-17 ушли под воду и потеряли топологию русла
+  // (inlets/outlet = 0), поэтому «океанское устье» на них больше не
+  // измеримо. Взяты первые четыре океанские ячейки действующего поля с
+  // входом русла: глубина моря 31,5…55,1 м — тот же класс, что 31,5…52,4 м
+  // в отчёте карточки 18c. Смысл проверки не изменился.
+  for (const cell of [7, 39, 70, 100]) {
     const row = depths.find((entry) => entry.cell === cell);
     assert.ok(row, `у ячейки ${cell} есть строка глубины`);
     assert.equal(row.threshold, '≥ 3 м', `ячейка ${cell}: порог морской ветви`);
@@ -656,30 +662,35 @@ test('W26b п.2: m.14 (measureLodConsistency) сравнивает одинак�
   }
 });
 
-test('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference', () => {
+test('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (27,49 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference', () => {
   const grid = GeodesicGrid.build(stand.CANONICAL_V);
   const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
   const direct = stand.measureHypsometry(surface);
   assert.equal(direct.totalCells, 163_842, 'всего ячеек сетки v=128: 163 842');
   assert.equal(direct.landCells, 16_596, 'наземных ячеек elev > seaLevel: 16 596');
+  // Переснято под поле c100-soft-v3 (W28, PR #235): пины p90/max и значение m.11
+  // взяты из замера того же PR — docs/stages/stage-08/notes/w28-field-results.md
+  // §4.3 (p90 0,4919616878, max 0,9981008172, hyps 27,49009207 %) и §Приложение.
+  // p10/p50 и число наземных ячеек W28 не сдвинул — они остались прежними.
+  // Порог 20…35 % и смысл проверки (доля суши в полосе) не менялись.
   assert.equal(Number(direct.p10.toFixed(4)), 0.2954, `p10 = 0,2954 (${direct.p10})`);
   assert.equal(Number(direct.p50.toFixed(4)), 0.3540, `p50 = 0,3540 (${direct.p50})`);
-  assert.equal(Number(direct.p90.toFixed(4)), 0.4685, `p90 = 0,4685 (${direct.p90})`);
-  assert.equal(Number(direct.maxH.toFixed(4)), 0.6600, `max = 0,6600 (${direct.maxH})`);
-  assert.equal(Number(direct.value.toFixed(2)), 45.93, `ожидаемое значение на v=128: 45,93 % (${direct.value})`);
-  assert.equal(direct.status, 'FAIL', '45,93 % вне полосы 20…35 % даёт FAIL');
-  assert.match(direct.detail, /p10 0,2954 \/ p50 0,3540 \/ p90 0,4685 \/ max 0,6600/);
+  assert.equal(Number(direct.p90.toFixed(4)), 0.492, `p90 = 0,4920 (${direct.p90})`);
+  assert.equal(Number(direct.maxH.toFixed(4)), 0.9981, `max = 0,9981 (${direct.maxH})`);
+  assert.equal(Number(direct.value.toFixed(2)), 27.49, `ожидаемое значение на v=128: 27,49 % (${direct.value})`);
+  assert.equal(direct.status, 'PASS', '27,49 % внутри полосы 20…35 %');
+  assert.match(direct.detail, /p10 0,2954 \/ p50 0,3540 \/ p90 0,4920 \/ max 0,9981/);
   assert.match(direct.detail, /суша 16596 из 163842/);
   assert.match(direct.detail, /ориентир: Земля 19,4 %, наш домен 28,1 %, прежний порог 35 %/);
 
-  // Во всех 7 строках отчёта m.11 равен 45.93 % и имеет порог 20…35 %.
+  // Во всех 7 строках отчёта m.11 равен 27.49 % и имеет порог 20…35 %.
   const m11Rows = report.rows.filter((r) => r.metric === stand.METRIC_TITLES.hypsometry);
   assert.equal(m11Rows.length, stand.CONTROL_CELLS.length);
   for (const row of m11Rows) {
     assert.equal(row.threshold, '20…35 %');
-    assert.equal(row.value, 45.93);
-    assert.equal(row.valueText, '45.93 %');
-    assert.equal(row.status, 'FAIL');
+    assert.equal(row.value, 27.49);
+    assert.equal(row.valueText, '27.49 %');
+    assert.equal(row.status, 'PASS');
     assert.match(row.detail, /суша 16596 из 163842/);
   }
 

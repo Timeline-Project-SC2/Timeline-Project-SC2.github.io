@@ -2403,6 +2403,21 @@ function goldenDigestOf(local, skirt) {
   return hash.digest('hex');
 }
 
+/**
+ * Golden-хэш локальной карты переснят ОДИН раз под поле c100-soft-v3
+ * (W28/W28b, PR #235) — второй раз после бампа `tools/planet_hash_fixtures.json`.
+ *
+ *   было: 51971e118707f641dba7f199ed2058964a1b44fb09c15a8b6461ba9dc3a438d1
+ *   стало: 3beaf8738a9e31c523fb71c4c34914d91a01133c8c4a9d22c6f4d36bedefa6b1
+ *
+ * Причина: W28 изменил рельеф канонических ячеек (суша `+5·d²` от пивота 0,40,
+ * океан `−0,65·d` от 0,12) и поднял версию поля до `c100-soft-v3`; фикстура
+ * `dryPatch` собирается из канонической поверхности v=16, поэтому высоты
+ * heightfield/юбки меняются законно. Рецепт генерации и воркер не менялись:
+ * прямой путь и ленивый чанк дают ОДИН и тот же новый хэш (это и проверяется
+ * вторым тестом), утечка деталей загрузчика исключена. Ссылка:
+ * docs/stages/stage-08/notes/w28-field-results.md §6.1.
+ */
 test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
@@ -2415,7 +2430,7 @@ test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово с
   const skirt = await Worker.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    '51971e118707f641dba7f199ed2058964a1b44fb09c15a8b6461ba9dc3a438d1',
+    '3beaf8738a9e31c523fb71c4c34914d91a01133c8c4a9d22c6f4d36bedefa6b1',
     'генерация локальной карты побайтово фиксирует согласованный стык A-17',
   );
 });
@@ -2436,7 +2451,7 @@ test('Stage-8.10b: ленивый чанк выставляет API глобус
   const skirt = await loaded.generateHorizonSkirt(request, local.heightfield);
   assert.equal(
     goldenDigestOf(local, skirt),
-    '51971e118707f641dba7f199ed2058964a1b44fb09c15a8b6461ba9dc3a438d1',
+    '3beaf8738a9e31c523fb71c4c34914d91a01133c8c4a9d22c6f4d36bedefa6b1',
     'генерация через ленивый чанк побайтово совпадает с golden-хэшем A-17',
   );
 });
@@ -2486,7 +2501,20 @@ test('Stage-8.10b: загрузчик страницы кэширует пром
 // строит каноническую v=128 поверхность seed=korhal-iv и печатает измерения.
 // ---------------------------------------------------------------------------
 
-const A17_CELLS = [43533, 43534, 43535, 43536, 43537];
+/**
+ * Контрольная пятёрка A-17 — низкая прибрежная равнина с устьем реки.
+ *
+ * Переснято под поле c100-soft-v3 (W28, PR #235): прежний диапазон
+ * `#43533…#43537` в этом мире физически ушёл под воду (контраст поля
+ * углубил океан: центры ячеек −0,29…−0,01 при seaLevel 0,085, у всех
+ * waterFraction = 1), поэтому «стык вода/суша» на них больше не
+ * диагностируется. `[847…851]` — та же семантика на действующем поле:
+ * суша у воды (вода у 4–6 из 6 соседей), входы/выход русла у четырёх
+ * ячеек из пяти, соседи различают «реку», «берег», «сушу» и «океан».
+ * Эта же пятёрка используется стендом `tools/stand_local_map.mjs`
+ * для кросс-проверки речных метрик мира A-17.
+ */
+const A17_CELLS = [847, 848, 849, 850, 851];
 const A17_RADIUS_M = 2500;
 const A17_PROFILE = {
   seedText: 'korhal-iv',
@@ -2594,7 +2622,7 @@ function a17NearestShore(skirt) {
   return nearest ?? { azimuthDeg: null, gapM: null, direction: 'берег не найден' };
 }
 
-test('A-17 diagnostic: числа стыка и берега для #43533…#43537', async () => {
+test('A-17 diagnostic: числа стыка и берега для #847…#851', async () => {
   const canonicalGrid = GeodesicGrid.build(128);
   const canonicalSurface = PlanetSurface.generateSurface(canonicalGrid, A17_PROFILE);
   const planetSpacingM = Worker.hexSpacingMeters(A17_PROFILE.radiusKm * 1000);
