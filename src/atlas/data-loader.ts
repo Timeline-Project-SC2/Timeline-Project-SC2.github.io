@@ -172,10 +172,8 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
   }
 
   /**
-   * Колонка `net_id` слоя сетей: целое число от 1, пустая ячейка — `null`
-   * (система не принадлежит ни одной сети). Нечисловой текст тоже даёт `null`:
-   * принадлежность сети — не повод ронять загрузку карты, а канал с такой
-   * строкой не построится и назовёт систему в `channelsFor`.
+   * Историческая колонка `net_id`: целое число от 1, иначе `null`.
+   * Данные сохранены для совместимости снимков; слой сетей больше не рисуется.
    */
   function netIdValue(value: unknown): number | null {
     var text = sheetValue(value);
@@ -185,9 +183,8 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
   }
 
   /**
-   * Колонка `net_confront_id` слоя сетей (`Z-3.8`): текст ячейки как есть,
-   * пустая ячейка — `null`. Формат `«N-M»` разбирает `faction-net.ts`: сюда
-   * проверки не дублируются, чтобы ошибка данных называлась в одном месте.
+   * Историческая колонка `net_confront_id`: текст ячейки как есть,
+   * пустая ячейка — `null`. Текущий рендерер её не использует.
    */
   function netConfrontValue(value: unknown): string | null {
     var text = sheetValue(value);

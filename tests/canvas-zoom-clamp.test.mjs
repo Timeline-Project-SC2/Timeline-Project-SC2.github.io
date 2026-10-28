@@ -32,7 +32,7 @@ const SAMPLE_TARGETS = [
   { name: 'Тарсонис', x: 4902, y: 5404 },
 ];
 
-function createStubCanvasContext() {
+function createStubCanvasContext(calls = []) {
   return new Proxy(
     {},
     {
@@ -40,7 +40,7 @@ function createStubCanvasContext() {
         if (prop === 'createRadialGradient') {
           return () => ({ addColorStop() {} });
         }
-        return () => {};
+        return (...args) => { calls.push([prop, ...args]); };
       },
       set() {
         return true;
@@ -105,10 +105,11 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
     fieldContextLost: false,
   };
 
+  const calls = [];
   const kernel = {
     doc: null,
     canvas: null,
-    ctx: createStubCanvasContext(),
+    ctx: createStubCanvasContext(calls),
     fieldCanvas: null,
     field: null,
     state,
@@ -172,7 +173,7 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
     }
   }
 
-  return { state, renderer, flushAnimationFrame, restoreGlobals };
+  return { state, renderer, flushAnimationFrame, restoreGlobals, calls };
 }
 
 /**
@@ -369,6 +370,33 @@ test('нижний упор minScale и пересчёт потолка при �
         assert.ok(distances.left > 0.39 && distances.right > 0.39);
       }
     }
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('контур рисуется целой кривой с clip даже без видимых вершин', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    h.state.sectorBounds = {
+      version: 1,
+      mapSize: 10000,
+      source: 'test',
+      bounds: [{
+        id: 'sector.outline', kind: 'sector', label: 'test',
+        style: { color: 'tactical', strokeWidth: 2, dash: [] },
+        points: [[0, 4000], [10000, 4000], [10000, 6000], [0, 6000], [0, 4000]],
+      }],
+    };
+    // Кадр вокруг части границы: все четыре исходные вершины вне кадра.
+    h.renderer.centerOn(5000, 4000, 1, false);
+    h.flushAnimationFrame(performance.now() + 1000);
+    const clipIndex = h.calls.findIndex(([name]) => name === 'clip');
+    assert.ok(clipIndex >= 0, 'контур обрезается контекстом по кадру');
+    const curveIndex = h.calls.findIndex(([name], index) => index > clipIndex && name === 'quadraticCurveTo');
+    assert.ok(curveIndex > clipIndex, 'отрисована кривая, хотя вершины вне кадра');
+    assert.ok(h.calls.some(([name], index) => index > curveIndex && name === 'closePath'));
+    assert.equal(h.calls.filter(([name], index) => index >= curveIndex && name === 'quadraticCurveTo').length, 4);
   } finally {
     h.restoreGlobals();
   }
