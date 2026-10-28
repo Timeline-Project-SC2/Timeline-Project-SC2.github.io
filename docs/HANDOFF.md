@@ -15,6 +15,7 @@
 | Что сделано в последних волнах и чем это закончилось | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Что вообще есть в репозитории и где что лежит | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
 | Что сделано по частям (тайлы, атлас, сектор) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Очередь и пробный порядок работы по сектору | [План следующей сессии](stages/stage-09-12-sector/todo.md) |
 | Состояние данных, синка и живых листов | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Что осталось проверить владельцу глазами | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Как устроен прицел и переход по областям | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
