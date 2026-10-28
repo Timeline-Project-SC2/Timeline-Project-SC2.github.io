@@ -1289,7 +1289,7 @@ const float STAR_GAIN = ${tuning.starGain.toFixed(6)};
 const float THREAD_AMPLITUDE = ${THREAD_AMPLITUDE.toFixed(6)};
 const float LOCAL_BACKGROUND_DENSITY = ${LOCAL_BACKGROUND_DENSITY.toFixed(6)};
 const float RIDGE_FINE_WEIGHTS[3] = float[3](${RIDGE_FINE_WEIGHTS.map((w) => w.toFixed(6)).join(', ')});
-const uint RIDGE_FINE_CHANNELS[3] = uint[3](${[CHANNEL_RIDGE_FINE, CHANNEL_RIDGE_FINE_2, CHANNEL_RIDGE_FINE_3].join(', ')}u);
+const uint RIDGE_FINE_CHANNELS[3] = uint[3](${[CHANNEL_RIDGE_FINE, CHANNEL_RIDGE_FINE_2, CHANNEL_RIDGE_FINE_3].map((channel) => `${channel}u`).join(', ')});
 const float DUST_WEIGHTS[2] = float[2](${DUST_OCTAVE_WEIGHTS.map((w) => w.toFixed(6)).join(', ')});
 
 const vec3 RAMP0 = vec3(${unitTriplet(ramp.colors[0])});
@@ -1626,11 +1626,13 @@ export function createSectorField(
   let lost = false;
   let runtime: GlRuntime | null = null;
   let context2d: CanvasRenderingContext2D | null = null;
-  let cachedFrame: {
-    readonly key: string;
-    readonly low: ImageData;
-    readonly full: ImageData | null;
-  } | null = null;
+  // Два прохода (фон и облака) должны переиспользоваться при неподвижной камере.
+  const cachedFrames = new Map<string, { readonly low: ImageData; readonly full: ImageData | null }>();
+  function cacheFrame(key: string, low: ImageData, full: ImageData | null): void {
+    cachedFrames.delete(key);
+    cachedFrames.set(key, { low, full });
+    if (cachedFrames.size > 2) cachedFrames.delete(cachedFrames.keys().next().value!);
+  }
   let offscreen: HTMLCanvasElement | null = null;
   let nativeScaleBroken = false;
   const cleanups: Array<() => void> = [];
@@ -1810,7 +1812,7 @@ export function createSectorField(
 
     const full = buildFrame(state);
     const key = cacheKey(style, state, full.width, full.height);
-    const cached = cachedFrame !== null && cachedFrame.key === key ? cachedFrame : null;
+    const cached = cachedFrames.get(key);
     const nativeUpscale = canUpscaleNative(ctx);
     const low = cached
       ? cached.low
@@ -1822,7 +1824,7 @@ export function createSectorField(
       if (canvas.width !== full.width) canvas.width = full.width;
       if (canvas.height !== full.height) canvas.height = full.height;
       if (upscaleNative(ctx, low, full.width, full.height)) {
-        cachedFrame = { key, low, full: null };
+        cacheFrame(key, low, null);
         return;
       }
     }
@@ -1836,7 +1838,7 @@ export function createSectorField(
     } catch {
       /* нет доступа к пикселям — тихий no-op, кадр рисует верхний слой */
     }
-    cachedFrame = { key, low, full: image };
+    cacheFrame(key, low, image);
   }
 
   return {
@@ -1869,7 +1871,7 @@ export function createSectorField(
       const current = runtime;
       runtime = null;
       context2d = null;
-      cachedFrame = null;
+      cachedFrames.clear();
       offscreen = null;
       if (current) {
         try {

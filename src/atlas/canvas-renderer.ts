@@ -17,6 +17,7 @@ import type {
 } from './config.ts';
 import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import { smoothPolyline } from './sector-bounds.ts';
+import { clipHalo } from './sector-halo-clip.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
 import type {
@@ -210,32 +211,22 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     return starCache;
   }
 
-  function drawSchematic(): void {
+  function drawSchematic(scene: SectorScene | null): void {
     const ctx = kernel.ctx!;
-    var size = kernel.data.mapSize();
-    var view = state.view;
-    var scale = view.scale;
-
     ctx.save();
     ctx.fillStyle = '#03060c';
     ctx.fillRect(0, 0, state.viewport.w, state.viewport.h);
 
-    // мягкие «облака» сектора, чтобы схема не выглядела пустой
-    var clouds = [
-      { x: 0.36, y: 0.30, r: 0.26, color: 'rgba(80,120,190,.16)' },
-      { x: 0.62, y: 0.58, r: 0.30, color: 'rgba(180,120,60,.12)' },
-      { x: 0.78, y: 0.30, r: 0.22, color: 'rgba(120,90,200,.10)' }
-    ];
-    clouds.forEach(function (cloud) {
-      var center = toScreen(cloud.x * size, cloud.y * size);
-      var radius = cloud.r * size * scale;
-      if (radius < 12) return;
-      var gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, radius);
-      gradient.addColorStop(0, cloud.color);
-      gradient.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(center.x - radius, center.y - radius, radius * 2, radius * 2);
-    });
+    // Резерв тоже использует контуры туманностей, а не несвязанные круги.
+    if (scene) {
+      ctx.fillStyle = 'rgba(80, 100, 180, .18)';
+      for (const primitive of scene.primitives) {
+        if (primitive.kind !== 'bounds' || primitive.boundsKind !== 'nebula') continue;
+        ctx.beginPath();
+        traceBounds(primitive);
+        ctx.fill();
+      }
+    }
 
     // звёздное поле
     var list = stars();
@@ -525,6 +516,33 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     };
   }
 
+  /** Одна геометрия для заливки туманности и её видимой границы. */
+  function traceBounds(bounds: SceneBounds): void {
+    const ctx = kernel.ctx!;
+    const path = smoothPolyline(
+      bounds.points.map(({ x, y }) => [x, y] as const),
+      bounds.boundsKind !== 'halo',
+    );
+    ctx.moveTo(path.start[0], path.start[1]);
+    for (const curve of path.curves) {
+      ctx.quadraticCurveTo(curve.control[0], curve.control[1], curve.end[0], curve.end[1]);
+    }
+    if (path.tail !== null) ctx.lineTo(path.tail[0], path.tail[1]);
+    if (path.closed) ctx.closePath();
+  }
+
+  /** Квадратичная кривая лежит внутри габарита своих исходных вершин. */
+  function boundsIntersectViewport(bounds: SceneBounds): boolean {
+    if (bounds.points.length < 2) return false;
+    let minX = Infinity; let maxX = -Infinity;
+    let minY = Infinity; let maxY = -Infinity;
+    for (const point of bounds.points) {
+      minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
+    }
+    return maxX >= 0 && maxY >= 0 && minX <= state.viewport.w && minY <= state.viewport.h;
+  }
+
   function drawBounds(bounds: SceneBounds): void {
     if (bounds.points.length < 2) return;
     const ctx = kernel.ctx!;
@@ -535,27 +553,29 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.lineWidth = Math.max(1, bounds.strokeWidth);
     ctx.setLineDash([...bounds.dash]);
 
-    // Обрезаем готовую кривую по кадру, не удаляя невидимые вершины заранее:
-    // иначе линия распадалась на несвязанные отрезки при глубоком зуме.
+    // Ограничиваем обводку кадром. Для пунктира дополнительно исключаем
+    // далёкие части кривой, сохраняя их длину в фазе штрихов.
     if (typeof ctx.rect === 'function' && typeof ctx.clip === 'function') {
       ctx.beginPath();
       ctx.rect(0, 0, state.viewport.w, state.viewport.h);
       ctx.clip();
     }
 
-    const path = smoothPolyline(
-      bounds.points.map(({ x, y }) => [x, y] as const),
-      bounds.boundsKind !== 'halo',
-    );
-    ctx.beginPath();
-    ctx.moveTo(path.start[0], path.start[1]);
-    for (var index = 0; index < path.curves.length; index += 1) {
-      var curve = path.curves[index]!;
-      ctx.quadraticCurveTo(curve.control[0], curve.control[1], curve.end[0], curve.end[1]);
+    if (bounds.boundsKind === 'halo' && bounds.dash.length > 0) {
+      const path = smoothPolyline(bounds.points.map(({ x, y }) => [x, y] as const), false);
+      const period = bounds.dash.reduce((sum, value) => sum + value, 0) * (bounds.dash.length % 2 ? 2 : 1);
+      for (const run of clipHalo(path, state.viewport.w, state.viewport.h)) {
+        ctx.lineDashOffset = period > 0 ? run.offset % period : 0;
+        ctx.beginPath();
+        ctx.moveTo(run.start[0], run.start[1]);
+        for (const curve of run.curves) ctx.quadraticCurveTo(curve.control[0], curve.control[1], curve.end[0], curve.end[1]);
+        ctx.stroke();
+      }
+    } else {
+      ctx.beginPath();
+      traceBounds(bounds);
+      ctx.stroke();
     }
-    if (path.tail !== null) ctx.lineTo(path.tail[0], path.tail[1]);
-    if (path.closed) ctx.closePath();
-    ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
   }
@@ -1048,6 +1068,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
     ctx.clearRect(0, 0, state.viewport.w, state.viewport.h);
 
+    // Сцена нужна до поля: её контуры являются маской облаков.
+    const scene = buildScene();
     const field = kernel.field;
     const fieldCanvas = kernel.fieldCanvas;
     if (
@@ -1058,26 +1080,42 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       state.viewport.w > 0 &&
       state.viewport.h > 0
     ) {
-      field.renderField({
+      const fieldState = {
         view: state.view,
         viewport: state.viewport,
         dpr: state.dpr,
         mapSize: kernel.data.mapSize(),
-      });
+      };
+      // Вне отмеченных туманностей — звёзды и спокойный фон без облачного шума.
+      field.renderField({ ...fieldState, edgeDist: 1 });
       if (fieldCanvas.width > 0 && fieldCanvas.height > 0) {
         ctx.imageSmoothingEnabled = true;
         if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(fieldCanvas, 0, 0, state.viewport.w, state.viewport.h);
+        const nebulae = scene?.primitives.filter((primitive): primitive is SceneBounds =>
+          primitive.kind === 'bounds' && primitive.boundsKind === 'nebula' && boundsIntersectViewport(primitive),
+        ) ?? [];
+        if (nebulae.length > 0) {
+          // Контур маски и обводка строятся одной и той же функцией; ограничение
+          // кадром выполняет Canvas, поэтому глубокий зум не теряет края.
+          ctx.save();
+          ctx.beginPath();
+          for (const nebula of nebulae) traceBounds(nebula);
+          ctx.clip();
+          field.renderField(fieldState);
+          ctx.drawImage(fieldCanvas, 0, 0, state.viewport.w, state.viewport.h);
+          ctx.restore();
+        }
       } else {
-        drawSchematic();
+        drawSchematic(scene);
       }
     } else {
-      drawSchematic();
+      drawSchematic(scene);
     }
 
     // Порядок слоёв: поле → контуры сектора → сетка →
-    // маркеры → подписи → апертуры. Сцена пересобирается в каждом кадре.
-    const scene = buildScene();
+    // маркеры → подписи → апертуры.
+
     if (scene) renderScene(scene, frameTime);
 
     drawTravelRoute(frameTime);
