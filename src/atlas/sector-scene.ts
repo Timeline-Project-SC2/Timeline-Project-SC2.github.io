@@ -24,7 +24,6 @@
 
 import { ADDRESS_TIERS, MAP_SIZE, addressOf, formatAddress, prefixOf } from './sector-address.ts';
 import type { AddressLetters } from './sector-address.ts';
-import { clipPolylineToViewport } from './sector-bounds.ts';
 import type { Point, SectorBounds } from './sector-bounds.ts';
 import type { LabelLayoutResult, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, LABEL_GAP, estimateLabelSize, layoutLabels } from './label-layout.ts';
@@ -508,15 +507,11 @@ export function boundsFor(
   if (sectorBounds === null || sectorBounds === undefined) return [];
   const frame = resolveViewport(viewport);
   const cam = resolveCamera(camera);
-  const boundsViewport = { width: frame.w, height: frame.h };
-  const screenCamera = { x: 0, y: 0, scale: 1 };
-
   return sectorBounds.bounds.map((item) => {
     const projected: Point[] = item.points.map(([wx, wy]) => {
       const point = worldToScreen(frame, cam, wx, wy);
       return [point.x, point.y] as const;
     });
-    const clipped = clipPolylineToViewport(projected, screenCamera, boundsViewport);
 
     return {
       kind: 'bounds' as const,
@@ -526,7 +521,7 @@ export function boundsFor(
       color: item.style.color,
       strokeWidth: item.style.strokeWidth,
       dash: [...item.style.dash],
-      points: clipped.map(([x, y]) => ({ x, y })),
+      points: projected.map(([x, y]) => ({ x, y })),
     };
   });
 }

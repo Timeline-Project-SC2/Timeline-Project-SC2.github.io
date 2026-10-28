@@ -16,6 +16,7 @@ import type {
   SystemRecord,
 } from './config.ts';
 import { layerFillAlpha, layerLineAlpha, markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
+import { smoothPolyline } from './sector-bounds.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
 import type {
@@ -596,13 +597,27 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.strokeStyle = bounds.color === 'tactical' ? theme.accent : theme.accent2;
     ctx.lineWidth = Math.max(1, bounds.strokeWidth);
     ctx.setLineDash([...bounds.dash]);
-    ctx.beginPath();
-    var first = bounds.points[0]!;
-    ctx.moveTo(first.x, first.y);
-    for (var index = 1; index < bounds.points.length; index += 1) {
-      var point = bounds.points[index]!;
-      ctx.lineTo(point.x, point.y);
+
+    // Обрезаем готовую кривую по кадру, не удаляя невидимые вершины заранее:
+    // иначе линия распадалась на несвязанные отрезки при глубоком зуме.
+    if (typeof ctx.rect === 'function' && typeof ctx.clip === 'function') {
+      ctx.beginPath();
+      ctx.rect(0, 0, state.viewport.w, state.viewport.h);
+      ctx.clip();
     }
+
+    const path = smoothPolyline(
+      bounds.points.map(({ x, y }) => [x, y] as const),
+      bounds.boundsKind !== 'halo',
+    );
+    ctx.beginPath();
+    ctx.moveTo(path.start[0], path.start[1]);
+    for (var index = 0; index < path.curves.length; index += 1) {
+      var curve = path.curves[index]!;
+      ctx.quadraticCurveTo(curve.control[0], curve.control[1], curve.end[0], curve.end[1]);
+    }
+    if (path.tail !== null) ctx.lineTo(path.tail[0], path.tail[1]);
+    if (path.closed) ctx.closePath();
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
