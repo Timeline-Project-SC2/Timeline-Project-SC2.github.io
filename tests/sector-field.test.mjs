@@ -540,5 +540,30 @@ test('кэш renderField учитывает edgeDist: смена глубины 
   field.renderField({ ...base, edgeDist: 10 });
   assert.equal(painted.count, before + 1, 'повторный кадр должен браться из кэша без пересчёта');
   assert.equal(painted.image, far, 'из кэша вернулся другой кадр');
+  field.renderField({ ...base, edgeDist: 1 });
+  assert.equal(painted.image, deep, 'фон должен сохраняться в кэше вместе с полным полем');
+  field.renderField({ ...base, edgeDist: 10 });
+  assert.equal(painted.image, far, 'полное поле должно сохраняться при чередовании проходов');
   field.dispose();
+});
+
+test('GLSL uint-конструктор использует unsigned-литерал для каждого канала', () => {
+  for (const style of ['nebula', 'tactical']) {
+    const sources = [];
+    const gl = {
+      VERTEX_SHADER: 1, FRAGMENT_SHADER: 2, COMPILE_STATUS: 3, LINK_STATUS: 4,
+      createShader: () => ({}), shaderSource: (_shader, source) => sources.push(source),
+      compileShader: () => {}, getShaderParameter: () => true, deleteShader: () => {},
+      createProgram: () => ({}), attachShader: () => {}, linkProgram: () => {},
+      getProgramParameter: () => true, getUniformLocation: () => null, deleteProgram: () => {},
+      getExtension: () => null,
+    };
+    const canvas = { getContext: (kind) => kind === 'webgl2' ? gl : null, addEventListener: () => {}, removeEventListener: () => {} };
+    const field = createSectorField(canvas, { style });
+    assert.equal(field.backend, 'webgl2');
+    const match = sources[1].match(/RIDGE_FINE_CHANNELS\[3\]\s*=\s*uint\[3\]\(([^)]+)\)/);
+    assert.ok(match, 'конструктор каналов отсутствует');
+    assert.deepEqual(match[1].split(',').map((s) => s.trim()), ['18u', '24u', '25u']);
+    field.dispose();
+  }
 });

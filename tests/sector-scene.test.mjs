@@ -524,7 +524,7 @@ test('B1–B4: контуры границ сектора и гало на L0…
     assert.equal(boundsFor(null, DESKTOP, cameraForLevel(level)).length, 0);
   }
 
-  // B2: точки контура лежат в пределах кадра ± 2 px (на L0…L12 и при наведении на вершину контура).
+  // B2: сохраняем полный непрерывный контур; кадр обрезается только при рисовании.
   for (let level = 0; level <= ladder.DEEPEST_SECTOR_LEVEL; level++) {
     for (const [cx, cy] of [[5000, 5000], [8024, 2788]]) {
       const built = buildSectorScene({
@@ -533,10 +533,15 @@ test('B1–B4: контуры границ сектора и гало на L0…
         camera: cameraForLevel(level, cx, cy),
         sectorBounds: SECTOR_BOUNDS,
       });
-      for (const item of built.primitives.filter((primitive) => primitive.kind === 'bounds')) {
-        for (const pt of item.points) {
-          assert.ok(pt.x >= -2 && pt.x <= DESKTOP.w + 2, `L${level} ${item.id}: x=${pt.x} вне кадра`);
-          assert.ok(pt.y >= -2 && pt.y <= DESKTOP.h + 2, `L${level} ${item.id}: y=${pt.y} вне кадра`);
+      const items = built.primitives.filter((primitive) => primitive.kind === 'bounds');
+      assert.equal(items.length, SECTOR_BOUNDS.bounds.length);
+      for (const item of items) {
+        const source = SECTOR_BOUNDS.bounds.find((entry) => entry.id === item.id);
+        assert.ok(source);
+        assert.equal(item.points.length, source.points.length, `L${level} ${item.id}: вершины не должны теряться вне viewport`);
+        assert.ok(item.points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
+        if (item.boundsKind !== 'halo') {
+          assert.deepEqual(item.points[0], item.points.at(-1), `L${level} ${item.id}: замкнутый контур должен оставаться замкнутым`);
         }
       }
     }

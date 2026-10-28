@@ -3,9 +3,6 @@ export type Polyline = readonly Point[];
 export interface BoundsStyle { readonly strokeWidth: number; readonly dash: readonly number[]; readonly color: 'nebula' | 'tactical'; }
 export interface BoundsPrimitive { readonly id: string; readonly kind: 'sector' | 'halo' | 'nebula'; readonly style: BoundsStyle; readonly label: string; readonly points: Polyline; readonly cells?: readonly Point[]; }
 export interface SectorBounds { readonly version: number; readonly mapSize: 10000; readonly source: string; readonly bounds: readonly BoundsPrimitive[]; }
-export interface Camera { readonly x: number; readonly y: number; readonly scale: number; }
-export interface Viewport { readonly width: number; readonly height: number; }
-
 function invalid(message: string): never { throw new RangeError(`Некорректные границы сектора: ${message}`); }
 export function parseBounds(json: unknown): SectorBounds {
   let value: unknown = json;
@@ -41,7 +38,50 @@ export function distanceToRing(polygon: Polyline, x: number, y: number): number 
   for (let i = 1; i < polygon.length; i++) { const a = polygon[i - 1]; const b = polygon[i]; if (a === undefined || b === undefined) continue; const dx = b[0] - a[0]; const dy = b[1] - a[1]; const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy || 1))); min = Math.min(min, Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy)); }
   return min;
 }
-export function clipPolylineToViewport(line: Polyline, camera: Camera, viewport: Viewport): Point[] {
-  return line.filter(([x, y]) => { const sx = (x - camera.x) * camera.scale; const sy = (y - camera.y) * camera.scale; return sx >= 0 && sx <= viewport.width && sy >= 0 && sy <= viewport.height; });
+export interface QuadraticSegment { readonly control: Point; readonly end: Point; }
+export interface SmoothedPolyline {
+  readonly start: Point;
+  readonly curves: readonly QuadraticSegment[];
+  readonly tail: Point | null;
+  readonly closed: boolean;
 }
+
+function midpoint(a: Point, b: Point): Point { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
+
+/**
+ * Скругляет ломаную квадратичными кривыми без выхода за локальную геометрию.
+ * Замкнутый контур остаётся замкнутым; открытая линия сохраняет оба конца.
+ */
+export function smoothPolyline(line: Polyline, closed: boolean): SmoothedPolyline {
+  const points = line.map(([x, y]) => [x, y] as const);
+  while (closed && points.length > 1
+    && points[0]?.[0] === points[points.length - 1]?.[0]
+    && points[0]?.[1] === points[points.length - 1]?.[1]) points.pop();
+
+  if (points.length < 3) {
+    return {
+      start: points[0] ?? [0, 0],
+      curves: [],
+      tail: closed ? null : points.at(-1) ?? null,
+      closed: closed && points.length > 2,
+    };
+  }
+
+  if (closed) {
+    const start = midpoint(points.at(-1)!, points[0]!);
+    const curves = points.map((point, index): QuadraticSegment => ({
+      control: point,
+      end: midpoint(point, points[(index + 1) % points.length]!),
+    }));
+    return { start, curves, tail: null, closed: true };
+  }
+
+  const curves: QuadraticSegment[] = [];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const point = points[index]!;
+    curves.push({ control: point, end: midpoint(point, points[index + 1]!) });
+  }
+  return { start: points[0]!, curves, tail: points.at(-1)!, closed: false };
+}
+
 export function enumerate(bounds: SectorBounds): BoundsPrimitive[] { return [...bounds.bounds]; }

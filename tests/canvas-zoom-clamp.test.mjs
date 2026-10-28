@@ -32,7 +32,7 @@ const SAMPLE_TARGETS = [
   { name: 'Тарсонис', x: 4902, y: 5404 },
 ];
 
-function createStubCanvasContext() {
+function createStubCanvasContext(calls = []) {
   return new Proxy(
     {},
     {
@@ -40,7 +40,7 @@ function createStubCanvasContext() {
         if (prop === 'createRadialGradient') {
           return () => ({ addColorStop() {} });
         }
-        return () => {};
+        return (...args) => { calls.push([prop, ...args]); };
       },
       set() {
         return true;
@@ -105,10 +105,11 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
     fieldContextLost: false,
   };
 
+  const calls = [];
   const kernel = {
     doc: null,
     canvas: null,
-    ctx: createStubCanvasContext(),
+    ctx: createStubCanvasContext(calls),
     fieldCanvas: null,
     field: null,
     state,
@@ -172,7 +173,7 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
     }
   }
 
-  return { state, renderer, flushAnimationFrame, restoreGlobals };
+  return { state, renderer, flushAnimationFrame, restoreGlobals, calls, kernel };
 }
 
 /**
@@ -369,6 +370,155 @@ test('нижний упор minScale и пересчёт потолка при �
         assert.ok(distances.left > 0.39 && distances.right > 0.39);
       }
     }
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('контур рисуется целой кривой с clip даже без видимых вершин', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    h.state.sectorBounds = {
+      version: 1,
+      mapSize: 10000,
+      source: 'test',
+      bounds: [{
+        id: 'sector.outline', kind: 'sector', label: 'test',
+        style: { color: 'tactical', strokeWidth: 2, dash: [] },
+        points: [[0, 4000], [10000, 4000], [10000, 6000], [0, 6000], [0, 4000]],
+      }],
+    };
+    // Кадр вокруг части границы: все четыре исходные вершины вне кадра.
+    h.renderer.centerOn(5000, 4000, 1, false);
+    h.flushAnimationFrame(performance.now() + 1000);
+    const clipIndex = h.calls.findIndex(([name]) => name === 'clip');
+    assert.ok(clipIndex >= 0, 'контур обрезается контекстом по кадру');
+    const curveIndex = h.calls.findIndex(([name], index) => index > clipIndex && name === 'quadraticCurveTo');
+    assert.ok(curveIndex > clipIndex, 'отрисована кривая, хотя вершины вне кадра');
+    assert.ok(h.calls.some(([name], index) => index > curveIndex && name === 'closePath'));
+    assert.equal(h.calls.filter(([name], index) => index >= curveIndex && name === 'quadraticCurveTo').length, 4);
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('туманность и обводка используют одну кривую на обзорном, среднем и глубоком масштабе', () => {
+  const bounds = {
+    version: 1, mapSize: 10000, source: 'test', bounds: [{
+      id: 'nebula.test', kind: 'nebula', label: 'test',
+      style: { color: 'nebula', strokeWidth: 2, dash: [] },
+      points: [[4000, 4000], [6000, 4000], [6000, 6000], [4000, 6000], [4000, 4000]],
+    }],
+  };
+  for (const scale of [0.02, 1, 500]) {
+    const h = createRendererHarness({ w: 300, h: 200 });
+    try {
+      h.state.meta = {};
+      h.state.sectorBounds = bounds;
+      h.state.view = { scale, tx: 150 - 5000 * scale, ty: 100 - 4000 * scale };
+      const fieldStates = [];
+      h.kernel.field = { renderField: (state) => fieldStates.push(state) };
+      h.kernel.fieldCanvas = { width: 300, height: 200 };
+      h.renderer.requestRender();
+      h.flushAnimationFrame(performance.now() + 1000);
+      assert.equal(fieldStates.length, 2, `масштаб ${scale}: фон и поле в туманности`);
+      assert.equal(fieldStates[0].edgeDist, 1);
+      assert.equal(fieldStates[1].edgeDist, undefined);
+      const clip = h.calls.findIndex(([name]) => name === 'clip');
+      const clipStart = h.calls.findLastIndex(([name], index) => name === 'beginPath' && index < clip);
+      const maskPath = h.calls.slice(clipStart + 1, clip);
+      const outlineClip = h.calls.findIndex(([name], index) => name === 'clip' && index > clip);
+      const outlineStart = h.calls.findIndex(([name], index) => name === 'beginPath' && index > outlineClip);
+      const outlineEnd = h.calls.findIndex(([name], index) => name === 'stroke' && index > outlineStart);
+      assert.deepEqual(h.calls.slice(outlineStart + 1, outlineEnd), maskPath, `масштаб ${scale}: маска отличается от границы`);
+    } finally {
+      h.restoreGlobals();
+    }
+  }
+});
+
+test('вдали от туманностей остаётся только спокойный фон и звёзды', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    h.state.meta = {};
+    h.state.sectorBounds = {
+      version: 1, mapSize: 10000, source: 'test', bounds: [{
+        id: 'nebula.test', kind: 'nebula', label: 'test',
+        style: { color: 'nebula', strokeWidth: 2, dash: [] },
+        points: [[0, 0], [1000, 0], [1000, 1000], [0, 0]],
+      }],
+    };
+    h.state.view = { scale: 1, tx: 150 - 5000, ty: 100 - 5000 };
+    const fieldStates = [];
+    h.kernel.field = { renderField: (state) => fieldStates.push(state) };
+    h.kernel.fieldCanvas = { width: 300, height: 200 };
+    h.renderer.requestRender();
+    h.flushAnimationFrame(performance.now() + 1000);
+    assert.equal(fieldStates.length, 1);
+    assert.equal(fieldStates[0].edgeDist, 1);
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('пунктир гало сохраняет открытый путь при панорамировании на разных масштабах', () => {
+  for (const scale of [0.03, 1, 500]) {
+    const h = createRendererHarness({ w: 300, h: 200 });
+    try {
+      h.state.sectorBounds = {
+        version: 1, mapSize: 10000, source: 'test', bounds: [{
+          id: 'halo.test', kind: 'halo', label: 'test',
+          style: { color: 'halo', strokeWidth: 2, dash: [12, 8] },
+          points: [[2000, 5000], [3500, 5000], [5000, 5000], [6500, 5000], [8000, 5000]],
+        }],
+      };
+      h.state.view = { scale, tx: 150 - 5000 * scale, ty: 100 - 5000 * scale };
+      const render = () => {
+        h.calls.length = 0;
+        h.renderer.requestRender();
+        h.flushAnimationFrame(performance.now() + 1000);
+        assert.deepEqual(h.calls.find(([name, dash]) => name === 'setLineDash' && dash.length > 0)?.[1], [12, 8]);
+        const stroke = h.calls.findIndex(([name]) => name === 'stroke');
+        const start = h.calls.findLastIndex(([name], i) => name === 'beginPath' && i < stroke);
+        return h.calls.slice(start + 1, stroke);
+      };
+      const before = render();
+      h.state.view.tx += 13;
+      h.state.view.ty -= 7;
+      const after = render();
+      assert.ok(before.some(([name]) => name === 'quadraticCurveTo'));
+      assert.ok(!before.some(([name]) => name === 'closePath'));
+      assert.equal(before.length, after.length);
+      for (let i = 0; i < before.length; i++) {
+        assert.equal(before[i][0], after[i][0]);
+        for (let j = 1; j < before[i].length; j++) {
+          assert.ok(Math.abs(after[i][j] - before[i][j] - (j % 2 ? 13 : -7)) < 1e-8);
+        }
+      }
+    } finally {
+      h.restoreGlobals();
+    }
+  }
+});
+
+test('схематический резерв заливает тот же контур туманности, что обводит', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    h.state.sectorBounds = {
+      version: 1, mapSize: 10000, source: 'test', bounds: [{
+        id: 'nebula.test', kind: 'nebula', label: 'test',
+        style: { color: 'nebula', strokeWidth: 2, dash: [] },
+        points: [[4000, 4000], [6000, 4000], [6000, 6000], [4000, 6000], [4000, 4000]],
+      }],
+    };
+    h.renderer.requestRender();
+    h.flushAnimationFrame(performance.now() + 1000);
+    const fill = h.calls.findIndex(([name]) => name === 'fill');
+    const fillStart = h.calls.findLastIndex(([name], i) => name === 'beginPath' && i < fill);
+    const clip = h.calls.findIndex(([name], i) => name === 'clip' && i > fill);
+    const outlineStart = h.calls.findIndex(([name], i) => name === 'beginPath' && i > clip);
+    const outlineEnd = h.calls.findIndex(([name], i) => name === 'stroke' && i > outlineStart);
+    assert.deepEqual(h.calls.slice(fillStart + 1, fill), h.calls.slice(outlineStart + 1, outlineEnd));
   } finally {
     h.restoreGlobals();
   }
