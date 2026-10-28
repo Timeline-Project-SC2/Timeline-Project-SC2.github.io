@@ -21,6 +21,7 @@
 | Известные ловушки среды и снапшотов | [`handoff/infra-pitfalls.md`](handoff/infra-pitfalls.md) |
 | Команды проверки перед PR | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
 | Правила пользователя (язык, ветки, merge) | [`handoff/rules.md`](handoff/rules.md) |
+| Что означают рабочие сокращения и названия | [Краткий словарик](README.md#как-читать-рабочие-обозначения) |
 
 ## История по волнам
 
@@ -40,7 +41,7 @@
 - Систематические ошибки: [`docs/registers/errors-systemic.md`](registers/errors-systemic.md).
 - Баги среды и контрактов: [`docs/registers/README.md`](registers/README.md).
 - Текущая волна: [`docs/agents_task_orchestration/agents_task_orchestration.md`](agents_task_orchestration/agents_task_orchestration.md).
-- Упрощение документации, тестов и кода: [карточка `UP-1`](agents_task_orchestration/wave_cards/UP-1.md), PR #325 открыт; [замечания и доработка](agents_task_orchestration/wave_cards/UP-1-review.md) подготовлены, но не запущены.
+- Упрощение документации, тестов и кода: [карточка `UP-1`](agents_task_orchestration/wave_cards/UP-1.md) и [замечания к работе](agents_task_orchestration/wave_cards/UP-1-review.md). PR #325 доработан, но остаётся открыт и не слит. Планетарные задачи и их визуальная приёмка отложены до отдельного указания владельца.
 
 ## Главное правило
 
