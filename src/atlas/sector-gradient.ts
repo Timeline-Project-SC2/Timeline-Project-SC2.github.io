@@ -20,26 +20,30 @@ export interface ColorAnchor {
 /**
  * Детерминированная ближайшая пара разных цветов, как в прежнем слое сетей.
  * При одном цвете оба стопа одинаковы; отсутствие источников даёт пустой массив.
+ * При равных расстояниях числовые ID идут первыми по числовому значению,
+ * затем текстовые по строке; одинаковые числовые значения — также по строке.
+ * Уникальность проверяется по точному значению строки ID.
  * Это только выбор цветов, а не определение геометрии столкновения областей.
  */
 export function nearestColorStops(anchors: readonly ColorAnchor[]): readonly GradientStop[] {
+  const ids = new Set<string>();
   const points = anchors.map((anchor) => {
     const rgb = parseHexColor(anchor.color);
     if (!anchor.id || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || rgb === null) {
       throw new RangeError('Цветовой якорь: нужны id, конечные координаты и цвет #rrggbb');
     }
+    if (ids.has(anchor.id)) throw new RangeError('Цветовой якорь: id должен быть уникальным');
+    ids.add(anchor.id);
     return { ...anchor, rgb, colorKey: anchor.color.trim().toLowerCase() };
   }).sort((a, b) => {
     const numberA = Number(a.id);
     const numberB = Number(b.id);
-    if (a.id.trim() !== '' && b.id.trim() !== '' && Number.isFinite(numberA) && Number.isFinite(numberB) && numberA !== numberB) {
-      return numberA - numberB;
-    }
+    const numericA = a.id.trim() !== '' && Number.isFinite(numberA);
+    const numericB = b.id.trim() !== '' && Number.isFinite(numberB);
+    if (numericA !== numericB) return numericA ? -1 : 1;
+    if (numericA && numericB && numberA !== numberB) return numberA < numberB ? -1 : 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
-  for (let index = 1; index < points.length; index += 1) {
-    if (points[index - 1]!.id === points[index]!.id) throw new RangeError('Цветовой якорь: id должен быть уникальным');
-  }
   if (points.length === 0) return [];
   let first = points[0]!;
   let second = first;

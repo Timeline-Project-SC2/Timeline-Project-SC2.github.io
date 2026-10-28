@@ -43,3 +43,65 @@ test('удалённый слой сетей не подключён к ренд
   assert.doesNotMatch(source, /faction-net|drawNetLayer|drawNetChannels|netPulseActive/);
   assert.match(source, /drawMarker\(primitive\)/);
 });
+
+function permutations(items) {
+  if (items.length === 0) return [[]];
+  return items.flatMap((item, index) =>
+    permutations(items.filter((_, other) => other !== index)).map((rest) => [item, ...rest]));
+}
+
+test('смешанные числовые и текстовые ID дают одинаковый результат для всех перестановок', () => {
+  // Все расстояния равны с точностью до допуска: выбор определяет порядок ID.
+  const tied = [
+    { id: '2', x: 0, y: 0, color: '#ff0000' },
+    { id: '10', x: 1, y: 0, color: '#00ff00' },
+    { id: '11x', x: 0.5, y: Math.sqrt(3) / 2, color: '#0000ff' },
+  ];
+  const expected = [{ offset: 0, rgb: [255, 0, 0] }, { offset: 1, rgb: [0, 255, 0] }];
+  for (const ordering of permutations(tied)) {
+    assert.deepEqual(nearestColorStops(ordering), expected, ordering.map((anchor) => anchor.id).join(','));
+  }
+});
+
+test('повторяющийся ID отклоняется независимо от порядка, даже среди смешанных ID', () => {
+  const anchorsWithDuplicate = [
+    { id: '2', x: 0, y: 0, color: '#ff0000' },
+    { id: '10', x: 1, y: 0, color: '#00ff00' },
+    { id: '11x', x: 0, y: 1, color: '#0000ff' },
+    { id: '2', x: 2, y: 2, color: '#ffffff' },
+  ];
+  for (const ordering of permutations(anchorsWithDuplicate)) {
+    assert.throws(() => nearestColorStops(ordering), /id должен быть уникальным/, ordering.map((anchor) => anchor.id).join(','));
+  }
+});
+
+test('числовые ID упорядочены по значению, а совпавшие значения и текстовые — по строке', () => {
+  const tied = [
+    { id: '02', x: 0, y: 0, color: '#ff0000' },
+    { id: '2', x: 1, y: 0, color: '#00ff00' },
+    { id: '10', x: 0.5, y: Math.sqrt(3) / 2, color: '#0000ff' },
+    { id: '11x', x: 50, y: 50, color: '#ffffff' },
+  ];
+  const expected = [{ offset: 0, rgb: [255, 0, 0] }, { offset: 1, rgb: [0, 255, 0] }];
+  for (const ordering of permutations(tied)) assert.deepEqual(nearestColorStops(ordering), expected);
+});
+
+test('порядок ID разрешает только равенство: ближайшая пара остаётся ближайшей', () => {
+  const items = [
+    { id: '2', x: 0, y: 0, color: '#ff0000' },
+    { id: '10', x: 100, y: 0, color: '#00ff00' },
+    { id: '11x', x: 101, y: 0, color: '#0000ff' },
+  ];
+  const expected = [{ offset: 0, rgb: [0, 255, 0] }, { offset: 1, rgb: [0, 0, 255] }];
+  for (const ordering of permutations(items)) assert.deepEqual(nearestColorStops(ordering), expected);
+});
+
+test('текстовые ID упорядочены по строке при равных расстояниях', () => {
+  const items = [
+    { id: 'z', x: 0, y: 0, color: '#ff0000' },
+    { id: 'a', x: 1, y: 0, color: '#00ff00' },
+    { id: 'b', x: 0.5, y: Math.sqrt(3) / 2, color: '#0000ff' },
+  ];
+  const expected = [{ offset: 0, rgb: [0, 255, 0] }, { offset: 1, rgb: [0, 0, 255] }];
+  for (const ordering of permutations(items)) assert.deepEqual(nearestColorStops(ordering), expected);
+});
