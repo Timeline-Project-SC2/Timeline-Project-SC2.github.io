@@ -20,6 +20,7 @@ const siteRoot = resolve(root, 'site');
 const routes = [
   'index.html',
   'sector/sector.html',
+  'sector/admin-edit/index.html',
   'minimal/minimal.html',
   'cursor-test/index.html',
   'spiral-test/index.html',
@@ -161,6 +162,22 @@ if (minimalHtml.includes('id="coordinateToggle"') || minimalHtml.includes('id="g
   fail('minimal получил секторные элементы варианта');
 }
 if (!minimalHtml.includes('<body class="minimal-mode">')) fail('minimal потерял body class варианта');
+const aboutButtonAt = sectorHtml.indexOf('id="helpButton"');
+const adminButtonAt = sectorHtml.indexOf('class="admin-gate-link"');
+const galaxyButtonAt = sectorHtml.indexOf('id="galaxyReturn"');
+if (!(aboutButtonAt >= 0 && aboutButtonAt < adminButtonAt && adminButtonAt < galaxyButtonAt)) {
+  fail('секторная кнопка администратора должна стоять между «О карте» и «К Галактике»');
+}
+if (minimalHtml.includes('admin-gate-link')) fail('minimal получил кнопку доступа администратора');
+const adminHtml = publishedHtml.get('sector/admin-edit/index.html') || '';
+for (const marker of ['id="mapCanvas"', 'id="adminGateForm"', 'id="adminEditorPanel"', 'Модули', 'Свойства', 'Изменения']) {
+  if (!adminHtml.includes(marker)) fail(`admin-edit потерял узел: ${marker}`);
+}
+if (!adminHtml.includes('id="adminEditorPanel" data-admin-editor aria-labelledby="adminEditorTitle" hidden')) {
+  fail('панель admin-edit должна быть скрыта до тестовой проверки');
+}
+if (!adminHtml.includes('id="adminGateError" role="alert" hidden')) fail('admin-edit потерял начальное скрытие ошибки формы');
+if (adminHtml.includes('atlas-variant:') || adminHtml.includes('@@')) fail('admin-edit не прошёл рендер общего шаблона');
 
 function publishRelative(fullPath) {
   return relative(publishRoot, fullPath).split('\\').join('/');

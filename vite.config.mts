@@ -12,6 +12,7 @@ const atlasTemplatePath = resolve(repoRoot, 'templates/atlas-shell.html');
 const routes = [
   'index.html',
   'sector/sector.html',
+  'sector/admin-edit/index.html',
   'minimal/minimal.html',
   'cursor-test/index.html',
   'spiral-test/index.html',
