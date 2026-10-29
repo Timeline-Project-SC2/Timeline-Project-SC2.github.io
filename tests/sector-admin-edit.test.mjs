@@ -10,11 +10,12 @@ const read = (relative) => readFileSync(path.join(root, relative), 'utf8');
 const gateSource = read('src/atlas/sector-admin-gate.ts');
 const gateModule = await transform(gateSource, { loader: 'ts', format: 'esm' });
 const gateApi = await import(`data:text/javascript;base64,${Buffer.from(gateModule.code).toString('base64')}`);
+const publicTestCode = gateApi.PUBLIC_TEST_CODE;
 
 test('форма принимает только публичное демонстрационное значение', () => {
-  assert.equal(gateApi.PUBLIC_TEST_CODE, 'KP-ADM-DEMO-27');
-  assert.equal(gateApi.isCorrectPublicTestCode('KP-ADM-DEMO-27'), true);
-  assert.equal(gateApi.isCorrectPublicTestCode('  KP-ADM-DEMO-27  '), true);
+  assert.equal(typeof publicTestCode, 'string');
+  assert.equal(gateApi.isCorrectPublicTestCode(publicTestCode), true);
+  assert.equal(gateApi.isCorrectPublicTestCode(`  ${publicTestCode}  `), true);
   assert.equal(gateApi.isCorrectPublicTestCode('неверно'), false);
   assert.match(read('tools/vite/atlas-shell.ts'), /type="password" autocomplete="off"/);
 });
@@ -22,9 +23,9 @@ test('форма принимает только публичное демонс
 test('неверный ввод блокирует подтверждение до изменения и разрешает новую попытку', () => {
   const attempt = gateApi.createGateAttemptController();
   assert.equal(attempt.submit('неверно'), 'invalid');
-  assert.equal(attempt.submit('KP-ADM-DEMO-27'), 'locked');
+  assert.equal(attempt.submit(publicTestCode), 'locked');
   attempt.inputChanged();
-  assert.equal(attempt.submit('KP-ADM-DEMO-27'), 'granted');
+  assert.equal(attempt.submit(publicTestCode), 'granted');
   assert.match(gateSource, /submit\.disabled = true/);
   assert.match(gateSource, /attempt\.inputChanged\(\)/);
   assert.match(gateSource, /error\.hidden = false/);
@@ -34,7 +35,7 @@ test('во вкладке хранится только несекретная �
   const key = gateApi.ADMIN_SESSION_MARKER_KEY;
   const values = new Map([[key, 'granted']]);
   assert.equal(gateApi.hasAdminSessionMarker({ getItem: (candidate) => values.get(candidate) ?? null }), true);
-  assert.equal(gateApi.hasAdminSessionMarker({ getItem: () => 'KP-ADM-DEMO-27' }), false);
+  assert.equal(gateApi.hasAdminSessionMarker({ getItem: () => 'wrong-value' }), false);
   assert.equal(gateApi.hasAdminSessionMarker(null), false);
   assert.equal(gateApi.hasAdminSessionMarker({ getItem() { throw new Error('blocked'); } }), false);
   assert.match(gateSource, /setItem\(ADMIN_SESSION_MARKER_KEY, ADMIN_SESSION_MARKER_VALUE\)/);

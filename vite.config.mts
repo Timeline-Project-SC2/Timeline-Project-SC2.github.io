@@ -22,6 +22,10 @@ const routes = [
 
 export default defineConfig({
   root: siteRoot,
+  server: {
+    host: true,
+    allowedHosts: true,
+  },
   publicDir: false,
   plugins: createTimelinePublishPlugins({
     repoRoot,
