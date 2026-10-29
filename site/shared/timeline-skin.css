@@ -932,6 +932,38 @@ select:focus-visible { outline-color: #2ef5e6; }
   .coordinates-label { width: 340px; box-sizing: border-box; }
 }
 
+/* Ссылка на публичную демо-заготовку; пульс ограничен этой кнопкой. */
+.admin-gate-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 198, 92, .68);
+  background: rgba(255, 174, 59, .11);
+  color: #ffd58d;
+  font: 10px var(--mono);
+  letter-spacing: .06em;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  animation: admin-gate-pulse 1.8s ease-in-out infinite;
+}
+.admin-gate-link:hover,
+.admin-gate-link:focus-visible {
+  background: rgba(255, 174, 59, .2);
+  box-shadow: 0 0 14px rgba(255, 196, 92, .28);
+  outline: 1px solid #ffd58d;
+  outline-offset: 2px;
+}
+@keyframes admin-gate-pulse {
+  0%, 100% { opacity: 1; filter: brightness(1); }
+  50% { opacity: .62; filter: brightness(1.2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-gate-link { animation: none; }
+}
+
 /* Кнопка «к галактике» на странице сектора (зелёная, в топ-панели) */
 .galaxy-return {
   display: inline-flex;

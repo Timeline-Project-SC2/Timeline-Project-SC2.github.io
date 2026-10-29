@@ -2,9 +2,11 @@
    Словарь вынесен из vite.config.mts (CR-01 PR 3): сборщик только подставляет
    эти строго типизированные фрагменты в templates/atlas-shell.html. */
 
-export type AtlasVariantName = 'minimal' | 'sector';
+export type AtlasVariantName = 'admin-edit' | 'minimal' | 'sector';
 
 export interface AtlasVariant {
+  readonly adminEditorPanel: string;
+  readonly adminGate: string;
   readonly bodyAttrs: string;
   readonly coordinateControls: string;
   readonly coordinateReadout: string;
@@ -22,8 +24,10 @@ export interface AtlasVariant {
   readonly title: string;
 }
 
-export const atlasVariants: Record<AtlasVariantName, AtlasVariant> = {
+export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
   sector: {
+    adminEditorPanel: '',
+    adminGate: '        <a class="admin-gate-link" href="/sector/admin-edit/">Доступ Администратора</a>',
     bodyAttrs: '',
     coordinateControls: [
       '        <div class="control-divider"></div>',
@@ -70,6 +74,8 @@ export const atlasVariants: Record<AtlasVariantName, AtlasVariant> = {
     title: 'Timeline Project — Map Atlas',
   },
   minimal: {
+    adminEditorPanel: '',
+    adminGate: '',
     bodyAttrs: ' class="minimal-mode"',
     coordinateControls: '',
     coordinateReadout: '',

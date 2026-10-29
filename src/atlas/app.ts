@@ -41,6 +41,7 @@ import {
 } from './sector-flight.ts';
 import { createSectorArrows } from './sector-arrows.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
+import { bindSectorAdminGate, isAdminUiTarget } from './sector-admin-gate.ts';
 
 const doc = document;
 
@@ -205,6 +206,17 @@ function toast(message: string): void {
   }, 2600);
 }
 
+function applyAuthorizedTheme(): void {
+  theme.bg = cssVar('--bg', theme.bg);
+  theme.accent = cssVar('--accent', theme.accent);
+  theme.accent2 = cssVar('--accent-2', theme.accent2);
+  theme.text = cssVar('--text', theme.text);
+  theme.muted = cssVar('--muted', theme.muted);
+  theme.line = cssVar('--line-strong', theme.line);
+  theme.mono = cssVar('--mono', theme.mono);
+  if (kernel.ctx) kernel.renderer.requestRender();
+}
+
 function applyLabelsToggle(): void {
   const label = state.labelsOn ? 'Скрыть подписи карты' : 'Показать подписи карты';
   el.labelsToggle.setAttribute('aria-pressed', String(state.labelsOn));
@@ -317,6 +329,7 @@ function bindEvents(): void {
 
   // Esc прерывает полёт даже при фокусе в поле ввода.
   doc.addEventListener('keydown', function (event): void {
+    if (isAdminUiTarget(event.target)) return;
     if (event.key === 'Escape' && flight.active) flight.cancel();
   }, true);
 
@@ -368,8 +381,10 @@ function bindEvents(): void {
 
   // клавиатура
   doc.addEventListener('keydown', function (event): void {
-    const tag = ((event.target as Element | null)?.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    const target = event.target as Element | null;
+    const tag = (target?.tagName || '').toLowerCase();
+    if (isAdminUiTarget(event.target) || tag === 'input' || tag === 'textarea' || tag === 'select'
+      || target?.getAttribute('contenteditable') === 'true') return;
     if (event.key === 'Escape') {
       if (flight.active) { flight.cancel(); return; }
       if (!el.helpModal.hidden) { closeModal(el.helpModal); return; }
@@ -493,6 +508,7 @@ function applySystemFrameRequest(): void {
 
 function boot(): void {
   cacheElements();
+  bindSectorAdminGate(doc, applyAuthorizedTheme);
   kernel.catalog.updateSearchHintDistance();
   // Страховка: экран аутентификации не должен зависнуть даже при сетевой ошибке.
   window.setTimeout(dismissTimelineLoader, 8000);
