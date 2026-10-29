@@ -19,7 +19,7 @@ const publishRoot = resolve(root, process.argv[2] || '.publish');
 const siteRoot = resolve(root, 'site');
 const routes = [
   'index.html',
-  'sector/sector.html',
+  'sector/index.html',
   'sector/admin-edit/index.html',
   'minimal/minimal.html',
   'cursor-test/index.html',
@@ -149,7 +149,7 @@ for (const route of routes) {
   if (!hasHiddenRule) fail(`нет глобального [hidden] правила: ${route}`);
 }
 
-const sectorHtml = publishedHtml.get('sector/sector.html') || '';
+const sectorHtml = publishedHtml.get('sector/index.html') || '';
 const minimalHtml = publishedHtml.get('minimal/minimal.html') || '';
 for (const marker of ['id="mapCanvas"', 'id="searchInput"', 'id="catalogList"', 'id="detailPanel"']) {
   if (!sectorHtml.includes(marker)) fail(`sector потерял общий узел атласа: ${marker}`);

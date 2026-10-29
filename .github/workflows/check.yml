@@ -55,7 +55,7 @@ jobs:
           du -sh .publish/* | sort -h
           # Маршруты и данные на месте; hashed JS/CSS/worker проверяет
           # tools/verify_feature_parity.mjs по build-manifest.json.
-          for f in index.html sector/sector.html minimal/minimal.html cursor-test/index.html \
+          for f in index.html sector/index.html minimal/minimal.html cursor-test/index.html \
                    spiral-test/index.html planet-test/index.html planet-globe/index.html build-manifest.json \
                    assets/galaxy-map-3000.webp data/systems.csv data/places.csv \
                    data/planet-generation.csv; do

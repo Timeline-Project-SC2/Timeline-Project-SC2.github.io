@@ -21,7 +21,7 @@ declare global {
 const siteLinks: SiteLinks = {
   // Картинка карты галактики: локальный файл или внешняя ссылка (например, на GitHub)
   galaxyMapImage: '/assets/galaxy-map-2000.webp',
-  sectorPage: '/sector/sector.html',
+  sectorPage: '/sector/',
   galaxyPage: '/index.html',
 };
 

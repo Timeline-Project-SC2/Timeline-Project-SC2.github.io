@@ -43,7 +43,7 @@
     дату `YYYY-MM-DD` (например, `"2026-10-21"`) и полный ISO datetime с `Z`
     (например, `"2026-10-21T18:30:00Z"`), тестируя обе ветки парсинга и сериализации.
 - `tools/verify_feature_parity.mjs` (`npm run verify:publish`):
-  - Проверяет присутствие всех 7 маршрутов в `.publish/`, целостность `.publish/build-manifest.json`,
+  - Проверяет присутствие всех 8 маршрутов в `.publish/`, целостность `.publish/build-manifest.json`,
     существование всех hashed-бандлов в HTML, `new Worker(...)` и `importScripts(...)`, отсутствие
     сырых `.ts` и `assets/src/` в публикации, а также паритет экспортов публичных модулей (И-6).
 - [`tools/verify_no_raster.mjs`](verify_no_raster.mjs) (`npm run verify:no-raster`) — гейт **G7.3** из 9 проверок:
@@ -71,7 +71,22 @@
 - `tools/vite/{asset-utils,atlas-shell,timeline-publish-pipeline}.ts` — модули сборочного пайплайна,
   на которые декомпозирован `vite.config.mts` (~120 строк):
   - `asset-utils.ts` — контент-хэширование, инлайн относительных JSON-импортов и утилиты путей;
-  - `atlas-shell.ts` — рендер вариантов `sector.html` и `minimal.html` из `templates/atlas-shell.html`;
+  - `atlas-shell.ts` — рендер вариантов `sector/index.html` и `minimal/minimal.html` из `templates/atlas-shell.html`;
   - `timeline-publish-pipeline.ts` — единый конвейер фаз публикации (`tokenizeLegacyAssets` →
     `ensureFinalizedAssets` → `restoreLegacyAssets` → `writePublishExtras`) с явным контекстом
     `PublishPipelineState` (`publishSources`, `finalizedAssets`, `tokenReferenceQueues`).
+- **Как смотреть сайт локально (предпросмотр).** Сайт многостраничный: hashed-бандлы
+  (`shared/app-<hash>.js`, `sector/sector-<hash>.css`) существуют только в собранной публикации.
+  Поэтому смотреть нужно собранную `.publish/`, а не исходники:
+  ```bash
+  python3 -m pip install -r tools/requirements.txt   # один раз, для картинок
+  npm run assets:build                               # производные webp в assets/
+  npm run build                                      # tsc --noEmit + vite build -> .publish/
+  python3 -m http.server 8080 --directory .publish   # адреса: /, /sector/, /sector/admin-edit/index.html
+  ```
+  Dev-сервер Vite (`npx vite`; скрипта `dev` в `package.json` нет) для просмотра **не подходит**:
+  в режиме `appType: 'spa'` он отвечает корневым `index.html` со статусом `200 text/html` на любой
+  неизвестный путь — в том числе на `/shared/app-<hash>.js`, `sector-<hash>.css` и `/sector/`.
+  Браузер получает HTML вместо CSS и JS, страница остаётся белой, а короткий адрес `/sector/`
+  выглядит рабочим, хотя маршрута с таким именем нет. Это диагноз белой страницы от 29.10.2026
+  (карточка `ADM-UI`), а не дефект разметки админ-интерфейса.
