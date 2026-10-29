@@ -18,6 +18,7 @@ import type {
 import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import { smoothPolyline } from './sector-bounds.ts';
 import { clipHalo } from './sector-halo-clip.ts';
+import { nebulaBlinkIntensity } from './nebula-model.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
 import type {
@@ -1095,16 +1096,28 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
         const nebulae = scene?.primitives.filter((primitive): primitive is SceneBounds =>
           primitive.kind === 'bounds' && primitive.boundsKind === 'nebula' && boundsIntersectViewport(primitive),
         ) ?? [];
-        if (nebulae.length > 0) {
-          // Контур маски и обводка строятся одной и той же функцией; ограничение
-          // кадром выполняет Canvas, поэтому глубокий зум не теряет края.
+        const stationary = nebulae.filter((nebula) => !nebula.blink?.enabled);
+        const blinking = nebulae.filter((nebula) => nebula.blink?.enabled);
+        if (stationary.length > 0) {
+          // Контур маски и обводка строятся одной и той же функцией.
           ctx.save();
           ctx.beginPath();
-          for (const nebula of nebulae) traceBounds(nebula);
+          for (const nebula of stationary) traceBounds(nebula);
           ctx.clip();
           field.renderField(fieldState);
           ctx.drawImage(fieldCanvas, 0, 0, state.viewport.w, state.viewport.h);
           ctx.restore();
+        }
+        for (const nebula of blinking) {
+          const blink = nebula.blink!;
+          ctx.save();
+          ctx.beginPath();
+          traceBounds(nebula);
+          ctx.clip();
+          field.renderField({ ...fieldState, cloudBrightness: nebulaBlinkIntensity(blink, frameTime) });
+          ctx.drawImage(fieldCanvas, 0, 0, state.viewport.w, state.viewport.h);
+          ctx.restore();
+          if (blink.min !== blink.max) requestRender();
         }
       } else {
         drawSchematic(scene);

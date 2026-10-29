@@ -523,3 +523,36 @@ test('схематический резерв заливает тот же ко�
     h.restoreGlobals();
   }
 });
+
+test('настроенное мигание работает непрерывно и отдельно для каждой видимой туманности', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    h.state.meta = {};
+    const points = [[4000, 4000], [6000, 4000], [6000, 6000], [4000, 6000], [4000, 4000]];
+    h.state.sectorBounds = {
+      version: 1, mapSize: 10000, source: 'test', bounds: [{
+        id: 'nebula.pulse', kind: 'nebula', label: 'test', points,
+        style: { color: 'nebula', strokeWidth: 2, dash: [] },
+        blink: { enabled: true, intervalMs: 2000, min: 0.2, max: 0.8, phase: 0 },
+      }, {
+        id: 'nebula.static', kind: 'nebula', label: 'test', points,
+        style: { color: 'nebula', strokeWidth: 2, dash: [] },
+      }],
+    };
+    h.state.view = { scale: 0.04, tx: 150 - 5000 * 0.04, ty: 100 - 5000 * 0.04 };
+    const states = [];
+    h.kernel.field = { renderField: (state) => states.push(state) };
+    h.kernel.fieldCanvas = { width: 300, height: 200 };
+    h.renderer.requestRender();
+    h.flushAnimationFrame(2000);
+    assert.equal(states.length, 3);
+    assert.equal(states[0].edgeDist, 1);
+    assert.equal(states[1].cloudBrightness, undefined);
+    assert.ok(Math.abs(states[2].cloudBrightness - 0.2) < 1e-12);
+    h.flushAnimationFrame(3000); // кадр поставлен в очередь самой анимацией
+    assert.equal(states.length, 6);
+    assert.ok(Math.abs(states[5].cloudBrightness - 0.8) < 1e-12);
+  } finally {
+    h.restoreGlobals();
+  }
+});

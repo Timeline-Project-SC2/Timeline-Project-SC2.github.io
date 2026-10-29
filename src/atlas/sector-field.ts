@@ -65,6 +65,8 @@ export interface SectorFieldState {
    * Поле необязательное: без него пресет прежний, полное поле.
    */
   readonly edgeDist?: number;
+  /** Множитель яркости облака для управляемой пульсации; фон и звёзды не меняет. */
+  readonly cloudBrightness?: number;
 }
 
 export interface SectorField {
@@ -251,10 +253,8 @@ const CHANNEL_LIMIT = 27;
 const WARP_FREQ_BIG = 3;
 const WARP_FREQ_SMALL = 11;
 /**
- * Амплитуда варпа задаётся в ячейках самой мелкой активной октавы кадра, а не
- * в долях карты: иначе на `L0` (видна вся карта) варп сжимает мелкие ячейки
- * в разы и добавляет деталь, которой нет на `L9` — по замеру это давало
- * просадку `edge / meanL` до `0,83 ×` (§17.12 `V-2`).
+ * Амплитуда варпа задаётся в ячейках фиксированной октавы узора, поэтому
+ * форма облака не зависит от масштаба камеры.
  */
 const WARP_CELLS = 5.2;
 
@@ -267,10 +267,8 @@ const WARP_CELLS = 5.2;
  *     ячеистую «червячную» сетку, поэтому она работает только как множитель
  *     и только внутри плотных участков (§17.12 `V-5`).
  *
- * Октавы разбиты на две полосы, обе привязаны к экранному масштабу:
- *  - окно облаков — ячейка `CLOUD_CELL_PX`, несколько октав вниз по частоте;
- *  - окно детали — ячейка `DETAIL_CELL_PX` (2–4 px, требование `V-2`), которое
- *    тем заметнее, чем глубже зум. Октав мельче пикселя нет: это было бы зерно.
+ * Облачное и детальное окна зафиксированы в мировых координатах: при зуме
+ * новые поколения шума не подменяют уже видимый рисунок.
  */
 const OCTAVE_BASE_FREQ = 3;
 const MAX_OCTAVES = 18;
@@ -539,25 +537,21 @@ interface FrameMath {
   readonly envelopeCells: number;
   readonly detailWarpCells: number;
   readonly detailWarpAmp: number;
-  /** Усиление нитей с зумом: на глубоких уровнях кадр обрастает волокнами. */
+  /** Фиксированное усиление нитей в мировом узоре. */
   readonly threadGain: number;
   readonly dustX: number;
   readonly dustY: number;
   /** Ячейка звёздной пыли в мировых единицах и их число на карту (целое). */
   readonly starCell: number;
   readonly starCells: number;
-  /** Пылевые полосы живут на `L0…L6` (§8.1) и плавно гаснут до `L9`. */
+  /** Фиксированная интенсивность пылевых полос. */
   readonly dustFade: number;
   /**
    * Гашение туманности на глубине (§17.15.5): `0` — облако и пыль погашены
    * полностью (в кадре звезда и мягкий фон), `1` — обычное поле.
    */
   readonly localFade: number;
-  /**
-   * Нормировка плотности по кадру (§17.12 `V-3`): средняя плотность кадра
-   * приводится к `TARGET_MEAN_DENSITY`, поэтому `meanL` не уезжает от уровня
-   * к уровню. Считается по данным кадра — грубой сетке `STATS_GRID²` точек.
-   */
+  /** Постоянная нормировка по всей карте, не зависящая от вида камеры. */
   readonly densityGain: number;
   readonly zoom: number;
 }
@@ -607,9 +601,8 @@ function windowWeight(index: number, peak: number, halfWidth: number): number {
 }
 
 /**
- * Окна октав для конкретного буфера. Оба пика выводятся из экранного масштаба:
- * `iₚ = log2(размер · zoom / (OCTAVE_BASE_FREQ · желаемая ячейка, px))`.
- * Поэтому при зуме в кадр приходит новое поколение частот, а не та же картинка.
+ * Окна октав вычисляются по фиксированному эталонному масштабу узора, а не
+ * по текущей камере. Пик `iₚ = log2(размер · zoom / (OCTAVE_BASE_FREQ · ячейка))`.
  */
 function buildOctaveField(width: number, height: number, zoom: number): OctaveField {
   const size = Math.sqrt(width * height);
@@ -669,9 +662,12 @@ function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
   const visibleWorldWidth = rawW / scale;
   const zoom = mapSize / Math.max(1e-6, visibleWorldWidth);
 
-  const octaves = buildOctaveField(width, height, zoom);
-  // Частоты в ячейках на нормированное поле: ячейка ≈ N пикселей буфера.
-  const cellFreq = (cellPx: number): number => (width * zoom) / cellPx;
+  // Фиксированный мировой рисунок: параметры облака не зависят от камеры,
+  // разрешения холста или CPU/GPU. Зум лишь увеличивает существующую структуру.
+  const patternWidth = 1920;
+  const patternZoom = 3;
+  const octaves = buildOctaveField(patternWidth, 1080, patternZoom);
+  const cellFreq = (cellPx: number): number => (patternWidth * patternZoom) / cellPx;
 
   const octaveCellsY: number[] = [];
   const octaveCellsCloudX: number[] = [];
@@ -717,12 +713,12 @@ function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
     detailWarpCells,
     detailWarpAmp: DETAIL_WARP_CELLS / detailWarpCells,
     threadGain: THREAD_GAIN_SHALLOW
-      + (THREAD_GAIN_DEEP - THREAD_GAIN_SHALLOW) * smoothstep(THREAD_ZOOM_FROM, THREAD_ZOOM_TO, zoom),
+      + (THREAD_GAIN_DEEP - THREAD_GAIN_SHALLOW) * smoothstep(THREAD_ZOOM_FROM, THREAD_ZOOM_TO, patternZoom),
     dustX: dustCells[0],
     dustY: dustCells[1],
     starCell: mapSize / starCells,
     starCells,
-    dustFade: 1 - smoothstep(40, 150, zoom),
+    dustFade: 1 - smoothstep(40, 150, patternZoom),
     localFade,
     densityGain: 1,
     zoom,
@@ -1000,9 +996,8 @@ function computeDensity(pass: CpuPass, worldX: number, worldY: number): number {
 /**
  * Один пиксель растра. Результат — в `pass.out` (значения в шкале `0…255`).
  *
- * Гашение на глубине применяется здесь, а не в `computeDensity`: нормировка
- * `V-3` считает среднюю плотность облака по кадру и не должна «разгонять»
- * пустой кадр глубокого пресета (§17.15.5 п. 3 — фон не выше `0,02`).
+ * Гашение применяется здесь, а не в `computeDensity`: нормировка по карте
+ * не должна «разгонять» пустой кадр фонового пресета.
  */
 function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
   const { ramp, tuning, out, frame } = pass;
@@ -1060,39 +1055,43 @@ function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
   out[2] = b;
 }
 
-/**
- * Нормировка по кадру: плотность замеряется на грубой сетке точек кадра
- * (детерминированно, без истории между кадрами), и коэффициент подбирается так,
- * чтобы средняя плотность кадра равнялась `TARGET_MEAN_DENSITY`. Это держит
- * `meanL` в полосе `12…40` и не даёт уровню «проваливаться» в тёмную часть
- * оболочки (§17.12 `V-3`).
- */
-function frameDensityGain(base: CpuPass): number {
+/** Одна нормировка по всей карте вместо зависимой от кадра автоэкспозиции. */
+const densityGainByStyle = new Map<FieldStyle, number>();
+function frameDensityGain(base: CpuPass, style: FieldStyle): number {
+  const cached = densityGainByStyle.get(style);
+  if (cached !== undefined) return cached;
   const { frame } = base;
-  const halfWidth = frame.width / 2;
-  const halfHeight = frame.height / 2;
-  const invDevice = 1 / frame.deviceScale;
   let sum = 0;
   let count = 0;
   for (let row = 0; row < STATS_GRID; row++) {
-    const y = ((row + 0.5) / STATS_GRID) * frame.height;
-    const worldY = frame.originY + (y - halfHeight) * invDevice;
+    const worldY = ((row + 0.5) / STATS_GRID) * frame.mapSize;
     for (let column = 0; column < STATS_GRID; column++) {
-      const x = ((column + 0.5) / STATS_GRID) * frame.width;
-      const worldX = frame.originX + (x - halfWidth) * invDevice;
+      const worldX = ((column + 0.5) / STATS_GRID) * frame.mapSize;
       sum += computeDensity(base, worldX, worldY);
       count++;
     }
   }
   const mean = count > 0 ? sum / count : 0;
-  if (!(mean > 1e-6)) return STATS_GAIN_MAX;
-  return Math.min(STATS_GAIN_MAX, Math.max(STATS_GAIN_MIN, TARGET_MEAN_DENSITY / mean));
+  const gain = !(mean > 1e-6)
+    ? STATS_GAIN_MAX
+    : Math.min(STATS_GAIN_MAX, Math.max(STATS_GAIN_MIN, TARGET_MEAN_DENSITY / mean));
+  densityGainByStyle.set(style, gain);
+  return gain;
+}
+
+/** Плотность облака в мировой точке без звёзд; пригодна для будущих инструментов. */
+export function sampleNebulaDensity(state: SectorFieldState, worldX: number, worldY: number, style: FieldStyle = 'nebula'): number {
+  if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) throw new RangeError('Координаты должны быть конечными');
+  const palette = paletteOf(style);
+  const base = buildFrame(state);
+  const probe = buildPass(base, buildRamp(palette), FIELD_TUNING[style], new Float64Array(3));
+  return clamp01(computeDensity(probe, worldX, worldY) * frameDensityGain(probe, style) * base.localFade * Math.max(0, Math.min(4, finiteOr(state.cloudBrightness, 1))));
 }
 
 function composeCpuData(state: SectorFieldState, palette: FieldPalette, divisor = 1): ImageData {
   const baseFrame = buildFrame(state, divisor);
   const probe = buildPass(baseFrame, buildRamp(palette), FIELD_TUNING[palette.id], new Float64Array(3));
-  const frame: FrameMath = { ...baseFrame, densityGain: frameDensityGain(probe) };
+  const frame: FrameMath = { ...baseFrame, densityGain: frameDensityGain(probe, palette.id) * Math.max(0, Math.min(4, finiteOr(state.cloudBrightness, 1))) };
   const pass = buildPass(frame, probe.ramp, probe.tuning, probe.out);
   const { width, height, originX, originY, deviceScale } = frame;
   const data = new Uint8ClampedArray(width * height * 4);
@@ -1606,6 +1605,7 @@ function cacheKey(style: FieldStyle, state: SectorFieldState, width: number, hei
     finiteOr(state.dpr, 1),
     finiteOr(state.mapSize, 0),
     finiteOr(state.edgeDist, -1),
+    finiteOr(state.cloudBrightness, 1),
     width,
     height,
   ].join('|');
@@ -1681,7 +1681,7 @@ export function createSectorField(
 
     const baseFrame = buildFrame(state);
     const probe = buildPass(baseFrame, buildRamp(palette), FIELD_TUNING[style], new Float64Array(3));
-    const gain = frameDensityGain(probe);
+    const gain = frameDensityGain(probe, style) * Math.max(0, Math.min(4, finiteOr(state.cloudBrightness, 1)));
     const glFrame: FrameMath = { ...baseFrame, densityGain: gain };
     const frame = glFrame;
     const { gl, program, uniforms } = current;

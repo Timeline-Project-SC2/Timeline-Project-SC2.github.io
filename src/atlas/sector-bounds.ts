@@ -1,7 +1,10 @@
+import { validBlink } from './nebula-model.ts';
+import type { NebulaBlink } from './nebula-model.ts';
+
 export type Point = readonly [number, number];
 export type Polyline = readonly Point[];
 export interface BoundsStyle { readonly strokeWidth: number; readonly dash: readonly number[]; readonly color: 'nebula' | 'tactical'; }
-export interface BoundsPrimitive { readonly id: string; readonly kind: 'sector' | 'halo' | 'nebula'; readonly style: BoundsStyle; readonly label: string; readonly points: Polyline; readonly cells?: readonly Point[]; }
+export interface BoundsPrimitive { readonly id: string; readonly kind: 'sector' | 'halo' | 'nebula'; readonly style: BoundsStyle; readonly label: string; readonly points: Polyline; readonly cells?: readonly Point[]; readonly blink?: NebulaBlink; }
 export interface SectorBounds { readonly version: number; readonly mapSize: 10000; readonly source: string; readonly bounds: readonly BoundsPrimitive[]; }
 function invalid(message: string): never { throw new RangeError(`Некорректные границы сектора: ${message}`); }
 export function parseBounds(json: unknown): SectorBounds {
@@ -23,7 +26,12 @@ export function parseBounds(json: unknown): SectorBounds {
     });
     if (kind !== 'halo' && (points.length < 4 || points[0]?.[0] !== points[points.length - 1]?.[0] || points[0]?.[1] !== points[points.length - 1]?.[1])) return invalid('замкнутый контур должен иметь минимум 3 вершины и совпадающие начало/конец.');
     if (kind === 'halo' && points.length < 2) return invalid('линия гало должна иметь минимум 2 точки.');
-    return { id: item.id, kind, style: { strokeWidth: style.strokeWidth as number, dash: style.dash as number[], color: style.color as BoundsStyle['color'] }, label: item.label, points };
+    let blink: NebulaBlink | undefined;
+    if (item.blink !== undefined) {
+      if (kind !== 'nebula' || item.blink === null || typeof item.blink !== 'object' || Array.isArray(item.blink)) return invalid('мигание допустимо только у туманности.');
+      try { blink = validBlink(item.blink as NebulaBlink); } catch { return invalid('некорректные настройки мигания.'); }
+    }
+    return { id: item.id, kind, style: { strokeWidth: style.strokeWidth as number, dash: style.dash as number[], color: style.color as BoundsStyle['color'] }, label: item.label, points, ...(blink ? { blink } : {}) };
   });
   return { version: 1, mapSize: 10000, source: root.source, bounds: items };
 }

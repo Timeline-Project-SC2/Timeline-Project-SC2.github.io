@@ -13,6 +13,7 @@ const {
   LOCAL_FADE_TO,
   createSectorField,
   hashSeed,
+  sampleNebulaDensity,
 } = fieldModule;
 const { edgeDistance, fitScaleFor, maxScaleForTargetWidth } = require('../src/atlas/level-ladder.ts');
 const { CONFIG } = require('../src/atlas/config.ts');
@@ -474,24 +475,44 @@ function frameMetrics(image) {
   return { meanL, ratio: edge / count / meanL, uniq: colors.size };
 }
 
-test('критерии V-2…V-4: деталь не гаснет с зумом, яркость в полосе, цветов достаточно', () => {
-  const size = 512;
+test('обзорный кадр сохраняет цветовое разнообразие и диапазон яркости', () => {
+  // Прежние V-2…V-4 требовали менять шум и нормировать каждый кадр при зуме.
+  // Это противоречит новому требованию неизменного мирового рисунка.
   for (const palette of FIELD_PALETTES) {
     const field = createSectorField(null, { style: palette.id });
-    const levels = [10000, 10000 / 16, 10000 / 512].map((width) => frameMetrics(
-      field.renderToImageData(stateForWidth(width, size)),
-    ));
-    const [shallow, middle, deep] = levels;
-    const uniqGate = palette.id === 'nebula' ? 3000 : 1800;
-    for (const [index, level] of levels.entries()) {
-      assert.ok(level.meanL >= 12 && level.meanL <= 40, `${palette.id} L${index}: meanL ${level.meanL.toFixed(1)} вне полосы 12…40`);
-      assert.ok(level.uniq >= uniqGate, `${palette.id} L${index}: уникальных цветов ${level.uniq} < ${uniqGate}`);
-    }
-    assert.ok(deep.meanL / shallow.meanL <= 1.25, `${palette.id}: рост яркости L9/L0 = ${(deep.meanL / shallow.meanL).toFixed(2)}`);
-    assert.ok(middle.ratio >= 0.9 * shallow.ratio, `${palette.id}: деталь L4/L0 = ${(middle.ratio / shallow.ratio).toFixed(2)} < 0,90`);
-    assert.ok(deep.ratio >= 0.9 * shallow.ratio, `${palette.id}: деталь L9/L0 = ${(deep.ratio / shallow.ratio).toFixed(2)} < 0,90`);
+    const level = frameMetrics(field.renderToImageData(stateForWidth(10000, 512)));
+    assert.ok(level.meanL >= 12 && level.meanL <= 40, `${palette.id}: meanL ${level.meanL}`);
+    assert.ok(level.uniq >= (palette.id === 'nebula' ? 3000 : 1800), `${palette.id}: цветов ${level.uniq}`);
     field.dispose();
   }
+});
+
+test('плотность туманности в мировой точке не зависит от камеры, зума и разрешения', () => {
+  const states = [
+    stateForWidth(10000, 512),
+    stateForWidth(625, 256),
+    { ...centredFrame(3000, 9000, 128, 500), dpr: 2 },
+    { ...centredFrame(8500, 1200, 64, 0.08), viewport: { w: 300, h: 800 }, dpr: 3 },
+  ];
+  for (const style of ['nebula', 'tactical']) {
+    for (const [x, y] of [[203, 3858], [3364, 9868], [5000, 5000], [7200, 3000]]) {
+      const expected = sampleNebulaDensity(states[0], x, y, style);
+      for (const state of states.slice(1)) assert.equal(sampleNebulaDensity(state, x, y, style), expected, `${style}: ${x}, ${y}`);
+    }
+  }
+});
+
+test('панорамирование не перенормирует яркость одного и того же участка CPU-кадра', () => {
+  const field = createSectorField(null, { style: 'tactical' });
+  const base = centredFrame(4000, 7000, 80, 1);
+  const shifted = { ...base, view: { ...base.view, tx: base.view.tx + 13, ty: base.view.ty + 7 } };
+  const a = field.renderToImageData(base).data;
+  const b = field.renderToImageData(shifted).data;
+  let max = 0;
+  for (let y = 0; y < 73; y++) for (let x = 0; x < 67; x++) for (let channel = 0; channel < 3; channel++) {
+    max = Math.max(max, Math.abs(a[(y * 80 + x) * 4 + channel] - b[((y + 7) * 80 + x + 13) * 4 + channel]));
+  }
+  assert.ok(max <= 1, `разница ${max}: допускается только дизеринг`);
 });
 
 /* ------------------------------------------------- кэш экранного пути и глубина */
@@ -566,4 +587,53 @@ test('GLSL uint-конструктор использует unsigned-литер�
     assert.deepEqual(match[1].split(',').map((s) => s.trim()), ['18u', '24u', '25u']);
     field.dispose();
   }
+});
+
+test('яркость облака управляется отдельно и учитывается CPU-кэшем', () => {
+  const { canvas, painted } = stubCanvas();
+  const field = createSectorField(canvas, { style: 'tactical' });
+  const base = stateForWidth(625, 96);
+  field.renderField({ ...base, cloudBrightness: 0 });
+  const dim = painted.image;
+  field.renderField({ ...base, cloudBrightness: 1 });
+  const bright = painted.image;
+  assert.notEqual(digest(dim.data), digest(bright.data));
+  field.renderField({ ...base, cloudBrightness: 0 });
+  assert.equal(painted.image, dim);
+  const sample = sampleNebulaDensity(base, 4000, 7000, 'tactical');
+  assert.equal(sampleNebulaDensity({ ...base, cloudBrightness: 0 }, 4000, 7000, 'tactical'), 0);
+  assert.equal(sampleNebulaDensity({ ...base, cloudBrightness: 1 }, 4000, 7000, 'tactical'), sample);
+  field.dispose();
+});
+
+test('WebGL получает постоянные параметры облака и независимый множитель мигания', () => {
+  const draws = [];
+  let uniforms = {};
+  const gl = new Proxy({
+    VERTEX_SHADER: 1, FRAGMENT_SHADER: 2, COMPILE_STATUS: 3, LINK_STATUS: 4, NO_ERROR: 0,
+    createShader: () => ({}), createProgram: () => ({}),
+    getShaderParameter: () => true, getProgramParameter: () => true,
+    getUniformLocation: (_program, name) => ({ name }), getError: () => 0,
+    uniform1f: (location, value) => { if (location) uniforms[location.name] = value; },
+    uniform1i: (location, value) => { if (location) uniforms[location.name] = value; },
+    uniform1ui: (location, value) => { if (location) uniforms[location.name] = value; },
+    uniform2i: (location, x, y) => { if (location) uniforms[location.name] = [x, y]; },
+    uniform2f: (location, x, y) => { if (location) uniforms[location.name] = [x, y]; },
+    uniform1fv: (location, value) => { if (location) uniforms[location.name] = [...value]; },
+    drawArrays: () => { draws.push(uniforms); uniforms = {}; },
+    getExtension: () => null,
+  }, { get: (target, property) => property in target ? target[property] : () => {} });
+  const canvas = { width: 0, height: 0, getContext: (kind) => kind === 'webgl2' ? gl : null, addEventListener() {}, removeEventListener() {} };
+  const field = createSectorField(canvas, { style: 'tactical' });
+  field.renderField(stateForWidth(10000, 128));
+  field.renderField({ ...centredFrame(3300, 9000, 256, 500), dpr: 2 });
+  field.renderField({ ...stateForWidth(625, 128), cloudBrightness: 3 });
+  assert.equal(draws.length, 3);
+  for (const key of ['u_warpAmp', 'u_octaveWeight[0]', 'u_octaveNormalizer', 'u_cloudPeak', 'u_threadGain', 'u_ridgeMidCells', 'u_ridgeFineCells', 'u_dustCells', 'u_dustFade', 'u_detailWarpCells', 'u_detailWarpAmp']) {
+    assert.deepEqual(draws[0][key], draws[1][key], key);
+    assert.deepEqual(draws[0][key], draws[2][key], key);
+  }
+  assert.equal(draws[0].u_densityGain, draws[1].u_densityGain);
+  assert.ok(Math.abs(draws[2].u_densityGain - draws[0].u_densityGain * 3) < 1e-12);
+  field.dispose();
 });
