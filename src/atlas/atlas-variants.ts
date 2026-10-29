@@ -5,6 +5,7 @@
 export type AtlasVariantName = 'minimal' | 'sector';
 
 export interface AtlasVariant {
+  readonly adminGate: string;
   readonly bodyAttrs: string;
   readonly coordinateControls: string;
   readonly coordinateReadout: string;
@@ -24,6 +25,7 @@ export interface AtlasVariant {
 
 export const atlasVariants: Record<AtlasVariantName, AtlasVariant> = {
   sector: {
+    adminGate: '        <a class="admin-gate-link" href="/sector/admin-edit/">Доступ Администратора</a>',
     bodyAttrs: '',
     coordinateControls: [
       '        <div class="control-divider"></div>',
@@ -70,6 +72,7 @@ export const atlasVariants: Record<AtlasVariantName, AtlasVariant> = {
     title: 'Timeline Project — Map Atlas',
   },
   minimal: {
+    adminGate: '',
     bodyAttrs: ' class="minimal-mode"',
     coordinateControls: '',
     coordinateReadout: '',

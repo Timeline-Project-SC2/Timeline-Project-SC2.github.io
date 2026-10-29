@@ -8,6 +8,7 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
   const variantName = match[1] as AtlasVariantName;
   const variant = atlasVariants[variantName];
   const replacements: Record<string, string> = {
+    ADMIN_GATE: variant.adminGate,
     BODY_ATTRS: variant.bodyAttrs,
     COORDINATE_CONTROLS: variant.coordinateControls,
     COORDINATE_READOUT: variant.coordinateReadout,
