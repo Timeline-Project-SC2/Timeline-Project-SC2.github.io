@@ -85,3 +85,14 @@ test('ввод и Escape внутри демо-панели изолирован
   assert.match(app, /isAdminUiTarget\(event\.target\) \|\| tag === 'input'/);
   assert.match(gateSource, /target\.closest\('#adminEditorGate, \[data-admin-editor\]'\)/);
 });
+
+test('успешная отправка включает красную тему и показывает подпись в стиле ошибки галактики', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(gateSource, /const ADMIN_SUCCESS_MESSAGE = 'Доступ Администратора получен\. Права расширены\.'/);
+  assert.match(gateSource, /showAdminAccessNotice\(doc\)/);
+  assert.match(gateSource, /doc\.documentElement\.classList\.add\('admin-editor-authorized'\)/);
+  assert.match(gateSource, /onAuthorized\(\)/);
+  assert.match(css, /:root\.admin-editor-authorized\s*\{[\s\S]*?--accent: #d9889a/);
+  assert.match(css, /\.toast\.admin-access-notice\s*\{[\s\S]*?top: 33\.33vh[\s\S]*?rgba\(255, 70, 70, \.7\)/);
+  assert.match(css, /\.admin-editor-authorized \.toast\.admin-access-notice\.is-done \.galaxy-error-dot/);
+});

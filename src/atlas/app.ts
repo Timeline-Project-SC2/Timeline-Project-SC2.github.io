@@ -206,6 +206,17 @@ function toast(message: string): void {
   }, 2600);
 }
 
+function applyAuthorizedTheme(): void {
+  theme.bg = cssVar('--bg', theme.bg);
+  theme.accent = cssVar('--accent', theme.accent);
+  theme.accent2 = cssVar('--accent-2', theme.accent2);
+  theme.text = cssVar('--text', theme.text);
+  theme.muted = cssVar('--muted', theme.muted);
+  theme.line = cssVar('--line-strong', theme.line);
+  theme.mono = cssVar('--mono', theme.mono);
+  if (kernel.ctx) kernel.renderer.requestRender();
+}
+
 function applyLabelsToggle(): void {
   const label = state.labelsOn ? 'Скрыть подписи карты' : 'Показать подписи карты';
   el.labelsToggle.setAttribute('aria-pressed', String(state.labelsOn));
@@ -497,7 +508,7 @@ function applySystemFrameRequest(): void {
 
 function boot(): void {
   cacheElements();
-  bindSectorAdminGate(doc);
+  bindSectorAdminGate(doc, applyAuthorizedTheme);
   kernel.catalog.updateSearchHintDistance();
   // Страховка: экран аутентификации не должен зависнуть даже при сетевой ошибке.
   window.setTimeout(dismissTimelineLoader, 8000);

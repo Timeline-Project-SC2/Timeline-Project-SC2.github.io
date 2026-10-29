@@ -2,6 +2,13 @@
 export const PUBLIC_TEST_CODE = 'KP-ADM-DEMO-27';
 export const ADMIN_SESSION_MARKER_KEY = 'timeline-admin-demo-access';
 const ADMIN_SESSION_MARKER_VALUE = 'granted';
+const ADMIN_SUCCESS_MESSAGE = 'Доступ Администратора получен. Права расширены.';
+const ADMIN_NOTICE_TYPING_MS = 45;
+const ADMIN_NOTICE_SHOW_MS = 5000;
+const ADMIN_NOTICE_FADE_MS = 400;
+let adminNoticeTypingTimer: number | null = null;
+let adminNoticeHideTimer: number | null = null;
+let adminNoticeFadeTimer: number | null = null;
 
 type SessionStore = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -40,8 +47,56 @@ export function isAdminUiTarget(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest('#adminEditorGate, [data-admin-editor]') !== null;
 }
 
+function activateAdminEditorTheme(doc: Document, onAuthorized: () => void): void {
+  doc.documentElement.classList.add('admin-editor-authorized');
+  doc.body.classList.add('admin-editor-authorized');
+  onAuthorized();
+}
+
+/** Печатает уведомление стилем красной ошибки с карты галактики. */
+function showAdminAccessNotice(doc: Document): void {
+  const notice = doc.getElementById('toast');
+  if (!(notice instanceof HTMLElement)) return;
+  if (adminNoticeTypingTimer !== null) window.clearInterval(adminNoticeTypingTimer);
+  if (adminNoticeHideTimer !== null) window.clearTimeout(adminNoticeHideTimer);
+  if (adminNoticeFadeTimer !== null) window.clearTimeout(adminNoticeFadeTimer);
+
+  const text = doc.createElement('span');
+  const dot = doc.createElement('span');
+  dot.className = 'galaxy-error-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  dot.textContent = '.';
+  notice.replaceChildren(text, dot);
+  notice.classList.add('admin-access-notice', 'visible');
+  notice.classList.remove('is-out', 'is-done');
+  const message = ADMIN_SUCCESS_MESSAGE.slice(0, -1);
+  let written = 0;
+  adminNoticeTypingTimer = window.setInterval((): void => {
+    written += 1;
+    text.textContent = message.slice(0, written);
+    if (written >= message.length) {
+      if (adminNoticeTypingTimer !== null) window.clearInterval(adminNoticeTypingTimer);
+      adminNoticeTypingTimer = null;
+      notice.classList.add('is-done');
+    }
+  }, ADMIN_NOTICE_TYPING_MS);
+
+  adminNoticeHideTimer = window.setTimeout((): void => {
+    notice.classList.add('is-out');
+    adminNoticeFadeTimer = window.setTimeout((): void => {
+      notice.classList.remove('admin-access-notice', 'visible', 'is-out', 'is-done');
+      notice.replaceChildren();
+      adminNoticeFadeTimer = null;
+      adminNoticeHideTimer = null;
+    }, ADMIN_NOTICE_FADE_MS);
+  }, ADMIN_NOTICE_SHOW_MS);
+}
+
 /** Привязывает только демо-форму; никаких данных или изменений не отправляется. */
-export function bindSectorAdminGate(doc: Document = document): void {
+export function bindSectorAdminGate(
+  doc: Document = document,
+  onAuthorized: () => void = function (): void {},
+): void {
   const gate = doc.getElementById('adminEditorGate');
   const panel = doc.getElementById('adminEditorPanel');
   const form = doc.getElementById('adminGateForm');
@@ -65,6 +120,7 @@ export function bindSectorAdminGate(doc: Document = document): void {
     panel.hidden = false;
   };
   if (hasAdminSessionMarker(storage)) {
+    activateAdminEditorTheme(doc, onAuthorized);
     showPanel();
     return;
   }
@@ -94,6 +150,8 @@ export function bindSectorAdminGate(doc: Document = document): void {
     } catch {
       // При недоступном sessionStorage доступ живёт только до закрытия/перезагрузки страницы.
     }
+    activateAdminEditorTheme(doc, onAuthorized);
     showPanel();
+    showAdminAccessNotice(doc);
   });
 }
