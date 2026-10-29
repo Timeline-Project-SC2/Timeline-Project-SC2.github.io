@@ -1,9 +1,9 @@
 # Карточка ADM-UI: оболочка административного редактора
 
 > **Статус на 29.10.2026:** [PR #335](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/335) слит в `0217f27`; исправление входа — [PR #337](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/337), `0ac3e2e`.
-> Автоматические проверки и публикация Pages прошли; владелец сообщил об исправлении.
-> [PR #339](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/339): владелец согласовал смену; функциональная проверка `/sector/` прошла.
-> Прежний `/sector/sector.html` даёт 404; решение о старых ссылках остаётся за владельцем.
+> [PR #339](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/339) слит с `--admin` по разрешению владельца в `82f5030`; публикация Pages прошла.
+> `/` — галактика, `/sector/` — сектор; прежний `/sector/sector.html` даёт ожидаемый 404.
+> По независимому отчёту сборка проверена в Chromium; живая визуальная приёмка не подтверждена.
 > Настоящие права и публикация данных не реализованы; факты кода — по отчёту исполнителя.
 >
 > Назад: [оркестрация](../README.md) · [очередь сектора](../../stages/stage-09-12-sector/todo.md) · [правила взаимодействия модулей](../../concepts/module-interaction-rules.md).

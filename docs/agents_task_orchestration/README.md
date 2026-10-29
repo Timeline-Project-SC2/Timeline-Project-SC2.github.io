@@ -36,7 +36,7 @@
 | Карточка | Волна | Статус |
 |---|---|---|
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и инициация изменений | `A0-G`: сообщён `HOLD`, факты ещё не получены; `A0-F` не подтверждён, реализация не начата |
-| [`wave_cards/ADM-UI.md`](wave_cards/ADM-UI.md) | `ADM-UI`: кнопка, условный код и оболочка редактора сектора | новый адрес PR #339 проверен; прежний возвращает 404, решение о совместимости ждёт владельца |
+| [`wave_cards/ADM-UI.md`](wave_cards/ADM-UI.md) | `ADM-UI`: кнопка, условный код и оболочка редактора сектора | PR #339 слит (`82f5030`), Pages опубликован; `/sector/` — сектор, старый адрес отключён по выбору владельца |
 | [`wave_cards/F-1.md`](wave_cards/F-1.md) | `F-1` · `Z-5`: единица `1` ед = `1` св.г., предел `0,002` св.г./px, лестница `L0…L12`, маркер `0,3544` | принята 26.10.2026 (PR #300); исполнение — [`F-1-execution.md`](wave_cards/F-1-execution.md), вердикт — [`wave_cards/F-1-execution.md`](wave_cards/F-1-execution.md) |
 | [`wave_cards/F-2.md`](wave_cards/F-2.md) | `F-2` · `Z-4e`: территории на глубине до `L12`, `faction-net` без `NET_LAYER_LEVELS`, диапазон от `layerFillAlpha` | принята 26.10.2026 (PR #308, PASS); исполнение и вердикт — [`F-2-execution.md`](wave_cards/F-2-execution.md) |
 | [`wave_cards/F-3.md`](wave_cards/F-3.md) | `F-3` · `Z-4f`: фактическая сетка, тиры `T6/T7`, `gridTiersFor(scale)`, удаление `.map-grid-overlay` | принята 26.10.2026 (PR #313, PASS, squash `59f8f3a`); исполнение, журнал F3-1…F3-13 и вердикт — [`F-3-execution.md`](wave_cards/F-3-execution.md) |
