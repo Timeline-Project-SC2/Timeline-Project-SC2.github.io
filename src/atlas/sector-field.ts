@@ -1,9 +1,9 @@
 /**
  * Процедурное поле сектора (шаг `SW-2A`, волна `SW-2`).
  *
- * Заменяет растровую подложку `/sector/` детерминированным шумовым полем:
- * `field.nebula` + `field.dust` + `field.stars` из §8.1 плана
- * `docs/stages/stage-9-12-sector-deep-render-plan.md`.
+ * Заменяет растровую подложку `/sector/` детерминированным шумовым полем
+ * облаков и пыли; звёзды рисуются отдельным мировым каталогом (§8.1 плана
+ * `docs/stages/stage-9-12-sector-deep-render-plan.md`).
  *
  * Контракт — §17.5 `docs/agents_task_orchestration/agents_task_orchestration.md`
  * (в редакции от 25.10.2026: центр кадра `(viewport.w / 2 − tx) / scale`,
@@ -36,8 +36,8 @@
  *     кадра приводится по модулю `mapSize`. Поэтому `field(x, y)` побитово равен
  *     `field(x ± mapSize, y ± mapSize)`: соседний сектор — продолжение поля.
  *  8. Глубина (§17.15.5). Необязательное `edgeDist` в св.г. гасит туманность
- *     и пыль монотонно: при `edgeDist ≤ 1 св.г.` остаются только звёздная
- *     пыль и мягкий фон плотностью ≤ `0,02`, при `edgeDist ≥ 4 св.г.` поле
+ *     и пыль монотонно: при `edgeDist ≤ 1 св.г.` остаётся мягкий фон
+ *     плотностью ≤ `0,02`; звёзды — отдельный слой. При `edgeDist ≥ 4 св.г.` поле
  *     обычное. Без `edgeDist` — прежнее полное поле.
  */
 
@@ -60,7 +60,7 @@ export interface SectorFieldState {
   /**
    * Расстояние от цели до ближайшей границы кадра в св.г. (§17.15.1).
    * Если задано, работает глубина: при `edgeDist ≤ 1 св.г.` туманность и
-   * пыль погашены полностью, остаются звёздная пыль и мягкий фон
+   * пыль погашены полностью, остаётся мягкий фон
    * (§17.15.5), при `edgeDist ≥ 4 св.г.` поле обычное.
    * Поле необязательное: без него пресет прежний, полное поле.
    */
@@ -237,10 +237,6 @@ const CHANNEL_ENVELOPE = 14;
 const CHANNEL_DETAIL_WARP_X = 12;
 const CHANNEL_DETAIL_WARP_Y = 13;
 const CHANNEL_DUST = 17;
-const CHANNEL_STAR_PRESENCE = 19;
-const CHANNEL_STAR_X = 20;
-const CHANNEL_STAR_Y = 21;
-const CHANNEL_STAR_BRIGHTNESS = 22;
 const CHANNEL_DITHER = 23;
 const CHANNEL_LIMIT = 27;
 
@@ -348,8 +344,6 @@ interface FieldTuning {
   readonly densityScale: number;
   readonly dustStrength: number;
   readonly dustTint: number;
-  readonly starPresence: number;
-  readonly starGain: number;
 }
 
 const FIELD_TUNING: { readonly [style in FieldStyle]: FieldTuning } = Object.freeze({
@@ -362,8 +356,6 @@ const FIELD_TUNING: { readonly [style in FieldStyle]: FieldTuning } = Object.fre
     densityScale: 0.62,
     dustStrength: 0.5,
     dustTint: 0.55,
-    starPresence: 0.34,
-    starGain: 1.15,
   }),
   tactical: Object.freeze({
     warpCells: 3.6,
@@ -376,8 +368,6 @@ const FIELD_TUNING: { readonly [style in FieldStyle]: FieldTuning } = Object.fre
     densityScale: 0.62,
     dustStrength: 0.5,
     dustTint: 0.8,
-    starPresence: 0.2,
-    starGain: 0.8,
   }),
 });
 
@@ -466,8 +456,6 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
 const FALLBACK_VIEWPORT = 1920;
 const FALLBACK_MAP_SIZE = 10000;
 const MAX_RENDER_SIDE = 4096;
-/** Ячейка звёздной пыли в device-пикселях: звезда получается размером 1–2 px (§8.1). */
-const STAR_CELL_PX = 3;
 /** Целевая средняя плотность кадра для нормировки `V-3` и сетка её замера. */
 const TARGET_MEAN_DENSITY = 0.13;
 const STATS_GRID = 24;
@@ -541,9 +529,6 @@ interface FrameMath {
   readonly threadGain: number;
   readonly dustX: number;
   readonly dustY: number;
-  /** Ячейка звёздной пыли в мировых единицах и их число на карту (целое). */
-  readonly starCell: number;
-  readonly starCells: number;
   /** Фиксированная интенсивность пылевых полос. */
   readonly dustFade: number;
   /**
@@ -683,8 +668,6 @@ function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
   const ridgeFine = cellsForLayer(cellFreq(THREAD_CELL_PX), THREAD_ANISOTROPY);
   const dustCells = cellsForLayer(cellFreq(DUST_CELL_PX), DUST_ANISOTROPY);
   const detailWarpCells = cellsPerMap(cellFreq(DETAIL_WARP_CELL_PX));
-  const starCellRaw = STAR_CELL_PX / deviceScale;
-  const starCells = cellsPerMap(mapSize / starCellRaw);
   const edgeDist = state.edgeDist;
   const localFade = typeof edgeDist === 'number' && Number.isFinite(edgeDist)
     ? smoothstep(LOCAL_FADE_FROM, LOCAL_FADE_TO, edgeDist)
@@ -716,8 +699,6 @@ function buildFrame(state: SectorFieldState, divisor = 1): FrameMath {
       + (THREAD_GAIN_DEEP - THREAD_GAIN_SHALLOW) * smoothstep(THREAD_ZOOM_FROM, THREAD_ZOOM_TO, patternZoom),
     dustX: dustCells[0],
     dustY: dustCells[1],
-    starCell: mapSize / starCells,
-    starCells,
     dustFade: 1 - smoothstep(40, 150, patternZoom),
     localFade,
     densityGain: 1,
@@ -1000,7 +981,7 @@ function computeDensity(pass: CpuPass, worldX: number, worldY: number): number {
  * не должна «разгонять» пустой кадр фонового пресета.
  */
 function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
-  const { ramp, tuning, out, frame } = pass;
+  const { ramp, out, frame } = pass;
   const fade = frame.localFade;
   const cloud = computeDensity(pass, worldX, worldY) * frame.densityGain * fade;
   // Мягкий градиент фона глубокого пресета: плотность ≤ `LOCAL_BACKGROUND_DENSITY`.
@@ -1018,41 +999,6 @@ function composePixel(pass: CpuPass, worldX: number, worldY: number): void {
   const density = clamp01(cloud + background);
 
   sampleRampInto(ramp, density, out);
-  let r = out[0] ?? 0;
-  let g = out[1] ?? 0;
-  let b = out[2] ?? 0;
-
-  // Звёздная пыль: power-law яркость, одна звезда на ячейку 3 device-пикселя.
-  // Решётка звёзд тоже завёрнута по модулю их числа на карту: иначе звёзды
-  // выдавали бы стык секторов даже при периодичном облаке.
-  const starX = worldX / frame.starCell;
-  const starY = worldY / frame.starCell;
-  const cellX = wrapIndex(Math.floor(starX), frame.starCells);
-  const cellY = wrapIndex(Math.floor(starY), frame.starCells);
-  const insideX = starX - Math.floor(starX);
-  const insideY = starY - Math.floor(starY);
-  const presence = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_PRESENCE] ?? 0);
-  if (presence < tuning.starPresence) {
-    const starPosX = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_X] ?? 0);
-    const starPosY = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_Y] ?? 0);
-    const spread = latticeValue(cellX, cellY, CHANNEL_SEEDS[CHANNEL_STAR_BRIGHTNESS] ?? 0);
-    // Показатель степени 4 через умножения: без `pow`, побитово одинаково везде.
-    const power = spread * spread * spread * spread;
-    const dx = insideX - starPosX;
-    const dy = insideY - starPosY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    if (distance < 0.34) {
-      const falloff = 1 - distance / 0.34;
-      const glow = clamp01(falloff * falloff * power * tuning.starGain);
-      r += (255 - r) * glow * 0.94 + ramp.colors[3][0] * glow * 0.06;
-      g += (255 - g) * glow * 0.94 + ramp.colors[3][1] * glow * 0.06;
-      b += (255 - b) * glow * 0.94 + ramp.colors[3][2] * glow * 0.06;
-    }
-  }
-
-  out[0] = r;
-  out[1] = g;
-  out[2] = b;
 }
 
 /** Одна нормировка по всей карте вместо зависимой от кадра автоэкспозиции. */
@@ -1249,7 +1195,6 @@ uniform vec2 u_offsetHi;      // старшая часть центра кадр
 uniform vec2 u_offsetLo;      // младшая часть того же центра
 uniform float u_deviceScale;  // device-пикселей на мировую единицу
 uniform float u_mapSize;
-uniform float u_starCell;     // ячейка звёздной пыли в мировых единицах
 uniform float u_dustFade;     // затухание пылевых полос на глубоких уровнях
 uniform float u_warpAmp;      // амплитуда домен-варпа (в долях поля)
 uniform int u_envelopeCells;
@@ -1260,7 +1205,6 @@ uniform float u_densityGain;
 uniform float u_threadGain;
 uniform ivec2 u_ridgeMidCells;
 uniform ivec2 u_ridgeFineCells;
-uniform int u_starCells;
 uniform float u_localFade;
 uniform float u_octaveWeight[${MAX_OCTAVES}];
 uniform float u_octaveNormalizer;
@@ -1283,8 +1227,6 @@ const float RIDGE_STRENGTH = ${tuning.ridgeStrength.toFixed(6)};
 const float FINE_STRENGTH = ${tuning.fineStrength.toFixed(6)};
 const float DUST_STRENGTH = ${tuning.dustStrength.toFixed(6)};
 const float DUST_TINT = ${tuning.dustTint.toFixed(6)};
-const float STAR_PRESENCE = ${tuning.starPresence.toFixed(6)};
-const float STAR_GAIN = ${tuning.starGain.toFixed(6)};
 const float THREAD_AMPLITUDE = ${THREAD_AMPLITUDE.toFixed(6)};
 const float LOCAL_BACKGROUND_DENSITY = ${LOCAL_BACKGROUND_DENSITY.toFixed(6)};
 const float RIDGE_FINE_WEIGHTS[3] = float[3](${RIDGE_FINE_WEIGHTS.map((w) => w.toFixed(6)).join(', ')});
@@ -1449,26 +1391,6 @@ void main() {
   float density = clamp(cloud + background, 0.0, 1.0);
   vec3 color = rampColor(density);
 
-  // Звёздная пыль: power-law яркость, одна звезда на ячейку. Решётка звёзд тоже
-  // завёрнута по числу ячеек на карту — иначе звёзды выдают стык секторов.
-  vec2 starPoint = world / u_starCell;
-  ivec2 starCell = wrapCell(ivec2(floor(starPoint)), ivec2(u_starCells, u_starCells));
-  vec2 inside = starPoint - floor(starPoint);
-  if (latticeValue(starCell, ${CHANNEL_STAR_PRESENCE}u) < STAR_PRESENCE) {
-    vec2 starPos = vec2(
-      latticeValue(starCell, ${CHANNEL_STAR_X}u),
-      latticeValue(starCell, ${CHANNEL_STAR_Y}u)
-    );
-    float spread = latticeValue(starCell, ${CHANNEL_STAR_BRIGHTNESS}u);
-    float power = spread * spread * spread * spread;
-    float distance = length(inside - starPos);
-    if (distance < 0.34) {
-      float falloff = 1.0 - distance / 0.34;
-      float glow = clamp(falloff * falloff * power * STAR_GAIN, 0.0, 1.0);
-      color += (vec3(1.0) - color) * glow * 0.94 + RAMP3 * glow * 0.06;
-    }
-  }
-
   // Дизеринг ±0,5/255 на выходе. Это шум, а не сигнал: его узор между CPU и GPU
   // намеренно не совпадает (разные порядки обхода), вклад в канал ≤ 0,5/255 —
   // в допуске G7.6 между ветками.
@@ -1487,7 +1409,6 @@ interface GlRuntime {
     readonly offsetLo: WebGLUniformLocation | null;
     readonly deviceScale: WebGLUniformLocation | null;
     readonly mapSize: WebGLUniformLocation | null;
-    readonly starCell: WebGLUniformLocation | null;
     readonly dustFade: WebGLUniformLocation | null;
     readonly warpAmp: WebGLUniformLocation | null;
     readonly envelopeCells: WebGLUniformLocation | null;
@@ -1497,7 +1418,6 @@ interface GlRuntime {
     readonly ridgeMidCells: WebGLUniformLocation | null;
     readonly ridgeFineCells: WebGLUniformLocation | null;
     readonly dustCells: WebGLUniformLocation | null;
-    readonly starCells: WebGLUniformLocation | null;
     readonly localFade: WebGLUniformLocation | null;
     readonly densityGain: WebGLUniformLocation | null;
     readonly octaveWeight: WebGLUniformLocation | null;
@@ -1553,7 +1473,6 @@ function createGlRuntime(gl: WebGL2RenderingContext, style: FieldStyle): GlRunti
       offsetLo: gl.getUniformLocation(program, 'u_offsetLo'),
       deviceScale: gl.getUniformLocation(program, 'u_deviceScale'),
       mapSize: gl.getUniformLocation(program, 'u_mapSize'),
-      starCell: gl.getUniformLocation(program, 'u_starCell'),
       dustFade: gl.getUniformLocation(program, 'u_dustFade'),
       warpAmp: gl.getUniformLocation(program, 'u_warpAmp'),
       envelopeCells: gl.getUniformLocation(program, 'u_envelopeCells'),
@@ -1563,7 +1482,6 @@ function createGlRuntime(gl: WebGL2RenderingContext, style: FieldStyle): GlRunti
       ridgeMidCells: gl.getUniformLocation(program, 'u_ridgeMidCells'),
       ridgeFineCells: gl.getUniformLocation(program, 'u_ridgeFineCells'),
       dustCells: gl.getUniformLocation(program, 'u_dustCells'),
-      starCells: gl.getUniformLocation(program, 'u_starCells'),
       localFade: gl.getUniformLocation(program, 'u_localFade'),
       densityGain: gl.getUniformLocation(program, 'u_densityGain'),
       octaveWeight: gl.getUniformLocation(program, 'u_octaveWeight[0]'),
@@ -1714,7 +1632,6 @@ export function createSectorField(
       gl.uniform2f(uniforms.offsetLo, loX, loY);
       gl.uniform1f(uniforms.deviceScale, frame.deviceScale);
       gl.uniform1f(uniforms.mapSize, frame.mapSize);
-      gl.uniform1f(uniforms.starCell, frame.starCell);
       gl.uniform1f(uniforms.dustFade, frame.dustFade);
       gl.uniform1f(uniforms.densityGain, glFrame.densityGain);
       gl.uniform1f(uniforms.warpAmp, frame.warpAmp);
@@ -1725,7 +1642,6 @@ export function createSectorField(
       gl.uniform2i(uniforms.ridgeMidCells, frame.ridgeMidX, frame.ridgeMidY);
       gl.uniform2i(uniforms.ridgeFineCells, frame.ridgeFineX, frame.ridgeFineY);
       gl.uniform2i(uniforms.dustCells, frame.dustX, frame.dustY);
-      gl.uniform1i(uniforms.starCells, frame.starCells);
       gl.uniform1f(uniforms.localFade, frame.localFade);
       gl.uniform1f(uniforms.octaveNormalizer, frame.octaveNormalizer);
       gl.uniform1i(uniforms.cloudPeak, probe.peak);
