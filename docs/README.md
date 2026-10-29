@@ -50,6 +50,7 @@
 | Консолидация документации после аудита PR #302 (вердикт, промпт, не запущена) | [`consolidation-plan.md`](consolidation-plan.md), [шаг 0 — инвентарная карта](consolidation/README.md) |
 | История агентских сессий (бывший `HANDOFF.md`) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Планетные промпты и Зерус | [`prompts/`](prompts/planet-seeds-from-reference.md), [`zerus/README.md`](zerus/README.md) |
+| Концепция процедурной станции (план, не спецификация реализации) | [`concepts/station-generator-plan.md`](concepts/station-generator-plan.md) |
 | Журнал изменений (append-only) | [`../CHANGELOG.md`](../CHANGELOG.md) |
 | Вводная для агента | [`HANDOFF.md`](HANDOFF.md), [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md), [`../AGENTS.md`](../AGENTS.md) |
 
