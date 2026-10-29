@@ -25,6 +25,7 @@
 import { ADDRESS_TIERS, MAP_SIZE, addressOf, formatAddress, prefixOf } from './sector-address.ts';
 import type { AddressLetters } from './sector-address.ts';
 import type { Point, SectorBounds } from './sector-bounds.ts';
+import type { NebulaBlink } from './nebula-model.ts';
 import type { LabelLayoutResult, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, LABEL_GAP, estimateLabelSize, layoutLabels } from './label-layout.ts';
 import type { FrameViewport, LadderFrame } from './level-ladder.ts';
@@ -78,6 +79,7 @@ export interface SceneBounds {
   readonly color: 'nebula' | 'tactical';
   readonly strokeWidth: number;
   readonly dash: readonly number[];
+  readonly blink?: NebulaBlink;
   readonly points: readonly { readonly x: number; readonly y: number }[];
 }
 
@@ -521,6 +523,7 @@ export function boundsFor(
       color: item.style.color,
       strokeWidth: item.style.strokeWidth,
       dash: [...item.style.dash],
+      ...(item.blink ? { blink: item.blink } : {}),
       points: projected.map(([x, y]) => ({ x, y })),
     };
   });
