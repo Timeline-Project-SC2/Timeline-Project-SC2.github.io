@@ -71,7 +71,7 @@
 - `tools/vite/{asset-utils,atlas-shell,timeline-publish-pipeline}.ts` — модули сборочного пайплайна,
   на которые декомпозирован `vite.config.mts` (~120 строк):
   - `asset-utils.ts` — контент-хэширование, инлайн относительных JSON-импортов и утилиты путей;
-  - `atlas-shell.ts` — рендер вариантов `sector.html` и `minimal.html` из `templates/atlas-shell.html`;
+  - `atlas-shell.ts` — рендер вариантов `sector/index.html` и `minimal/minimal.html` из `templates/atlas-shell.html`;
   - `timeline-publish-pipeline.ts` — единый конвейер фаз публикации (`tokenizeLegacyAssets` →
     `ensureFinalizedAssets` → `restoreLegacyAssets` → `writePublishExtras`) с явным контекстом
     `PublishPipelineState` (`publishSources`, `finalizedAssets`, `tokenReferenceQueues`).
@@ -82,7 +82,7 @@
   python3 -m pip install -r tools/requirements.txt   # один раз, для картинок
   npm run assets:build                               # производные webp в assets/
   npm run build                                      # tsc --noEmit + vite build -> .publish/
-  python3 -m http.server 8080 --directory .publish   # адреса: /, /sector/sector.html, /sector/admin-edit/index.html
+  python3 -m http.server 8080 --directory .publish   # адреса: /, /sector/, /sector/admin-edit/index.html
   ```
   Dev-сервер Vite (`npx vite`; скрипта `dev` в `package.json` нет) для просмотра **не подходит**:
   в режиме `appType: 'spa'` он отвечает корневым `index.html` со статусом `200 text/html` на любой

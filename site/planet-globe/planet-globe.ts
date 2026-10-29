@@ -3277,9 +3277,9 @@ function installPlaceCatalog(placesText: string, systemsText: string, generation
 function applyPlace(place: CsvRow | null): void {
   if (!place) {
     els.breadcrumbSystem.textContent = 'Система';
-    els.breadcrumbSystem.href = '../sector/sector.html';
+    els.breadcrumbSystem.href = '../sector/';
     els.breadcrumbPlanet.textContent = els.preset.options[els.preset.selectedIndex]?.text || 'Демо-мир';
-    els.backToSector.href = '../sector/sector.html';
+    els.backToSector.href = '../sector/';
     return;
   }
   const genRow = place.ID ? generationByPlaceId.get(place.ID) : undefined;
@@ -3314,8 +3314,8 @@ function applyPlace(place: CsvRow | null): void {
   }
   els.breadcrumbPlanet.textContent = place.name || 'Планета';
   els.breadcrumbSystem.textContent = system ? (system.name || 'Система') : 'Система';
-  els.breadcrumbSystem.href = systemId ? ('../sector/sector.html#/s/' + encodeURIComponent(systemId)) : '../sector/sector.html';
-  els.backToSector.href = placeId ? ('../sector/sector.html#/p/' + encodeURIComponent(placeId)) : '../sector/sector.html';
+  els.breadcrumbSystem.href = systemId ? ('../sector/#/s/' + encodeURIComponent(systemId)) : '../sector/';
+  els.backToSector.href = placeId ? ('../sector/#/p/' + encodeURIComponent(placeId)) : '../sector/';
 }
 
 function syncDossierSummary(summary: GlobeSummary): void {
