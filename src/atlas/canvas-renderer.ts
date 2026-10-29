@@ -18,7 +18,7 @@ import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import { smoothPolyline } from './sector-bounds.ts';
 import { smoothBoundaryAtMapEdge } from './sector-boundary-path.ts';
 import { clipHalo } from './sector-halo-clip.ts';
-import { createStarGroups } from './sector-stars.ts';
+import { createStarGroups, DEPTH_STAR_LAYERS, depthStarOpacity, forEachDepthStar } from './sector-stars.ts';
 import { nebulaBlinkIntensity } from './nebula-model.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
@@ -220,6 +220,32 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
         }
       }
       ctx.fill();
+    }
+
+    // Новые глубинные слои проявляются плавно, а уже видимые звёзды не сдвигаются.
+    const visibleWidth = state.viewport.w / scale;
+    for (const layer of DEPTH_STAR_LAYERS) {
+      const opacity = depthStarOpacity(layer, visibleWidth);
+      if (opacity <= 0) continue;
+      const positions = starGroups.map((): number[] => []);
+      forEachDepthStar(layer, size, { left, right, top, bottom }, (worldX, worldY, groupIndex) => {
+        const x = state.view.tx + worldX * scale;
+        const y = state.view.ty + worldY * scale;
+        positions[groupIndex]!.push(x, y);
+      });
+      for (let index = 0; index < starGroups.length; index++) {
+        const group = starGroups[index]!;
+        const points = positions[index]!;
+        if (points.length === 0) continue;
+        ctx.globalAlpha = group.alpha * opacity;
+        ctx.beginPath();
+        for (let i = 0; i < points.length; i += 2) {
+          const x = points[i]!; const y = points[i + 1]!;
+          ctx.moveTo(x + group.radius, y);
+          ctx.arc(x, y, group.radius, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
     }
     ctx.restore();
   }

@@ -32,7 +32,7 @@ const SAMPLE_TARGETS = [
   { name: 'Тарсонис', x: 4902, y: 5404 },
 ];
 
-function createStubCanvasContext(calls = []) {
+function createStubCanvasContext(calls = [], assignments = []) {
   return new Proxy(
     {},
     {
@@ -42,7 +42,8 @@ function createStubCanvasContext(calls = []) {
         }
         return (...args) => { calls.push([prop, ...args]); };
       },
-      set() {
+      set(_target, prop, value) {
+        assignments.push([prop, value]);
         return true;
       },
     },
@@ -106,10 +107,11 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
   };
 
   const calls = [];
+  const assignments = [];
   const kernel = {
     doc: null,
     canvas: null,
-    ctx: createStubCanvasContext(calls),
+    ctx: createStubCanvasContext(calls, assignments),
     fieldCanvas: null,
     field: null,
     state,
@@ -173,7 +175,7 @@ function createRendererHarness(viewport, mapSize = MAP_SIZE) {
     }
   }
 
-  return { state, renderer, flushAnimationFrame, restoreGlobals, calls, kernel };
+  return { state, renderer, flushAnimationFrame, restoreGlobals, calls, assignments, kernel };
 }
 
 /**
@@ -589,6 +591,104 @@ test('на краю карты маска и обводка туманности
     const outlineEnd = h.calls.findIndex(([name], index) => name === 'stroke' && index > outlineStart);
     assert.deepEqual(h.calls.slice(outlineStart + 1, outlineEnd), mask);
     assert.ok(mask.some(([name, cx, , x]) => name === 'quadraticCurveTo' && cx === 150 && x === 150), 'край карты отсутствует в маске');
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('глубинные звёздные слои плавно проявляются и остаются видимыми', () => {
+  const { DEPTH_STAR_LAYERS, depthStarOpacity } = require('../src/atlas/sector-stars.ts');
+  assert.equal(DEPTH_STAR_LAYERS.length, 4);
+  for (const layer of DEPTH_STAR_LAYERS) {
+    assert.equal(depthStarOpacity(layer, layer.startWidth), 0);
+    assert.equal(depthStarOpacity(layer, layer.startWidth * 1.01), 0);
+    assert.ok(Math.abs(depthStarOpacity(layer, Math.sqrt(layer.startWidth * layer.fullWidth)) - 0.5) < 1e-12);
+    assert.equal(depthStarOpacity(layer, layer.fullWidth), 1);
+    assert.equal(depthStarOpacity(layer, layer.fullWidth / 100), 1);
+    let previous = 0;
+    for (let i = 0; i <= 100; i++) {
+      const width = layer.startWidth * (layer.fullWidth / layer.startWidth) ** (i / 100);
+      const alpha = depthStarOpacity(layer, width);
+      assert.ok(alpha >= previous && alpha - previous < 0.02, 'непрерывное монотонное проявление');
+      previous = alpha;
+    }
+  }
+});
+
+test('глубинные звёзды сохраняют координаты и стиль при панорамировании и повторе карты', () => {
+  const { DEPTH_STAR_LAYERS, forEachDepthStar } = require('../src/atlas/sector-stars.ts');
+  for (const layer of DEPTH_STAR_LAYERS) {
+    const size = MAP_SIZE / layer.cellsPerMap;
+    const sample = (rect) => {
+      const stars = [];
+      forEachDepthStar(layer, MAP_SIZE, rect, (x, y, group) => stars.push([x, y, group]));
+      return stars;
+    };
+    const region = { left: 123 * size, right: 153 * size, top: 231 * size, bottom: 261 * size };
+    const base = sample(region);
+    const shifted = sample({ ...region, left: region.left - 10 * size, top: region.top - 10 * size });
+    const overlap = shifted.filter(([x, y]) => x >= region.left && y >= region.top);
+    assert.ok(base.length > 100);
+    assert.deepEqual(overlap, base, `слой ${layer.cellsPerMap}: сдвиг камеры`);
+    assert.deepEqual(sample(region), base, 'повторное построение детерминировано');
+    const repeated = sample({ left: region.left + MAP_SIZE, right: region.right + MAP_SIZE, top: region.top, bottom: region.bottom });
+    assert.equal(repeated.length, base.length);
+    for (let i = 0; i < base.length; i++) {
+      assert.ok(Math.abs(repeated[i][0] - base[i][0] - MAP_SIZE) < 1e-9);
+      assert.equal(repeated[i][1], base[i][1]);
+      assert.equal(repeated[i][2], base[i][2]);
+    }
+  }
+});
+
+test('глубинные слои дают заметную плотность на разных масштабах и на максимальном зуме', () => {
+  const { DEPTH_STAR_LAYERS, forEachDepthStar } = require('../src/atlas/sector-stars.ts');
+  for (const layer of DEPTH_STAR_LAYERS) {
+    const width = layer.fullWidth;
+    const rect = { left: 5000 - width / 2, right: 5000 + width / 2, top: 5000 - width * 0.3, bottom: 5000 + width * 0.3 };
+    let count = 0;
+    forEachDepthStar(layer, MAP_SIZE, rect, () => { count++; });
+    assert.ok(count >= 800 && count <= 10000, `слой ${layer.cellsPerMap}: ${count} звёзд`);
+  }
+});
+
+test('рендер применяет плавную прозрачность к новому слою и сохраняет базовые звёзды', () => {
+  const { DEPTH_STAR_LAYERS } = require('../src/atlas/sector-stars.ts');
+  const width = Math.sqrt(DEPTH_STAR_LAYERS[0].startWidth * DEPTH_STAR_LAYERS[0].fullWidth);
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    const scale = 300 / width;
+    h.state.view = { scale, tx: 150 - 5000 * scale, ty: 100 - 5000 * scale };
+    h.renderer.requestRender();
+    h.flushAnimationFrame(performance.now() + 1000);
+    const values = h.assignments.filter(([name]) => name === 'globalAlpha').map(([, alpha]) => alpha);
+    assert.ok(values.some((alpha) => Math.abs(alpha - 0.16) < 1e-12), 'базовые звёзды остались на месте');
+    assert.ok(values.some((alpha) => Math.abs(alpha - 0.08) < 1e-12), 'новый слой проявился наполовину');
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('глубинная звезда сохраняет мировой адрес и экранный радиус при зуме и сдвиге', () => {
+  const { DEPTH_STAR_LAYERS, createStarGroups, forEachDepthStar } = require('../src/atlas/sector-stars.ts');
+  let star;
+  forEachDepthStar(DEPTH_STAR_LAYERS[0], MAP_SIZE, { left: 4960, right: 5040, top: 4960, bottom: 5040 }, (x, y, group) => {
+    star ??= { x, y, radius: createStarGroups()[group].radius };
+  });
+  assert.ok(star);
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    for (const [width, centerX] of [[1600, 5000], [800, 5010]]) {
+      const scale = 300 / width;
+      h.state.view = { scale, tx: 150 - centerX * scale, ty: 100 - 5000 * scale };
+      h.calls.length = 0;
+      h.renderer.requestRender();
+      h.flushAnimationFrame(performance.now() + 1000);
+      const expectedX = h.state.view.tx + star.x * scale;
+      const expectedY = h.state.view.ty + star.y * scale;
+      assert.ok(h.calls.some(([name, x, y, radius]) => name === 'arc' &&
+        Math.abs(x - expectedX) < 1e-9 && Math.abs(y - expectedY) < 1e-9 && radius === star.radius));
+    }
   } finally {
     h.restoreGlobals();
   }
