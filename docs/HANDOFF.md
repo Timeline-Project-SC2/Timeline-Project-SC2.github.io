@@ -17,6 +17,7 @@
 | Что сделано по частям (тайлы, атлас, сектор) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Очередь и пробный порядок работы по сектору | [План следующей сессии](stages/stage-09-12-sector/todo.md) |
 | Состояние данных, синка и живых листов | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Правила взаимодействия данных, геометрии и отрисовки модулей | [`concepts/module-interaction-rules.md`](concepts/module-interaction-rules.md) |
 | Концепция процедурной модели орбитальной станции | [`concepts/station-generator-plan.md`](concepts/station-generator-plan.md) |
 | Что осталось проверить владельцу глазами | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Как устроен прицел и переход по областям | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
