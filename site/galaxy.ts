@@ -237,7 +237,7 @@ interface GalaxyConfig {
   }
 
   var sectorName = hotspot.getAttribute('data-name') || 'Сектор';
-  var defaultHref = (window.SITE_LINKS && window.SITE_LINKS.sectorPage) || '/sector/sector.html';
+  var defaultHref = (window.SITE_LINKS && window.SITE_LINKS.sectorPage) || '/sector/';
 
   // Параметры — как на странице сектора (app.js → CONFIG.view)
   var CONFIG: GalaxyConfig = {
