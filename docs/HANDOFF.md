@@ -17,6 +17,7 @@
 | Что сделано по частям (тайлы, атлас, сектор) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Очередь и пробный порядок работы по сектору | [План следующей сессии](stages/stage-09-12-sector/todo.md) |
 | Состояние данных, синка и живых листов | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Концепция процедурной модели орбитальной станции | [`concepts/station-generator-plan.md`](concepts/station-generator-plan.md) |
 | Что осталось проверить владельцу глазами | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Как устроен прицел и переход по областям | [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md) |
 | Известные ловушки среды и снапшотов | [`handoff/infra-pitfalls.md`](handoff/infra-pitfalls.md) |
@@ -42,7 +43,7 @@
 - Систематические ошибки: [`docs/registers/errors-systemic.md`](registers/errors-systemic.md).
 - Баги среды и контрактов: [`docs/registers/README.md`](registers/README.md).
 - Текущая волна: [`docs/agents_task_orchestration/agents_task_orchestration.md`](agents_task_orchestration/agents_task_orchestration.md).
-- Упрощение документации, тестов и кода: [карточка `UP-1`](agents_task_orchestration/wave_cards/UP-1.md) и [замечания к работе](agents_task_orchestration/wave_cards/UP-1-review.md). PR #325 доработан, но остаётся открыт и не слит. Планетарные задачи и их визуальная приёмка отложены до отдельного указания владельца.
+- Упрощение документации, тестов и кода: [карточка `UP-1`](agents_task_orchestration/wave_cards/UP-1.md) и [замечания к работе](agents_task_orchestration/wave_cards/UP-1-review.md). PR #325 доработан, но остаётся открыт и не слит. По отдельному указанию владельца 29.10 выполнены только аудит генератора планет и документация [концепции станции](concepts/station-generator-plan.md); реализация модели и её визуальная приёмка не начаты.
 
 ## Главное правило
 
