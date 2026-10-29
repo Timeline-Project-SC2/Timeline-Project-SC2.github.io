@@ -2,6 +2,7 @@
 export const PUBLIC_TEST_CODE = 'KP-ADM-DEMO-27';
 export const ADMIN_SESSION_MARKER_KEY = 'timeline-admin-demo-access';
 const ADMIN_SESSION_MARKER_VALUE = 'granted';
+const ADMIN_ACCESS_QUERY_PARAM = 'adminAccess';
 const ADMIN_SUCCESS_MESSAGE = 'Доступ Администратора получен. Права расширены.';
 const ADMIN_NOTICE_TYPING_MS = 45;
 const ADMIN_NOTICE_SHOW_MS = 5000;
@@ -92,7 +93,17 @@ function showAdminAccessNotice(doc: Document): void {
   }, ADMIN_NOTICE_SHOW_MS);
 }
 
-/** Привязывает только демо-форму; никаких данных или изменений не отправляется. */
+function removeAdminAccessQuery(doc: Document): boolean {
+  const view = doc.defaultView;
+  if (!view) return false;
+  const url = new URL(view.location.href);
+  if (url.searchParams.get(ADMIN_ACCESS_QUERY_PARAM) !== 'confirmed') return false;
+  url.searchParams.delete(ADMIN_ACCESS_QUERY_PARAM);
+  view.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  return true;
+}
+
+/** Привязывает публичный демо-барьер: сектор открывает модалку, переход — только после совпадения кода. */
 export function bindSectorAdminGate(
   doc: Document = document,
   onAuthorized: () => void = function (): void {},
@@ -103,11 +114,17 @@ export function bindSectorAdminGate(
   const input = doc.getElementById('adminGateCode');
   const submit = doc.getElementById('adminGateSubmit');
   const error = doc.getElementById('adminGateError');
-  if (!(gate instanceof HTMLElement) || !(panel instanceof HTMLElement)
+  const openButton = doc.getElementById('adminGateOpen');
+  const destination = form instanceof HTMLFormElement
+    ? form.dataset.adminGateDestination?.trim() || ''
+    : '';
+  const modalGate = gate?.hasAttribute('data-admin-gate-modal') === true;
+  if (!(gate instanceof HTMLElement) || (!destination && !(panel instanceof HTMLElement))
     || !(form instanceof HTMLFormElement) || !(input instanceof HTMLInputElement)
     || !(submit instanceof HTMLButtonElement) || !(error instanceof HTMLElement)) return;
 
   const attempt = createGateAttemptController();
+  const defaultErrorMessage = error.textContent || 'Код не совпадает. Измените ввод, чтобы попробовать снова.';
   let storage: SessionStore | null = null;
   try {
     storage = window.sessionStorage;
@@ -117,20 +134,50 @@ export function bindSectorAdminGate(
 
   const showPanel = (): void => {
     gate.hidden = true;
-    panel.hidden = false;
+    if (panel instanceof HTMLElement) panel.hidden = false;
   };
-  if (hasAdminSessionMarker(storage)) {
+  const closeModal = (returnFocus: boolean): void => {
+    gate.hidden = true;
+    doc.body.classList.remove('admin-gate-open');
+    if (returnFocus && openButton instanceof HTMLButtonElement) openButton.focus();
+  };
+
+  if (hasAdminSessionMarker(storage) && !destination) {
     activateAdminEditorTheme(doc, onAuthorized);
     showPanel();
+    if (removeAdminAccessQuery(doc)) showAdminAccessNotice(doc);
     return;
   }
 
-  panel.hidden = true;
-  gate.hidden = false;
+  if (modalGate) {
+    gate.hidden = true;
+    if (!(openButton instanceof HTMLButtonElement)) return;
+    openButton.addEventListener('click', (): void => {
+      gate.hidden = false;
+      doc.body.classList.add('admin-gate-open');
+      input.focus();
+    });
+    gate.addEventListener('click', (event: MouseEvent): void => {
+      if (event.target instanceof Element && event.target.closest('[data-admin-gate-close]')) {
+        closeModal(true);
+      }
+    });
+    doc.addEventListener('keydown', (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || gate.hidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeModal(true);
+    });
+  } else {
+    gate.hidden = false;
+    if (panel instanceof HTMLElement) panel.hidden = true;
+  }
+
   form.addEventListener('input', (event: Event): void => {
     if (event.target !== input) return;
     attempt.inputChanged();
     submit.disabled = false;
+    error.textContent = defaultErrorMessage;
     error.hidden = true;
     input.setAttribute('aria-invalid', 'false');
   });
@@ -148,8 +195,23 @@ export function bindSectorAdminGate(
     try {
       storage?.setItem(ADMIN_SESSION_MARKER_KEY, ADMIN_SESSION_MARKER_VALUE);
     } catch {
-      // При недоступном sessionStorage доступ живёт только до закрытия/перезагрузки страницы.
+      // При недоступном sessionStorage переход между страницами выполнить нельзя.
     }
+
+    if (destination) {
+      if (!hasAdminSessionMarker(storage)) {
+        error.textContent = 'Не удалось подтвердить сессию браузера. Разрешите sessionStorage и попробуйте снова.';
+        error.hidden = false;
+        return;
+      }
+      const view = doc.defaultView;
+      if (!view) return;
+      const target = new URL(destination, view.location.href);
+      target.searchParams.set(ADMIN_ACCESS_QUERY_PARAM, 'confirmed');
+      view.location.assign(target.href);
+      return;
+    }
+
     activateAdminEditorTheme(doc, onAuthorized);
     showPanel();
     showAdminAccessNotice(doc);

@@ -68,9 +68,11 @@ test('админ-кнопка стоит между «О карте» и воз�
   const adminAt = template.indexOf('@@ADMIN_GATE@@');
   const galaxyAt = template.indexOf('@@GALAXY_RETURN@@');
   assert.ok(helpAt >= 0 && helpAt < adminAt && adminAt < galaxyAt);
-  assert.match(variants, /sector:\s*\{[\s\S]*?adminGate: ['"]\s*<a class="admin-gate-link"/);
-  assert.match(variants, /minimal:\s*\{\s*adminEditorPanel: '',\s*adminGate: ''/);
+  assert.match(variants, /sector:\s*\{[\s\S]*?adminGate: ['"]\s*<button class="admin-gate-link" id="adminGateOpen" type="button"/);
+  assert.match(variants, /minimal:\s*\{\s*adminEditorPanel: '',\s*adminGate: '',\s*adminGatePanel: ''/);
   assert.match(variants, /adminGate: ''/);
+  assert.match(variants, /data-admin-gate-destination="\/sector\/admin-edit\/"/);
+  assert.match(variants, /id="adminEditorGate" role="dialog"[\s\S]*?data-admin-gate-modal hidden/);
 });
 
 test('ссылка доступна в мобильной горизонтальной шапке и отключает мигание при reduced motion', () => {
@@ -84,6 +86,19 @@ test('ввод и Escape внутри демо-панели изолирован
   const app = read('src/atlas/app.ts');
   assert.match(app, /isAdminUiTarget\(event\.target\) \|\| tag === 'input'/);
   assert.match(gateSource, /target\.closest\('#adminEditorGate, \[data-admin-editor\]'\)/);
+});
+
+test('кнопка только открывает модалку; переход на редактор происходит после совпадения кода и подтверждения', () => {
+  const variants = read('src/atlas/atlas-variants.ts');
+  const gate = read('src/atlas/sector-admin-gate.ts');
+  const template = read('templates/atlas-shell.html');
+  assert.match(variants, /id="adminGateOpen" type="button"/);
+  assert.ok(variants.includes('id="adminEditorGate" role="dialog" aria-modal="true" aria-labelledby="adminGateTitle" data-admin-gate-modal hidden'));
+  assert.ok(variants.includes('data-admin-gate-destination="/sector/admin-edit/"'));
+  assert.match(template, /@@ADMIN_GATE_PANEL@@/);
+  assert.match(gate, /if \(result === 'invalid'\)[\s\S]*?return;/);
+  assert.match(gate, /if \(destination\)[\s\S]*?target\.searchParams\.set\(ADMIN_ACCESS_QUERY_PARAM, 'confirmed'\)[\s\S]*?view\.location\.assign\(target\.href\)/);
+  assert.match(gate, /if \(modalGate\)[\s\S]*?openButton\.addEventListener\('click'[\s\S]*?gate\.hidden = false/);
 });
 
 test('успешная отправка включает красную тему и показывает подпись в стиле ошибки галактики', () => {
