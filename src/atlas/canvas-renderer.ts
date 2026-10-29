@@ -5,7 +5,6 @@ import {
   clamp,
   easeOutCubic,
   normalize,
-  rng,
 } from './config.ts';
 import type {
   AtlasKernel,
@@ -17,7 +16,9 @@ import type {
 } from './config.ts';
 import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import { smoothPolyline } from './sector-bounds.ts';
+import { smoothBoundaryAtMapEdge } from './sector-boundary-path.ts';
 import { clipHalo } from './sector-halo-clip.ts';
+import { createStarGroups } from './sector-stars.ts';
 import { nebulaBlinkIntensity } from './nebula-model.ts';
 import type { LabelItem, LabelLayoutResult, LabelMetrics, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, layoutLabels } from './label-layout.ts';
@@ -46,13 +47,6 @@ interface ViewAnimation {
   from: AtlasView;
   to: AtlasView;
   start: number;
-}
-
-interface SchematicStar {
-  x: number;
-  y: number;
-  r: number;
-  a: number;
 }
 
 interface DragState {
@@ -194,22 +188,40 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
 
   /* ------------------------------------------------------------------ схематичная подложка */
 
-  let starCache: SchematicStar[] | null = null;
-
-  function stars(): SchematicStar[] {
-    if (starCache) return starCache;
-    var random = rng(100000);
-    var size = kernel.data.mapSize();
-    starCache = [];
-    for (var i = 0; i < 900; i++) {
-      starCache.push({
-        x: random() * size,
-        y: random() * size,
-        r: 0.4 + random() * 1.5,
-        a: 0.12 + random() * 0.5
-      });
+  // Один и тот же каталог для обычного поля и схематического резерва.
+  const starGroups = createStarGroups();
+  function drawStars(): void {
+    const ctx = kernel.ctx!;
+    const size = kernel.data.mapSize();
+    const scale = state.view.scale;
+    if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(scale) || scale <= 0 ||
+        !Number.isFinite(state.view.tx) || !Number.isFinite(state.view.ty) ||
+        !Number.isFinite(state.viewport.w) || !Number.isFinite(state.viewport.h) ||
+        state.viewport.w <= 0 || state.viewport.h <= 0) return;
+    const margin = 2 / scale;
+    const left = (-state.view.tx) / scale - margin;
+    const right = (state.viewport.w - state.view.tx) / scale + margin;
+    const top = (-state.view.ty) / scale - margin;
+    const bottom = (state.viewport.h - state.view.ty) / scale + margin;
+    ctx.save();
+    ctx.fillStyle = '#cfe0f5';
+    for (const group of starGroups) {
+      ctx.globalAlpha = group.alpha;
+      ctx.beginPath();
+      for (let tileY = Math.floor(top / size); tileY <= Math.floor(bottom / size); tileY++) {
+        for (let tileX = Math.floor(left / size); tileX <= Math.floor(right / size); tileX++) {
+          for (const star of group.stars) {
+            const x = state.view.tx + (star.x + tileX) * size * scale;
+            const y = state.view.ty + (star.y + tileY) * size * scale;
+            if (x < -2 || y < -2 || x > state.viewport.w + 2 || y > state.viewport.h + 2) continue;
+            ctx.moveTo(x + group.radius, y);
+            ctx.arc(x, y, group.radius, 0, Math.PI * 2);
+          }
+        }
+      }
+      ctx.fill();
     }
-    return starCache;
+    ctx.restore();
   }
 
   function drawSchematic(scene: SectorScene | null): void {
@@ -228,20 +240,6 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
         ctx.fill();
       }
     }
-
-    // звёздное поле
-    var list = stars();
-    for (var i = 0; i < list.length; i++) {
-      var star = list[i]!;
-      var point = toScreen(star.x, star.y);
-      if (point.x < -4 || point.y < -4 || point.x > state.viewport.w + 4 || point.y > state.viewport.h + 4) continue;
-      ctx.globalAlpha = star.a;
-      ctx.fillStyle = '#cfe0f5';
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, Math.max(0.5, star.r), 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
 
     // Сетку и координатные отметки рисует только слой сцены (`gridFor`):
     // собственных шагов сетки в рендерере нет.
@@ -520,10 +518,12 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /** Одна геометрия для заливки туманности и её видимой границы. */
   function traceBounds(bounds: SceneBounds): void {
     const ctx = kernel.ctx!;
-    const path = smoothPolyline(
-      bounds.points.map(({ x, y }) => [x, y] as const),
-      bounds.boundsKind !== 'halo',
-    );
+    const points = bounds.points.map(({ x, y }) => [x, y] as const);
+    const corner = toScreen(0, 0);
+    const farCorner = toScreen(kernel.data.mapSize(), kernel.data.mapSize());
+    const path = bounds.boundsKind === 'nebula'
+      ? smoothBoundaryAtMapEdge(points, { left: corner.x, right: farCorner.x, top: corner.y, bottom: farCorner.y })
+      : smoothPolyline(points, bounds.boundsKind !== 'halo');
     ctx.moveTo(path.start[0], path.start[1]);
     for (const curve of path.curves) {
       ctx.quadraticCurveTo(curve.control[0], curve.control[1], curve.end[0], curve.end[1]);
@@ -936,10 +936,10 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /* ---------------------------------------------------- сборка слоёв сцены */
 
   function renderScene(scene: SectorScene, nowMs: number): void {
-    // Первыми идут границы сектора, туманностей и гало.
+    // Гало сохранено в сцене и данных для редактора, но временно не рисуется.
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
-      if (primitive.kind === 'bounds') drawBounds(primitive);
+      if (primitive.kind === 'bounds' && primitive.boundsKind !== 'halo') drawBounds(primitive);
     }
     // Смена тира гасит/проявляет линии 160 мс (§17.3 п. 9); порядок проходов тот же.
     updateGridFade(scene, nowMs);
@@ -1126,7 +1126,10 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       drawSchematic(scene);
     }
 
-    // Порядок слоёв: поле → контуры сектора → сетка →
+    // Один звёздный слой поверх фона и облаков; размер точки не зависит от зума.
+    drawStars();
+
+    // Порядок слоёв: поле → звёзды → контуры сектора → сетка →
     // маркеры → подписи → апертуры.
 
     if (scene) renderScene(scene, frameTime);

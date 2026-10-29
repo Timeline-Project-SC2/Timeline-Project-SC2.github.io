@@ -461,43 +461,21 @@ test('вдали от туманностей остаётся только сп�
   }
 });
 
-test('пунктир гало сохраняет открытый путь при панорамировании на разных масштабах', () => {
-  for (const scale of [0.03, 1, 500]) {
-    const h = createRendererHarness({ w: 300, h: 200 });
-    try {
-      h.state.sectorBounds = {
-        version: 1, mapSize: 10000, source: 'test', bounds: [{
-          id: 'halo.test', kind: 'halo', label: 'test',
-          style: { color: 'halo', strokeWidth: 2, dash: [12, 8] },
-          points: [[2000, 5000], [3500, 5000], [5000, 5000], [6500, 5000], [8000, 5000]],
-        }],
-      };
-      h.state.view = { scale, tx: 150 - 5000 * scale, ty: 100 - 5000 * scale };
-      const render = () => {
-        h.calls.length = 0;
-        h.renderer.requestRender();
-        h.flushAnimationFrame(performance.now() + 1000);
-        assert.deepEqual(h.calls.find(([name, dash]) => name === 'setLineDash' && dash.length > 0)?.[1], [12, 8]);
-        const stroke = h.calls.findIndex(([name]) => name === 'stroke');
-        const start = h.calls.findLastIndex(([name], i) => name === 'beginPath' && i < stroke);
-        return h.calls.slice(start + 1, stroke);
-      };
-      const before = render();
-      h.state.view.tx += 13;
-      h.state.view.ty -= 7;
-      const after = render();
-      assert.ok(before.some(([name]) => name === 'quadraticCurveTo'));
-      assert.ok(!before.some(([name]) => name === 'closePath'));
-      assert.equal(before.length, after.length);
-      for (let i = 0; i < before.length; i++) {
-        assert.equal(before[i][0], after[i][0]);
-        for (let j = 1; j < before[i].length; j++) {
-          assert.ok(Math.abs(after[i][j] - before[i][j] - (j % 2 ? 13 : -7)) < 1e-8);
-        }
-      }
-    } finally {
-      h.restoreGlobals();
-    }
+test('гало остаётся в данных сцены, но временно не рисуется', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    const halo = {
+      id: 'halo.test', kind: 'halo', label: 'test',
+      style: { color: 'halo', strokeWidth: 2, dash: [12, 8] },
+      points: [[2000, 5000], [3500, 5000], [5000, 5000], [6500, 5000], [8000, 5000]],
+    };
+    h.state.sectorBounds = { version: 1, mapSize: 10000, source: 'test', bounds: [halo] };
+    h.renderer.requestRender();
+    h.flushAnimationFrame(performance.now() + 1000);
+    assert.equal(h.state.sectorBounds.bounds[0], halo);
+    assert.ok(!h.calls.some(([name, dash]) => name === 'setLineDash' && dash.length > 0), 'пунктир гало не должен рисоваться');
+  } finally {
+    h.restoreGlobals();
   }
 });
 
@@ -552,6 +530,65 @@ test('настроенное мигание работает непрерывн�
     h.flushAnimationFrame(3000); // кадр поставлен в очередь самой анимацией
     assert.equal(states.length, 6);
     assert.ok(Math.abs(states[5].cloudBrightness - 0.8) < 1e-12);
+  } finally {
+    h.restoreGlobals();
+  }
+});
+
+test('каталог звёзд закреплён в мире: точка и её экранный размер не зависят от зума и DPR', () => {
+  const { createStarGroups } = require('../src/atlas/sector-stars.ts');
+  const groups = createStarGroups();
+  assert.deepEqual(groups, createStarGroups(), 'каталог должен быть воспроизводим');
+  assert.equal(groups.reduce((n, group) => n + group.stars.length, 0), 6000);
+  const group = groups.find((entry) => entry.stars.length > 0);
+  const star = group.stars[0];
+  const worldX = star.x * MAP_SIZE;
+  const worldY = star.y * MAP_SIZE;
+  for (const [scale, dpr] of [[0.02, 1], [1, 2], [500, 3]]) {
+    const h = createRendererHarness({ w: 300, h: 200 });
+    try {
+      h.state.dpr = dpr;
+      h.state.view = { scale, tx: 150 - worldX * scale, ty: 100 - worldY * scale };
+      h.renderer.requestRender();
+      h.flushAnimationFrame(performance.now() + 1000);
+      const match = h.calls.find(([name, x, y, r]) => name === 'arc' && Math.abs(x - 150) < 1e-6 && Math.abs(y - 100) < 1e-6 && r === group.radius);
+      assert.ok(match, `та же звезда не найдена при масштабе ${scale}`);
+      h.calls.length = 0;
+      h.state.view.tx += 13;
+      h.state.view.ty -= 7;
+      h.renderer.requestRender();
+      h.flushAnimationFrame(performance.now() + 1000);
+      assert.ok(h.calls.some(([name, x, y, r]) => name === 'arc' && Math.abs(x - 163) < 1e-6 && Math.abs(y - 93) < 1e-6 && r === group.radius), 'звезда не следует за панорамированием');
+    } finally {
+      h.restoreGlobals();
+    }
+  }
+});
+
+test('на краю карты маска и обводка туманности используют один закреплённый путь', () => {
+  const h = createRendererHarness({ w: 300, h: 200 });
+  try {
+    h.state.meta = {};
+    h.state.view = { scale: 1, tx: 150, ty: -4900 };
+    h.state.sectorBounds = {
+      version: 1, mapSize: 10000, source: 'test', bounds: [{
+        id: 'nebula.edge', kind: 'nebula', label: 'test',
+        style: { color: 'nebula', strokeWidth: 2, dash: [] },
+        points: [[0, 4900], [500, 4900], [500, 5100], [0, 5100], [0, 4900]],
+      }],
+    };
+    h.kernel.field = { renderField() {} };
+    h.kernel.fieldCanvas = { width: 300, height: 200 };
+    h.renderer.requestRender();
+    h.flushAnimationFrame(performance.now() + 1000);
+    const clip = h.calls.findIndex(([name]) => name === 'clip');
+    const start = h.calls.findLastIndex(([name], index) => name === 'beginPath' && index < clip);
+    const mask = h.calls.slice(start + 1, clip);
+    const outlineClip = h.calls.findIndex(([name], index) => name === 'clip' && index > clip);
+    const outlineStart = h.calls.findIndex(([name], index) => name === 'beginPath' && index > outlineClip);
+    const outlineEnd = h.calls.findIndex(([name], index) => name === 'stroke' && index > outlineStart);
+    assert.deepEqual(h.calls.slice(outlineStart + 1, outlineEnd), mask);
+    assert.ok(mask.some(([name, cx, , x]) => name === 'quadraticCurveTo' && cx === 150 && x === 150), 'край карты отсутствует в маске');
   } finally {
     h.restoreGlobals();
   }

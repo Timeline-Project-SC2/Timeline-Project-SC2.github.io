@@ -84,3 +84,34 @@ test('обрезка длинного гало сохраняет фазу шт�
     assert.ok(Math.abs((run.offset + 150 - run.start[0]) - (150 - start)) < 1e-7);
   }
 });
+
+test('туманности доходят до края карты, сглаживание сохраняет участки вдоль края', async () => {
+  const { smoothBoundaryAtMapEdge } = await import('../src/atlas/sector-boundary-path.ts');
+  const cases = [
+    { id: 'nebula.lost-signals', axis: 0, edge: 0, from: 3610, to: 5630 },
+    { id: 'nebula.fog-echos', axis: 1, edge: 10000, from: 2716, to: 7900 },
+  ];
+  for (const { id, axis, edge, from, to } of cases) {
+    const outline = bounds.bounds.find((entry) => entry.id === id).points;
+    for (const scale of [0.02, 1, 500]) {
+      const tx = 100 - edge * scale;
+      const ty = 200 - edge * scale;
+      const transformed = outline.map(([x, y]) => [x * scale + tx, y * scale + ty]);
+      const rect = { left: tx, right: tx + 10000 * scale, top: ty, bottom: ty + 10000 * scale };
+      const path = smoothBoundaryAtMapEdge(transformed, rect);
+      let start = path.start;
+      const edgeCoordinate = edge * scale + (axis === 0 ? tx : ty);
+      let found = false;
+      for (const curve of path.curves) {
+        const otherOffset = axis === 0 ? ty : tx;
+        const other = 1 - axis;
+        const lo = Math.min(start[other], curve.end[other]);
+        const hi = Math.max(start[other], curve.end[other]);
+        if (Math.abs(start[axis] - edgeCoordinate) < 1e-5 && Math.abs(curve.control[axis] - edgeCoordinate) < 1e-5 && Math.abs(curve.end[axis] - edgeCoordinate) < 1e-5 && Math.abs(lo - (from * scale + otherOffset)) < 1e-5 && Math.abs(hi - (to * scale + otherOffset)) < 1e-5) found = true;
+        start = curve.end;
+      }
+      assert.ok(found, `${id}: участок края отсутствует на масштабе ${scale}`);
+      assert.equal(path.closed, true);
+    }
+  }
+});

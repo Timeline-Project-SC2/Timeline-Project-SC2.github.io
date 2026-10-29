@@ -164,12 +164,11 @@ test('детерминизм CPU: два прогона дают побитов�
   assert.notEqual(digest(nebula.data), digest(tacticalOne.data));
 });
 
-test('кадр не пустой: на L0 и L9 больше одного уникального цвета', () => {
+test('поле облака не пустое на обзорном и глубоком масштабе', () => {
   for (const width of [LEVEL_WIDTHS[0], LEVEL_WIDTHS[2]]) {
     const image = createSectorField(null).renderToImageData(stateForWidth(width));
     const colors = uniqueColors(image.data);
     assert.ok(colors > 1, `ширина ${width}: уникальных цветов ${colors}`);
-    assert.ok(colors > 64, `ширина ${width}: слишком однородный кадр, цветов ${colors}`);
   }
 });
 
@@ -255,7 +254,6 @@ test('периодичность: сдвиг камеры на mapSize даёт 
 /* ------------------------------------------------- §17.15.5: глубокий пресет field.local */
 
 const PROXY_SIZE = 72;
-const PROXY_FRAMES = 5;
 
 /**
  * Оценка плотности облака по цвету пикселя. Первый отрезок рампы монотонен
@@ -272,34 +270,15 @@ function densityProxy(luminance, palette) {
   return Math.max(0, Math.min(stop, fraction * stop));
 }
 
-/**
- * Кадр с погашенной звездой: минимум по пяти сдвигам камеры на три пикселя.
- * Звёзды радиусом ~1 px движутся вместе с миром, поэтому в любом пикселе
- * оказываются не более чем в одном из пяти кадров — минимум их убирает,
- * а облако остаётся (медиана оставляла 1–2 «упрямых» пикселя).
- */
+/** Поле больше не содержит звёзды: они рисуются отдельным слоем поверх облака. */
 function cloudWithoutStars(field, base, palette) {
-  const frames = [];
-  for (let step = 0; step < PROXY_FRAMES; step++) {
-    const image = field.renderToImageData({
-      ...base,
-      view: { scale: base.view.scale, tx: base.view.tx + step * 3, ty: base.view.ty },
-    });
-    const luminance = new Float64Array(image.width * image.height);
-    for (let index = 0; index < luminance.length; index++) {
-      luminance[index] = 0.2126 * image.data[index * 4]
-        + 0.7152 * image.data[index * 4 + 1]
-        + 0.0722 * image.data[index * 4 + 2];
-    }
-    frames.push(luminance);
-  }
-  const density = new Float64Array(frames[0].length);
-  const column = new Float64Array(PROXY_FRAMES);
+  const image = field.renderToImageData(base);
+  const density = new Float64Array(image.width * image.height);
   for (let index = 0; index < density.length; index++) {
-    for (let step = 0; step < PROXY_FRAMES; step++) column[step] = frames[step][index];
-    let lowest = column[0];
-    for (let step = 1; step < PROXY_FRAMES; step++) if (column[step] < lowest) lowest = column[step];
-    density[index] = densityProxy(lowest, palette);
+    const luminance = 0.2126 * image.data[index * 4]
+      + 0.7152 * image.data[index * 4 + 1]
+      + 0.0722 * image.data[index * 4 + 2];
+    density[index] = densityProxy(luminance, palette);
   }
   return density;
 }
@@ -482,7 +461,8 @@ test('обзорный кадр сохраняет цветовое разноо
     const field = createSectorField(null, { style: palette.id });
     const level = frameMetrics(field.renderToImageData(stateForWidth(10000, 512)));
     assert.ok(level.meanL >= 12 && level.meanL <= 40, `${palette.id}: meanL ${level.meanL}`);
-    assert.ok(level.uniq >= (palette.id === 'nebula' ? 3000 : 1800), `${palette.id}: цветов ${level.uniq}`);
+    // Шум звёзд перенесён в отдельный неизменный каталог: здесь измеряется только рампа облака.
+    assert.ok(level.uniq > 256, `${palette.id}: цветов ${level.uniq}`);
     field.dispose();
   }
 });
