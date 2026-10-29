@@ -20,3 +20,100 @@
 
 .map-coordinate-readout[hidden] { display: none; }
 .coordinate-toggle svg { width: 13px; height: 13px; }
+
+/* Демо-форма открывается поверх карты, но перехода до совпадения кода нет. */
+.admin-gate-modal {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.admin-gate-modal[hidden] { display: none; }
+.admin-gate-modal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(1, 5, 7, .78);
+  backdrop-filter: blur(3px);
+}
+.admin-gate-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.admin-gate-modal .admin-editor-gate {
+  position: relative;
+  z-index: 1;
+  top: auto;
+  left: auto;
+  width: min(420px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  transform: none;
+}
+.admin-editor-gate {
+  position: absolute;
+  z-index: 30;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100vw - 32px));
+  padding: 24px;
+  transform: translate(-50%, -50%);
+}
+.admin-editor-gate h1,
+.admin-editor-heading h1 {
+  margin: 10px 0;
+  color: var(--white);
+  font-size: 20px;
+}
+.admin-editor-gate > p:not(.eyebrow),
+.admin-editor-gate label,
+.admin-editor-gate form p,
+.admin-editor-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.admin-editor-gate form { display: grid; gap: 10px; margin-top: 20px; }
+.admin-editor-gate label { color: var(--text); }
+.admin-editor-gate input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  background: rgba(3, 8, 14, .9);
+  color: var(--white);
+}
+.admin-editor-gate form p { margin: 0; font-size: 11px; }
+.admin-editor-gate .admin-gate-error { color: #ffb4a8; }
+.admin-gate-submit {
+  min-height: 44px;
+  border: 1px solid rgba(181, 211, 250, .48);
+  background: rgba(145, 183, 230, .12);
+  color: var(--white);
+  cursor: pointer;
+}
+.admin-gate-submit:disabled { cursor: not-allowed; opacity: .5; }
+.admin-gate-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .04);
+  color: var(--muted);
+  font: 20px/1 var(--mono);
+  cursor: pointer;
+}
+.admin-gate-close:hover,
+.admin-gate-close:focus-visible { border-color: var(--line-strong); color: var(--white); }
+body.admin-gate-open { overflow: hidden; }
+.admin-gate-open .topbar { pointer-events: none; }

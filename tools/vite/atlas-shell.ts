@@ -10,6 +10,7 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
     ? {
       ...atlasVariants.sector,
       adminGate: '',
+      adminGatePanel: '',
       adminEditorPanel: [
         '      <section class="admin-editor-gate panel" id="adminEditorGate" aria-labelledby="adminGateTitle">',
         '        <p class="eyebrow"><span class="eyebrow-line"></span> ПУБЛИЧНЫЙ ТЕСТОВЫЙ БАРЬЕР</p>',
@@ -38,6 +39,7 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
   const replacements: Record<string, string> = {
     ADMIN_EDITOR_PANEL: variant.adminEditorPanel,
     ADMIN_GATE: variant.adminGate,
+    ADMIN_GATE_PANEL: variant.adminGatePanel,
     BODY_ATTRS: variant.bodyAttrs,
     COORDINATE_CONTROLS: variant.coordinateControls,
     COORDINATE_READOUT: variant.coordinateReadout,

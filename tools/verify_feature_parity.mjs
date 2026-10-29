@@ -168,6 +168,10 @@ const galaxyButtonAt = sectorHtml.indexOf('id="galaxyReturn"');
 if (!(aboutButtonAt >= 0 && aboutButtonAt < adminButtonAt && adminButtonAt < galaxyButtonAt)) {
   fail('секторная кнопка администратора должна стоять между «О карте» и «К Галактике»');
 }
+if (!sectorHtml.includes('id="adminGateOpen" type="button"')) fail('кнопка администратора должна открывать форму, не переходить сразу на редактор');
+if (!sectorHtml.includes('id="adminEditorGate" role="dialog" aria-modal="true"')) fail('sector потерял модальную форму подтверждения доступа');
+if (!sectorHtml.includes('data-admin-gate-destination="/sector/admin-edit/"')) fail('форма сектора потеряла маршрут после успешной проверки кода');
+if (!sectorHtml.includes('id="adminEditorGate"') || !sectorHtml.includes('data-admin-gate-modal hidden')) fail('форма доступа должна быть закрыта до нажатия кнопки администратора');
 if (minimalHtml.includes('admin-gate-link')) fail('minimal получил кнопку доступа администратора');
 const adminHtml = publishedHtml.get('sector/admin-edit/index.html') || '';
 for (const marker of ['id="mapCanvas"', 'id="adminGateForm"', 'id="adminEditorPanel"', 'Модули', 'Свойства', 'Изменения']) {

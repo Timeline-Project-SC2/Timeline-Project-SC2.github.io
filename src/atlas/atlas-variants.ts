@@ -7,6 +7,7 @@ export type AtlasVariantName = 'admin-edit' | 'minimal' | 'sector';
 export interface AtlasVariant {
   readonly adminEditorPanel: string;
   readonly adminGate: string;
+  readonly adminGatePanel: string;
   readonly bodyAttrs: string;
   readonly coordinateControls: string;
   readonly coordinateReadout: string;
@@ -27,7 +28,25 @@ export interface AtlasVariant {
 export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
   sector: {
     adminEditorPanel: '',
-    adminGate: '        <a class="admin-gate-link" href="/sector/admin-edit/">Доступ Администратора</a>',
+    adminGate: '        <button class="admin-gate-link" id="adminGateOpen" type="button" aria-haspopup="dialog" aria-controls="adminEditorGate">Доступ Администратора</button>',
+    adminGatePanel: [
+      '    <div class="admin-gate-modal" id="adminEditorGate" role="dialog" aria-modal="true" aria-labelledby="adminGateTitle" data-admin-gate-modal hidden>',
+      '      <button class="admin-gate-backdrop" type="button" data-admin-gate-close aria-label="Закрыть окно доступа"></button>',
+      '      <section class="admin-editor-gate panel">',
+      '        <button class="admin-gate-close" id="adminGateClose" type="button" aria-label="Закрыть окно доступа">×</button>',
+      '        <p class="eyebrow"><span class="eyebrow-line"></span> ПУБЛИЧНЫЙ ТЕСТОВЫЙ БАРЬЕР</p>',
+      '        <h1 id="adminGateTitle">Доступ Администратора</h1>',
+      '        <p>Демонстрационная проверка интерфейса. Это не вход, не защита данных и не средство контроля доступа.</p>',
+      '        <form id="adminGateForm" data-admin-gate-destination="/sector/admin-edit/" novalidate>',
+      '          <label for="adminGateCode">Тестовый код</label>',
+      '          <input id="adminGateCode" name="code" type="password" autocomplete="off" aria-describedby="adminGateHelp adminGateError">',
+      '          <p id="adminGateHelp">Публичное значение тестового кода указано в исходнике проекта.</p>',
+      '          <p class="admin-gate-error" id="adminGateError" role="alert" hidden>Код не совпадает. Измените ввод, чтобы попробовать снова.</p>',
+      '          <button class="admin-gate-submit" id="adminGateSubmit" type="submit">Проверить тестовый код</button>',
+      '        </form>',
+      '      </section>',
+      '    </div>',
+    ].join('\n'),
     bodyAttrs: '',
     coordinateControls: [
       '        <div class="control-divider"></div>',
@@ -76,6 +95,7 @@ export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
   minimal: {
     adminEditorPanel: '',
     adminGate: '',
+    adminGatePanel: '',
     bodyAttrs: ' class="minimal-mode"',
     coordinateControls: '',
     coordinateReadout: '',
