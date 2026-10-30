@@ -12,7 +12,7 @@
 site/                  ← вход Vite-сборки; публикуется собранная .publish/
 ├── index.html         карта галактики, открывается по /
 ├── galaxy.ts  galaxy.css
-├── sector/sector.html   вариант-вход атласа (общая разметка — templates/atlas-shell.html)
+├── sector/index.html    вариант-вход атласа (общая разметка — templates/atlas-shell.html)
 ├── minimal/minimal.html вариант-вход атласа + minimal-skin.css
 ├── cursor-test/       страница проверки курсора (/cursor-test/, ссылок с сайта нет)
 ├── spiral-test/       демо и настройка ядра спирали (/spiral-test/, ссылок с сайта нет)
@@ -38,7 +38,7 @@ assets/                собранные тайлы и WebP (Git-ignored, со�
 docs/, tools/, .github/ — служебное
 ```
 
-- Все внутренние ссылки от корня сайта: `/shared/…`, `/sector/sector.html`, `/data/…`, `/assets/…`.
+- Все внутренние ссылки от корня сайта: `/shared/…`, `/sector/`, `/data/…`, `/assets/…`.
 - Деплой: `pages.yml` → `setup-python` (3.12) → Pillow из `tools/requirements.txt` → `tools/build_assets.py` →
   `setup-node` → `npm ci` → `npm run build` (Vite собирает маршруты, hashed JS/CSS/worker, `data/` и
   `assets/` минус `assets/src` в `.publish`, пишет `build-manifest.json`) → `npm run verify:publish`

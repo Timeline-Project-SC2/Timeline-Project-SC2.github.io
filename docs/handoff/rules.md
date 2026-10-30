@@ -6,9 +6,9 @@
 ## 9. Правила пользователя
 
 - Комментарии, тексты интерфейса и сообщения коммитов — **по-русски**.
-- Общую разметку `sector.html` и `minimal.html` править один раз в `templates/atlas-shell.html`;
+- Общую разметку `sector/index.html` и `minimal/minimal.html` править один раз в `templates/atlas-shell.html`;
   различия вариантов — только в `atlasVariants` внутри `vite.config.mts`. Сами
-  `site/sector/sector.html` и `site/minimal/minimal.html` — тонкие входы вариантов, не копии разметки.
+  `site/sector/index.html` и `site/minimal/minimal.html` — тонкие входы вариантов, не копии разметки.
 - Работаем только в своей ветке; в `main` не пушим. Путь: правки → коммит → PR →
   пользователь смотрит → `gh pr merge <номер> --merge` (с 17.10 ruleset на `main`
   требует линейную историю — мержить `--squash --admin` или `--rebase --admin`, см. §7).
