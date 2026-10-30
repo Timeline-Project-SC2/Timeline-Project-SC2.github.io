@@ -36,7 +36,7 @@ TIMELINE PROJECT создаёт возможности для ролевого �
 в секторе Копрулу и готовиться к играм, обсуждениям и ролевым событиям.
 
 - [Карта галактики](https://timeline-project-sc2.github.io/) — обзорная сцена с переходом в секторы и регионы
-- [Атлас сектора Копрулу](https://timeline-project-sc2.github.io/sector/sector.html) — интерактивная карта систем, каталог, досье и планировщик маршрутов ([минимальный скин](https://timeline-project-sc2.github.io/minimal/minimal.html))
+- [Атлас сектора Копрулу](https://timeline-project-sc2.github.io/sector/) — интерактивная карта систем, каталог, досье и планировщик маршрутов ([минимальный скин](https://timeline-project-sc2.github.io/minimal/minimal.html))
 - [3D-глобус планет](https://timeline-project-sc2.github.io/planet-globe/) — процедурная география, гидрология, биомы и рельеф планет ([стенд FX и осколков Шакураса](https://timeline-project-sc2.github.io/planet-test/))
 
 **Изучайте карту внимательно — будь вы игрок, ролевик, командир или просто

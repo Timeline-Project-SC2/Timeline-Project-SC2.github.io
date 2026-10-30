@@ -181,6 +181,12 @@ if (!adminHtml.includes('id="adminEditorPanel" data-admin-editor aria-labelledby
   fail('панель admin-edit должна быть скрыта до тестовой проверки');
 }
 if (!adminHtml.includes('id="adminGateError" role="alert" hidden')) fail('admin-edit потерял начальное скрытие ошибки формы');
+if (!adminHtml.includes('id="adminSessionEnd" type="button" data-admin-session-return="/sector/" hidden')) {
+  fail('кнопка «Завершить сеанс» должна быть скрыта до подтверждения и возвращать на /sector/');
+}
+if (!sectorHtml.includes('id="adminGateClose" type="button" data-admin-gate-close')) {
+  fail('крестик окна доступа потерял признак закрытия');
+}
 if (adminHtml.includes('atlas-variant:') || adminHtml.includes('@@')) fail('admin-edit не прошёл рендер общего шаблона');
 
 function publishRelative(fullPath) {

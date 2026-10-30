@@ -9,7 +9,8 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
   const variant = variantName === 'admin-edit'
     ? {
       ...atlasVariants.sector,
-      adminGate: '',
+      // Выход из демо-режима стоит там же, где на секторе — кнопка входа.
+      adminGate: '        <button class="admin-gate-link admin-session-end" id="adminSessionEnd" type="button" data-admin-session-return="/sector/" hidden>Завершить сеанс</button>',
       adminGatePanel: '',
       adminEditorPanel: [
         '      <section class="admin-editor-gate panel" id="adminEditorGate" aria-labelledby="adminGateTitle">',

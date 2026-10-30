@@ -48,7 +48,7 @@
 | `src/atlas/dossier-card.ts` (485) | досье, ссылки на глобус | добавить адрес и кнопку «Войти в систему» |
 | `src/atlas/atlas-variants.ts` (99) | тексты вариантов `sector`/`minimal` | переименовать `coordinate*` → `address*` |
 | `templates/atlas-shell.html` | общий каркас | добавить слой поля и адресный HUD |
-| `site/sector/sector.html`, `site/shared/styles.css` | вход и скин | минимальные правки |
+| `site/sector/index.html`, `site/shared/styles.css` | вход и скин | минимальные правки |
 
 ### 2.2. Растровый конвейер (то, что убирается)
 

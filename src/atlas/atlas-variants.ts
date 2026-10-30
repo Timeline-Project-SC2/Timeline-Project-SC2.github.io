@@ -33,7 +33,7 @@ export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
       '    <div class="admin-gate-modal" id="adminEditorGate" role="dialog" aria-modal="true" aria-labelledby="adminGateTitle" data-admin-gate-modal hidden>',
       '      <button class="admin-gate-backdrop" type="button" data-admin-gate-close aria-label="Закрыть окно доступа"></button>',
       '      <section class="admin-editor-gate panel">',
-      '        <button class="admin-gate-close" id="adminGateClose" type="button" aria-label="Закрыть окно доступа">×</button>',
+      '        <button class="admin-gate-close" id="adminGateClose" type="button" data-admin-gate-close aria-label="Закрыть окно доступа">×</button>',
       '        <p class="eyebrow"><span class="eyebrow-line"></span> ПУБЛИЧНЫЙ ТЕСТОВЫЙ БАРЬЕР</p>',
       '        <h1 id="adminGateTitle">Доступ Администратора</h1>',
       '        <p>Демонстрационная проверка интерфейса. Это не вход, не защита данных и не средство контроля доступа.</p>',
