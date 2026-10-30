@@ -143,6 +143,7 @@ function removeAdminAccessQuery(doc: Document): boolean {
 export function bindSectorAdminGate(
   doc: Document = document,
   onAuthorized: () => void = function (): void {},
+  scheduleNotice: (show: () => void) => void = function (show: () => void): void { show(); },
 ): void {
   const gate = doc.getElementById('adminEditorGate');
   const panel = doc.getElementById('adminEditorPanel');
@@ -251,14 +252,20 @@ export function bindSectorAdminGate(
 
   // Возврат после выхода из сеанса: уведомление печатается уже на карте сектора.
   if (takeAdminSessionEndQuery(doc)) {
-    showAdminNotice(doc, ADMIN_SESSION_END_MESSAGE, ADMIN_SESSION_END_NOTICE_CLASS);
+    scheduleNotice(function (): void {
+      showAdminNotice(doc, ADMIN_SESSION_END_MESSAGE, ADMIN_SESSION_END_NOTICE_CLASS);
+    });
   }
 
   // Отметка уже есть: панель открывается сразу, форма остаётся на страже после выхода.
   if (hasAdminSessionMarker(storage) && !destination) {
     activateAdminEditorTheme(doc, onAuthorized);
     showPanel();
-    if (removeAdminAccessQuery(doc)) showAdminNotice(doc, ADMIN_SUCCESS_MESSAGE, ADMIN_ACCESS_NOTICE_CLASS);
+    if (removeAdminAccessQuery(doc)) {
+      scheduleNotice(function (): void {
+        showAdminNotice(doc, ADMIN_SUCCESS_MESSAGE, ADMIN_ACCESS_NOTICE_CLASS);
+      });
+    }
     return;
   }
 
