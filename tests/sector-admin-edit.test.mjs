@@ -102,12 +102,95 @@ test('кнопка только открывает модалку; перехо�
 });
 
 test('успешная отправка включает красную тему и показывает подпись в стиле ошибки галактики', () => {
-  const css = read('site/sector/admin-edit/admin-edit.css');
+  const css = read('site/shared/timeline-skin.css');
+  const theme = read('site/sector/admin-edit/admin-edit.css');
   assert.match(gateSource, /const ADMIN_SUCCESS_MESSAGE = 'Доступ Администратора получен\. Права расширены\.'/);
-  assert.match(gateSource, /showAdminAccessNotice\(doc\)/);
+  assert.match(gateSource, /showAdminNotice\(doc, ADMIN_SUCCESS_MESSAGE, ADMIN_ACCESS_NOTICE_CLASS\)/);
   assert.match(gateSource, /doc\.documentElement\.classList\.add\('admin-editor-authorized'\)/);
   assert.match(gateSource, /onAuthorized\(\)/);
-  assert.match(css, /:root\.admin-editor-authorized\s*\{[\s\S]*?--accent: #d9889a/);
+  assert.match(theme, /:root\.admin-editor-authorized\s*\{[\s\S]*?--white: #fff1f3/);
   assert.match(css, /\.toast\.admin-access-notice\s*\{[\s\S]*?top: 33\.33vh[\s\S]*?rgba\(255, 70, 70, \.7\)/);
   assert.match(css, /\.admin-editor-authorized \.toast\.admin-access-notice\.is-done \.galaxy-error-dot/);
+});
+
+test('крестик окна доступа закрывает его наравне с подложкой и Escape', () => {
+  const variants = read('src/atlas/atlas-variants.ts');
+  const gate = read('src/atlas/sector-admin-gate.ts');
+  assert.match(variants, /id="adminGateClose"[^>]*data-admin-gate-close/);
+  assert.match(gate, /closest\('\[data-admin-gate-close\]'\)/);
+  assert.match(gate, /closeModal\(true\)/);
+});
+
+test('«Завершить сеанс» стоит там же, где кнопка входа, и появляется только в сеансе', () => {
+  const variant = read('tools/vite/atlas-shell.ts');
+  const template = read('templates/atlas-shell.html');
+  const gate = read('src/atlas/sector-admin-gate.ts');
+  assert.match(variant, /class="admin-gate-link admin-session-end" id="adminSessionEnd" type="button" data-admin-session-return="\/sector\/" hidden>Завершить сеанс<\/button>/);
+  assert.match(template, /@@ADMIN_GATE@@/);
+  assert.match(gate, /const ADMIN_SESSION_END_MESSAGE = 'Сеанс завершён\. Администрирование окончено\.'/);
+  assert.match(gate, /endButton\.hidden = true/);
+  assert.match(gate, /storage\.removeItem\(ADMIN_SESSION_MARKER_KEY\)/);
+  assert.match(gate, /classList\.remove\('admin-editor-authorized'\)/);
+  assert.match(gate, /showAdminNotice\(doc, ADMIN_SESSION_END_MESSAGE, ADMIN_SESSION_END_NOTICE_CLASS\)/);
+  assert.match(gate, /ADMIN_SESSION_END_NOTICE_CLASS = 'admin-session-end-notice'/);
+});
+
+test('красная тема разделена: шрифты, топ-панель и визуальный слой, без перекраса модулей', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  const block = /:root\.admin-editor-authorized\s*\{([\s\S]*?)\n\}/.exec(css)[1];
+  // Переопределены только текстовые токены: окантовка, линии и панели не тронуты.
+  for (const token of ['--accent', '--line-strong', '--panel', '--timeline-cyan', '--bg-2']) {
+    assert.doesNotMatch(block, new RegExp(`\\${token}:`), `${token} не должен переопределяться`);
+  }
+  assert.match(block, /--text: #ead7dc/);
+  assert.match(block, /--topbar-line: rgba\(212, 112, 133/);
+  assert.match(block, /--topbar-bg: rgba\(17, 9, 13/);
+  assert.match(block, /--admin-topbar-ink:/);
+  assert.match(block, /--admin-stage-core:/);
+  assert.match(block, /--admin-grid-major:/);
+  // Модули и органы управления картой остаются в обычной стилистике.
+  assert.doesNotMatch(css, /\.admin-editor-authorized \.map-control/);
+  assert.doesNotMatch(css, /\.admin-editor-authorized \.panel,/);
+  assert.doesNotMatch(css, /\.admin-editor-authorized \.admin-editor-panel \{ border-color/);
+  // Три слоя описаны явно и по отдельности.
+  assert.match(css, /\/\* 3\. Визуальный слой/);
+  assert.match(css, /\/\* 2\. Топ-панель/);
+  assert.match(css, /\/\* 1\. Шрифты/);
+});
+
+test('уведомление о завершении сеанса — цветом интерфейса и без привязки к красной теме', () => {
+  const css = read('site/shared/timeline-skin.css');
+  const notice = /\.toast\.admin-session-end-notice \{([\s\S]*?)\n\}/.exec(css)[1];
+  assert.doesNotMatch(notice, /#ff5a5a|rgba\(255, 70, 70/);
+  assert.match(notice, /color: #cffffb/);
+  assert.match(notice, /rgba\(46, 245, 230, \.7\)/);
+  assert.match(css, /\.toast\.admin-session-end-notice\.is-done \.galaxy-error-dot/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?admin-session-end-notice/);
+});
+
+test('выход из сеанса возвращает на карту сектора и печатает уведомление там', () => {
+  const variant = read('tools/vite/atlas-shell.ts');
+  const gate = read('src/atlas/sector-admin-gate.ts');
+  assert.match(variant, /id="adminSessionEnd" type="button" data-admin-session-return="\/sector\/"/);
+  assert.match(gate, /ADMIN_SESSION_END_QUERY_PARAM = 'adminSession'/);
+  assert.match(gate, /ADMIN_SESSION_END_QUERY_VALUE = 'ended'/);
+  assert.match(gate, /target\.searchParams\.set\(ADMIN_SESSION_END_QUERY_PARAM, ADMIN_SESSION_END_QUERY_VALUE\)/);
+  assert.match(gate, /if \(takeAdminSessionEndQuery\(doc\)\)[\s\S]*?ADMIN_SESSION_END_NOTICE_CLASS/);
+  assert.match(gate, /url\.searchParams\.delete\(ADMIN_SESSION_END_QUERY_PARAM\)/);
+});
+
+test('общий скин разделяет окантовку, цвет текста и границы топ-панели', () => {
+  const skin = read('site/shared/styles.css');
+  const root = /:root \{([\s\S]*?)\n\}/.exec(skin)[1];
+  assert.match(root, /--accent: #b5d3fa/);
+  assert.match(root, /--accent-outline: #b5d3fa/);
+  assert.match(root, /--topbar-line: rgba\(172, 194, 221, \.28\)/);
+  assert.match(root, /--topbar-bg: rgba\(5, 10, 17, \.92\)/);
+  // Топ-панель не зависит от линий панелей.
+  assert.match(skin, /\.topbar \{[^}]*background: var\(--topbar-bg\)[^}]*border: 1px solid var\(--topbar-line\)/);
+  assert.doesNotMatch(skin, /\.topbar \{[^}]*var\(--line-strong\)/);
+  // Окантовка (обводки и штрихи) отделена от цвета текста.
+  assert.match(skin, /button:focus-visible, input:focus-visible, a:focus-visible \{ outline: 1px solid var\(--accent-outline\)/);
+  assert.match(skin, /\.brand-emblem svg \{[^}]*stroke: var\(--accent-outline\)/);
+  assert.match(skin, /\.confidence-dot \{[^}]*background: var\(--accent-outline\)/);
 });
