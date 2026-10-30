@@ -3,7 +3,7 @@
 > **Статус на 31.10.2026:** [PR #339](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/339) слит в `82f5030`; `/` — галактика, `/sector/` — сектор, старый адрес удалён.
 > [PR #340](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/340) — черновик `b47060e`: крестик закрывает окно, «Завершить сеанс» возвращает на `/sector/` с уведомлением.
 > Тема разделена на слои; доработка уведомлений включена в PR — [ADM-NOTICE](ADM-NOTICE.md).
-> GitHub CI — 4/4 на `b47060e`; прежний PASS относится к `1fba1eb`. Сводка воркера 2 ожидается — [ADM-NOTICE-REPORT](ADM-NOTICE-REPORT.md); визуальная приёмка не подтверждена.
+> GitHub CI — 4/4 на `b47060e`; воркер 2 сообщил функциональный PASS — [разбор](ADM-NOTICE-REPORT.md). Реальный браузер и визуальная приёмка не подтверждены.
 > Условный код публичный и не выдаёт настоящих прав или возможности записи.
 >
 > Назад: [оркестрация](../README.md) · [очередь сектора](../../stages/stage-09-12-sector/todo.md) · [правила взаимодействия модулей](../../concepts/module-interaction-rules.md).
