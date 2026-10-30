@@ -173,11 +173,61 @@ function startFlightTo(systemId: string, arrowTrip = false): void {
 
 // Экран загрузки уходит сразу, как страница готова: искусственной паузы нет.
 // Вызывается после первой отрисовки canvas (см. boot) и по таймауту-страховке.
+
+/* Очередь уведомлений, ожидающих снятия шторки. Пока шторка перекрывает карту,
+   печать не начинается; после фактического снятия каждое сообщение запускается
+   ровно один раз. Проверка идёт по реальному состоянию DOM (is-hidden/отсутствие),
+   а не только по флагу loaderDismissed, так как флаг выставляется в начале
+   затухания (is-leaving), а шторка ещё полупрозрачно перекрывает текст. */
+let pendingAdminNotices: Array<() => void> = [];
+let loaderObserver: MutationObserver | null = null;
+
+function isTimelineLoaderGone(): boolean {
+  const loader = doc.getElementById('timelineLoader');
+  if (!loader) return true;
+  if (loader.classList.contains('is-hidden')) return true;
+  return false;
+}
+
+function flushPendingAdminNotices(): void {
+  if (pendingAdminNotices.length === 0) return;
+  const pending = pendingAdminNotices.slice();
+  pendingAdminNotices = [];
+  for (const show of pending) show();
+  if (loaderObserver) {
+    loaderObserver.disconnect();
+    loaderObserver = null;
+  }
+}
+
+function ensureLoaderObserver(): void {
+  if (loaderObserver) return;
+  const Observer = (typeof MutationObserver !== 'undefined' ? MutationObserver : (doc.defaultView as unknown as { MutationObserver?: typeof MutationObserver } | null)?.MutationObserver) as typeof MutationObserver | undefined;
+  if (!Observer) return;
+  loaderObserver = new Observer(function (): void {
+    if (isTimelineLoaderGone()) flushPendingAdminNotices();
+  });
+  const target = doc.documentElement;
+  if (target) {
+    loaderObserver.observe(target, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'aria-hidden', 'hidden'] });
+  }
+}
+
+function scheduleAdminNotice(show: () => void): void {
+  if (isTimelineLoaderGone()) {
+    show();
+    return;
+  }
+  pendingAdminNotices.push(show);
+  ensureLoaderObserver();
+}
+
 function dismissTimelineLoader(): void {
   if (runtime.loaderDismissed) return;
   const loader = doc.getElementById('timelineLoader');
   if (!loader) {
     runtime.loaderDismissed = true;
+    flushPendingAdminNotices();
     return;
   }
   runtime.loaderDismissed = true;
@@ -185,6 +235,7 @@ function dismissTimelineLoader(): void {
   window.setTimeout(function (): void {
     loader.classList.add('is-hidden');
     loader.setAttribute('aria-hidden', 'true');
+    flushPendingAdminNotices();
   }, 480);
 }
 
@@ -508,7 +559,7 @@ function applySystemFrameRequest(): void {
 
 function boot(): void {
   cacheElements();
-  bindSectorAdminGate(doc, applyAuthorizedTheme);
+  bindSectorAdminGate(doc, applyAuthorizedTheme, scheduleAdminNotice);
   kernel.catalog.updateSearchHintDistance();
   // Страховка: экран аутентификации не должен зависнуть даже при сетевой ошибке.
   window.setTimeout(dismissTimelineLoader, 8000);

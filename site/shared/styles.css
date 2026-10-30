@@ -14,6 +14,13 @@
   --accent: #b5d3fa;
   --accent-2: #80a9da;
   --accent-fade: rgba(140, 181, 231, .11);
+  /* Окантовка: обводки, штрихи и подсветка — отдельный параметр, он не отвечает
+     за цвет текста. --accent остаётся цветом подписей и иконок. */
+  --accent-outline: #b5d3fa;
+  /* Топ-панель: своя линия и фон. Не связаны с --line/--line-strong панелей,
+     поэтому границы шапки можно менять независимо от модулей. */
+  --topbar-line: rgba(172, 194, 221, .28);
+  --topbar-bg: rgba(5, 10, 17, .92);
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -22,7 +29,7 @@ html, body { width: 100%; height: 100%; margin: 0; background: var(--bg); color:
 body { font-family: var(--sans); -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid var(--accent-outline); outline-offset: 3px; }
 [hidden] { display: none !important; }
 .app-shell { height: 100dvh; width: 100vw; overflow: hidden; position: relative; background: radial-gradient(ellipse at 64% 45%, #0d1828 0, #060a11 58%, #03060a 100%); }
 
@@ -36,7 +43,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 .coordinates-label span + span { color: rgba(219,230,244,.67); }
 
 /* Command bar */
-.topbar { position: absolute; z-index: 20; top: 14px; left: 14px; right: 14px; height: 58px; display: flex; align-items: center; gap: 18px; padding: 0 12px; background: rgba(5,10,17,.92); border: 1px solid var(--line-strong); box-shadow: 0 8px 32px rgba(0,0,0,.28); backdrop-filter: blur(12px); }
+.topbar { position: absolute; z-index: 20; top: 14px; left: 14px; right: 14px; height: 58px; display: flex; align-items: center; gap: 18px; padding: 0 12px; background: var(--topbar-bg); border: 1px solid var(--topbar-line); box-shadow: 0 8px 32px rgba(0,0,0,.28); backdrop-filter: blur(12px); }
 .topbar-left { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .topbar-right { min-width: 0; margin-left: auto; display: flex; align-items: center; gap: 10px; }
 /* Десктоп: симметричная шапка — равные боковые колонки, плашка строго по центру */
@@ -64,7 +71,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 .suggestions-empty { padding: 15px 10px 17px; color: var(--muted); font-size: 11px; }
 .brand-lockup { height: 40px; display: flex; align-items: center; gap: 10px; padding-left: 1px; min-width: 194px; }
 .brand-emblem { display: grid; place-items: center; width: 33px; height: 33px; border: 1px solid rgba(180,204,233,.29); background: rgba(151,185,225,.06); }
-.brand-emblem svg { width: 22px; height: 22px; fill: none; stroke: var(--accent); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.brand-emblem svg { width: 22px; height: 22px; fill: none; stroke: var(--accent-outline); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 .brand-copy { display: flex; flex-direction: column; gap: 3px; }
 .brand-copy strong { color: #edf4fd; font-size: 12px; line-height: 1; letter-spacing: .17em; font-weight: 650; }
 .brand-copy span { color: #7f8ea1; font: 8px/1 var(--mono); letter-spacing: .13em; }
@@ -150,7 +157,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 .catalog-dropdown-summary:focus-visible,
 .filter-panel-summary:focus-visible,
 .filter-group > summary:focus-visible,
-.catalog-list-dropdown > summary:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.catalog-list-dropdown > summary:focus-visible { outline: 1px solid var(--accent-outline); outline-offset: -2px; }
 .catalog-dropdown-summary b { color: var(--accent); font: 10px var(--mono); }
 .filter-panel-summary { min-height: 35px; color: #758398; font-size: 8px; }
 .filter-indicator { margin-left: auto; color: var(--accent); font-size: 8px; letter-spacing: .04em; }
@@ -211,7 +218,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 .pin-button.active { color: var(--accent); background: rgba(149,185,230,.11); border-color: rgba(181,211,250,.25); }
 .detail-scroll { min-height: 0; overflow-y: auto; flex: 1 1 auto; padding: 18px 17px 22px; scrollbar-width: thin; scrollbar-color: #34465d transparent; }
 .detail-kicker { display: flex; align-items: center; gap: 7px; color: #8d9db1; font: 8px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
-.confidence-dot { width: 6px; height: 6px; display: inline-block; border-radius: 50%; background: var(--accent); box-shadow: 0 0 7px rgba(181,211,250,.45); }
+.confidence-dot { width: 6px; height: 6px; display: inline-block; border-radius: 50%; background: var(--accent-outline); box-shadow: 0 0 7px rgba(181,211,250,.45); }
 .confidence-dot.inferred { background: #8793a2; box-shadow: none; }
 .confidence-dot.pdf-linked { background: #d0d9e4; box-shadow: none; }
 .detail-title { margin: 8px 0 5px; color: var(--white); font-size: 21px; line-height: 1.1; letter-spacing: -.035em; font-weight: 550; }

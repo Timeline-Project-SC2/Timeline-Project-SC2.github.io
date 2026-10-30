@@ -14,133 +14,97 @@
 .admin-editor-panel section p { margin: 0; }
 .admin-editor-notice { padding: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.025); }
 
-/* После подтверждения открывается тот же секторный интерфейс в мягкой красной теме. */
+/* Тема администратора разделена на три независимых набора параметров:
+   шрифты, топ-панель и визуальный слой. Общие токены сайта, отвечающие за
+   окантовку, границы панелей и органы управления (--accent, --line,
+   --line-strong, --panel, --timeline-*), здесь НЕ переопределяются: модули,
+   панели и элементы управления картой остаются в обычной стилистике. */
 :root.admin-editor-authorized {
   color-scheme: dark;
-  --bg: #10090c;
-  --bg-2: #190c11;
-  --panel: rgba(18, 9, 13, .96);
-  --panel-2: rgba(26, 12, 18, .98);
-  --line: rgba(205, 100, 121, .18);
-  --line-strong: rgba(219, 123, 142, .42);
+  /* 1. Шрифты: только цвет текста. */
   --text: #ead7dc;
-  --white: #fff1f3;
   --muted: #a9868e;
   --muted-2: #795c65;
-  --accent: #d9889a;
-  --accent-2: #b96e83;
-  --accent-fade: rgba(190, 73, 99, .1);
-  --timeline-cyan: #d9778d;
-  --timeline-ice: #ffd8df;
-  --timeline-deep: #1b0b11;
-  --timeline-grid: rgba(181, 70, 94, .12);
+  --white: #fff1f3;
+  /* 2. Топ-панель: переопределяются её собственные параметры. */
+  --topbar-line: rgba(212, 112, 133, .38);
+  --topbar-bg: rgba(17, 9, 13, .94);
+  --admin-topbar-ink: #e4a3b0;
+  --admin-topbar-ink-strong: #ffe2e7;
+  --admin-topbar-hover-bg: rgba(182, 63, 89, .15);
+  --admin-topbar-hover-line: rgba(240, 163, 177, .68);
+  --admin-topbar-glow: rgba(205, 82, 108, .18);
+  /* 3. Визуальный слой: фон, сетка, подсветка — не связан с модулями. */
+  --admin-stage-core: #160b10;
+  --admin-stage-mid: #0d080b;
+  --admin-stage-edge: #080608;
+  --admin-stage-halo: rgba(105, 28, 48, .19);
+  --admin-stage-tint: rgba(120, 18, 41, .14);
+  --admin-grid-major: rgba(191, 77, 101, .07);
+  --admin-grid-minor: rgba(191, 77, 101, .025);
+  --admin-glow-hard: rgba(24, 3, 10, .38);
+  --admin-glow-soft: rgba(175, 55, 81, .06);
 }
 
+/* 3. Визуальный слой: тот же интерфейс, иной фон, сетка и подсветка. */
 html.admin-editor-authorized,
-body.admin-editor-authorized { background: #10090c; }
+body.admin-editor-authorized { background: var(--admin-stage-edge); }
 .admin-editor-authorized .app-shell {
   background:
-    radial-gradient(circle at 67% 44%, rgba(105, 28, 48, .19), transparent 32%),
-    radial-gradient(circle at 67% 44%, #160b10 0, #0d080b 58%, #080608 100%);
+    radial-gradient(circle at 67% 44%, var(--admin-stage-halo), transparent 32%),
+    radial-gradient(circle at 67% 44%, var(--admin-stage-core) 0, var(--admin-stage-mid) 58%, var(--admin-stage-edge) 100%);
   animation: admin-editor-enter .55s ease-out both;
 }
 .admin-editor-authorized .app-shell::before {
   background-image:
-    linear-gradient(rgba(191, 77, 101, .07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(191, 77, 101, .07) 1px, transparent 1px),
-    linear-gradient(rgba(191, 77, 101, .025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(191, 77, 101, .025) 1px, transparent 1px);
+    linear-gradient(var(--admin-grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--admin-grid-major) 1px, transparent 1px),
+    linear-gradient(var(--admin-grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--admin-grid-minor) 1px, transparent 1px);
 }
-.admin-editor-authorized .topbar,
-.admin-editor-authorized .panel,
-.admin-editor-authorized .map-controls {
-  border-color: rgba(212, 112, 133, .38);
-  background-color: rgba(17, 9, 13, .94);
-  box-shadow: 0 12px 36px rgba(24, 3, 10, .38), 0 0 18px rgba(175, 55, 81, .06);
-}
-.admin-editor-authorized .brand-emblem,
-.admin-editor-authorized .top-action,
-.admin-editor-authorized .galaxy-return,
-.admin-editor-authorized .admin-gate-link,
-.admin-editor-authorized .map-control {
-  border-color: rgba(218, 128, 149, .44);
-  color: #e4a3b0;
-}
-.admin-editor-authorized .top-action:hover,
-.admin-editor-authorized .galaxy-return:hover,
-.admin-editor-authorized .admin-gate-link:hover,
-.admin-editor-authorized .map-control:hover,
-.admin-editor-authorized .map-control[aria-pressed="true"] {
-  border-color: rgba(240, 163, 177, .68);
-  background: rgba(182, 63, 89, .15);
-  color: #ffe2e7;
-  box-shadow: 0 0 14px rgba(205, 82, 108, .18);
-}
-.admin-editor-authorized .galaxy-return { background: rgba(153, 52, 74, .12); }
-.admin-editor-authorized .admin-gate-link {
-  background: rgba(173, 59, 82, .12);
-  animation: none;
-}
-.admin-editor-authorized .eyebrow-line,
-.admin-editor-authorized .zoom-tick { background: #c9768b; box-shadow: 0 0 8px rgba(210, 117, 139, .3); }
-.admin-editor-authorized .status-dot { background: #df8598; box-shadow: 0 0 9px rgba(220, 120, 145, .55); }
-.admin-editor-authorized .map-controls { box-shadow: 0 8px 24px rgba(0, 0, 0, .48), 0 0 18px rgba(175, 55, 81, .08); }
-.admin-editor-authorized .map-control:hover,
-.admin-editor-authorized .map-control[aria-pressed="true"] { background: rgba(186, 69, 94, .14); }
-.admin-editor-authorized .map-hint { color: rgba(220, 151, 164, .62); }
-.admin-editor-authorized .mouse-icon { border-color: rgba(216, 127, 147, .55); }
-.admin-editor-authorized .mouse-icon i { background: #d9889a; }
 .admin-editor-authorized .map-stage::after {
   content: "";
   position: absolute;
   z-index: 2;
   inset: 0;
-  background: rgba(120, 18, 41, .14);
+  background: var(--admin-stage-tint);
   mix-blend-mode: color;
   pointer-events: none;
 }
-.admin-editor-authorized .admin-editor-panel { border-color: rgba(219, 123, 142, .48); }
-.admin-editor-authorized .admin-editor-panel section { border-top-color: rgba(205, 100, 121, .24); }
-.admin-editor-authorized .admin-editor-notice { border-color: rgba(205, 100, 121, .3); background: rgba(133, 37, 58, .1); }
-.admin-editor-authorized .toast.admin-access-notice {
-  position: fixed;
-  z-index: 100;
-  top: 33.33vh;
-  right: auto;
-  bottom: auto;
-  left: 50%;
-  width: max-content;
-  max-width: calc(100vw - 32px);
-  padding: 14px 22px;
-  transform: translate(-50%, -50%);
-  border: 1px solid rgba(255, 70, 70, .7);
-  border-radius: 0;
-  background: rgba(24, 2, 2, .82);
-  color: #ff5a5a;
-  font: 22px/1.25 var(--mono);
-  letter-spacing: .1em;
-  text-align: center;
-  white-space: normal;
-  box-shadow: 0 0 28px rgba(255, 60, 60, .35);
-  opacity: 1;
-  pointer-events: none;
-  transition: opacity .4s ease;
+
+/* 2. Топ-панель: линия, фон, надписи и их подсветка. */
+.admin-editor-authorized .topbar {
+  box-shadow: 0 12px 36px var(--admin-glow-hard), 0 0 18px var(--admin-glow-soft);
 }
-.admin-editor-authorized .toast.admin-access-notice.is-out { opacity: 0; }
-.admin-editor-authorized .toast.admin-access-notice .galaxy-error-dot { visibility: hidden; }
-.admin-editor-authorized .toast.admin-access-notice.is-done .galaxy-error-dot {
-  visibility: visible;
-  animation: admin-error-dot-blink 1s step-end infinite;
+.admin-editor-authorized .brand-emblem,
+.admin-editor-authorized .top-action,
+.admin-editor-authorized .galaxy-return,
+.admin-editor-authorized .admin-gate-link {
+  border-color: rgba(218, 128, 149, .44);
+  color: var(--admin-topbar-ink);
 }
-@keyframes admin-error-dot-blink { 0%,49% { opacity:1; } 50%,100% { opacity:0; } }
+.admin-editor-authorized .top-action:hover,
+.admin-editor-authorized .galaxy-return:hover,
+.admin-editor-authorized .admin-gate-link:hover,
+.admin-editor-authorized .admin-gate-link:focus-visible {
+  border-color: var(--admin-topbar-hover-line);
+  background: var(--admin-topbar-hover-bg);
+  color: var(--admin-topbar-ink-strong);
+  box-shadow: 0 0 14px var(--admin-topbar-glow);
+}
+.admin-editor-authorized .galaxy-return { background: rgba(153, 52, 74, .12); }
+.admin-editor-authorized .status-dot { background: #df8598; box-shadow: 0 0 9px rgba(220, 120, 145, .55); }
+
+/* 1. Шрифты: только цвет подсказок, без перекраса панелей и органов управления. */
+.admin-editor-authorized .eyebrow { color: var(--admin-topbar-ink); }
+.admin-editor-authorized .map-hint { color: rgba(220, 151, 164, .62); }
+
+/* Кнопка выхода не мигает: это действие, а не приглашение. */
+.admin-gate-link.admin-session-end { animation: none; }
+
 @keyframes admin-editor-enter { from { opacity:.76; } to { opacity:1; } }
-@media (max-width: 480px) {
-  .admin-editor-authorized .toast.admin-access-notice { padding: 12px 16px; font-size: 17px; letter-spacing: .06em; }
-}
 @media (prefers-reduced-motion: reduce) {
   .admin-editor-authorized .app-shell { animation: none; }
-  .admin-editor-authorized .toast.admin-access-notice,
-  .admin-editor-authorized .toast.admin-access-notice.is-done .galaxy-error-dot { transition: none; animation: none; }
 }
 
 @media (max-width: 700px) {
