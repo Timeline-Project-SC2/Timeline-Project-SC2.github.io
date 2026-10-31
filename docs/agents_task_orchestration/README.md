@@ -35,7 +35,7 @@
 
 | Карточка | Волна | Статус |
 |---|---|---|
-| [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и инициация изменений | `A0-G`: сообщён `HOLD`, факты ещё не получены; `A0-F` не подтверждён, реализация не начата |
+| [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и инициация изменений | `A0-G`: сообщён `HOLD`, факты не получены; `A0-F` не подтверждён. Сверка с базой `661165b`, реализация не начата; `ADM-0P` сохраняется |
 | [`wave_cards/ADM-NOTICE.md`](wave_cards/ADM-NOTICE.md) | `ADM-NOTICE`: запуск уведомлений после снятия загрузочной шторки | #340 слит в `0bef478`; CI 4/4 и функциональный PASS, визуал не проверен |
 | [`wave_cards/ADM-NOTICE-REPORT.md`](wave_cards/ADM-NOTICE-REPORT.md) | Разбор отчёта об исправлениях `ADM-NOTICE` | сводка воркера 2 разобрана; дополнительная перепроверка — только вне текущей итерации |
 | [`wave_cards/ADM-UI.md`](wave_cards/ADM-UI.md) | `ADM-UI`: кнопка, условный код и оболочка редактора сектора | PR #340 слит в `0bef478`; Pages опубликован, визуальная приёмка открыта |
