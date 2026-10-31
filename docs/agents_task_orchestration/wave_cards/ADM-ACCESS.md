@@ -8,7 +8,7 @@
 > Получены `A0-F`/`A0-G`, [A0-S/S2/S3](ADM-ACCESS-S-REPORT.md) и [A0-H/H2](ADM-ACCESS-H-REPORT.md).
 > [Критика `b030d20`](ADM-ACCESS-R-REPORT.md) — `HOLD`; [пакет](ADM-ACCESS-PACKET.md) не согласован.
 > Владелец попросил сначала прояснить [подключение, права и Discord](ADM-ACCESS-INTEGRATION.md);
-> App + Actions — кандидат; экран установки: `Read access to members`, `No repositories`.
+> App + Actions — кандидат; владелец подтвердил App в установках организации, права сверяются.
 >
 > Назад: [оркестрация](../README.md) · [оболочка ADM-UI](ADM-UI.md) ·
 > [очередь сектора](../../stages/stage-09-12-sector/todo.md) ·

@@ -37,11 +37,11 @@
 |---|---|---|
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
-| [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | Владелец скачал ключ; защищённое использование и Actions-секрет не подтверждены |
+| [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | App виден владельцу в установках организации; ключ скачан, Actions-секрет не подтверждён |
 | [`wave_cards/ADM-ACCESS-KEY-REVIEW.md`](wave_cards/ADM-ACCESS-KEY-REVIEW.md) | Воркер 2: безопасность ключа `A0-K` | Read-only [отчёт получен](wave_cards/ADM-ACCESS-K-REPORT.md); настройки и секреты не менялись |
 | [`wave_cards/ADM-ACCESS-K-REPORT.md`](wave_cards/ADM-ACCESS-K-REPORT.md) | Разбор разведки ключа `A0-K` | Отдельное окружение — кандидат; полные правила и права не доказаны |
 | [`wave_cards/ADM-ACCESS-KEY-CRITIC.md`](wave_cards/ADM-ACCESS-KEY-CRITIC.md) | Задание независимому критику `A0-K-R` | [Отчёт получен](wave_cards/ADM-ACCESS-KR-REPORT.md), все три гейта — `HOLD` |
-| [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Хранение, read-only тест и живая запись на `HOLD`; сначала уточнить установку |
+| [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Три `HOLD`; владелец проверяет права установки, защиту `main` и Actions |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
