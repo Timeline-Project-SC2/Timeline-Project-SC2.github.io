@@ -1,3 +1,7 @@
+## 2026-11-01 — Независимая сверка Actions и оценка тестового плана
+
+Получен [отчёт A0-K2-Q](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TQ-REPORT.md): общие сведения о workflow совпадают с отчётом воркера 2, blob-хеши сверены по Git-метаданным, но ссылки на строки и fork-сценарии нуждаются в уточнении. Предложения отдельного PAT и реального Pages не приняты как первый шаг; подготовлены [короткое уточнение воркеру 1](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TQ-CLARIFY.md) и параллельная [критика безопасного плана](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TR-CRITIC.md). Изменение default, тест App, хранение ключа и живая запись остаются на `HOLD`; настройки, секреты и данные не менялись.
+
 ## 2026-11-01 — Отчёт о правах Actions и независимая сверка
 
 Получен [read-only отчёт A0-K2](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-T-REPORT.md): по воркеру 2 все четыре текущих workflow явно задают права, но runtime, организация и совместимость реальной публикации не проверены. Снижение default не отменяет явно запрошенный write и не защищает ключ App; изменение настройки остаётся на `HOLD`. Подготовлена [независимая сверка воркеру 1 A0-K2-Q](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-T-REVIEW.md) с планом фиктивных испытаний без запуска. Код, настройки, секреты, рабочие данные и три прежних гейта не менялись.
