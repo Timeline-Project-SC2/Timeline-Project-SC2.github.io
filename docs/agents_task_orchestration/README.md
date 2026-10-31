@@ -38,6 +38,7 @@
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
 | [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | App виден владельцу в установках организации; ключ скачан, Actions-секрет не подтверждён |
+| [`wave_cards/ADM-ACCESS-APP-PROBE.md`](wave_cards/ADM-ACCESS-APP-PROBE.md) | Воркер 2: ручная проверка App `A0-K3` | Одно небольшое задание, без размещения ключа и запуска App |
 | [`wave_cards/ADM-ACCESS-KEY-REVIEW.md`](wave_cards/ADM-ACCESS-KEY-REVIEW.md) | Воркер 2: безопасность ключа `A0-K` | Read-only [отчёт получен](wave_cards/ADM-ACCESS-K-REPORT.md); настройки и секреты не менялись |
 | [`wave_cards/ADM-ACCESS-TOKEN-AUDIT.md`](wave_cards/ADM-ACCESS-TOKEN-AUDIT.md) | Воркер 2: права Actions `A0-K2` | [Read-only отчёт получен](wave_cards/ADM-ACCESS-T-REPORT.md); изменение default на `HOLD` |
 | [`wave_cards/ADM-ACCESS-T-REPORT.md`](wave_cards/ADM-ACCESS-T-REPORT.md) | Отчёт о правах workflow | Все четыре workflow, по воркеру 2, задают права явно; runtime не проверен |
