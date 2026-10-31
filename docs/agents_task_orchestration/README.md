@@ -38,8 +38,9 @@
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
-| [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и атомарного Git-коммита | Не утверждён; очередь и безопасная публикация требуют критики |
-| [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2` | ID и часть тестов уточнены; триггеры и версия не доказаны |
+| [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Не утверждён; очередь и безопасная публикация требуют критики |
+| [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Подготовлено после `A0-S3`; новый вердикт не получен |
+| [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
 | [`wave_cards/ADM-ACCESS-F-REPORT.md`](wave_cards/ADM-ACCESS-F-REPORT.md) | Разбор разведки интерфейса `A0-F` | Сводка на `661165b`; точная версия снимка и часть предметных валидаторов не установлены |
 | [`wave_cards/ADM-ACCESS-G-REPORT.md`](wave_cards/ADM-ACCESS-G-REPORT.md) | Разбор GitHub-разведки `A0-G` | Получена независимо; реальные настройки и права не проверены |
