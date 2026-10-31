@@ -1,8 +1,8 @@
 # ADM-ACCESS-T-REVIEW: независимая сверка прав и план проверки
 
 > **Статус:** read-only [отчёт воркера 1 `A0-K2-Q`](ADM-ACCESS-TQ-REPORT.md) получен.
-> Подготовлены [краткое уточнение](ADM-ACCESS-TQ-CLARIFY.md) и параллельная
-> [критика плана](ADM-ACCESS-TR-CRITIC.md); тесты и изменение настроек не разрешены.
+> Получены [краткое уточнение](ADM-ACCESS-TQ-CLARIFY.md) и [критика плана](ADM-ACCESS-TR-REPORT.md);
+> тесты и изменение настроек не разрешены.
 > [Отчёт воркера 2](ADM-ACCESS-T-REPORT.md) также получен.
 > [Подключение](ADM-ACCESS-INTEGRATION.md) · [безопасность ключа](ADM-ACCESS-KR-REPORT.md) ·
 > [индекс](../README.md).

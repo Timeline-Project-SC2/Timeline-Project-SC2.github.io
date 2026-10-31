@@ -1,3 +1,7 @@
+## 2026-11-01 — Вердикт критика по правам Actions
+
+Получены [уточнение воркера 1](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TQ-REPORT.md) и [критика A0-K2-R](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TR-REPORT.md): смена default остаётся на `HOLD`, направление фиктивных испытаний принято с условиями без разрешения на запуск. Универсальный запрет workflow в fork скорректирован по GitHub Docs; некоторые ссылки на строки сохраняют оговорки. Секреты, настройки, данные, App и три прежних гейта не менялись.
+
 ## 2026-11-01 — Независимая сверка Actions и оценка тестового плана
 
 Получен [отчёт A0-K2-Q](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TQ-REPORT.md): общие сведения о workflow совпадают с отчётом воркера 2, blob-хеши сверены по Git-метаданным, но ссылки на строки и fork-сценарии нуждаются в уточнении. Предложения отдельного PAT и реального Pages не приняты как первый шаг; подготовлены [короткое уточнение воркеру 1](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TQ-CLARIFY.md) и параллельная [критика безопасного плана](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-TR-CRITIC.md). Изменение default, тест App, хранение ключа и живая запись остаются на `HOLD`; настройки, секреты и данные не менялись.
