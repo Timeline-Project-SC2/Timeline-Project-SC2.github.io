@@ -1,0 +1,56 @@
+name: Manual App owner check (read-only)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check-owner:
+    if: github.repository == 'Timeline-Project-SC2/Timeline-Project-SC2.github.io' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: app-owner-readonly
+    steps:
+      - name: Restrict the target
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TARGET_REF: ${{ github.ref }}
+        run: |
+          if [[ "$TARGET_REPOSITORY" != "Timeline-Project-SC2/Timeline-Project-SC2.github.io" || "$TARGET_REF" != "refs/heads/main" ]]; then
+            echo "Unsupported repository or ref." >&2
+            exit 1
+          fi
+
+      # Explicit owner without repositories scopes the token to every repository
+      # granted to this installation; the intended installation has none.
+      - name: Create organization installation token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.OWNER_CHECK_APP_CLIENT_ID }}
+          private-key: ${{ secrets.OWNER_CHECK_APP_PRIVATE_KEY }}
+          owner: Timeline-Project-SC2
+          permission-members: read
+
+      - name: Check the dispatch actor's active owner role
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ACTOR" =~ ^[a-zA-Z0-9-]+$ || ! "$ACTOR_ID" =~ ^[0-9]+$ ]]; then
+            echo "Owner verification failed." >&2
+            exit 1
+          fi
+          if ! response=$(gh api --method GET "/orgs/Timeline-Project-SC2/memberships/$ACTOR" 2>/dev/null); then
+            echo "Owner verification failed." >&2
+            exit 1
+          fi
+          if ! jq -e --arg id "$ACTOR_ID" \
+            '.state == "active" and .role == "admin" and (.user.id | tostring) == $id' \
+            >/dev/null 2>&1 <<< "$response"; then
+            echo "Owner verification failed." >&2
+            exit 1
+          fi
+          echo "Owner verification passed."
