@@ -20,7 +20,9 @@
   [1](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/editing-an-issue).
   Сравнение текущего и исходного текста не доказывает отсутствие edit→restore.
 - Сверка настоящего автора по стабильному ID и активной роли Owner необходима, но
-  отражает момент запроса к GitHub; она не атомарна с последующей записью в Sheets.
+  отражает момент запроса к GitHub; она не доказана атомарной с последующей записью
+  в Sheets или в репозиторий. Последний вариант предложен владельцем для будущего
+  перехода и разобран в [плане очереди](ADM-ACCESS-REPO.md).
 - По документации Actions стандартная очередь `concurrency` заменяет предыдущую
   ожидающую задачу; `queue: max` ограничена 100 ожидающими
   [1](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
