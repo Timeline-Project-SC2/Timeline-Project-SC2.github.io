@@ -7,6 +7,8 @@
 > приёмка не подтверждена. Приложение, его полномочия и реальная авторизация не проверены.
 > Получены `A0-F`/`A0-G`, [A0-S/S2/S3](ADM-ACCESS-S-REPORT.md) и [A0-H/H2](ADM-ACCESS-H-REPORT.md).
 > [Критика `b030d20`](ADM-ACCESS-R-REPORT.md) — `HOLD`; [пакет](ADM-ACCESS-PACKET.md) не согласован.
+> Владелец попросил сначала прояснить [подключение и права](ADM-ACCESS-INTEGRATION.md);
+> предложенный GitHub App + Actions пока не выбран и не установлен.
 >
 > Назад: [оркестрация](../README.md) · [оболочка ADM-UI](ADM-UI.md) ·
 > [очередь сектора](../../stages/stage-09-12-sector/todo.md) ·

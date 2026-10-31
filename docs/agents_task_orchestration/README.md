@@ -37,6 +37,7 @@
 |---|---|---|
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
+| [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Настройка, ключ и права автоматики | Приоритет до кода; GitHub App + Actions — кандидат, ничего не подключено |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
