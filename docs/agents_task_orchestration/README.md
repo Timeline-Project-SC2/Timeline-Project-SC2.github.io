@@ -35,7 +35,7 @@
 
 | Карточка | Волна | Статус |
 |---|---|---|
-| [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и инициация изменений | `A0-F` получен с оговорками; `A0-G`: сообщён `HOLD`, факты не получены. Реализация не начата; `ADM-0P` сохраняется |
+| [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и инициация изменений | `A0-F` получен с оговорками; для `A0-G` подготовлено независимое задание, отчёта нет. Реализация не начата; `ADM-0P` сохраняется |
 | [`wave_cards/ADM-ACCESS-F-REPORT.md`](wave_cards/ADM-ACCESS-F-REPORT.md) | Разбор разведки интерфейса `A0-F` | Сводка на `661165b`; точная версия снимка и часть предметных валидаторов не установлены |
 | [`wave_cards/ADM-NOTICE.md`](wave_cards/ADM-NOTICE.md) | `ADM-NOTICE`: запуск уведомлений после снятия загрузочной шторки | #340 слит в `0bef478`; CI 4/4 и функциональный PASS, визуал не проверен |
 | [`wave_cards/ADM-NOTICE-REPORT.md`](wave_cards/ADM-NOTICE-REPORT.md) | Разбор отчёта об исправлениях `ADM-NOTICE` | сводка воркера 2 разобрана; дополнительная перепроверка — только вне текущей итерации |
