@@ -24,15 +24,18 @@ GitHub и официальные документы. OWNED_FILES: пусто; FO
 При 403/недоступности отметь неизвестно — права не повышать и защиты не обходить.
 
 Вход: base main 70cd3c19f98faac79974fd9b5cc258976acf1a92. Документы с отчётом
-и планом могут находиться не в main, а в ветке сессии
-arena/91fe7cda-timeline-project-sc2-github-io. При наличии доступа прочитай без
-переключения ветки: git fetch origin arena/91fe7cda-timeline-project-sc2-github-io;
-сверь FETCH_HEAD с удалённым HEAD ветки и укажи оба SHA; затем git show FETCH_HEAD:
-  docs/agents_task_orchestration/wave_cards/ADM-ACCESS-K-REPORT.md
-  docs/agents_task_orchestration/wave_cards/ADM-ACCESS-INTEGRATION.md
-  docs/agents_task_orchestration/wave_cards/ADM-ACCESS-KEY-REVIEW.md
-Если документы недоступны или SHA не совпал, остановись и сообщи; не утверждай,
-что проверил план. Если main изменился, укажи это; не переноси автоматически выводы.
+и планом находятся в ветке arena/91fe7cda-timeline-project-sc2-github-io. Без
+переключения ветки выполни read-only Git-команды:
+  git fetch origin arena/91fe7cda-timeline-project-sc2-github-io
+  git rev-parse FETCH_HEAD
+  git ls-remote --heads origin arena/91fe7cda-timeline-project-sc2-github-io
+Сверь и сообщи SHA FETCH_HEAD и удалённого HEAD. Прочитай документы по этому SHA:
+  git show FETCH_HEAD:docs/agents_task_orchestration/wave_cards/ADM-ACCESS-K-REPORT.md
+  git show FETCH_HEAD:docs/agents_task_orchestration/wave_cards/ADM-ACCESS-INTEGRATION.md
+  git show FETCH_HEAD:docs/agents_task_orchestration/wave_cards/ADM-ACCESS-KEY-REVIEW.md
+Прочитай правила роли rc-08 и протокол из документации. Если документы недоступны
+или SHA не совпал, остановись и сообщи; не утверждай, что проверил план. Если main
+изменился, укажи это; не переноси автоматически выводы.
 
 Контекст владельца: App создан; скриншот установки показывает Read access to members
 и No repositories, Developed by — организация, но аккаунт установки на кадре не виден.
@@ -66,8 +69,8 @@ A. STORE: можно ли вообще размещать .pem в выбранн
 B. READ-ONLY TEST: что нужно до однократной проверки App и активного Owner организации?
    Оцени явную установку организации, выбранный main/ref, доверенный workflow,
    ограничение полномочий, обработку недоверенной issue, подмену PR/артефактов и
-   зависимостей, сокрытие приватного членства и безопасный тест с фиктивными данными.
-   Отдельно укажи, что должен подтвердить владелец до реального теста.
+   зависимостей, отсутствие секретов и приватного членства в логах и Discord, а также
+   безопасный тест с фиктивными данными. Укажи, что владелец подтверждает до теста.
 C. LIVE APPLY: сохраняется ли прежний HOLD для порядка первого Submit, исходного
    снимка, отзыва роли, записи, текущего sync и подтверждённой публикации? PASS на
    STORE или TEST не снимает HOLD на автоматическую запись.
