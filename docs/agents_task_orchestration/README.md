@@ -39,7 +39,9 @@
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
 | [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | App виден владельцу в установках организации; ключ скачан, Actions-секрет не подтверждён |
 | [`wave_cards/ADM-ACCESS-KEY-REVIEW.md`](wave_cards/ADM-ACCESS-KEY-REVIEW.md) | Воркер 2: безопасность ключа `A0-K` | Read-only [отчёт получен](wave_cards/ADM-ACCESS-K-REPORT.md); настройки и секреты не менялись |
-| [`wave_cards/ADM-ACCESS-TOKEN-AUDIT.md`](wave_cards/ADM-ACCESS-TOKEN-AUDIT.md) | Воркер 2: права Actions `A0-K2` | Подготовлена read-only проверка совместимости снижения default токена |
+| [`wave_cards/ADM-ACCESS-TOKEN-AUDIT.md`](wave_cards/ADM-ACCESS-TOKEN-AUDIT.md) | Воркер 2: права Actions `A0-K2` | [Read-only отчёт получен](wave_cards/ADM-ACCESS-T-REPORT.md); изменение default на `HOLD` |
+| [`wave_cards/ADM-ACCESS-T-REPORT.md`](wave_cards/ADM-ACCESS-T-REPORT.md) | Отчёт о правах workflow | Все четыре workflow, по воркеру 2, задают права явно; runtime не проверен |
+| [`wave_cards/ADM-ACCESS-T-REVIEW.md`](wave_cards/ADM-ACCESS-T-REVIEW.md) | Воркер 1: независимая сверка `A0-K2-Q` | Подготовлена статическая сверка и план изолированной проверки |
 | [`wave_cards/ADM-ACCESS-K-REPORT.md`](wave_cards/ADM-ACCESS-K-REPORT.md) | Разбор разведки ключа `A0-K` | Отдельное окружение — кандидат; полные правила и права не доказаны |
 | [`wave_cards/ADM-ACCESS-KEY-CRITIC.md`](wave_cards/ADM-ACCESS-KEY-CRITIC.md) | Задание независимому критику `A0-K-R` | [Отчёт получен](wave_cards/ADM-ACCESS-KR-REPORT.md), все три гейта — `HOLD` |
 | [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Три `HOLD`; владелец проверяет права установки, защиту `main` и Actions |
