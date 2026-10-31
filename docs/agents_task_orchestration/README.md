@@ -35,11 +35,12 @@
 
 | Карточка | Волна | Статус |
 |---|---|---|
-| [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и инициация изменений | Разведки и критика получены; реализация на `HOLD` до согласования контракта |
+| [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
+| [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация и новые разведки | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
 | [`wave_cards/ADM-ACCESS-F-REPORT.md`](wave_cards/ADM-ACCESS-F-REPORT.md) | Разбор разведки интерфейса `A0-F` | Сводка на `661165b`; точная версия снимка и часть предметных валидаторов не установлены |
 | [`wave_cards/ADM-ACCESS-G-REPORT.md`](wave_cards/ADM-ACCESS-G-REPORT.md) | Разбор GitHub-разведки `A0-G` | Получена независимо; реальные настройки и права не проверены |
-| [`wave_cards/ADM-ACCESS-R-REPORT.md`](wave_cards/ADM-ACCESS-R-REPORT.md) | Критика `rc-08` и решения владельца | `HOLD`: нужно доказать связь исходного содержания с проверенным автором |
-| [`wave_cards/ADM-ACCESS-CONTRACT.md`](wave_cards/ADM-ACCESS-CONTRACT.md) | Черновик контракта проверки и матрицы | Для повторной критики, не разрешение на код; `ADM-0P` сохранён |
+| [`wave_cards/ADM-ACCESS-R-REPORT.md`](wave_cards/ADM-ACCESS-R-REPORT.md) | Критика `rc-08` и решения владельца | Повторный `HOLD`: снимок, гонки и история; реальные настройки не проверены |
+| [`wave_cards/ADM-ACCESS-CONTRACT.md`](wave_cards/ADM-ACCESS-CONTRACT.md) | Черновик контракта проверки и матрицы | Критика получена; требуется доработка, запись пока не разрешена |
 | [`wave_cards/ADM-NOTICE.md`](wave_cards/ADM-NOTICE.md) | `ADM-NOTICE`: запуск уведомлений после снятия загрузочной шторки | #340 слит в `0bef478`; CI 4/4 и функциональный PASS, визуал не проверен |
 | [`wave_cards/ADM-NOTICE-REPORT.md`](wave_cards/ADM-NOTICE-REPORT.md) | Разбор отчёта об исправлениях `ADM-NOTICE` | сводка воркера 2 разобрана; дополнительная перепроверка — только вне текущей итерации |
 | [`wave_cards/ADM-UI.md`](wave_cards/ADM-UI.md) | `ADM-UI`: кнопка, условный код и оболочка редактора сектора | PR #340 слит в `0bef478`; Pages опубликован, визуальная приёмка открыта |
