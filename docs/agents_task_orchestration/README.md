@@ -7,6 +7,7 @@
 |---|---|
 | [`agents_task_orchestration.md`](agents_task_orchestration.md) | Хаб: карта разделов `§1…§18` и правила `О-1…О-4` |
 | [`waves/`](waves/protocol.md) | Сами разделы по волнам: `protocol`, `stage-6-dx`, `stage-8`, `sw-1`, `sw-2*`, `z-3`, `unit-*`, `f` |
+| [`pull_request_template.md`](../pull_request_template.md) | Краткое описание PR: суть, проверки, границы и следующий шаг |
 | [`worker_instruction_on_splitwork.md`](worker_instruction_on_splitwork.md) | Что делает **Воркер** в параллельной тройке: `OWNED_FILES`, самопроверка, формат отчёта |
 | [`external_agency_agents_audit.md`](external_agency_agents_audit.md) | Откуда взяты карточки ролей: аудит внешнего набора `agency-agents`, что взято, что отброшено и почему |
 | [`external_ci_gate_audit_2026-10-26.md`](external_ci_gate_audit_2026-10-26.md) | Внешний аудит CI-гейта: «привычно красный» `check.yml`, решения E1…E6, карточка [`CI-1`](wave_cards/CI-1.md) |
@@ -37,7 +38,21 @@
 |---|---|---|
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
-| [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | Уведомления включены в план; способ доставки и установка App не подтверждены |
+| [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | Ручной тест App прошёл; автоматическая запись и Discord не включены |
+| [`wave_cards/ADM-ACCESS-APP-PROBE.md`](wave_cards/ADM-ACCESS-APP-PROBE.md) | Воркер 2: ручная проверка App `A0-K3` | PR #343 слит; токен и проверка роли инициатора прошли на `main` |
+| [`wave_cards/ADM-ACCESS-ISSUE-ROLE.md`](wave_cards/ADM-ACCESS-ISSUE-ROLE.md) | Воркер 2: автор заявки `A0-L` | Draft PR #344: тест 9/9, новый тест подключён; CI 4/4 |
+| [`wave_cards/ADM-ACCESS-ISSUE-QA.md`](wave_cards/ADM-ACCESS-ISSUE-QA.md) | Воркер 1: приёмка `A0-L-Q` | Однократный независимый обзор чувствительной логики, без живого App |
+| [`wave_cards/ADM-ACCESS-KEY-REVIEW.md`](wave_cards/ADM-ACCESS-KEY-REVIEW.md) | Воркер 2: безопасность ключа `A0-K` | Read-only [отчёт получен](wave_cards/ADM-ACCESS-K-REPORT.md); настройки и секреты не менялись |
+| [`wave_cards/ADM-ACCESS-TOKEN-AUDIT.md`](wave_cards/ADM-ACCESS-TOKEN-AUDIT.md) | Воркер 2: права Actions `A0-K2` | [Read-only отчёт получен](wave_cards/ADM-ACCESS-T-REPORT.md); изменение default на `HOLD` |
+| [`wave_cards/ADM-ACCESS-T-REPORT.md`](wave_cards/ADM-ACCESS-T-REPORT.md) | Отчёт о правах workflow | Все четыре workflow, по воркеру 2, задают права явно; runtime не проверен |
+| [`wave_cards/ADM-ACCESS-T-REVIEW.md`](wave_cards/ADM-ACCESS-T-REVIEW.md) | Воркер 1: независимая сверка `A0-K2-Q` | [Отчёт и уточнение получены](wave_cards/ADM-ACCESS-TQ-REPORT.md); runtime не проверен |
+| [`wave_cards/ADM-ACCESS-TQ-REPORT.md`](wave_cards/ADM-ACCESS-TQ-REPORT.md) | Сверка прав Actions | Blob-хеши сверены по Git-метаданным; некоторые ссылки и fork-сценарии с оговорками |
+| [`wave_cards/ADM-ACCESS-TQ-CLARIFY.md`](wave_cards/ADM-ACCESS-TQ-CLARIFY.md) | Воркер 1: уточнение `A0-K2-Q1` | Ответ получен; универсальное утверждение о fork не принято |
+| [`wave_cards/ADM-ACCESS-TR-CRITIC.md`](wave_cards/ADM-ACCESS-TR-CRITIC.md) | Критик: план изолированных проверок `A0-K2-R` | [Вердикт получен](wave_cards/ADM-ACCESS-TR-REPORT.md): default — HOLD, план — условный PASS |
+| [`wave_cards/ADM-ACCESS-TR-REPORT.md`](wave_cards/ADM-ACCESS-TR-REPORT.md) | Критика тестового плана | Исторический вердикт; позднее ручной тест App прошёл по решению владельца |
+| [`wave_cards/ADM-ACCESS-K-REPORT.md`](wave_cards/ADM-ACCESS-K-REPORT.md) | Разбор разведки ключа `A0-K` | Отдельное окружение — кандидат; полные правила и права не доказаны |
+| [`wave_cards/ADM-ACCESS-KEY-CRITIC.md`](wave_cards/ADM-ACCESS-KEY-CRITIC.md) | Задание независимому критику `A0-K-R` | [Исторический отчёт](wave_cards/ADM-ACCESS-KR-REPORT.md): три гейта — `HOLD` |
+| [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Ручной тест позже прошёл; живая запись остаётся на `HOLD` |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
