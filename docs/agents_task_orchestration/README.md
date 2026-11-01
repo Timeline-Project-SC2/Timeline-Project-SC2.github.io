@@ -54,7 +54,8 @@
 | [`wave_cards/ADM-ACCESS-KEY-CRITIC.md`](wave_cards/ADM-ACCESS-KEY-CRITIC.md) | Задание независимому критику `A0-K-R` | [Исторический отчёт](wave_cards/ADM-ACCESS-KR-REPORT.md): три гейта — `HOLD` |
 | [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Ручной тест позже прошёл; живая запись остаётся на `HOLD` |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
-| [`wave_cards/ADM-ACCESS-QUEUE-STEP.md`](wave_cards/ADM-ACCESS-QUEUE-STEP.md) | Воркер 2: конкретная схема очереди `A0-M` | Одно задание на проект и следующий изолированный шаг; отчёта ещё нет |
+| [`wave_cards/ADM-ACCESS-QUEUE-STEP.md`](wave_cards/ADM-ACCESS-QUEUE-STEP.md) | Воркер 2: схема очереди `A0-M` | Отчёт получен; полнота, порядок и неизменность не доказаны |
+| [`wave_cards/ADM-ACCESS-CONFLICT-STEP.md`](wave_cards/ADM-ACCESS-CONFLICT-STEP.md) | Воркер 2: изолированная проверка конфликтов `A0-M1` | Подготовлено одно продолжение без живой записи и фиктивного `ready` |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
