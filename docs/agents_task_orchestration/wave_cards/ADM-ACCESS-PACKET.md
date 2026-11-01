@@ -7,7 +7,8 @@
 > критик на `b030d20` повторно поставил [HOLD](ADM-ACCESS-R-REPORT.md).
 >
 > [Источник и очередь](ADM-ACCESS-REPO.md) · [доступ](ADM-ACCESS-CONTRACT.md) ·
-> [данные A0-S/S2](ADM-ACCESS-S-REPORT.md) · [GitHub A0-H/H2](ADM-ACCESS-H-REPORT.md).
+> [данные A0-S/S2](ADM-ACCESS-S-REPORT.md) · [GitHub A0-H/H2](ADM-ACCESS-H-REPORT.md) ·
+> [задание на пример и сессии](ADM-ACCESS-EXAMPLE-STEP.md).
 
 ## 1. На что распространяется проект
 
