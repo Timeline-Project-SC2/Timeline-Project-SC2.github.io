@@ -1,8 +1,9 @@
 # ADM-ACCESS-KEY-CRITIC: независимая оценка защиты ключа
 
-> **Статус:** отдельный отчёт `rc-08` [получен](ADM-ACCESS-KR-REPORT.md): хранение
-> ключа, read-only тест и живая запись — `HOLD`. Отчёт воркера 2 —
-> [A0-K](ADM-ACCESS-K-REPORT.md); ключ и настройки помощнику не передавались.
+> **Исторический вердикт** `rc-08` [получен](ADM-ACCESS-KR-REPORT.md): хранение
+> ключа, read-only тест и живая запись — `HOLD`. Позднее владелец разрешил и провёл
+> ручной read-only тест; живая запись остаётся `HOLD`. [A0-K](ADM-ACCESS-K-REPORT.md);
+> ключ и настройки помощнику не передавались. Актуальный UX — в [плане входа](ADM-ACCESS-AUTH-PLAN.md).
 >
 > [Подключение](ADM-ACCESS-INTEGRATION.md) · [задание воркера 2](ADM-ACCESS-KEY-REVIEW.md) ·
 > [прежний HOLD](ADM-ACCESS-R-REPORT.md) · [индекс](../README.md).
