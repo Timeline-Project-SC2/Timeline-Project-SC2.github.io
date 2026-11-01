@@ -62,6 +62,7 @@
 | [`wave_cards/ADM-ACCESS-EXAMPLE-STEP.md`](wave_cards/ADM-ACCESS-EXAMPLE-STEP.md) | Воркер 1: пример полей и серия заявок `A0-N` | Отчёт получен; чтение чужой issue возможно, совместная запись обсуждается |
 | [`wave_cards/ADM-ACCESS-DRAFT-COMPARE.md`](wave_cards/ADM-ACCESS-DRAFT-COMPARE.md) | Черновик, отправка, сравнение и логи issue | Приоритет первой отправки подтверждён; шаблон логов условно принят |
 | [`wave_cards/ADM-ACCESS-AUTH-PLAN.md`](wave_cards/ADM-ACCESS-AUTH-PLAN.md) | Вход GitHub и создание черновика | Подготовка: форма GitHub или web-авторизация; реализация и права не проверены |
+| [`wave_cards/ADM-ACCESS-AUTH-TASK.md`](wave_cards/ADM-ACCESS-AUTH-TASK.md) | Воркер 1: следующий шаг `A0-O` | Карточка готова к передаче, без живых настроек и записи |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
