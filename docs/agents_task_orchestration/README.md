@@ -61,7 +61,7 @@
 | [`wave_cards/ADM-ACCESS-F-REPORT.md`](wave_cards/ADM-ACCESS-F-REPORT.md) | Разбор разведки интерфейса `A0-F` | Сводка на `661165b`; точная версия снимка и часть предметных валидаторов не установлены |
 | [`wave_cards/ADM-ACCESS-G-REPORT.md`](wave_cards/ADM-ACCESS-G-REPORT.md) | Разбор GitHub-разведки `A0-G` | Получена независимо; реальные настройки и права не проверены |
 | [`wave_cards/ADM-ACCESS-R-REPORT.md`](wave_cards/ADM-ACCESS-R-REPORT.md) | Критика `rc-08` и решения владельца | Третий `HOLD`: снимок, порядок, роль и запись; реальные настройки не проверены |
-| [`wave_cards/ADM-ACCESS-CONTRACT.md`](wave_cards/ADM-ACCESS-CONTRACT.md) | Черновик контракта проверки и матрицы | Критика получена; требуется доработка, запись пока не разрешена |
+| [`wave_cards/ADM-ACCESS-CONTRACT.md`](wave_cards/ADM-ACCESS-CONTRACT.md) | Черновик контракта проверки и матрицы | Правка до записи останавливает заявку; альтернативная модель сохранена, живая запись на `HOLD` |
 | [`wave_cards/ADM-NOTICE.md`](wave_cards/ADM-NOTICE.md) | `ADM-NOTICE`: запуск уведомлений после снятия загрузочной шторки | #340 слит в `0bef478`; CI 4/4 и функциональный PASS, визуал не проверен |
 | [`wave_cards/ADM-NOTICE-REPORT.md`](wave_cards/ADM-NOTICE-REPORT.md) | Разбор отчёта об исправлениях `ADM-NOTICE` | сводка воркера 2 разобрана; дополнительная перепроверка — только вне текущей итерации |
 | [`wave_cards/ADM-UI.md`](wave_cards/ADM-UI.md) | `ADM-UI`: кнопка, условный код и оболочка редактора сектора | PR #340 слит в `0bef478`; Pages опубликован, визуальная приёмка открыта |
