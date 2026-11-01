@@ -54,7 +54,7 @@
 | [`wave_cards/ADM-ACCESS-KEY-CRITIC.md`](wave_cards/ADM-ACCESS-KEY-CRITIC.md) | Задание независимому критику `A0-K-R` | [Исторический отчёт](wave_cards/ADM-ACCESS-KR-REPORT.md): три гейта — `HOLD` |
 | [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Ручной тест позже прошёл; живая запись остаётся на `HOLD` |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
-| [`wave_cards/ADM-ACCESS-QUEUE-STEP.md`](wave_cards/ADM-ACCESS-QUEUE-STEP.md) | Воркер 2: схема очереди `A0-M` | Отчёт получен; полнота, порядок и неизменность не доказаны |
+| [`wave_cards/ADM-ACCESS-QUEUE-STEP.md`](wave_cards/ADM-ACCESS-QUEUE-STEP.md) | Очередь `A0-M` и тест истории правок | `edit→restore` наблюдался в #347; полнота, порядок и отсутствие гонки не доказаны |
 | [`wave_cards/ADM-ACCESS-CONFLICT-STEP.md`](wave_cards/ADM-ACCESS-CONFLICT-STEP.md) | Воркер 2: изолированная проверка конфликтов `A0-M1` | PR #346 слит в `18458c0`; живая запись не включена |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
