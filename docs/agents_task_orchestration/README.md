@@ -62,6 +62,7 @@
 | [`wave_cards/ADM-ACCESS-EXAMPLE-STEP.md`](wave_cards/ADM-ACCESS-EXAMPLE-STEP.md) | Воркер 1: пример полей и серия заявок `A0-N` | Отчёт получен; чтение чужой issue возможно, совместная запись обсуждается |
 | [`wave_cards/ADM-ACCESS-DRAFT-COMPARE.md`](wave_cards/ADM-ACCESS-DRAFT-COMPARE.md) | Черновик, отправка, сравнение и логи issue | Приоритет первой отправки подтверждён; шаблон логов условно принят |
 | [`wave_cards/ADM-ACCESS-AUTH-PLAN.md`](wave_cards/ADM-ACCESS-AUTH-PLAN.md) | Вход GitHub и создание черновика | `HOLD`: нужен GitHub-only путь без карты и недоступных в РФ сервисов |
+| [`wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md`](wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md) | Передача в новый чат оркестратора | Актуальный UX, границы, противоречия и `HOLD`; новые чаты не запущены |
 | [`wave_cards/ADM-ACCESS-AUTH-TASK.md`](wave_cards/ADM-ACCESS-AUTH-TASK.md) | Воркер 1: следующий шаг `A0-O` | Отчёт получен с уточнением по App; вход и запись не включены |
 | [`wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md`](wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md) | Воркер 1: офлайн-просмотр `A0-P` | `HOLD` по команде владельца; не передавать без нового решения |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
