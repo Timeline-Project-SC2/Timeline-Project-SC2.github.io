@@ -7,6 +7,7 @@
 |---|---|
 | [`agents_task_orchestration.md`](agents_task_orchestration.md) | Хаб: карта разделов `§1…§18` и правила `О-1…О-4` |
 | [`waves/`](waves/protocol.md) | Сами разделы по волнам: `protocol`, `stage-6-dx`, `stage-8`, `sw-1`, `sw-2*`, `z-3`, `unit-*`, `f` |
+| [`pull_request_template.md`](../pull_request_template.md) | Краткое описание PR: суть, проверки, границы и следующий шаг |
 | [`worker_instruction_on_splitwork.md`](worker_instruction_on_splitwork.md) | Что делает **Воркер** в параллельной тройке: `OWNED_FILES`, самопроверка, формат отчёта |
 | [`external_agency_agents_audit.md`](external_agency_agents_audit.md) | Откуда взяты карточки ролей: аудит внешнего набора `agency-agents`, что взято, что отброшено и почему |
 | [`external_ci_gate_audit_2026-10-26.md`](external_ci_gate_audit_2026-10-26.md) | Внешний аудит CI-гейта: «привычно красный» `check.yml`, решения E1…E6, карточка [`CI-1`](wave_cards/CI-1.md) |
