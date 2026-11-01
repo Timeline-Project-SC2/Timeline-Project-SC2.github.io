@@ -1,3 +1,7 @@
+## 2026-11-01 — Результат проверки полноты очереди
+
+Получен [отчёт A0-M2 воркера 2](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-QUEUE-PROOF.md): документированный GitHub-only критерий полноты и порядка не найден, `HOLD`; это не доказательство невозможности всех решений. Подготовлен, но не отправлен [вопрос GitHub](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-GITHUB-QUESTION.md). Схема `createCommitOnBranch` проверена только на уровне публичных входных полей; живая запись и настройки не менялись.
+
 ## 2026-11-01 — Метаданные удалённой ревизии
 
 Владелец удалил одну ревизию [тестовой issue #347](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/347) и передал воркеру 2 [A0-M2](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-QUEUE-PROOF.md). В повторном GraphQL-чтении у удалённой ревизии видны время правки и удаления, а `diff` равен маркеру `deleted`; сохранились дата последней правки и события переименования. Это один наблюдаемый случай, а не гарантия полноты истории или отсутствия гонки перед записью; отчёта воркера ещё нет.

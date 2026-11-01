@@ -6,8 +6,8 @@
 > а не первого открывшего редактор. Очередь, данные, синхронизация и права не изменены;
 > изолированный модуль роли слит отдельно, повторная критика записи остаётся `HOLD`.
 > [Отчёт A0-M](ADM-ACCESS-QUEUE-STEP.md) получен; [проверка конфликта A0-M1](ADM-ACCESS-CONFLICT-STEP.md)
-> слита в `18458c0`. Воркеру 2 передана [точечная проверка A0-M2](ADM-ACCESS-QUEUE-PROOF.md),
-> без живой записи.
+> слита в `18458c0`. [Отчёт A0-M2](ADM-ACCESS-QUEUE-PROOF.md) — `HOLD`;
+> подготовлен [вопрос GitHub](ADM-ACCESS-GITHUB-QUESTION.md), без живой записи.
 >
 > [Сквозной план](ADM-ACCESS-AUTO.md) · [пакет](ADM-ACCESS-PACKET.md) ·
 > [задание критику](ADM-ACCESS-REVIEW.md) · [данные](ADM-ACCESS-S-REPORT.md) ·
