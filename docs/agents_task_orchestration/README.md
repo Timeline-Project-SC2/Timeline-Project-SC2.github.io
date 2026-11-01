@@ -59,7 +59,7 @@
 | [`wave_cards/ADM-ACCESS-GITHUB-QUESTION.md`](wave_cards/ADM-ACCESS-GITHUB-QUESTION.md) | Вопрос GitHub о порядке и атомарности | Подготовлен черновик; не отправлен |
 | [`wave_cards/ADM-ACCESS-CONFLICT-STEP.md`](wave_cards/ADM-ACCESS-CONFLICT-STEP.md) | Воркер 2: изолированная проверка конфликтов `A0-M1` | PR #346 слит в `18458c0`; живая запись не включена |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
-| [`wave_cards/ADM-ACCESS-EXAMPLE-STEP.md`](wave_cards/ADM-ACCESS-EXAMPLE-STEP.md) | Воркер 1: реальный формат полей и серия заявок `A0-N` | Владелец передал карточку; отчёт ожидается |
+| [`wave_cards/ADM-ACCESS-EXAMPLE-STEP.md`](wave_cards/ADM-ACCESS-EXAMPLE-STEP.md) | Воркер 1: пример полей и серия заявок `A0-N` | Отчёт получен; обсуждается общий код сессии |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
