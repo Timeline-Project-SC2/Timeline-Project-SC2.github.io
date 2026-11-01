@@ -1,3 +1,7 @@
+## 2026-11-01 — Тест проверки автора подключён к общему прогону
+
+Воркер 2 обновил [draft PR #344](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/344) до `1924058`: по его отчёту прямой тест 9/9, `npm test` предварительный набор 25 pass и основной прогон 418 pass; восемь карантинных тестов по-прежнему отфильтрованы. GitHub CI 4/4. Для чувствительной логики подготовлен [один независимый обзор воркеру 1](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-ISSUE-QA.md); живые события, запись и очередь не включены.
+
 ## 2026-11-01 — Черновик проверки автора заявки
 
 Воркер 2 подготовил [draft PR #344](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/344) на `e4010b4`: изолированный модуль и тест; по отчёту прямой прогон 9/9, GitHub CI 4/4. Новый тест не входил в `npm test`; для того же воркера подготовлено [небольшое продолжение](docs/agents_task_orchestration/wave_cards/ADM-ACCESS-ISSUE-ROLE.md). Заявки, запись и очередь не включены.
