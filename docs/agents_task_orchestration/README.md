@@ -30,6 +30,11 @@
 
 ## Карточки волн
 
+> **ADM-ACCESS:** для нового оркестратора начните с [карточки передачи](wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md)
+> и [плана входа](wave_cards/ADM-ACCESS-AUTH-PLAN.md). Поздние решения владельца имеют
+> приоритет над старыми заданиями и примерами: ручная issue не заменяет выбранное
+> автоматическое создание; способ безопасного входа и живая обработка пока не готовы.
+
 Отдельный файл на каждую выданную волну карточку ведёт Гайдлайнер (`rc-07`). Карточка — это
 рабочий документ воркера: `OWNED_FILES`/`FORBIDDEN_FILES`, контракт символов, шаги с коммитами,
 гейты, риски и журнал решений. Файлы карточек **не входят** в `OWNED_FILES` кодовых воркеров.
@@ -40,8 +45,8 @@
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
 | [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | Ручной тест App прошёл; автоматическая запись и Discord не включены |
 | [`wave_cards/ADM-ACCESS-APP-PROBE.md`](wave_cards/ADM-ACCESS-APP-PROBE.md) | Воркер 2: ручная проверка App `A0-K3` | PR #343 слит; токен и проверка роли инициатора прошли на `main` |
-| [`wave_cards/ADM-ACCESS-ISSUE-ROLE.md`](wave_cards/ADM-ACCESS-ISSUE-ROLE.md) | Воркер 2: автор заявки `A0-L` | Draft PR #344: тест 9/9, новый тест подключён; CI 4/4 |
-| [`wave_cards/ADM-ACCESS-ISSUE-QA.md`](wave_cards/ADM-ACCESS-ISSUE-QA.md) | Воркер 1: приёмка `A0-L-Q` | Однократный независимый обзор чувствительной логики, без живого App |
+| [`wave_cards/ADM-ACCESS-ISSUE-ROLE.md`](wave_cards/ADM-ACCESS-ISSUE-ROLE.md) | Воркер 2: автор заявки `A0-L` | PR #344 слит в `5c2acc8`; живые заявки и запись не подключены |
+| [`wave_cards/ADM-ACCESS-ISSUE-QA.md`](wave_cards/ADM-ACCESS-ISSUE-QA.md) | Воркер 1: приёмка `A0-L-Q` | PASS изолированной логике; интеграция и API не проверены |
 | [`wave_cards/ADM-ACCESS-KEY-REVIEW.md`](wave_cards/ADM-ACCESS-KEY-REVIEW.md) | Воркер 2: безопасность ключа `A0-K` | Read-only [отчёт получен](wave_cards/ADM-ACCESS-K-REPORT.md); настройки и секреты не менялись |
 | [`wave_cards/ADM-ACCESS-TOKEN-AUDIT.md`](wave_cards/ADM-ACCESS-TOKEN-AUDIT.md) | Воркер 2: права Actions `A0-K2` | [Read-only отчёт получен](wave_cards/ADM-ACCESS-T-REPORT.md); изменение default на `HOLD` |
 | [`wave_cards/ADM-ACCESS-T-REPORT.md`](wave_cards/ADM-ACCESS-T-REPORT.md) | Отчёт о правах workflow | Все четыре workflow, по воркеру 2, задают права явно; runtime не проверен |
@@ -54,14 +59,24 @@
 | [`wave_cards/ADM-ACCESS-KEY-CRITIC.md`](wave_cards/ADM-ACCESS-KEY-CRITIC.md) | Задание независимому критику `A0-K-R` | [Исторический отчёт](wave_cards/ADM-ACCESS-KR-REPORT.md): три гейта — `HOLD` |
 | [`wave_cards/ADM-ACCESS-KR-REPORT.md`](wave_cards/ADM-ACCESS-KR-REPORT.md) | Критика ключа и проверка владельцем | Ручной тест позже прошёл; живая запись остаётся на `HOLD` |
 | [`wave_cards/ADM-ACCESS-REPO.md`](wave_cards/ADM-ACCESS-REPO.md) | Репозиторий как цель и очередь заявок | Предложен переход от Sheets; владелец выбрал приоритет первой отправки |
+| [`wave_cards/ADM-ACCESS-QUEUE-STEP.md`](wave_cards/ADM-ACCESS-QUEUE-STEP.md) | Очередь `A0-M` и тест истории правок | После `edit→restore` и удаления ревизии #347 метаданные правки видимы; гарантии очереди не доказаны |
+| [`wave_cards/ADM-ACCESS-QUEUE-PROOF.md`](wave_cards/ADM-ACCESS-QUEUE-PROOF.md) | Воркер 2: проверка полноты очереди `A0-M2` | Отчёт получен: документированного критерия не найдено, `HOLD` |
+| [`wave_cards/ADM-ACCESS-GITHUB-QUESTION.md`](wave_cards/ADM-ACCESS-GITHUB-QUESTION.md) | Вопрос GitHub о порядке и атомарности | Подготовлен черновик; не отправлен |
+| [`wave_cards/ADM-ACCESS-CONFLICT-STEP.md`](wave_cards/ADM-ACCESS-CONFLICT-STEP.md) | Воркер 2: изолированная проверка конфликтов `A0-M1` | PR #346 слит в `18458c0`; живая запись не включена |
 | [`wave_cards/ADM-ACCESS-PACKET.md`](wave_cards/ADM-ACCESS-PACKET.md) | Черновик пакета и Git-коммита | Критика `b030d20` — `HOLD`; порядок, права и публикация не доказаны |
+| [`wave_cards/ADM-ACCESS-EXAMPLE-STEP.md`](wave_cards/ADM-ACCESS-EXAMPLE-STEP.md) | Воркер 1: пример полей и серия заявок `A0-N` | Отчёт получен; чтение чужой issue возможно, совместная запись обсуждается |
+| [`wave_cards/ADM-ACCESS-DRAFT-COMPARE.md`](wave_cards/ADM-ACCESS-DRAFT-COMPARE.md) | Черновик, отправка, сравнение и логи issue | Приоритет первой отправки подтверждён; шаблон логов условно принят |
+| [`wave_cards/ADM-ACCESS-AUTH-PLAN.md`](wave_cards/ADM-ACCESS-AUTH-PLAN.md) | Вход GitHub и создание черновика | `HOLD`: нужен GitHub-only путь без карты и недоступных в РФ сервисов |
+| [`wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md`](wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md) | Передача в новый чат оркестратора | Актуальный UX, границы, противоречия и `HOLD`; новые чаты не запущены |
+| [`wave_cards/ADM-ACCESS-AUTH-TASK.md`](wave_cards/ADM-ACCESS-AUTH-TASK.md) | Воркер 1: следующий шаг `A0-O` | Отчёт получен с уточнением по App; вход и запись не включены |
+| [`wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md`](wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md) | Воркер 1: офлайн-просмотр `A0-P` | `HOLD` по команде владельца; не передавать без нового решения |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
 | [`wave_cards/ADM-ACCESS-F-REPORT.md`](wave_cards/ADM-ACCESS-F-REPORT.md) | Разбор разведки интерфейса `A0-F` | Сводка на `661165b`; точная версия снимка и часть предметных валидаторов не установлены |
 | [`wave_cards/ADM-ACCESS-G-REPORT.md`](wave_cards/ADM-ACCESS-G-REPORT.md) | Разбор GitHub-разведки `A0-G` | Получена независимо; реальные настройки и права не проверены |
 | [`wave_cards/ADM-ACCESS-R-REPORT.md`](wave_cards/ADM-ACCESS-R-REPORT.md) | Критика `rc-08` и решения владельца | Третий `HOLD`: снимок, порядок, роль и запись; реальные настройки не проверены |
-| [`wave_cards/ADM-ACCESS-CONTRACT.md`](wave_cards/ADM-ACCESS-CONTRACT.md) | Черновик контракта проверки и матрицы | Критика получена; требуется доработка, запись пока не разрешена |
+| [`wave_cards/ADM-ACCESS-CONTRACT.md`](wave_cards/ADM-ACCESS-CONTRACT.md) | Черновик контракта проверки и матрицы | Правка до записи останавливает заявку; альтернативная модель сохранена, живая запись на `HOLD` |
 | [`wave_cards/ADM-NOTICE.md`](wave_cards/ADM-NOTICE.md) | `ADM-NOTICE`: запуск уведомлений после снятия загрузочной шторки | #340 слит в `0bef478`; CI 4/4 и функциональный PASS, визуал не проверен |
 | [`wave_cards/ADM-NOTICE-REPORT.md`](wave_cards/ADM-NOTICE-REPORT.md) | Разбор отчёта об исправлениях `ADM-NOTICE` | сводка воркера 2 разобрана; дополнительная перепроверка — только вне текущей итерации |
 | [`wave_cards/ADM-UI.md`](wave_cards/ADM-UI.md) | `ADM-UI`: кнопка, условный код и оболочка редактора сектора | PR #340 слит в `0bef478`; Pages опубликован, визуальная приёмка открыта |
