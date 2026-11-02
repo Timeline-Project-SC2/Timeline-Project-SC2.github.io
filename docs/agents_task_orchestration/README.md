@@ -69,8 +69,9 @@
 | [`wave_cards/ADM-ACCESS-AUTH-PLAN.md`](wave_cards/ADM-ACCESS-AUTH-PLAN.md) | Вход GitHub и создание черновика | `HOLD`: нужен GitHub-only путь без карты и недоступных в РФ сервисов |
 | [`wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md`](wave_cards/ADM-ACCESS-ORCHESTRATOR-HANDOFF.md) | Передача в новый чат оркестратора | Актуальный UX, границы, противоречия и `HOLD`; новые чаты не запущены |
 | [`wave_cards/ADM-ACCESS-AUTH-TASK.md`](wave_cards/ADM-ACCESS-AUTH-TASK.md) | Воркер 1: следующий шаг `A0-O` | Отчёт получен с уточнением по App; вход и запись не включены |
-| [`wave_cards/ADM-ACCESS-CF-WORKER-AUTH.md`](wave_cards/ADM-ACCESS-CF-WORKER-AUTH.md) | Воркер 1: узкий CF Worker OAuth-посредник | Выдана владельцем 02.11.2026; read-only разведка и проект, без реализации; A0-P и живая запись — `HOLD` |
-| [`wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md`](wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md) | Воркер 1: офлайн-просмотр `A0-P` | `HOLD` по команде владельца; не передавать без нового решения |
+| [`wave_cards/ADM-ACCESS-CF-WORKER-AUTH.md`](wave_cards/ADM-ACCESS-CF-WORKER-AUTH.md) | Воркер 1: узкий CF Worker OAuth-посредник | Выдана владельцем 02.11.2026; read-only разведка и проект, без реализации; живая запись — `HOLD` |
+| [`wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md`](wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md) | Воркер 1: офлайн-просмотр `A0-P`, историческая | Преемник — [`ADM-ACCESS-A0-P-REACTIVATION.md`](wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md); старый текст повторно не выдавать |
+| [`wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md`](wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md) | Воркер 1: реактивированный `A0-P` | Выдана владельцем 02.11.2026; новая сверка PR #348, без слияния и без запуска агента |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
