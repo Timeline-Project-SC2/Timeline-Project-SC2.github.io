@@ -40,7 +40,7 @@ workers_free_limit_source=https://developers.cloudflare.com/workers/platform/lim
 
 ## Границы
 
-- Лимит Workers Free: **100 000 запросов в день**, сброс 00:00 UTC; `Observability events` — отдельный счётчик 200 000/день. Подтверждено [Limits](https://developers.cloudflare.com/workers/platform/limits/) и [Pricing](https://developers.cloudflare.com/workers/platform/pricing/); скриншот владельца — наблюдение.
+- Лимит Workers Free: **100 000 запросов в день**, сброс 00:00 UTC; `Observability events` — отдельный счётчик 200 000 log events/день. Подтверждено [Limits](https://developers.cloudflare.com/workers/platform/limits/), [Pricing](https://developers.cloudflare.com/workers/platform/pricing/) и [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/); скриншот владельца — наблюдение.
 - CF Worker + zapret выбраны владельцем только для логина GitHub и автосоздания issue; это не прокси сайта и не живая запись.
 - Живое применение, данные, Sheets/sync, планеты, OAuth-настройки, секреты, workflow, вторая модерация, слияние PR #348 — `HOLD` / отдельные решения.
 - Исторические карточки не переписываются; преемственность фиксируется блоками и этим редиректом.
