@@ -1,6 +1,7 @@
 # ADM-ACCESS-AUTH-TASK: карточка воркера 1 — вход и issue
 
 > **Статус:** отчёт `A0-O` получен; авторизацию и запись не реализовывали.
+> **Преемники:** [`ADM-ACCESS-CF-WORKER-AUTH.md`](ADM-ACCESS-CF-WORKER-AUTH.md), [`ADM-ACCESS-A0-P-REACTIVATION.md`](ADM-ACCESS-A0-P-REACTIVATION.md) и [карточка-редирект](ADM-ACCESS-CARDS-REDIRECT.md) для автопарсинга. Отчёт исторический; старое задание не продолжать без отдельного решения. Приоритет — решения владельца от 02.11.2026.
 > Воркер читал `origin/main = 18458c0`, но не получил локально документ из `de200b8`.
 > [План](ADM-ACCESS-AUTH-PLAN.md) · [прежний отчёт A0-N](ADM-ACCESS-EXAMPLE-STEP.md) ·
 > [индекс](../README.md).
