@@ -185,10 +185,15 @@ def looks_like_html(data, headers):
     return head.startswith(b"<!doctype") or head.startswith(b"<html")
 
 
-def transform_csv(text, transform, img_w, img_h):
+def transform_csv(text, transform, img_w, img_h, exclude_columns=()):
     reader = csv.DictReader(io.StringIO(text))
     rows = list(reader)
-    fieldnames = [ (fn or "").strip() for fn in (reader.fieldnames or []) ]
+    excluded = {str(name).strip().lower() for name in exclude_columns}
+    fieldnames = [
+        (fn or "").strip()
+        for fn in (reader.fieldnames or [])
+        if (fn or "").strip().lower() not in excluded
+    ]
     # normalize row keys
     norm_rows = []
     for r in rows:
@@ -204,6 +209,11 @@ def transform_csv(text, transform, img_w, img_h):
             continue
         norm_rows.append(nr)
     rows = norm_rows
+    if excluded:
+        for row in rows:
+            for key in tuple(row):
+                if key.strip().lower() in excluded:
+                    del row[key]
     t = transform or {}
     flip_y = t.get("flipY", False)
     scale = t.get("scale", 1)
@@ -532,7 +542,11 @@ def prepare_url_source(src, manifest, strict=False, map_size=None):
         transformed_text = planet_generation.serialize_profiles(rows)
     else:
         transformed_text, rows, fieldnames = transform_csv(
-            text, src.get("transform", {}), None, None
+            text,
+            src.get("transform", {}),
+            None,
+            None,
+            exclude_columns=("net_confront_id",) if role == "systems" else (),
         )
 
     if strict:
