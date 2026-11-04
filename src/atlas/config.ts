@@ -189,6 +189,8 @@ export interface SystemRecord {
   needsReview?: boolean;
   mapLabel?: string | null;
   mapNote?: string;
+  /** Исторический идентификатор сети; сохраняется в снимке, но не участвует в отрисовке. */
+  net_id?: number | null;
   fromSheet?: boolean;
   isFreePoint?: boolean;
   [key: string]: unknown;
