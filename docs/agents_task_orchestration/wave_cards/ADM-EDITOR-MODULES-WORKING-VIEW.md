@@ -1,7 +1,7 @@
 # ADM-EDITOR-MODULES-WORKING-VIEW (ED-2): скан модулей редактора → имплементация → примерный конечный рабочий вид
 
 > **Решение владельца 05.11.2026:** новая прямая карточка. Выдаётся **второй**, только после влития [ED-1](ADM-EDITOR-BUBBLE-CUT.md) в `main`. Поздние прямые решения выше старых примеров и исторических `HOLD`: прежний запрет на реализацию редактора снимается в зоне этой карточки, остальные ограничения сохранены (§6).
-> **Ветка:** `arena/ddc5c8a9-timeline-project-sc2-github-io` (`active`); база — актуальный `origin/main` **после ED-1**. [Прямая ссылка на карточку в ветке](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/blob/arena/ddc5c8a9-timeline-project-sc2-github-io/docs/agents_task_orchestration/wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md).
+> **Ветка:** `arena/ddc5c8a9-timeline-project-sc2-github-io` (`active`); база — `origin/main = dd9e2ce…` **после ED-1** ([PR #351](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/351), 05.11.2026). [Прямая ссылка на карточку в ветке](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/blob/arena/ddc5c8a9-timeline-project-sc2-github-io/docs/agents_task_orchestration/wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md).
 > **Адресат:** **Воркер 1**, один исполнитель, не волна; прежний чат `A0-F → A0-S → A0-S2 → A0-S3 → A0-N → A0-O → A0-P` (по [карточке-редиректу](ADM-ACCESS-CARDS-REDIRECT.md)). Промпт копирует владелец; Гайдлайнер агентов не запускает.
 > **О-5:** карточка составлена по документам, дереву файлов и сводкам PR/CI; код, тесты, данные и конфиги Гайдлайнером не читались. Все `путь:строка` — от исполнителя.
 > **Смысловая связность:** модули «по смыслу» связаны друг с другом: скан обязан дать карту направленных связей, а имплементация — собрать **уже существующие** модули в один рабочий контур, не подменяя их копиями ([концепция](../../concepts/module-interaction-rules.md), [ADM-UI §3](ADM-UI.md)).
@@ -74,7 +74,7 @@ ADM_EDITOR_ED2_MODULES_WORKING_VIEW_V1
 role=rc-07_issue_to_worker_1
 order=2
 execute_after=ADM_EDITOR_ED1_BUBBLE_CUT_in_main
-base=main_after_ed1
+base=dd9e2ce378260066aed41225c9fd1c1065ecfc39
 implementation=true
 turn_into_final_working_view=true
 source=existing_modules_only
