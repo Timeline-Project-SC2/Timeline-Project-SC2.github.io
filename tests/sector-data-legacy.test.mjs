@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
-test('исторические колонки сетей из снимка загружаются без потери данных', async () => {
+test('net_id из снимка загружается, удалённая колонка не попадает в модель', async () => {
   const text = readFileSync(new URL('../data/systems.csv', import.meta.url), 'utf8');
   const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
   try {
@@ -21,8 +21,9 @@ test('исторические колонки сетей из снимка за�
     const dataset = await createDataLoader({ state: {}, runtime: { travelCore: null } }).loadDataset();
     assert.equal(dataset.systems.length, 173);
     const byName = new Map(dataset.systems.map((system) => [system.name, system]));
-    assert.deepEqual([byName.get('Корхал').net_id, byName.get('Корхал').net_confront_id], [1, null]);
-    assert.deepEqual([byName.get('Умоджа').net_id, byName.get('Умоджа').net_confront_id], [3, '3-1']);
+    assert.equal(byName.get('Корхал').net_id, 1);
+    assert.equal(byName.get('Умоджа').net_id, 3);
+    assert.equal(Object.hasOwn(byName.get('Умоджа'), 'net_confront_id'), false);
     assert.equal(byName.get('Корхал').primaryFaction, 'Доминион Терран');
     assert.deepEqual(byName.get('Корхал').coord, [5720, 6257]);
   } finally {

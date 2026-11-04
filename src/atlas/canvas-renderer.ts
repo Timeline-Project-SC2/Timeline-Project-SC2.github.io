@@ -748,18 +748,13 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     var highlighted = isHover || isActive;
     var verified = system ? system.coordSource === 'map' : true;
     var fromLabel = !!system && verified && !system.fromSheet;
-    // Подсветка добавляет не больше 2 px и упирается в тот же кламп 40 px:
-    // на глубоком зуме маркер не раздувается (§6.2 п. 2).
-    var radius = Math.min(20, marker.diameter / 2 + (highlighted ? 2 : 0));
+    // Выбор меняет цвет маркера, но не создаёт вокруг системы отдельный ореол.
+    var radius = Math.min(20, marker.diameter / 2);
     var dot = Math.min(clamp(marker.diameter * 0.2, 1.1, 3.6), radius * 0.8);
     var stroke = clamp(marker.diameter * 0.12, 1, 2.4);
     var color = highlighted ? theme.accent : 'rgba(36,234,219,.38)';
 
     ctx.save();
-    if (highlighted) {
-      ctx.shadowColor = theme.accent;
-      ctx.shadowBlur = 18;
-    }
     ctx.globalAlpha = markerAlpha(marker.id, highlighted, verified);
     ctx.beginPath();
     ctx.arc(marker.x, marker.y, radius, 0, Math.PI * 2);
