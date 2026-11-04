@@ -36,6 +36,7 @@
 > автоматическое создание; с 02.11.2026 выбран узкий CF Worker OAuth-посредник с доступом через zapret (только логин и
 > отправка issue), A0-P реактивирован отдельной карточкой, лимит Workers Free — 100 000 запросов в **день**. Правки и
 > доп. руководства выдавать ссылкой сразу на ветку `arena/911dc5ef-...` или заносить в `main`. Живая обработка и запись пока не готовы.
+> **ED-1/ED-2 (05.11.2026):** новые прямые карточки редактора — [вырезание баблов](wave_cards/ADM-EDITOR-BUBBLE-CUT.md) (первая, результат в `main`) и [скан модулей → рабочий вид](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) (вторая, после ED-1). Проверки — только критический минимум, остальное `TODO` конца сессии.
 
 Отдельный файл на каждую выданную волну карточку ведёт Гайдлайнер (`rc-07`). Карточка — это
 рабочий документ воркера: `OWNED_FILES`/`FORBIDDEN_FILES`, контракт символов, шаги с коммитами,
@@ -75,6 +76,8 @@
 | [`wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md`](wave_cards/ADM-ACCESS-DRAFT-PREVIEW-TASK.md) | Воркер 1: офлайн-просмотр `A0-P`, историческая | Преемник — [`ADM-ACCESS-A0-P-REACTIVATION.md`](wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md); старый текст повторно не выдавать |
 | [`wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md`](wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md) | Воркер 1: реактивированный `A0-P` | Выдана владельцем 02.11.2026; новая сверка PR #348, без слияния и без запуска агента |
 | [`wave_cards/ADM-ACCESS-CARDS-REDIRECT.md`](wave_cards/ADM-ACCESS-CARDS-REDIRECT.md) | Карточка-редирект активных задач для автопарсинга | В `main`; даёт прямые ссылки на ветку `arena/911dc5ef-...` и правило доставки правок |
+| [`wave_cards/ADM-EDITOR-BUBBLE-CUT.md`](wave_cards/ADM-EDITOR-BUBBLE-CUT.md) | `ED-1`: вырезание баблов-выделений границ относительно выбранных систем | Выдана 05.11.2026; **первая**, результат заносится в `main`; модули и данные сохранены для редактора |
+| [`wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md`](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) | `ED-2`: скан модулей редактора → имплементация → примерный конечный рабочий вид | Выдана 05.11.2026; **вторая**, только после влития ED-1; связи модулей по смыслу; проверки — критический минимум |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
