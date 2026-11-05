@@ -187,6 +187,12 @@ export interface StrokeInput {
   readonly width?: number;
   readonly parentId?: string | null;
   readonly source?: Area['source'];
+  /**
+   * Состояние, создаваемое вместе с областью. Без него область остаётся
+   * невидимой: рендер показывает только области с состоянием на этом уровне.
+   * Передаётся сразу, чтобы «создать» и «показать» были одной отменой.
+   */
+  readonly state?: AreaState;
 }
 
 /** Свободная кисть: произвольный полигон в мировых координатах. */
@@ -197,7 +203,7 @@ export function addAreaFromStroke(session: EditorSession, input: StrokeInput): E
     throw new RangeError(`Штрих должен содержать минимум ${minimum} точки`);
   }
   const ring = thickenStroke(input.points, input.width ?? 0, closed);
-  const area = createArea({
+  const created = createArea({
     id: input.id,
     name: input.name,
     rings: [ring],
@@ -206,6 +212,9 @@ export function addAreaFromStroke(session: EditorSession, input: StrokeInput): E
     closed,
     source: input.source ?? 'brush',
   });
+  // `createArea` всегда создаёт область без состояний; состояние прикладываем
+  // сразу, иначе область появляется в документе, но остаётся невидимой.
+  const area: Area = input.state === undefined ? created : { ...created, states: [input.state] };
 
   const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
   return {

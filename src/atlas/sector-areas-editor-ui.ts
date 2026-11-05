@@ -5,14 +5,15 @@
  * того же `data/sector-areas.json`, что читает публичная страница: своего
  * снимка у редактора нет.
  *
- * Ввод идёт на `#mapCanvas` в фазе перехвата: пока рисование включено, карта не
- * получает pointer-события и не уезжает под курсором. Все изменения идут через
- * команды слоя `sector-areas-editor.ts`, поэтому журнал и отмена работают так
- * же, как из кода.
+ * Модель поведения скопирована с классического «лассо» (Photoshop, GIMP,
+ * Krita): нажатие левой кнопки начинает контур, движение тянет «резиновую
+ * нить», отпускание замыкает контур, `Esc` и правая кнопка прерывают штрих,
+ * щелчок без движения выделяет область под курсором. Правая кнопка и колесо
+ * остаются карте, поэтому рисование не спорит с панорамой.
  */
 
 import { DEFAULT_GRADIENT, MODES, emptySectorAreasDoc, parseSectorAreas } from './sector-areas-contract.ts';
-import type { Area, AreaEvent, AreaState, Mode, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
+import type { Area, AreaEvent, AreaPoint, AreaState, Mode, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
 import {
   addAreaFromStroke,
   addForceFill,
@@ -33,20 +34,31 @@ import {
 } from './sector-areas-editor.ts';
 import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
 import { areaSize } from './sector-areas-render.ts';
-import { totalVertices } from './sector-areas-geometry.ts';
+import { pointInArea, totalVertices } from './sector-areas-geometry.ts';
+import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
 import { brushWidthInWorld, thickenStroke } from './sector-areas-editor.ts';
 import type { AtlasKernel } from './config.ts';
 
 export const DRAFT_KEY = 'timeline.sector-areas.draft.v1';
+export const PANEL_KEY = 'timeline.sector-areas.panel.v1';
 /** Минимальный шаг между точками мазка в пикселях экрана. */
 export const MIN_STEP_PX = 6;
+/** Граница «щелчок или штрих»: меньше столько точек — это выбор, а не контур. */
+export const CLICK_POINTS = 3;
 
 export interface SectorAreasEditorUiOptions {
   readonly kernel: AtlasKernel;
   /** Панель `[data-admin-editor]`. */
   readonly panel: HTMLElement | null;
+  /**
+   * Родитель канвы — `.map-stage`. Перехватчик вешается именно на него в фазе
+   * перехвата: так он срабатывает раньше обработчиков панорамы на канве.
+   */
+  readonly stage: HTMLElement | null;
   readonly canvas: HTMLCanvasElement | null;
-  /** Хранилище черновика; `null` — черновик отключён (например, в тестах). */
+  /** Текст справки в разметке Markdown; пусто — кнопка «?» показывает заглушку. */
+  readonly helpText?: string;
+  /** Хранилище черновика и состояния панели; `null` — отключены. */
   readonly storage?: Storage | null;
 }
 
@@ -63,6 +75,9 @@ export interface SectorAreasEditorUiApi {
   refresh(): void;
   setEnabled(on: boolean): void;
   enabled(): boolean;
+  /** Свёрнута ли панель; `null` — панели нет. */
+  collapsed(): boolean | null;
+  setCollapsed(value: boolean): void;
   draft: SectorAreasEditorDraft;
   /** Документ в виде JSON для выгрузки. */
   exportJson(): string;
@@ -73,14 +88,19 @@ export interface SectorAreasEditorUiApi {
 
 /* -------------------------------------------------------------- чистые утилиты */
 
+/** Правая и средняя кнопки рисовать не должны: это панорама и контекст карты. */
+export function isDrawButton(button: number): boolean {
+  return button === 0;
+}
+
 /**
  * Прореживает мазок: точки ближе `minDistance` не несут формы, но раздувают
  * документ. Первая и последняя сохраняются всегда — начало и конец штриха
  * важны для замыкания.
  */
-export function strokePoints(points: readonly [number, number][], minDistance: number): [number, number][] {
+export function strokePoints(points: readonly AreaPoint[], minDistance: number): AreaPoint[] {
   if (points.length === 0 || minDistance <= 0) return [...points];
-  const kept: [number, number][] = [points[0]!];
+  const kept: AreaPoint[] = [points[0]!];
   let last = points[0]!;
   for (let i = 1; i < points.length; i += 1) {
     const point = points[i]!;
@@ -105,6 +125,26 @@ export function eventLine(event: AreaEvent): string {
 /** Заголовок области в списке: имя плюс число вершин. */
 export function areaLabel(area: Area): string {
   return `${area.name} (${totalVertices(area)} верш.)`;
+}
+
+/** Состояние по умолчанию: цвет режима, полный диапазон глубин. */
+export function createDefaultState(id: string, mode: Mode): AreaState {
+  return {
+    id,
+    mode,
+    factionMode: 'single',
+    factionIds: [],
+    task: 'none',
+    visibleFrom: 0,
+    visibleTo: 12,
+    z: 10,
+    priority: 0,
+    lodBias: 0,
+    rounding: 1,
+    gradient: DEFAULT_GRADIENT,
+    override: false,
+    label: null,
+  };
 }
 
 /**
@@ -148,25 +188,6 @@ export function requestMaterial(doc: SectorAreasDoc, options: { readonly title?:
   return lines.join('\n');
 }
 
-function defaultState(id: string, mode: Mode): AreaState {
-  return {
-    id,
-    mode,
-    factionMode: 'single',
-    factionIds: [],
-    task: 'none',
-    visibleFrom: 0,
-    visibleTo: 12,
-    z: 10,
-    priority: 0,
-    lodBias: 0,
-    rounding: 1,
-    gradient: DEFAULT_GRADIENT,
-    override: false,
-    label: null,
-  };
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -187,10 +208,22 @@ function download(name: string, text: string, type: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+const MODE_LABELS: Record<Mode, string> = {
+  political: 'политический',
+  military: 'военный',
+  economy: 'экономический',
+  tension: 'напряжённость',
+};
+
+export function modeLabel(mode: Mode): string {
+  return MODE_LABELS[mode] ?? mode;
+}
+
 /* ------------------------------------------------------------------ редактор */
 
 export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): SectorAreasEditorUiApi {
-  const { kernel, panel, canvas } = options;
+  const { kernel, panel, stage, canvas } = options;
+  const helpText = options.helpText ?? '';
   const storage = options.storage === undefined
     ? (typeof window === 'undefined' ? null : window.localStorage)
     : options.storage;
@@ -198,9 +231,20 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   let session: EditorSession = createEditorSession(kernel.state.sectorAreas ?? emptySectorAreasDoc());
   let on = false;
   let drawing = false;
-  let stroke: [number, number][] = [];
+  let stroke: AreaPoint[] = [];
   let color = '#ffcc00';
   let notice: string | null = null;
+  let capturedId: number | null = null;
+
+  /* Окно справки создаётся лениво и живёт вне панели: у панели своя прокрутка,
+   * а окно должно лежать поверх карты. */
+  let help: HTMLElement | null = null;
+  let helpReturn: HTMLElement | null = null;
+
+  /* Предпросмотр штриха: отдельный канвас поверх карты. Области рисует общий
+   * рендер сцены, а «резиновая нить» живёт только во время штриха. */
+  let preview: HTMLCanvasElement | null = null;
+  let previewCtx: CanvasRenderingContext2D | null = null;
 
   /* Область, выбранная в панели: без неё клавиша `F` не знает, что закрашивать. */
   function selected(): Area | null {
@@ -219,6 +263,141 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     apply();
   }
 
+  /* ------------------------------------------------------- предпросмотр штриха */
+
+  function previewCanvas(): CanvasRenderingContext2D | null {
+    if (stage === null) return null;
+    if (preview === null) {
+      const node = document.createElement('canvas');
+      node.className = 'admin-editor-brush-preview';
+      node.setAttribute('aria-hidden', 'true');
+      stage.appendChild(node);
+      preview = node;
+      previewCtx = node.getContext('2d');
+    }
+    const w = Math.max(1, Math.round(stage.clientWidth));
+    const h = Math.max(1, Math.round(stage.clientHeight));
+    const dpr = Math.min(typeof window === 'undefined' ? 1 : (window.devicePixelRatio || 1), 2);
+    if (preview.width !== w * dpr || preview.height !== h * dpr) {
+      preview.width = w * dpr;
+      preview.height = h * dpr;
+    }
+    preview.style.width = w + 'px';
+    preview.style.height = h + 'px';
+    if (previewCtx !== null) {
+      previewCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      previewCtx.clearRect(0, 0, w, h);
+    }
+    return previewCtx;
+  }
+
+  function screenOf(point: AreaPoint): { x: number; y: number } | null {
+    return kernel.renderer.toScreen(point[0], point[1]);
+  }
+
+  /** «Резиновая нить»: сам штрих и линия от курсора к началу (замыкание). */
+  function drawPreview(): void {
+    const ctx = previewCanvas();
+    if (ctx === null || preview === null) return;
+    const points: { x: number; y: number }[] = [];
+    for (const point of stroke) {
+      const screen = screenOf(point);
+      if (screen !== null) points.push(screen);
+    }
+    if (points.length === 0) return;
+
+    const w = Number(preview.style.width.replace('px', '')) || preview.clientWidth;
+    const h = Number(preview.style.height.replace('px', '')) || preview.clientHeight;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(1.2, session.brushWidthPx / 2);
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = 'rgba(255, 226, 231, .92)';
+    ctx.beginPath();
+    ctx.moveTo(points[0]!.x, points[0]!.y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i]!.x, points[i]!.y);
+    if (points.length > 2) ctx.lineTo(points[0]!.x, points[0]!.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255, 226, 231, .95)';
+    for (const point of points) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function clearPreview(): void {
+    const ctx = previewCtx;
+    if (ctx === null || preview === null) return;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, preview.width, preview.height);
+    ctx.restore();
+  }
+
+  /* ------------------------------------------------------------------- справка */
+
+  function helpHtml(): string {
+    if (helpText.trim().length === 0) {
+      return '<p class="admin-editor-hint">Текст справки не передан: окно открывается, но файла руководства в сборке нет.</p>';
+    }
+    return markdownToHtml(helpText);
+  }
+
+  function ensureHelp(): HTMLElement | null {
+    if (typeof document === 'undefined') return null;
+    if (help !== null) return help;
+    const node = document.createElement('div');
+    node.className = 'admin-editor-help-backdrop';
+    node.hidden = true;
+    node.innerHTML = [
+      '<div class="admin-editor-help-dialog" role="dialog" aria-modal="true" aria-labelledby="adminEditorHelpTitle">',
+      '  <div class="admin-editor-help-head">',
+      '    <h2 id="adminEditorHelpTitle" data-editor-help-title>Справка редактора</h2>',
+      '    <button class="admin-editor-help-close icon-button" type="button" data-action="help-close" title="Закрыть справку" aria-label="Закрыть справку"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg></button>',
+      '  </div>',
+      '  <div class="admin-editor-help-body" data-editor-help></div>',
+      '</div>',
+    ].join('');
+    node.addEventListener('click', function (event): void {
+      if (event.target === node) closeHelp();
+    });
+    document.body.appendChild(node);
+    help = node;
+    return node;
+  }
+
+  function openHelp(): void {
+    const dialog = ensureHelp();
+    if (dialog === null) return;
+    helpReturn = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const title = dialog.querySelector('[data-editor-help-title]');
+    const body = dialog.querySelector('[data-editor-help]');
+    if (title !== null) title.textContent = helpText.trim().length === 0 ? 'Справка редактора' : helpTitle(helpText);
+    if (body !== null) body.innerHTML = helpHtml();
+    dialog.hidden = false;
+    const close = dialog.querySelector<HTMLElement>('[data-action="help-close"]');
+    if (close !== null) close.focus();
+  }
+
+  function closeHelp(): void {
+    if (help !== null) help.hidden = true;
+    if (helpReturn !== null) {
+      helpReturn.focus();
+      helpReturn = null;
+    }
+  }
+
+  function helpOpen(): boolean {
+    return help !== null && !help.hidden;
+  }
+
   /* ------------------------------------------------------------------- панель */
 
   function modulesHtml(): string {
@@ -226,31 +405,23 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       `<option value="${mode}"${mode === session.mode ? ' selected' : ''}>${modeLabel(mode)}</option>`
     )).join('');
     return [
-      '<label class="admin-editor-field"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
+      '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
+      '<div class="admin-editor-grid">',
       '<label class="admin-editor-field">Режим <select data-action="mode">' + modeOptions + '</select></label>',
       '<label class="admin-editor-field">Привязка <select data-action="snap">',
       '<option value="free"' + (session.snapMode === 'free' ? ' selected' : '') + '>свободная</option>',
       '<option value="sector"' + (session.snapMode === 'sector' ? ' selected' : '') + '>к сектору</option>',
       '</select></label>',
       '<label class="admin-editor-field">Кисть, px <input type="number" min="1" max="40" step="1" value="' + session.brushWidthPx + '" data-action="width"></label>',
-      '<p class="admin-editor-hint">ЛКМ — провести границу. <kbd>F</kbd> — закрасить выбранную область. <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
+      '</div>',
+      '<p class="admin-editor-hint">ЛКМ — контур. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Esc</kbd> — прервать, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
     ].join('');
-  }
-
-  function modeLabel(mode: Mode): string {
-    const labels: Record<Mode, string> = {
-      political: 'политический',
-      military: 'военный',
-      economy: 'экономический',
-      tension: 'напряжённость',
-    };
-    return labels[mode] ?? mode;
   }
 
   function propertiesHtml(): string {
     const areas = session.doc.areas;
     if (areas.length === 0) {
-      return '<p class="admin-editor-hint">Областей пока нет: проведите границу на карте.</p>';
+      return '<p class="admin-editor-hint">Областей пока нет: проведите контур на карте.</p>';
     }
     const options = areas.map((area) => (
       `<option value="${escapeHtml(area.id)}"${area.id === session.selection ? ' selected' : ''}>${escapeHtml(areaLabel(area))}</option>`
@@ -264,7 +435,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<button type="button" data-action="add-state">Состояние</button>',
       '<button type="button" data-action="remove">Удалить</button>',
       '</div>',
-      '<label class="admin-editor-field">Цвет заливки <input type="color" value="' + color + '" data-field="color"></label>',
+      '<label class="admin-editor-field admin-editor-field-inline">Цвет заливки <input type="color" value="' + color + '" data-field="color"></label>',
       '<div class="admin-editor-row"><button type="button" data-action="force">Закрасить (F)</button></div>',
       '<p class="admin-editor-meta">',
       'Вершин: ' + totalVertices(area) + ' · площадь: ' + Math.round(areaSize(area)).toLocaleString('ru-RU'),
@@ -281,7 +452,6 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       : '<ol class="admin-editor-log">' + events.map((event) => (
         '<li>' + escapeHtml(eventLine(event)) + '</li>'
       )).join('') + '</ol>';
-    const draftInfo = draftInfoText();
     return [
       '<div class="admin-editor-row">',
       '<button type="button" data-action="undo"' + (canUndo(session) ? '' : ' disabled') + '>Отменить</button>',
@@ -293,7 +463,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<button type="button" data-action="draft-load">загрузить</button>',
       '<button type="button" data-action="draft-clear">очистить</button>',
       '</div>',
-      '<p class="admin-editor-hint">' + escapeHtml(draftInfo) + '</p>',
+      '<p class="admin-editor-hint">' + escapeHtml(draft.info() ?? '') + '</p>',
       '<div class="admin-editor-row">',
       '<button type="button" data-action="download">Скачать JSON</button>',
       '<button type="button" data-action="copy">Скопировать</button>',
@@ -303,7 +473,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     ].join('');
   }
 
-  function draftInfoText(): string {
+  function draftInfoText(): string | null {
     if (storage === null) return 'Черновик недоступен: нет локального хранилища.';
     const raw = storage.getItem(DRAFT_KEY);
     if (raw === null) return 'Черновик не сохранялся.';
@@ -319,38 +489,108 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function refresh(): void {
     if (panel === null) return;
+    const summary = panel.querySelector('[data-editor-summary]');
     const modules = panel.querySelector('[data-editor-block="modules"]');
     const properties = panel.querySelector('[data-editor-block="properties"]');
     const changes = panel.querySelector('[data-editor-block="changes"]');
+    if (summary !== null) summary.textContent = summaryText();
     if (modules !== null) modules.innerHTML = modulesHtml();
     if (properties !== null) properties.innerHTML = propertiesHtml();
     if (changes !== null) changes.innerHTML = changesHtml();
   }
 
-  /* --------------------------------------------------------------- дейстpanel */
+  /** Сводка в шапке: режим, кисть и привязка видны и при свёрнутых разделах. */
+  function summaryText(): string {
+    const state = on ? 'рисование включено' : 'рисование выключено';
+    return `${state} · режим: ${modeLabel(session.mode)} · кисть: ${session.brushWidthPx} px · привязка: ${session.snapMode === 'sector' ? 'к сектору' : 'свободная'}`;
+  }
+
+  /* --------------------------------------------------------------- сворачивание */
+
+  function setCollapsed(value: boolean): void {
+    if (panel === null) return;
+    panel.classList.toggle('is-collapsed', value);
+    const rail = panel.querySelector<HTMLElement>('[data-action="expand"]');
+    const collapse = panel.querySelector<HTMLElement>('[data-action="collapse"]');
+    if (rail !== null) rail.setAttribute('aria-expanded', value ? 'false' : 'true');
+    if (collapse !== null) collapse.setAttribute('aria-expanded', value ? 'false' : 'true');
+    if (storage !== null) {
+      try {
+        storage.setItem(PANEL_KEY, value ? 'collapsed' : 'expanded');
+      } catch (err) {
+        /* хранилище недоступно — панель просто не запомнит состояние */
+      }
+    }
+  }
+
+  function collapsed(): boolean | null {
+    if (panel === null) return null;
+    return panel.classList.contains('is-collapsed');
+  }
+
+  function restoreCollapsed(): void {
+    if (panel === null || storage === null) return;
+    const saved = storage.getItem(PANEL_KEY);
+    setCollapsed(saved === 'collapsed');
+  }
+
+  /* ------------------------------------------------------------------- команды */
 
   function closeStroke(): void {
     drawing = false;
     stroke = [];
+    clearPreview();
     if (canvas !== null) canvas.classList.remove('editor-drawing');
+    if (stage !== null && capturedId !== null) {
+      try {
+        if (stage.hasPointerCapture(capturedId)) stage.releasePointerCapture(capturedId);
+      } catch (err) {
+        /* захват уже снят браузером — это не ошибка */
+      }
+      capturedId = null;
+    }
+  }
+
+  /** Область под курсором: верхняя из подходящих (последняя нарисованная). */
+  function areaAt(point: AreaPoint): Area | null {
+    const areas = session.doc.areas;
+    for (let i = areas.length - 1; i >= 0; i -= 1) {
+      const area = areas[i]!;
+      if (pointInArea(area, point[0], point[1])) return area;
+    }
+    return null;
   }
 
   function finishStroke(): void {
     const points = strokePoints(stroke, MIN_STEP_PX);
+    const start = stroke[0] ?? null;
     closeStroke();
-    if (points.length < 3) {
+    // Щелчок без движения — это выделение, а не попытка нарисовать точку.
+    if (points.length < CLICK_POINTS) {
+      if (start !== null) {
+        const area = areaAt(start);
+        if (area !== null) {
+          notice = 'Выбрана область: ' + area.name + '.';
+          session = selectArea(session, area.id);
+          refresh();
+          return;
+        }
+      }
       notice = 'Короткий штрих: нужно не меньше трёх точек.';
       refresh();
       return;
     }
     notice = null;
-    const name = 'Область ' + (session.doc.areas.length + 1);
+    const id = nextId();
+    // Область сразу получает состояние текущего режима: иначе она создаётся,
+    // но остаётся невидимой — рендер показывает только области с состояниями.
     commit(addAreaFromStroke(session, {
-      id: nextId(),
-      name,
+      id,
+      name: 'Область ' + (session.doc.areas.length + 1),
       points,
       closed: true,
       source: session.snapMode === 'sector' ? 'sector' : 'brush',
+      state: createDefaultState('state-' + id, session.mode),
     }));
   }
 
@@ -387,16 +627,16 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const area = selected();
     if (area === null) return;
     const id = 'state-' + area.id + '-' + String(area.states.length + 1);
-    commit(setState(session, area.id, defaultState(id, session.mode)));
+    commit(setState(session, area.id, createDefaultState(id, session.mode)));
   }
-
-  /* ------------------------------------------------------------------- события */
 
   function setEnabled(value: boolean): void {
     on = value;
     if (!on) closeStroke();
     refresh();
   }
+
+  /* ------------------------------------------------------------------- события */
 
   function onPanelClick(event: Event): void {
     const target = event.target;
@@ -406,6 +646,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const input = target as HTMLInputElement;
 
     switch (action) {
+      case 'help': openHelp(); break;
+      case 'help-close': closeHelp(); break;
+      case 'collapse': setCollapsed(true); break;
+      case 'expand': setCollapsed(false); break;
       case 'toggle-enable': setEnabled(input.checked); break;
       case 'mode': commit(setMode(session, input.value as Mode)); break;
       case 'snap': commit(setSnapMode(session, input.value as SnapMode)); break;
@@ -436,7 +680,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (input !== null && input !== undefined) color = input.value;
   }
 
-  function pointAt(event: PointerEvent): [number, number] | null {
+  function pointAt(event: PointerEvent): AreaPoint | null {
     if (canvas === null) return null;
     const rect = canvas.getBoundingClientRect();
     const world = kernel.renderer.toWorld(event.clientX - rect.left, event.clientY - rect.top);
@@ -444,35 +688,74 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     return [world.x, world.y];
   }
 
+  /** Шаг прореживания в мировых единицах: порог задан в пикселях экрана. */
+  function minStepWorld(): number {
+    const scale = kernel.state.view.scale || 1;
+    return MIN_STEP_PX / scale;
+  }
+
   function onPointerDown(event: PointerEvent): void {
-    if (!on || canvas === null) return;
-    // Перехват до обработчиков карты: панорама не должна мешать штриху.
-    event.stopImmediatePropagation();
+    // Правая и средняя кнопки — карте: панорама и контекстное меню.
+    if (!on || !isDrawButton(event.button) || !event.isPrimary) return;
+    // Перехват раньше обработчиков карты: панорама не должна мешать штриху.
+    event.stopPropagation();
     event.preventDefault();
     const point = pointAt(event);
     if (point === null) return;
     drawing = true;
     stroke = [point];
-    canvas.classList.add('editor-drawing');
+    if (stage !== null) {
+      try {
+        stage.setPointerCapture(event.pointerId);
+        capturedId = event.pointerId;
+      } catch (err) {
+        capturedId = null;
+      }
+    }
+    if (canvas !== null) canvas.classList.add('editor-drawing');
+    drawPreview();
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!on || !drawing || canvas === null) return;
-    event.stopImmediatePropagation();
+    if (!on || !drawing) return;
+    event.stopPropagation();
     const point = pointAt(event);
     if (point === null) return;
+    const last = stroke[stroke.length - 1];
+    if (last !== undefined) {
+      const dx = point[0] - last[0];
+      const dy = point[1] - last[1];
+      if (Math.hypot(dx, dy) < minStepWorld()) return;
+    }
     stroke.push(point);
-    kernel.renderer.requestRender();
+    drawPreview();
   }
 
   function onPointerUp(event: PointerEvent): void {
-    if (!on || !drawing) return;
-    event.stopImmediatePropagation();
+    if (!drawing) return;
+    // Отпускание любой другой кнопки штрих не завершает.
+    if (event.button !== 0) return;
+    event.stopPropagation();
     event.preventDefault();
     finishStroke();
   }
 
+  /** Правая кнопка во время штриха — отмена, как в классическом лассо. */
+  function onContextMenu(event: Event): void {
+    if (!drawing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    notice = 'Штрих отменён.';
+    closeStroke();
+    refresh();
+  }
+
   function onKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'escape' && helpOpen()) {
+      event.preventDefault();
+      closeHelp();
+      return;
+    }
     if (!on) return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return;
@@ -542,22 +825,28 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /* --------------------------------------------------------------------- wiring */
 
   type Handler = (event: Event) => void;
-  const listeners: { target: EventTarget; type: string; handler: Handler }[] = [];
+  const listeners: { target: EventTarget; type: string; handler: Handler; capture: boolean }[] = [];
 
   function bind(target: EventTarget | null, type: string, handler: Handler, capture = false): void {
     if (target === null) return;
-    if (capture) target.addEventListener(type, handler, true);
-    else target.addEventListener(type, handler);
-    listeners.push({ target, type, handler });
+    target.addEventListener(type, handler, capture);
+    listeners.push({ target, type, handler, capture });
   }
 
+  // Ввод слушается на стадии карты в фазе перехвата: канва — её потомок, и
+  // обработчики панорамы на ней просто не получают событий рисования.
+  const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
   bind(panel, 'input', onColorInput);
-  bind(canvas, 'pointerdown', onPointerDown as unknown as Handler, true);
-  bind(canvas, 'pointermove', onPointerMove as unknown as Handler, true);
-  bind(canvas, 'pointerup', onPointerUp as unknown as Handler, true);
-  bind(canvas, 'pointercancel', onPointerUp as unknown as Handler, true);
+  bind(inputTarget, 'pointerdown', onPointerDown as unknown as Handler, true);
+  bind(inputTarget, 'pointermove', onPointerMove as unknown as Handler, true);
+  bind(inputTarget, 'pointerup', onPointerUp as unknown as Handler, true);
+  bind(inputTarget, 'pointercancel', onPointerUp as unknown as Handler, true);
+  bind(inputTarget, 'contextmenu', onContextMenu, true);
   bind(typeof window === 'undefined' ? null : window, 'keydown', onKeyDown as unknown as Handler);
+
+  restoreCollapsed();
+  refresh();
 
   return {
     session(): EditorSession { return session; },
@@ -565,13 +854,25 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     refresh,
     setEnabled,
     enabled(): boolean { return on; },
+    collapsed,
+    setCollapsed,
     draft,
     exportJson(): string { return exportDoc(session); },
     requestMaterial(): string { return requestMaterial(session.doc); },
     destroy(): void {
-      for (const item of listeners) item.target.removeEventListener(item.type, item.handler, true);
+      for (const item of listeners) item.target.removeEventListener(item.type, item.handler, item.capture);
       listeners.length = 0;
       closeStroke();
+      if (preview !== null) {
+        preview.remove();
+        preview = null;
+        previewCtx = null;
+      }
+      if (help !== null) {
+        help.remove();
+        help = null;
+        helpReturn = null;
+      }
     },
   };
 }
@@ -583,7 +884,7 @@ export function brushWidth(options: { readonly session: EditorSession; readonly 
 }
 
 /** Контур по готовому штриху: для предпросмотра и для команды создания области. */
-export function strokeRing(points: readonly [number, number][], width: number): Ring {
+export function strokeRing(points: readonly AreaPoint[], width: number): Ring {
   return thickenStroke(points, width);
 }
 

@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
 import { build as esbuildBuild } from 'esbuild';
+import type { Plugin as EsbuildPlugin } from 'esbuild';
 import type { Plugin } from 'vite';
 import { renderAtlasVariant } from './atlas-shell.ts';
 import {
@@ -17,6 +18,23 @@ import {
 } from './asset-utils.ts';
 
 const tokenOrigin = 'https://timeline-asset.invalid';
+
+/* Суффикс `?raw` (как во Vite): файл подключается в бандл как строка. Нужен,
+ * чтобы текст, живущий в репозитории одним экземпляром (например, справка
+ * редактора из `docs/admins/`), не дублировался в исходниках ради сборки. */
+const rawTextPlugin: EsbuildPlugin = {
+  name: 'timeline-raw-text',
+  setup(build): void {
+    build.onResolve({ filter: /\?raw$/ }, (args) => ({
+      path: resolve(args.resolveDir, args.path.replace(/\?raw$/, '')),
+      namespace: 'timeline-raw-text',
+    }));
+    build.onLoad({ filter: /.*/, namespace: 'timeline-raw-text' }, (args) => ({
+      contents: readFileSync(args.path, 'utf8'),
+      loader: 'text',
+    }));
+  },
+};
 
 const generatedImageNames = new Set([
   'galaxy-map-1200.webp',
@@ -289,6 +307,7 @@ class TimelinePublishPipeline {
       // публикуется как отдельный hashed-ассет — esbuild не инлайнит его
       // в главный бандл, а оставляет import() для браузера.
       external: ['./local-map-worker-lazy.js'],
+      plugins: [rawTextPlugin],
     };
     // Entry, который сам ставит window/globalThis API, нельзя перезаписывать namespace esbuild.
     if (globalName && !assignsOwnBrowserGlobal) buildOptions.globalName = globalName;
