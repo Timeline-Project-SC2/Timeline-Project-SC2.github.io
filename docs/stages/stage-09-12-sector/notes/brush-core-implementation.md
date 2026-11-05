@@ -28,6 +28,10 @@
 | `sector-areas-border-world.ts` | Пограничный мир: полосы от центральных систем |
 | `sector-areas-journal.ts` | Записи журнала, счётчики «веса», фильтры, выгрузка |
 
+Счётчик тест-файлов в self-тесте стража карантина
+(`tests/check-test-baseline.test.mjs`) обновлён: 40 → 43 — иначе `npm test`
+считает новый файл «новым падением».
+
 Данные: `data/sector-areas.json` — каркас схемы версии 1 (областей нет).
 Тесты: `tests/sector-areas.test.mjs` (31 тест), `tests/sector-areas-scope.test.mjs`
 (11), `tests/sector-areas-border-world.test.mjs` (8); все три подключены в
