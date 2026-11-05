@@ -58,7 +58,13 @@ test('прямой маршрут рендерит ту же карту с за�
   assert.match(variant, /Модули/);
   assert.match(variant, /Свойства/);
   assert.match(variant, /Изменения/);
-  assert.match(variant, /не сохраняются и не отправляются/);
+  // Панель больше не «демо»: изменения лежат черновиком в браузере и
+  // выгружаются файлом, но на сайт не уходят до заявки владельца.
+  assert.match(variant, /черновиком в этом браузере/);
+  assert.match(variant, /не уходит до заявки/);
+  assert.match(variant, /data-editor-block="modules"/);
+  assert.match(variant, /data-editor-block="properties"/);
+  assert.match(variant, /data-editor-block="changes"/);
 });
 
 test('админ-кнопка стоит между «О карте» и возвратом, а минимальный вариант её не получает', () => {
