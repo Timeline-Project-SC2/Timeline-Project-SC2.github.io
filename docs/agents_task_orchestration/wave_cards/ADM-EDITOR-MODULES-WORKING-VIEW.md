@@ -1,7 +1,7 @@
 # ADM-EDITOR-MODULES-WORKING-VIEW (ED-2): скан модулей редактора → имплементация → примерный конечный рабочий вид
 
 > **Решение владельца 05.11.2026:** [ED-1](ADM-EDITOR-BUBBLE-CUT.md) уже в `main`; карточка готовится к выдаче после решений владельца. Поздние прямые решения выше старых примеров и исторических `HOLD`: запрет на реализацию редактора снят в зоне этой карточки, остальные ограничения сохранены (§6).
-> **Ветка:** `arena/ddc5c8a9-timeline-project-sc2-github-io` (`active`); база — `origin/main = 5a7f96d…` (ED-1 [PR #351](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/351) + формат снимка [PR #352](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/352)), карточки вносятся в `main` документационным PR. [Прямая ссылка на карточку в ветке](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/blob/arena/ddc5c8a9-timeline-project-sc2-github-io/docs/agents_task_orchestration/wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md).
+> **Каноническая копия:** `main` ([PR #353](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/353), `2fda452`); активная ветка сессии — `arena/19b09273-timeline-project-sc2-github-io`. База для выдачи — `origin/main = 2fda452`. [Карточка в `main`](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/blob/main/docs/agents_task_orchestration/wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md). Порядок работ — в [плане закрытия сектора](../../stages/stage-09-12-sector/plan-to-close-sector.md).
 > **Адресат:** **Воркер 1**, один исполнитель, не волна; прежний чат `A0-F → A0-S → A0-S2 → A0-S3 → A0-N → A0-O → A0-P` (по [карточке-редиректу](ADM-ACCESS-CARDS-REDIRECT.md)). Промпт копирует владелец; Гайдлайнер агентов не запускает.
 > **О-5:** карточка составлена по документам, дереву файлов и сводкам PR/CI; код, тесты, данные и конфиги Гайдлайнером не читались. Все `путь:строка` — от исполнителя.
 > **Смысловая связность:** модули «по смыслу» связаны друг с другом: скан обязан дать карту направленных связей, а имплементация — собрать **уже существующие** модули в один рабочий контур, не подменяя их копиями ([концепция](../../concepts/module-interaction-rules.md), [ADM-UI §3](ADM-UI.md)).
@@ -12,6 +12,7 @@
 2. **Команда на имплементацию и сразу «превращение» в примерный конечный и рабочий вид** из имеющихся модулей. Одним проходом, без отдельного этапа согласования схемы и без «плана на потом»: показанное как работающее должно работать офлайн. Не имитировать готовое сохранение и не выдавать заглушку за функцию.
 3. **Связи «по смыслу»:** модули не перечисляются по алфавиту, а группируются по трём независимым плоскостям — связи данных, пространственное влияние, порядок отрисовки — плюс контуры доступа и черновика. Одна числовая шкала приоритетов не вводится; исходные данные и контуры сохраняются; связи направленные.
 4. Карточка [ED-1](ADM-EDITOR-BUBBLE-CUT.md) убрала ореол выделенного маркера и **сохранила** модули границ, гало и градиента: здесь они подключаются как модели редактора, а не как боевой рендер.
+5. **Уточнение владельца 05.11.2026:** баблы — области-границы территорий фракции с «столкновением» и памятью пространства между системами, а не ореол маркера. Это целевая механика редактора (пункты П3–П7 [плана](../../stages/stage-09-12-sector/plan-to-close-sector.md)): память с версией и откатом, явные правила пересечения, согласование видимой кривой.
 
 ## 2. Спецификация сканирования (точечная)
 
@@ -112,11 +113,11 @@ report_lines_max=30
 
 - [PR #352](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/352) **слит** squash в `main` (`5a7f96d`): `net_confront_id` удалён из `data/systems.csv`, модели загрузчика и нормализованного экспорта `systems` (`tools/sync.py`); `net_id` сохранён, внешний Google Sheets не менялся. ED-2 не восстанавливает поле и не правит формат снимка.
 - Гейт `tools/check_docs.py` зелёный: лишняя строка в `docs/handoff/status-and-state.md` убрана, файл держит 200 строк. Конфликт `CHANGELOG.md` между ветками разрешён сложением записей, история не переписана.
-- **База ED-2:** `origin/main = 5a7f96d`; карточки ED-1/ED-2, индекс и `CHANGELOG` вносятся в `main` документационным PR этой ветки.
+- **База ED-2:** `origin/main = 2fda452` ([PR #353](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/353)); карточки уже в `main`. Порядок П1–П14 и критерий готовности — в [плане закрытия сектора](../../stages/stage-09-12-sector/plan-to-close-sector.md).
 - Выдача ED-2 ожидает решений владельца: подтверждение подмены цели ED-1, зависимости воркера (`npm ci` против `--ignore-scripts`) и судьба быстрого браузерного smoke.
 
 ## Ссылки
 
-- [ED-1: ореол выделенного маркера, архив](ADM-EDITOR-BUBBLE-CUT.md) · [индекс оркестрации](../README.md)
+- [План закрытия сектора](../../stages/stage-09-12-sector/plan-to-close-sector.md) · [ED-1: ореол выделенного маркера, архив](ADM-EDITOR-BUBBLE-CUT.md) · [индекс оркестрации](../README.md)
 - [Оболочка редактора ADM-UI](ADM-UI.md) · [концепция взаимодействия модулей](../../concepts/module-interaction-rules.md)
 - [A0-P](ADM-ACCESS-A0-P-REACTIVATION.md) · [карточка-редирект](ADM-ACCESS-CARDS-REDIRECT.md) · [CHANGELOG](../../../CHANGELOG.md)
