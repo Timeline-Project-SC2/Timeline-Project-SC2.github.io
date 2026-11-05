@@ -42,6 +42,10 @@ import {
 import { createSectorArrows } from './sector-arrows.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
 import { bindSectorAdminGate, isAdminUiTarget } from './sector-admin-gate.ts';
+import { createSectorAreasEditorUi } from './sector-areas-editor-ui.ts';
+// Единственный источник текста справки: файл руководства администратора.
+import sectorAreasHelp from '../../docs/admins/sector-areas-editor.md?raw';
+import type { SectorAreasEditorUiApi } from './sector-areas-editor-ui.ts';
 
 const doc = document;
 
@@ -557,6 +561,27 @@ function applySystemFrameRequest(): void {
   doc.documentElement.setAttribute('data-system-frame-id', request.systemId);
 }
 
+/* Редактор границ есть только в админской копии сектора: панель
+ * `[data-admin-editor]` существует лишь в ней. Данные редактор берёт из общего
+ * состояния карты, поэтому правки видны сразу — тем же рендером и на той же
+ * канве, что и публичный `/sector/`. */
+let areasEditor: SectorAreasEditorUiApi | null = null;
+
+function bindSectorAreasEditor(): void {
+  const panel = qs<HTMLElement>('[data-admin-editor]');
+  if (panel === null) return;
+  areasEditor = createSectorAreasEditorUi({
+    kernel,
+    panel,
+    // Перехват рисования вешается на стадию карты: она родитель канвы, и её
+    // фаза перехвата срабатывает раньше обработчиков панорамы на канве.
+    stage: el.mapStage,
+    canvas: el.mapCanvas,
+    helpText: sectorAreasHelp,
+  });
+  areasEditor.refresh();
+}
+
 function boot(): void {
   cacheElements();
   bindSectorAdminGate(doc, applyAuthorizedTheme, scheduleAdminNotice);
@@ -614,6 +639,7 @@ function boot(): void {
     kernel.renderer.fitView();
     initUI();
     kernel.catalog.renderFilters();
+    bindSectorAreasEditor();
     kernel.catalog.renderCatalog();
 
     kernel.dossier.applyHash();

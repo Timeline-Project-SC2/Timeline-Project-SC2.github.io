@@ -1,3 +1,4 @@
+import type { AreaPaint } from './sector-areas-render.ts';
 /* Модель сцены сектора: примитивы для отрисовки без DOM и без canvas.
  *
  * Модуль ничего не рисует и ни к чему не подключён: на вход идут данные систем,
@@ -62,6 +63,8 @@ export interface SectorSceneInput {
   readonly viewport: FrameViewport;
   readonly camera: SceneCamera;
   readonly sectorBounds?: SectorBounds | null;
+  /** Области редактора границ в мировых координатах (шаг 2 §11 части 2). */
+  readonly areas?: readonly AreaPaint[];
   /** Сенсорный экран включает хит-зону `≥ 44 px` (§6.2 п. 5). По умолчанию мышь. */
   readonly hitTarget?: 'mouse' | 'touch';
   /** Переопределение бюджета подписей (по умолчанию `LABEL_BUDGET`). */
@@ -81,6 +84,35 @@ export interface SceneBounds {
   readonly dash: readonly number[];
   readonly blink?: NebulaBlink;
   readonly points: readonly { readonly x: number; readonly y: number }[];
+}
+
+/** Кольцо области редактора границ (`kind: 'brush'`, часть 3 §3 плана). */
+export interface SceneAreaRing {
+  /** Точки в экранных координатах. */
+  readonly points: readonly { readonly x: number; readonly y: number }[];
+  /** Цвет вершины из градиента: обводка рисуется по сегментам. */
+  readonly colors: readonly string[];
+  readonly alphas: readonly number[];
+  readonly closed: boolean;
+}
+
+/** Область редактора границ: фракция, задача, градиент и LOD уже применены. */
+export interface SceneArea {
+  readonly kind: 'brush';
+  /** Идентификатор области документа `data/sector-areas.json`. */
+  readonly id: string;
+  readonly stateId: string | null;
+  readonly mode: string;
+  readonly label: string | null;
+  readonly z: number;
+  readonly fill: string | null;
+  readonly stroke: string;
+  readonly strokeWidth: number;
+  readonly dash: readonly number[];
+  readonly alpha: number;
+  /** `true` — мазок форс-закрашивания поверх всех состояний. */
+  readonly override: boolean;
+  readonly rings: readonly SceneAreaRing[];
 }
 
 /** Линия сетки адреса (§8.1, `L0…L12`, два тира по `gridTiersFor`). */
@@ -153,6 +185,7 @@ export type ScenePrimitive =
   | SceneBounds
   | SceneGridLine
   | SceneGridLabel
+  | SceneArea
   | SceneMarker
   | SceneAperture
   | SceneLabel;
@@ -172,6 +205,8 @@ export interface SectorScene {
     readonly bounds: number;
     readonly gridLines: number;
     readonly gridLabels: number;
+    /** Области редактора границ (`kind: 'brush'`). */
+    readonly areas: number;
     readonly markers: number;
     readonly apertures: number;
     readonly labels: number;
@@ -527,6 +562,56 @@ export function boundsFor(
       points: projected.map(([x, y]) => ({ x, y })),
     };
   });
+}
+
+/**
+ * Области редактора границ в экранных координатах кадра (`L0…L12`).
+ * Цвета вершин приходят из градиента — обводка рисуется по сегментам, поэтому
+ * градиент не зависит от числа вершин после LOD.
+ */
+export function areasFor(
+  paints: readonly AreaPaint[] | null | undefined,
+  viewport: FrameViewport,
+  camera: SceneCamera,
+): readonly SceneArea[] {
+  if (paints === null || paints === undefined || paints.length === 0) return [];
+  const frame = resolveViewport(viewport);
+  const cam = resolveCamera(camera);
+
+  return paints.filter((paint) => paint.rings.length > 0).map((paint) => {
+    const rings = paint.rings.map((ring) => ({
+      points: ring.points.map(([wx, wy]) => {
+        const point = worldToScreen(frame, cam, wx, wy);
+        return { x: point.x, y: point.y };
+      }),
+      colors: ring.colors.map((rgb, index) => cssColor(rgb, ring.alphas[index] ?? 1)),
+      alphas: [...ring.alphas],
+      closed: ring.closed,
+    }));
+
+    return {
+      kind: 'brush' as const,
+      id: paint.areaId,
+      stateId: paint.stateId,
+      mode: paint.mode,
+      label: paint.label,
+      z: paint.z,
+      fill: paint.fill === null ? null : cssColor(paint.fill.rgb, paint.fill.alpha),
+      stroke: cssColor(paint.stroke.rgb, paint.stroke.alpha),
+      strokeWidth: paint.stroke.width,
+      dash: [...paint.stroke.dash],
+      alpha: paint.stroke.alpha,
+      override: paint.override,
+      rings,
+    };
+  });
+}
+
+function cssColor(rgb: readonly [number, number, number], alpha: number): string {
+  const a = Math.max(0, Math.min(1, alpha));
+  return a >= 1
+    ? 'rgb(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ')'
+    : 'rgba(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ', ' + a.toFixed(3) + ')';
 }
 
 /** Видимая часть мира по камере (для обхода сетки). */
@@ -983,6 +1068,7 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
   const invalidSystems = systems.filter((system) => !isUsableSystem(system)).length;
 
   const bounds = boundsFor(input.sectorBounds, frame, cam);
+  const areas = areasFor(input.areas, frame, cam);
   const grid = gridFor(frame, cam, level);
   const markers = clusterSystems(systems, frame, cam, diameter, input.hitTarget ?? 'mouse');
   const apertures = aperturesFor(markers, level);
@@ -1030,6 +1116,8 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
     ...bounds,
     ...grid.lines,
     ...grid.labels,
+    // Области — над сеткой и под маркерами: подписи систем остаются читаемыми.
+    ...areas,
     ...markers,
     ...apertures,
     ...labels,
@@ -1048,6 +1136,7 @@ export function buildSectorScene(input: SectorSceneInput): SectorScene {
       bounds: bounds.length,
       gridLines: grid.lines.length,
       gridLabels: grid.labels.length,
+      areas: areas.length,
       markers: markers.length,
       apertures: apertures.length,
       labels: labels.length,

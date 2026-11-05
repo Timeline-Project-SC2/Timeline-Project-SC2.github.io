@@ -14,7 +14,12 @@ import type {
   PlaceRecord,
   SystemRecord,
 } from './config.ts';
-import { markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
+import { levelForWidth, markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
+import { buildAreaPaints } from './sector-areas-render.ts';
+import type { AreaPaint } from './sector-areas-render.ts';
+import { createFactionPalette } from './sector-areas-color.ts';
+import type { FactionPalette } from './sector-areas-color.ts';
+import { createLodCache } from './sector-areas-lod.ts';
 import { smoothPolyline } from './sector-bounds.ts';
 import { smoothBoundaryAtMapEdge } from './sector-boundary-path.ts';
 import { clipHalo } from './sector-halo-clip.ts';
@@ -31,6 +36,7 @@ import type {
   SceneMarker,
   SceneSystemInput,
   SectorScene,
+  SceneArea,
 } from './sector-scene.ts';
 import {
   LOUPE_LABEL_PAD_PX,
@@ -76,6 +82,40 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /* ------------------------------------------------------------------ представление карты */
+
+  /* Кэш LOD областей и палитра фракций собираются один раз: документ областей
+   * один и тот же для `/sector/` и админской копии (`data/sector-areas.json`). */
+  var areaCache = createLodCache();
+  var areaPaletteCache: FactionPalette | null = null;
+
+  function areaPalette(): FactionPalette {
+    if (areaPaletteCache === null) {
+      var entries: { name: string; color: string }[] = [];
+      if (kernel.data && typeof kernel.data.factionsByName === 'function') {
+        kernel.data.factionsByName().forEach(function (details, name) {
+          entries.push({ name: name, color: details.color });
+        });
+      }
+      areaPaletteCache = createFactionPalette(entries);
+    }
+    return areaPaletteCache;
+  }
+
+  /** Области редактора границ в мировых координатах: каскад, LOD, фокус. */
+  function sceneAreas(): readonly AreaPaint[] {
+    var doc = state.sectorAreas;
+    if (!doc || !doc.areas || !doc.areas.length) return [];
+    var width = visibleWidth();
+    return buildAreaPaints(doc, {
+      level: levelForWidth(width),
+      visibleWidth: width,
+      palette: areaPalette(),
+      cache: areaCache,
+      strokeSafe: true,
+      fillAlpha: 0.16,
+      strokeWidth: 1.6,
+    });
+  }
 
   function fitScale(): number {
     var size = kernel.data.mapSize();
@@ -506,6 +546,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       viewport: state.viewport,
       camera: sceneCamera(),
       sectorBounds: state.sectorBounds ?? null,
+      areas: sceneAreas(),
       hitTarget: coarsePointer() ? 'touch' : 'mouse',
       // Подписи раскладывает рендерер: только он знает фактические метрики шрифта.
       labels: false,
@@ -969,12 +1010,86 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       if (primitive.kind === 'grid.line') drawGridLine(primitive);
       else if (primitive.kind === 'grid.label') drawGridLabel(primitive);
     }
+    // Области редактора границ: над сеткой, под маркерами и подписями (§11).
+    for (index = 0; index < scene.primitives.length; index += 1) {
+      primitive = scene.primitives[index]!;
+      if (primitive.kind === 'brush') drawArea(primitive);
+    }
     // Лупа режима осмотра (Z-4c §2): после сетки адресов и до маркеров.
     drawLoupe(scene.level);
     for (index = 0; index < scene.primitives.length; index += 1) {
       primitive = scene.primitives[index]!;
       if (primitive.kind === 'marker') drawMarker(primitive);
     }
+  }
+
+  /**
+   * Область редактора границ (`kind: 'brush'`): заливка внешнего кольца с
+   * дырками по правилу «чётность», затем обводка. Если градиент дал цвета
+   * вершин, обводка идёт по сегментам — так градиент не зависит от LOD.
+   */
+  function drawArea(area: SceneArea): void {
+    if (area.rings.length === 0) return;
+    const ctx = kernel.ctx!;
+    ctx.save();
+    if (typeof ctx.rect === 'function' && typeof ctx.clip === 'function') {
+      ctx.beginPath();
+      ctx.rect(0, 0, state.viewport.w, state.viewport.h);
+      ctx.clip();
+    }
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(1, area.strokeWidth);
+    ctx.setLineDash([...area.dash]);
+
+    for (const ring of area.rings) {
+      if (ring.points.length < 2) continue;
+      if (area.fill !== null) {
+        ctx.beginPath();
+        traceRing(ring.points, ring.closed);
+        ctx.fillStyle = area.fill;
+        ctx.fill('evenodd');
+      }
+      if (ring.colors.length === ring.points.length && ring.colors.length > 1) {
+        for (let i = 1; i < ring.points.length; i += 1) {
+          const a = ring.points[i - 1]!;
+          const b = ring.points[i]!;
+          ctx.strokeStyle = ring.colors[i]!;
+          ctx.globalAlpha = Math.max(0, Math.min(1, ring.alphas[i] ?? 1)) * Math.max(0, Math.min(1, area.alpha));
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+        if (ring.closed) {
+          const first = ring.points[0]!;
+          const last = ring.points[ring.points.length - 1]!;
+          ctx.strokeStyle = ring.colors[0]!;
+          ctx.globalAlpha = area.alpha;
+          ctx.beginPath();
+          ctx.moveTo(last.x, last.y);
+          ctx.lineTo(first.x, first.y);
+          ctx.stroke();
+        }
+      } else {
+        ctx.strokeStyle = area.stroke;
+        ctx.globalAlpha = Math.max(0, Math.min(1, area.alpha));
+        ctx.beginPath();
+        traceRing(ring.points, ring.closed);
+        ctx.stroke();
+      }
+    }
+
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function traceRing(points: readonly { readonly x: number; readonly y: number }[], closed: boolean): void {
+    const ctx = kernel.ctx!;
+    ctx.moveTo(points[0]!.x, points[0]!.y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i]!.x, points[i]!.y);
+    if (closed) ctx.closePath();
   }
 
   /**

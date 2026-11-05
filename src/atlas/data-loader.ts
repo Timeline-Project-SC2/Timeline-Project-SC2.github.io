@@ -30,6 +30,8 @@ import type {
   UnknownRecord,
 } from './config.ts';
 import { parseBounds } from './sector-bounds.ts';
+import { parseSectorAreas } from './sector-areas-contract.ts';
+import type { SectorAreasDoc } from './sector-areas-contract.ts';
 
 type SheetRow = Record<string, string>;
 
@@ -102,6 +104,22 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
       })
       .catch(function (err) {
         console.error('Границы сектора: ' + (err instanceof Error ? err.message : String(err)));
+        return null;
+      });
+  }
+
+  /** Области редактора границ: тот же файл `data/sector-areas.json`, что и у `/sector/`. */
+  function fetchSectorAreas(url: string): Promise<SectorAreasDoc | null> {
+    return fetch(url, { credentials: 'same-origin' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json() as Promise<unknown>;
+      })
+      .then(function (raw) {
+        return parseSectorAreas(raw);
+      })
+      .catch(function (err) {
+        console.error('Области сектора: ' + (err instanceof Error ? err.message : String(err)));
         return null;
       });
   }
@@ -402,15 +420,20 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
       const inlineBoundsPromise: Promise<SectorBounds | null> = inline.sectorBounds !== undefined
         ? Promise.resolve(inline.sectorBounds)
         : fetchSectorBounds(CONFIG.data.dir + CONFIG.data.bounds);
+      const inlineAreasPromise: Promise<SectorAreasDoc | null> = inline.sectorAreas !== undefined
+        ? Promise.resolve(inline.sectorAreas)
+        : fetchSectorAreas(CONFIG.data.dir + CONFIG.data.areas);
       return Promise.all([
         fetchCSV('/data/systems.csv'),
         fetchCSV('/data/places.csv'),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation),
         fetchCSV('/data/factions.csv'),
-        inlineBoundsPromise
-      ]).then(function ([systemRows, placeRows, generationRows, factionRows, sectorBounds]) {
+        inlineBoundsPromise,
+        inlineAreasPromise
+      ]).then(function ([systemRows, placeRows, generationRows, factionRows, sectorBounds, sectorAreas]) {
         setFactionRows(factionRows);
         state.sectorBounds = sectorBounds;
+        state.sectorAreas = sectorAreas;
         var planets = inline.planets || [];
         planets = planets.length
           ? mergeStandalonePoiRows(planets, placeRows)
@@ -423,6 +446,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           overrides: inline.overrides || { systems: {} },
           labels: inline.labels || [],
           sectorBounds: sectorBounds,
+          sectorAreas: sectorAreas,
         };
       });
     }
@@ -440,13 +464,15 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         fetchJSON<AtlasOverrides>(dir + CONFIG.data.overrides + suffix, { systems: {} }),
         fetchJSON<MapLabel[]>(dir + CONFIG.data.labels + suffix, []),
         fetchSectorBounds(dir + CONFIG.data.bounds + suffix),
+        fetchSectorAreas(dir + CONFIG.data.areas + suffix),
         fetchCSV('/data/systems.csv' + suffix),
         fetchCSV('/data/places.csv' + suffix),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix),
         fetchCSV('/data/factions.csv' + suffix)
-      ]).then(function ([systemsJson, planetsJson, overrides, labels, sectorBounds, systemRows, placeRows, generationRows, factionRows]) {
+      ]).then(function ([systemsJson, planetsJson, overrides, labels, sectorBounds, sectorAreas, systemRows, placeRows, generationRows, factionRows]) {
         setFactionRows(factionRows);
         state.sectorBounds = sectorBounds;
+        state.sectorAreas = sectorAreas;
         var systems = systemsJson;
         var planets = planetsJson;
         if ((!systems || !systems.length) && systemRows && systemRows.length) {
@@ -466,6 +492,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           overrides: overrides,
           labels: labels,
           sectorBounds: sectorBounds,
+          sectorAreas: sectorAreas,
         };
       });
     });

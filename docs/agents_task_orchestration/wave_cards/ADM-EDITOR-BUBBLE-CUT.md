@@ -3,7 +3,7 @@
 > **Статус 05.11.2026:** выполнена; [PR #351](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/351) squash-слит в `main` (`dd9e2ce`). Повторно не выдаётся.
 > **Каноническая копия:** [карточка в `main`](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/blob/main/docs/agents_task_orchestration/wave_cards/ADM-EDITOR-BUBBLE-CUT.md).
 > **О-5:** факты — из сводок PR/CI и Git-метаданных; код, тесты, данные и конфиги Гайдлайнером не читались.
-> **Далее:** [ED-2](ADM-EDITOR-MODULES-WORKING-VIEW.md) — скан модулей редактора и рабочий вид.
+> **Актуальный `main` 05.11.2026:** `3554e92` ([PR #359](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/359)); влит редактор границ #354–#359. Далее не ED-2, а [цепочка разведки Р1–Р4](ADM-SECTOR-RECON-CHAIN.md) и [план закрытия сектора](../../stages/stage-09-12-sector/plan-to-close-sector.md).
 
 ## 1. Что сделано
 
