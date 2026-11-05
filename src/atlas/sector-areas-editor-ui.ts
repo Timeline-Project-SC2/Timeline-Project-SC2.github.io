@@ -35,6 +35,7 @@ import {
 import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
 import { areaSize } from './sector-areas-render.ts';
 import { pointInArea, totalVertices } from './sector-areas-geometry.ts';
+import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
 import { brushWidthInWorld, thickenStroke } from './sector-areas-editor.ts';
 import type { AtlasKernel } from './config.ts';
 
@@ -55,6 +56,8 @@ export interface SectorAreasEditorUiOptions {
    */
   readonly stage: HTMLElement | null;
   readonly canvas: HTMLCanvasElement | null;
+  /** Текст справки в разметке Markdown; пусто — кнопка «?» показывает заглушку. */
+  readonly helpText?: string;
   /** Хранилище черновика и состояния панели; `null` — отключены. */
   readonly storage?: Storage | null;
 }
@@ -220,6 +223,7 @@ export function modeLabel(mode: Mode): string {
 
 export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): SectorAreasEditorUiApi {
   const { kernel, panel, stage, canvas } = options;
+  const helpText = options.helpText ?? '';
   const storage = options.storage === undefined
     ? (typeof window === 'undefined' ? null : window.localStorage)
     : options.storage;
@@ -231,6 +235,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   let color = '#ffcc00';
   let notice: string | null = null;
   let capturedId: number | null = null;
+
+  /* Окно справки создаётся лениво и живёт вне панели: у панели своя прокрутка,
+   * а окно должно лежать поверх карты. */
+  let help: HTMLElement | null = null;
+  let helpReturn: HTMLElement | null = null;
 
   /* Предпросмотр штриха: отдельный канвас поверх карты. Области рисует общий
    * рендер сцены, а «резиновая нить» живёт только во время штриха. */
@@ -330,6 +339,63 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, preview.width, preview.height);
     ctx.restore();
+  }
+
+  /* ------------------------------------------------------------------- справка */
+
+  function helpHtml(): string {
+    if (helpText.trim().length === 0) {
+      return '<p class="admin-editor-hint">Текст справки не передан: окно открывается, но файла руководства в сборке нет.</p>';
+    }
+    return markdownToHtml(helpText);
+  }
+
+  function ensureHelp(): HTMLElement | null {
+    if (typeof document === 'undefined') return null;
+    if (help !== null) return help;
+    const node = document.createElement('div');
+    node.className = 'admin-editor-help-backdrop';
+    node.hidden = true;
+    node.innerHTML = [
+      '<div class="admin-editor-help-dialog" role="dialog" aria-modal="true" aria-labelledby="adminEditorHelpTitle">',
+      '  <div class="admin-editor-help-head">',
+      '    <h2 id="adminEditorHelpTitle" data-editor-help-title>Справка редактора</h2>',
+      '    <button class="admin-editor-help-close icon-button" type="button" data-action="help-close" title="Закрыть справку" aria-label="Закрыть справку"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg></button>',
+      '  </div>',
+      '  <div class="admin-editor-help-body" data-editor-help></div>',
+      '</div>',
+    ].join('');
+    node.addEventListener('click', function (event): void {
+      if (event.target === node) closeHelp();
+    });
+    document.body.appendChild(node);
+    help = node;
+    return node;
+  }
+
+  function openHelp(): void {
+    const dialog = ensureHelp();
+    if (dialog === null) return;
+    helpReturn = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const title = dialog.querySelector('[data-editor-help-title]');
+    const body = dialog.querySelector('[data-editor-help]');
+    if (title !== null) title.textContent = helpText.trim().length === 0 ? 'Справка редактора' : helpTitle(helpText);
+    if (body !== null) body.innerHTML = helpHtml();
+    dialog.hidden = false;
+    const close = dialog.querySelector<HTMLElement>('[data-action="help-close"]');
+    if (close !== null) close.focus();
+  }
+
+  function closeHelp(): void {
+    if (help !== null) help.hidden = true;
+    if (helpReturn !== null) {
+      helpReturn.focus();
+      helpReturn = null;
+    }
+  }
+
+  function helpOpen(): boolean {
+    return help !== null && !help.hidden;
   }
 
   /* ------------------------------------------------------------------- панель */
@@ -580,6 +646,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const input = target as HTMLInputElement;
 
     switch (action) {
+      case 'help': openHelp(); break;
+      case 'help-close': closeHelp(); break;
       case 'collapse': setCollapsed(true); break;
       case 'expand': setCollapsed(false); break;
       case 'toggle-enable': setEnabled(input.checked); break;
@@ -683,6 +751,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function onKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'escape' && helpOpen()) {
+      event.preventDefault();
+      closeHelp();
+      return;
+    }
     if (!on) return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return;
@@ -794,6 +867,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         preview.remove();
         preview = null;
         previewCtx = null;
+      }
+      if (help !== null) {
+        help.remove();
+        help = null;
+        helpReturn = null;
       }
     },
   };

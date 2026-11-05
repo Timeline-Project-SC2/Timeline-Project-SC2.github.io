@@ -391,6 +391,80 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
 .admin-editor-authorized .left-panel .catalog-list { scrollbar-color: rgba(182, 63, 89, .5) transparent; }
 .admin-editor-authorized .left-panel .catalog-list::-webkit-scrollbar-thumb { background: rgba(182, 63, 89, .5); }
 
+/* ------------------------------------------------------------- окно справки */
+
+.admin-editor-heading-tools { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+
+.admin-editor-help-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(4, 2, 3, .74);
+  backdrop-filter: blur(3px);
+}
+.admin-editor-help-backdrop[hidden] { display: none; }
+
+.admin-editor-help-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(78vh, 720px);
+  border: 1px solid rgba(218, 128, 149, .46);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(31, 14, 20, .97), rgba(13, 8, 11, .98));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
+  color: var(--text);
+}
+
+.admin-editor-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(212, 112, 133, .3);
+}
+.admin-editor-help-head h2 { margin: 0; color: var(--white); font-size: 15px; font-weight: 560; }
+.admin-editor-help-close { color: #c79aa6; }
+.admin-editor-help-close:hover { border-color: rgba(240, 163, 177, .5); background: rgba(182, 63, 89, .14); color: #ffe2e7; }
+
+.admin-editor-help-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 18px 20px; }
+.admin-editor-help-body > :first-child { margin-top: 14px; }
+.admin-editor-help-body h2 { margin: 22px 0 8px; border: 0; padding: 0; color: var(--admin-topbar-ink); font-size: 13px; letter-spacing: .06em; text-transform: none; }
+.admin-editor-help-body h3 { margin: 18px 0 8px; color: #ffe2e7; font-size: 12px; letter-spacing: .04em; }
+.admin-editor-help-body h4 { margin: 14px 0 6px; color: #f0a3b1; font-size: 11px; }
+.admin-editor-help-body p { margin: 0 0 10px; font-size: 12px; line-height: 1.65; color: var(--text); }
+.admin-editor-help-body ul { margin: 0 0 12px; padding-left: 18px; }
+.admin-editor-help-body li { margin-bottom: 5px; font-size: 12px; line-height: 1.6; }
+.admin-editor-help-body strong { color: #ffe2e7; font-weight: 600; }
+.admin-editor-help-body code {
+  padding: 1px 4px;
+  border: 1px solid rgba(218, 128, 149, .24);
+  border-radius: 4px;
+  background: rgba(153, 52, 74, .12);
+  font: 11px/1.5 var(--mono);
+  color: #f0a3b1;
+}
+.admin-editor-help-body pre { margin: 0 0 12px; padding: 10px 12px; overflow-x: auto; border: 1px solid rgba(218, 128, 149, .24); background: rgba(10, 5, 8, .6); }
+.admin-editor-help-body pre code { padding: 0; border: 0; background: none; color: #e8c3cb; }
+.admin-editor-help-body a { color: #f0a3b1; text-decoration: underline; text-underline-offset: 2px; }
+.admin-editor-help-table { margin: 0 0 14px; overflow-x: auto; }
+.admin-editor-help-body table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.admin-editor-help-body th,
+.admin-editor-help-body td { padding: 6px 9px; border: 1px solid rgba(212, 112, 133, .26); text-align: left; vertical-align: top; }
+.admin-editor-help-body th { background: rgba(153, 52, 74, .14); color: #ffe2e7; font-weight: 600; }
+
+@media (max-width: 700px) {
+  .admin-editor-help-backdrop { padding: 12px 8px; }
+  .admin-editor-help-dialog { max-height: 86vh; }
+  .admin-editor-help-body { padding: 4px 14px 16px; }
+}
+
 @media (max-width: 700px) {
   .admin-editor-gate { top: 50%; padding: 20px; }
   .admin-editor-panel {

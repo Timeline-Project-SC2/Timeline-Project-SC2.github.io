@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { createArea, emptySectorAreasDoc, parseSectorAreas } from '../src/atlas/sector-areas-contract.ts';
+import { helpTitle, markdownToHtml } from '../src/atlas/sector-areas-help.ts';
 import {
   CLICK_POINTS,
   DRAFT_KEY,
@@ -193,6 +194,55 @@ test('без хранилища черновик недоступен, но ре
   api.destroy();
 });
 
+test('справка превращает разметку файла в HTML без исполняемого кода', () => {
+  const html = markdownToHtml([
+    '# Заголовок',
+    '',
+    'Обычный абзац с `кодом` и **жирным**.',
+    '',
+    '- первый пункт',
+    '- второй пункт',
+    '',
+    '| Колонка | Значение |',
+    '|---|---|',
+    '| режим | политический |',
+    '',
+    '```',
+    'npm test',
+    '```',
+    '',
+    'Ссылка: [индекс](README.md) и [сайт](https://example.org).',
+  ].join('\n'));
+
+  assert.match(html, /<h2>Заголовок<\/h2>/);
+  assert.match(html, /<p>Обычный абзац с <code>кодом<\/code> и <strong>жирным<\/strong>\.<\/p>/);
+  assert.match(html, /<ul><li>первый пункт<\/li><li>второй пункт<\/li><\/ul>/);
+  assert.match(html, /<th>Колонка<\/th>/);
+  assert.match(html, /<td>политический<\/td>/);
+  assert.match(html, /<pre><code>npm test<\/code><\/pre>/);
+  // Ссылка на файл репозитория остаётся текстом, внешняя — настоящей ссылкой.
+  assert.doesNotMatch(html, /href="README\.md"/);
+  assert.match(html, /<a href="https:\/\/example\.org"/);
+  // Ничего исполняемого: разметка экранируется.
+  assert.equal(markdownToHtml('<img src=x onerror=alert(1)>'), '<p>&lt;img src=x onerror=alert(1)&gt;</p>');
+});
+
+test('справка на сайте — тот же файл, что лежит в docs/admins', () => {
+  const markdown = read('docs/admins/sector-areas-editor.md');
+  const html = markdownToHtml(markdown);
+  assert.equal(helpTitle(markdown), 'Редактор границ сектора — руководство администратора');
+  // Весь объём доезжает до окна: разделы «как должно / как не должно».
+  assert.match(html, /Как должно работать и как не должно/);
+  assert.match(html, /<strong>Должно:<\/strong>/);
+  assert.match(html, /<strong>Не должно:<\/strong>/);
+  assert.match(html, /Порядок работы/);
+  assert.match(html, /Чего в редакторе нет/);
+  // Навигация репозитория в окно не попадает.
+  assert.doesNotMatch(html, /Назад: <a/);
+  // Файл подключён в сборку как текст: второй копии в исходниках нет.
+  assert.match(read('src/atlas/app.ts'), /docs\/admins\/sector-areas-editor\.md\?raw/);
+});
+
 test('ключи хранилища разделяют черновик и состояние панели', () => {
   assert.notEqual(DRAFT_KEY, PANEL_KEY);
   assert.match(DRAFT_KEY, /^timeline\.sector-areas\./);
@@ -211,6 +261,11 @@ test('панель администратора держит три якоря �
   assert.match(variant, /Изменения/);
   assert.match(css, /\.admin-editor-log/);
   assert.match(css, /#mapCanvas\.editor-drawing/);
+  // Кнопка «?» в шапке: справка открывается поверх карты.
+  assert.match(variant, /class="admin-editor-help icon-button"/);
+  assert.match(variant, /data-action="help"/);
+  assert.match(css, /\.admin-editor-help-backdrop\[hidden\] \{ display: none; \}/);
+  assert.match(css, /\.admin-editor-help-dialog \{/);
   // Свёрнутая панелька: рейл, пять стрелочек и скрытое тело.
   assert.match(variant, /class="admin-editor-rail"/);
   assert.match(variant, /data-action="expand"/);
