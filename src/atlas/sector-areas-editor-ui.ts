@@ -36,6 +36,7 @@ import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
 import { areaSize } from './sector-areas-render.ts';
 import { pointInArea, totalVertices } from './sector-areas-geometry.ts';
 import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
+import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule } from './pointer-rules.ts';
 import { brushWidthInWorld, thickenStroke } from './sector-areas-editor.ts';
 import type { AtlasKernel } from './config.ts';
 
@@ -90,7 +91,7 @@ export interface SectorAreasEditorUiApi {
 
 /** Правая и средняя кнопки рисовать не должны: это панорама и контекст карты. */
 export function isDrawButton(button: number): boolean {
-  return button === 0;
+  return isDrawButtonRule(button);
 }
 
 /**
@@ -695,8 +696,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function onPointerDown(event: PointerEvent): void {
-    // Правая и средняя кнопки — карте: панорама и контекстное меню.
-    if (!on || !isDrawButton(event.button) || !event.isPrimary) return;
+    // Правило ввода: жест начинается только на канве карты, только основной
+    // левой кнопкой и никогда — на органе интерфейса. Панели лежат внутри
+    // `.map-stage`, поэтому без этой проверки перехватчик глушил бы их клики.
+    if (!on || !canStartStroke(event, canvas)) return;
     // Перехват раньше обработчиков карты: панорама не должна мешать штриху.
     event.stopPropagation();
     event.preventDefault();
@@ -717,7 +720,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!on || !drawing) return;
+    if (!on || !drawing || !canContinueStroke(event)) return;
     event.stopPropagation();
     const point = pointAt(event);
     if (point === null) return;
