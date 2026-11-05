@@ -501,7 +501,9 @@ export function exportDoc(session: EditorSession, indent = 2): string {
 }
 
 export function importDoc(json: string | unknown): EditorSession {
-  return createEditorSession(parseSectorAreas(json));
+  // Строку разбираем как JSON: выгрузка редактора и черновик идут текстом.
+  const raw = typeof json === 'string' ? JSON.parse(json) as unknown : json;
+  return createEditorSession(parseSectorAreas(raw));
 }
 
 export function selectedArea(session: EditorSession): Area | null {

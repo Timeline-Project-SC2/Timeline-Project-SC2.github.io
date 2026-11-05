@@ -14,6 +14,49 @@
 .admin-editor-panel section p { margin: 0; }
 .admin-editor-notice { padding: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.025); }
 
+/* Редактор границ: поля, кнопки и журнал панели «Редактор сектора». */
+.admin-editor-block { display: grid; gap: 8px; }
+.admin-editor-field { display: grid; gap: 4px; font-size: 12px; color: var(--dim); }
+.admin-editor-field input[type="text"],
+.admin-editor-field input[type="number"],
+.admin-editor-field select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(0,0,0,.35);
+  color: var(--white);
+  font: inherit;
+}
+.admin-editor-field input[type="color"] { width: 48px; height: 28px; padding: 0; border: 1px solid var(--line); background: none; }
+.admin-editor-field input[type="checkbox"] { width: auto; margin-right: 6px; }
+.admin-editor-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-editor-row button {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255,255,255,.04);
+  color: var(--white);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.admin-editor-row button:hover { background: rgba(255,255,255,.1); }
+.admin-editor-row button:disabled { opacity: .45; cursor: default; }
+.admin-editor-hint { margin: 0; font-size: 12px; color: var(--dim); }
+.admin-editor-hint kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+}
+.admin-editor-meta { margin: 0; font-size: 12px; color: var(--dim); }
+.admin-editor-log { margin: 0; padding-left: 18px; font-size: 12px; color: var(--dim); }
+.admin-editor-log li { margin-bottom: 3px; }
+/* Пока идёт штрих, курсор не должен намекать на панораму карты. */
+#mapCanvas.editor-drawing { cursor: crosshair; }
+
 /* Тема администратора разделена на три независимых набора параметров:
    шрифты, топ-панель и визуальный слой. Общие токены сайта, отвечающие за
    окантовку, границы панелей и органы управления (--accent, --line,
