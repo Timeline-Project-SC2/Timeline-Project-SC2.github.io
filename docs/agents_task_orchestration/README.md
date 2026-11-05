@@ -37,8 +37,6 @@
 > отправка issue), A0-P реактивирован отдельной карточкой, лимит Workers Free — 100 000 запросов в **день**. Правки и
 > доп. руководства выдавать ссылкой сразу на ветку `arena/911dc5ef-...` или заносить в `main`. Живая обработка и запись пока не готовы.
 > **ED-1/ED-2 (05.11.2026):** [ED-1](wave_cards/ADM-EDITOR-BUBBLE-CUT.md) выполнена ([PR #351](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/351), `dd9e2ce`), [ED-2](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) готовится к выдаче после влития документационного PR и решений владельца. Проверки — только критический минимум, остальное `TODO` конца сессии.
-> **План сектора (05.11.2026):** [план закрытия пласта простыми словами](../stages/stage-09-12-sector/plan-to-close-sector.md). Владелец уточнил: баблы — области-границы территорий фракции с механикой «столкновения» и памятью пространства между системами, а не подсветка маркера.
-> **Актуальный `main` (05.11.2026):** `3554e92` ([PR #359](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/359)); влиты #354–#359 с редактором границ. План и карточки ниже приведены к этой базе. [Цепочка разведки Р1–Р4](wave_cards/ADM-SECTOR-RECON-CHAIN.md) — активная работа ветки.
 
 Отдельный файл на каждую выданную волну карточку ведёт Гайдлайнер (`rc-07`). Карточка — это
 рабочий документ воркера: `OWNED_FILES`/`FORBIDDEN_FILES`, контракт символов, шаги с коммитами,
@@ -46,11 +44,6 @@
 
 | Карточка | Волна | Статус |
 |---|---|---|
-| [`wave_cards/ADM-SECTOR-RECON-CHAIN.md`](wave_cards/ADM-SECTOR-RECON-CHAIN.md) | `Р1–Р4`: цепочка разведки сектора | Короткая карточка-редирект; полные версии по ссылкам внутри |
-| [`wave_cards/ADM-SECTOR-R1-CODE.md`](wave_cards/ADM-SECTOR-R1-CODE.md) | `Р1`: разведка кода | read-only; отчёт передаёт Р2 |
-| [`wave_cards/ADM-SECTOR-R2-FUNCTION.md`](wave_cards/ADM-SECTOR-R2-FUNCTION.md) | `Р2`: разведка функционала | По отчёту Р1; отчёт передаёт Р3 и Р4 |
-| [`wave_cards/ADM-SECTOR-R3-DOCS.md`](wave_cards/ADM-SECTOR-R3-DOCS.md) | `Р3`: разведка документации | По отчёту Р2; отчёт + отчёт Р2 передаёт Р4 |
-| [`wave_cards/ADM-SECTOR-R4-APPLY.md`](wave_cards/ADM-SECTOR-R4-APPLY.md) | `Р4`: занесение изменений | Отдельно, только по отчётам Р2 и Р3 |
 | [`wave_cards/ADM-ACCESS.md`](wave_cards/ADM-ACCESS.md) | `ADM-ACCESS`: проверка GitHub и автоматизация изменений | Разведки и критика получены; реализация на `HOLD` до разрешения рисков |
 | [`wave_cards/ADM-ACCESS-AUTO.md`](wave_cards/ADM-ACCESS-AUTO.md) | Сквозная автоматизация | Владелец выбрал автоматическое применение; проектирование вне планет разрешено |
 | [`wave_cards/ADM-ACCESS-INTEGRATION.md`](wave_cards/ADM-ACCESS-INTEGRATION.md) | Подключение, права и Discord | Ручной тест App прошёл; автоматическая запись и Discord не включены |
