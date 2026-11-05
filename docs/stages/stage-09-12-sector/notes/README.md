@@ -15,6 +15,7 @@
 | [`brush-modes-and-cascade.md`](brush-modes-and-cascade.md) | Редактор границ: модель Area + State + Mode, режимы, анимации, свободная кисть, градиент |
 | [`brush-lod-log-and-plan.md`](brush-lod-log-and-plan.md) | Редактор границ: LOD, журнал, схема, валидация и порядок работ |
 | [`brush-scopes-and-border-world.md`](brush-scopes-and-border-world.md) | Редактор границ: области действия, подключение туманностей/сектора, детализация и пограничный мир |
+| [`brush-core-implementation.md`](brush-core-implementation.md) | Редактор границ: реализованное ядро — модули, решения владельца и что не сделано |
 | [`flight-and-arrows.md`](flight-and-arrows.md) | Сектор: полёт к системе и стрелки |
 | [`gates-roadmap-and-wave-f.md`](gates-roadmap-and-wave-f.md) | Сектор: гейты, целевой чек-лист и волна F |
 | [`risks-decisions-and-sync.md`](risks-decisions-and-sync.md) | Сектор: риски, решения и синхронизация документов |

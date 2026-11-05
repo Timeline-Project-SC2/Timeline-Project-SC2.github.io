@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "mapSize": 10000,
+  "modes": ["political", "military", "economy", "tension"],
+  "experimentalModes": ["ecology", "history"],
+  "areas": [],
+  "overrides": [],
+  "events": []
+}
