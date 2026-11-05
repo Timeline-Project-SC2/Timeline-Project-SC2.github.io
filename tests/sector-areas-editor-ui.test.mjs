@@ -11,15 +11,19 @@ import { readFileSync } from 'node:fs';
 
 import { createArea, emptySectorAreasDoc, parseSectorAreas } from '../src/atlas/sector-areas-contract.ts';
 import {
+  CLICK_POINTS,
   DRAFT_KEY,
   MIN_STEP_PX,
+  PANEL_KEY,
+  createDefaultState,
   createSectorAreasEditorUi,
   eventLine,
+  isDrawButton,
   parseExported,
   requestMaterial,
   strokePoints,
 } from '../src/atlas/sector-areas-editor-ui.ts';
-import { createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
+import { addAreaFromStroke, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
 
 const root = new URL('..', import.meta.url);
 const read = (relative) => readFileSync(new URL(relative, root), 'utf8');
@@ -62,6 +66,33 @@ test('прореживание мазка убирает точки ближе �
   assert.deepEqual(kept, [[0, 0], [30, 0], [80, 0]]);
   // Порог взят из модуля: это пиксели экрана, а не мировые единицы.
   assert.equal(MIN_STEP_PX, 6);
+});
+
+test('рисовать разрешено только левой кнопкой: правая и средняя — карте', () => {
+  assert.equal(isDrawButton(0), true);
+  assert.equal(isDrawButton(1), false, 'средняя кнопка — панорама');
+  assert.equal(isDrawButton(2), false, 'правая кнопка — контекст карты');
+  // Щелчок без движения — выбор области, а не контур из одной точки.
+  assert.equal(CLICK_POINTS, 3);
+});
+
+test('область, созданная кистью, сразу получает состояние и видна на карте', () => {
+  const session = createEditorSession(emptySectorAreasDoc());
+  const next = addAreaFromStroke(session, {
+    id: 'area-1',
+    name: 'Область 1',
+    points: SQUARE,
+    closed: true,
+    state: createDefaultState('state-area-1', 'political'),
+  });
+  assert.equal(next.doc.areas.length, 1);
+  const area = next.doc.areas[0];
+  assert.equal(area.states.length, 1, 'без состояния область остаётся невидимой');
+  assert.equal(area.states[0].mode, 'political');
+  assert.equal(area.states[0].visibleFrom, 0);
+  assert.equal(area.states[0].visibleTo, 12);
+  // Создание и показ — одна запись журнала, то есть одна отмена.
+  assert.equal(next.doc.events.length, 1);
 });
 
 test('прореживание не трогает пустой мазок и отключается нулевым порогом', () => {
@@ -162,6 +193,12 @@ test('без хранилища черновик недоступен, но ре
   api.destroy();
 });
 
+test('ключи хранилища разделяют черновик и состояние панели', () => {
+  assert.notEqual(DRAFT_KEY, PANEL_KEY);
+  assert.match(DRAFT_KEY, /^timeline\.sector-areas\./);
+  assert.match(PANEL_KEY, /^timeline\.sector-areas\./);
+});
+
 test('панель администратора держит три якоря блоков редактора', () => {
   const variant = read('tools/vite/atlas-shell.ts');
   const css = read('site/sector/admin-edit/admin-edit.css');
@@ -174,13 +211,28 @@ test('панель администратора держит три якоря �
   assert.match(variant, /Изменения/);
   assert.match(css, /\.admin-editor-log/);
   assert.match(css, /#mapCanvas\.editor-drawing/);
+  // Свёрнутая панелька: рейл, пять стрелочек и скрытое тело.
+  assert.match(variant, /class="admin-editor-rail"/);
+  assert.match(variant, /data-action="expand"/);
+  assert.match(variant, /data-action="collapse"/);
+  assert.match(variant, /id="adminEditorBody"/);
+  assert.equal((variant.match(/<i><\/i>/g) ?? []).length, 5, 'ровно пять стрелочек');
+  assert.match(css, /\.admin-editor-panel\.is-collapsed/);
+  assert.match(css, /@keyframes admin-rail-arrow/);
+  assert.match(css, /prefers-reduced-motion[\s\S]*?\.admin-editor-rail-arrows i \{ animation: none/);
+  // Левая панель каталога перекрашена в красноватую тему администратора.
+  assert.match(css, /\.admin-editor-authorized \.left-panel \{/);
+  assert.match(css, /--line-strong: rgba\(218, 128, 149, \.46\)/);
 });
 
 test('редактор подключается только там, где есть панель администратора', () => {
   const app = read('src/atlas/app.ts');
   const variant = read('tools/vite/atlas-shell.ts');
-  assert.match(app, /createSectorAreasEditorUi\(\{ kernel, panel, canvas: el\.mapCanvas \}\)/);
-  assert.match(app, /qs<HTElement>|qs<HTMLElement>\('\[data-admin-editor\]'\)/);
+  // Перехват рисования вешается на стадию: она родитель канвы, поэтому её
+  // фаза перехвата срабатывает раньше обработчиков панорамы на самой канве.
+  assert.match(app, /stage: el\.mapStage/);
+  assert.match(app, /canvas: el\.mapCanvas/);
+  assert.match(app, /qs<HTMLElement>\('\[data-admin-editor\]'\)/);
   // Якорь есть только в варианте `admin-edit`: публичный `/sector/` не трогаем.
   assert.match(variant, /data-admin-editor/);
   const sectorVariant = /const sector[\s\S]*?adminEditorPanel: '([\s\S]*?)'/.exec(read('src/atlas/atlas-variants.ts'));

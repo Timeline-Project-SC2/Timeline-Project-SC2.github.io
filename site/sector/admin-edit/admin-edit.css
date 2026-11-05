@@ -1,4 +1,9 @@
-/* Страница-заготовка: карта и общий интерфейс остаются теми же, что в /sector/. */
+/* Страница-заготовка: карта и общий интерфейс остаются теми же, что в /sector/.
+ * Редактор границ собран на админских токенах (--admin-*), поэтому панель,
+ * её органы и свёрнутый рейл держат один красноватый цвет интерфейса. */
+
+/* ------------------------------------------------------------- панель редактора */
+
 .admin-editor-panel {
   position: absolute;
   z-index: 12;
@@ -8,54 +13,224 @@
   width: min(360px, calc(100vw - 28px));
   padding: 20px;
   overflow-y: auto;
+  transition: width .22s ease, padding .22s ease, height .22s ease;
 }
-.admin-editor-panel h2 { margin: 0 0 6px; color: var(--white); font-size: 14px; }
-.admin-editor-panel section { padding: 16px 0; border-top: 1px solid var(--line); }
-.admin-editor-panel section p { margin: 0; }
-.admin-editor-notice { padding: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.025); }
 
-/* Редактор границ: поля, кнопки и журнал панели «Редактор сектора». */
-.admin-editor-block { display: grid; gap: 8px; }
-.admin-editor-field { display: grid; gap: 4px; font-size: 12px; color: var(--dim); }
+.admin-editor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-editor-panel h1 { margin: 6px 0 0; color: var(--white); font-size: 19px; line-height: 1.05; }
+.admin-editor-panel h2 {
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(212, 112, 133, .28);
+  color: var(--admin-topbar-ink);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.admin-editor-panel section { padding: 16px 0; border-top: 1px solid rgba(212, 112, 133, .22); }
+.admin-editor-panel section:first-of-type { border-top: 0; }
+.admin-editor-panel section p { margin: 0; }
+
+.admin-editor-summary {
+  margin: 10px 0 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(212, 112, 133, .3);
+  background: rgba(153, 52, 74, .12);
+  color: var(--admin-topbar-ink);
+  font: 10px/1.5 var(--mono);
+  letter-spacing: .02em;
+}
+.admin-editor-summary:empty { display: none; }
+
+.admin-editor-notice {
+  padding: 10px;
+  border: 1px solid rgba(212, 112, 133, .32);
+  background: rgba(153, 52, 74, .1);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.admin-editor-block { display: grid; gap: 10px; }
+
+/* Сетка полей: два коротких поля в ряд, длинное — на всю ширину. */
+.admin-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.admin-editor-field { display: grid; gap: 5px; font-size: 11px; color: var(--muted); }
+.admin-editor-field-inline { display: flex; align-items: center; gap: 8px; }
 .admin-editor-field input[type="text"],
 .admin-editor-field input[type="number"],
 .admin-editor-field select {
   width: 100%;
+  min-height: 30px;
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(218, 128, 149, .38);
   border-radius: 6px;
-  background: rgba(0,0,0,.35);
+  background: rgba(10, 5, 8, .55);
   color: var(--white);
   font: inherit;
 }
-.admin-editor-field input[type="color"] { width: 48px; height: 28px; padding: 0; border: 1px solid var(--line); background: none; }
-.admin-editor-field input[type="checkbox"] { width: auto; margin-right: 6px; }
+.admin-editor-field select { height: 30px; }
+.admin-editor-field input:focus-visible,
+.admin-editor-field select:focus-visible,
+.admin-editor-row button:focus-visible {
+  outline: 1px solid rgba(240, 163, 177, .7);
+  outline-offset: 1px;
+}
+.admin-editor-field input[type="color"] {
+  width: 46px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(218, 128, 149, .38);
+  border-radius: 6px;
+  background: none;
+}
+.admin-editor-field input[type="checkbox"] { width: auto; margin: 0; accent-color: #b63f59; }
+
 .admin-editor-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .admin-editor-row button {
-  padding: 6px 10px;
-  border: 1px solid var(--line);
+  flex: 1 1 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(218, 128, 149, .38);
   border-radius: 6px;
-  background: rgba(255,255,255,.04);
-  color: var(--white);
+  background: rgba(153, 52, 74, .12);
+  color: var(--admin-topbar-ink);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
-.admin-editor-row button:hover { background: rgba(255,255,255,.1); }
-.admin-editor-row button:disabled { opacity: .45; cursor: default; }
-.admin-editor-hint { margin: 0; font-size: 12px; color: var(--dim); }
+.admin-editor-row button:hover {
+  border-color: rgba(240, 163, 177, .68);
+  background: rgba(182, 63, 89, .18);
+  color: var(--admin-topbar-ink-strong);
+  box-shadow: 0 0 14px var(--admin-topbar-glow);
+}
+.admin-editor-row button:disabled { opacity: .45; cursor: default; box-shadow: none; }
+
+.admin-editor-hint { margin: 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .admin-editor-hint kbd {
   padding: 1px 4px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(218, 128, 149, .38);
   border-radius: 4px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 10px;
 }
-.admin-editor-meta { margin: 0; font-size: 12px; color: var(--dim); }
-.admin-editor-log { margin: 0; padding-left: 18px; font-size: 12px; color: var(--dim); }
+.admin-editor-meta { margin: 0; font-size: 11px; color: var(--muted); }
+.admin-editor-log { margin: 0; padding-left: 18px; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .admin-editor-log li { margin-bottom: 3px; }
-/* Пока идёт штрих, курсор не должен намекать на панораму карты. */
+
+/* Слой предпросмотра штриха: живёт только во время рисования, мышь сквозь него
+   проходит к карте, поэтому панорама и подсказки не ломаются. */
+.admin-editor-brush-preview {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
 #mapCanvas.editor-drawing { cursor: crosshair; }
+
+/* ---------------------------------------------------------- свёрнутая панелька */
+
+/* Свёрнутое состояние: узкая длинная панелька по правому краю. */
+.admin-editor-panel.is-collapsed {
+  top: 50%;
+  bottom: auto;
+  width: 46px;
+  height: 216px;
+  padding: 10px 8px;
+  overflow: visible;
+  transform: translateY(-50%);
+  background: rgba(20, 10, 14, .92);
+  border-color: rgba(218, 128, 149, .44);
+}
+.admin-editor-panel.is-collapsed .admin-editor-heading,
+.admin-editor-panel.is-collapsed .admin-editor-summary,
+.admin-editor-panel.is-collapsed .admin-editor-body { display: none; }
+
+.admin-editor-rail { display: none; }
+.admin-editor-panel.is-collapsed .admin-editor-rail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--admin-topbar-ink);
+  cursor: pointer;
+}
+.admin-editor-panel.is-collapsed .admin-editor-rail:hover,
+.admin-editor-panel.is-collapsed .admin-editor-rail:focus-visible {
+  color: var(--admin-topbar-ink-strong);
+}
+.admin-editor-panel.is-collapsed .admin-editor-rail:focus-visible {
+  outline: 1px solid rgba(240, 163, 177, .7);
+  outline-offset: 2px;
+}
+.admin-editor-rail-label {
+  writing-mode: vertical-rl;
+  font: 10px/1 var(--mono);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+
+/* Пять стрелочек: появляются левее панельки, плывут к ней и гаснут у края. */
+.admin-editor-rail-arrows {
+  position: absolute;
+  right: 100%;
+  top: 0;
+  bottom: 0;
+  width: 46px;
+  margin-right: 7px;
+  pointer-events: none;
+}
+.admin-editor-rail-arrows i {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -5px;
+  border-right: 1.5px solid var(--admin-topbar-ink);
+  border-bottom: 1.5px solid var(--admin-topbar-ink);
+  border-radius: 0 0 2px 0;
+  opacity: 0;
+  filter: drop-shadow(0 0 6px var(--admin-topbar-glow));
+  animation: admin-rail-arrow 2.6s linear infinite;
+  transform: rotate(-45deg);
+}
+.admin-editor-rail-arrows i:nth-child(1) { animation-delay: 0s; }
+.admin-editor-rail-arrows i:nth-child(2) { animation-delay: .34s; }
+.admin-editor-rail-arrows i:nth-child(3) { animation-delay: .68s; }
+.admin-editor-rail-arrows i:nth-child(4) { animation-delay: 1.02s; }
+.admin-editor-rail-arrows i:nth-child(5) { animation-delay: 1.36s; }
+
+@keyframes admin-rail-arrow {
+  0% { opacity: 0; transform: translateX(-30px) rotate(-45deg) scale(.8); }
+  30% { opacity: 1; transform: translateX(-16px) rotate(-45deg) scale(1); }
+  70% { opacity: .9; transform: translateX(-6px) rotate(-45deg) scale(1); }
+  100% { opacity: 0; transform: translateX(6px) rotate(-45deg) scale(.92); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-editor-panel { transition: none; }
+  .admin-editor-rail-arrows i { animation: none; opacity: .6; transform: translateX(0) rotate(-45deg); }
+  .admin-editor-rail-arrows i:nth-child(n+2) { display: none; }
+}
+
+/* ------------------------------------------------- тема администратора (общая) */
 
 /* Тема администратора разделена на три независимых набора параметров:
    шрифты, топ-панель и визуальный слой. Общие токены сайта, отвечающие за
@@ -150,6 +325,72 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   .admin-editor-authorized .app-shell { animation: none; }
 }
 
+/* ------------------------------------ левая панель каталога в админском сеансе */
+
+/* Каталог систем и мест перекрашивается в красноватую тему администратора.
+ * Токены переопределены локально — на `.left-panel` и её подэлементах, — чтобы
+ * карта, маркеры и подписи остались в обычной стилистике. */
+.admin-editor-authorized .left-panel {
+  --panel: linear-gradient(180deg, rgba(31, 14, 20, .94), rgba(14, 8, 11, .96));
+  --line: rgba(212, 112, 133, .26);
+  --line-strong: rgba(218, 128, 149, .46);
+  --accent: #e4a3b0;
+  --accent-2: #d4707f;
+  --accent-outline: rgba(240, 163, 177, .6);
+}
+.admin-editor-authorized .left-panel .eyebrow,
+.admin-editor-authorized .left-panel .stat-label,
+.admin-editor-authorized .left-panel .list-caption,
+.admin-editor-authorized .left-panel .panel-foot,
+.admin-editor-authorized .left-panel .row-meta,
+.admin-editor-authorized .left-panel .catalog-empty { color: #a9868e; }
+.admin-editor-authorized .left-panel .eyebrow-line { background: #d4707f; box-shadow: 0 0 8px rgba(212, 112, 127, .5); }
+.admin-editor-authorized .left-panel .panel-head h1,
+.admin-editor-authorized .left-panel .stat-value,
+.admin-editor-authorized .left-panel .row-title { color: #ffe2e7; }
+.admin-editor-authorized .left-panel .filter-count,
+.admin-editor-authorized .left-panel .row-count,
+.admin-editor-authorized .left-panel .filter-menu-current,
+.admin-editor-authorized .left-panel .catalog-dropdown-summary,
+.admin-editor-authorized .left-panel .catalog-list-dropdown > summary,
+.admin-editor-authorized .left-panel .filter-panel-summary,
+.admin-editor-authorized .left-panel .filter-group > summary { color: #c79aa6; }
+.admin-editor-authorized .left-panel .catalog-dropdown-summary b,
+.admin-editor-authorized .left-panel .filter-indicator,
+.admin-editor-authorized .left-panel .sort-button:hover,
+.admin-editor-authorized .left-panel .foot-mark { color: #e4a3b0; }
+.admin-editor-authorized .left-panel .filter-chip {
+  border-color: rgba(218, 128, 149, .24);
+  background: rgba(153, 52, 74, .08);
+  color: #c79aa6;
+}
+.admin-editor-authorized .left-panel .filter-chip:hover {
+  border-color: rgba(240, 163, 177, .5);
+  color: #ffe2e7;
+}
+.admin-editor-authorized .left-panel .filter-chip.active {
+  border-color: rgba(240, 163, 177, .55);
+  background: rgba(182, 63, 89, .16);
+  color: #ffe2e7;
+}
+.admin-editor-authorized .left-panel .filter-group { border-color: rgba(218, 128, 149, .18); background: rgba(153, 52, 74, .06); }
+.admin-editor-authorized .left-panel .catalog-row:hover { background: rgba(182, 63, 89, .12); border-color: rgba(240, 163, 177, .22); }
+.admin-editor-authorized .left-panel .catalog-row.selected { background: rgba(182, 63, 89, .18); border-color: rgba(240, 163, 177, .34); }
+.admin-editor-authorized .left-panel .row-glyph { border-color: rgba(240, 163, 177, .28); color: #f0a3b1; }
+.admin-editor-authorized .left-panel .row-glyph::before,
+.admin-editor-authorized .left-panel .row-glyph::after { background: #d4707f; }
+.admin-editor-authorized .left-panel .row-status { background: #e4a3b0; }
+.admin-editor-authorized .left-panel .row-status.inferred { background: #8b6b74; }
+.admin-editor-authorized .left-panel .row-status.pdf-linked { background: #f0c3cb; }
+.admin-editor-authorized .left-panel .icon-button { color: #c79aa6; }
+.admin-editor-authorized .left-panel .icon-button:hover {
+  border-color: rgba(240, 163, 177, .5);
+  background: rgba(182, 63, 89, .14);
+  color: #ffe2e7;
+}
+.admin-editor-authorized .left-panel .catalog-list { scrollbar-color: rgba(182, 63, 89, .5) transparent; }
+.admin-editor-authorized .left-panel .catalog-list::-webkit-scrollbar-thumb { background: rgba(182, 63, 89, .5); }
+
 @media (max-width: 700px) {
   .admin-editor-gate { top: 50%; padding: 20px; }
   .admin-editor-panel {
@@ -159,5 +400,13 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
     width: min(360px, calc(100vw - 16px));
     max-height: calc(100dvh - 94px - env(safe-area-inset-bottom));
     padding: 16px;
+  }
+  .admin-editor-panel.is-collapsed {
+    top: 50%;
+    bottom: auto;
+    width: 42px;
+    height: 180px;
+    padding: 8px 6px;
+    max-height: none;
   }
 }
