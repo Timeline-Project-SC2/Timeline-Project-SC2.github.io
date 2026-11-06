@@ -213,16 +213,17 @@ export interface StrokeInput {
   readonly parentId?: string | null;
   readonly source?: Area['source'];
   /**
-   * Положение области. Открытая линия площади не имеет, поэтому для неё
-   * передаётся `unknown`: классифицировать несуществующую площадь нельзя.
-   */
-  readonly location?: AreaLocation | null;
-  /**
    * Состояние, создаваемое вместе с областью. Без него область остаётся
    * невидимой: рендер показывает только области с состоянием на этом уровне.
    * Передаётся сразу, чтобы «создать» и «показать» были одной отменой.
    */
   readonly state?: AreaState;
+  /**
+   * Положение области. Открытая линия площади не имеет, поэтому для неё
+   * передаётся `unknown`: классифицировать несуществующую площадь нельзя.
+   * Без параметра поле остаётся `null`.
+   */
+  readonly location?: AreaLocation | null;
 }
 
 /** Свободная кисть: произвольный полигон в мировых координатах. */
@@ -245,7 +246,8 @@ export function addAreaFromStroke(session: EditorSession, input: StrokeInput): E
   // `createArea` всегда создаёт область без состояний; состояние прикладываем
   // сразу, иначе область появляется в документе, но остаётся невидимой.
   const withState: Area = input.state === undefined ? created : { ...created, states: [input.state] };
-  // Положение задаётся вызывающей стороной: открытая линия получает `unknown`.
+  // Положение задаётся вызывающей стороной: у открытой линии нет площади,
+  // поэтому её `location` — `unknown`, а не результат классификации по ней.
   const area: Area = input.location === undefined
     ? withState
     : { ...withState, location: input.location };
@@ -345,7 +347,13 @@ function syncClosure(ring: Ring, closed: boolean): Ring {
   return closeRing(ring);
 }
 
-function updateArea(session: EditorSession, areaId: string, update: (area: Area) => Area, note: string): EditorSession {
+function updateArea(
+  session: EditorSession,
+  areaId: string,
+  update: (area: Area) => Area,
+  note: string,
+  kind = 'edit',
+): EditorSession {
   const target = session.doc.areas.find((area) => area.id === areaId);
   if (target === undefined) throw new RangeError(`Область ${areaId} не найдена`);
   const next = update(target);
@@ -353,7 +361,7 @@ function updateArea(session: EditorSession, areaId: string, update: (area: Area)
     ...session.doc,
     areas: session.doc.areas.map((area) => (area.id === areaId ? next : area)),
   };
-  return commit(session, doc, { kind: 'edit', areaId, mode: session.mode, note });
+  return commit(session, doc, { kind, areaId, mode: session.mode, note });
 }
 
 export function moveVertex(
@@ -496,15 +504,23 @@ export function fillShapeAsState(session: EditorSession, input: StateFillInput):
   const area = session.doc.areas.find((item) => item.id === input.areaId) ?? null;
   const check = canFillArea(area);
   if (!check.ok) throw new RangeError(check.reason ?? 'Залить фигуру нельзя.');
-  return updateArea(session, input.areaId, (item) => {
-    const exists = item.states.some((state) => state.id === input.state.id);
-    return {
-      ...item,
-      states: exists
-        ? item.states.map((state) => (state.id === input.state.id ? input.state : state))
-        : [...item.states, input.state],
-    };
-  }, `Заливка как состояние ${input.state.id} режима ${input.state.mode}`);
+  return updateArea(
+    session,
+    input.areaId,
+    (item) => {
+      const exists = item.states.some((state) => state.id === input.state.id);
+      return {
+        ...item,
+        states: exists
+          ? item.states.map((state) => (state.id === input.state.id ? input.state : state))
+          : [...item.states, input.state],
+      };
+    },
+    `Заливка как состояние ${input.state.id} режима ${input.state.mode}`,
+    // Вид события `state`, а не `edit`: в журнале обе заливки различимы сразу —
+    // форс-закрашивание пишется видом `override` и лежит в слое `overrides`.
+    'state',
+  );
 }
 
 export function setGradient(session: EditorSession, areaId: string, stateId: string, gradient: GradientSpec): EditorSession {

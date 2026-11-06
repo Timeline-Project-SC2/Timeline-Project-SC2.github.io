@@ -10,12 +10,19 @@
  *  - `rectangle`, `ellipse` — перетаскиванием от угла до угла, замкнутые;
  *  - `polygon` — замкнутый контур по вершинам.
  *
+ * Два способа ввода не смешиваются: перетаскивание и установка вершин кликами.
+ * Завершение вершин — `Enter` или двойной клик, отмена незавершённого ввода —
+ * `Escape`; и то, и другое документ не трогает.
+ *
  * Пороги взяты из существующего контракта, а не придуманы здесь: замкнутое
  * кольцо требует минимум четыре точки (три уникальные вершины плюс замыкание),
- * открытое — минимум две. Контракт не меняется и не дублируется.
+ * открытое — минимум две. Контракт не меняется и не дублируется, площадь и
+ * длину считает `sector-areas-geometry`, а не второй похожий слой.
  */
 
+import { SECTOR_AREAS_MAP_SIZE } from './sector-areas-contract.ts';
 import type { AreaPoint, Ring } from './sector-areas-contract.ts';
+import { ringArea, ringLength } from './sector-areas-geometry.ts';
 
 /* ------------------------------------------------------------------ справочник */
 
@@ -33,6 +40,15 @@ export const TOOL_IDS: readonly ToolId[] = Object.freeze([
 export const TOOL_TITLES: Readonly<Record<ToolId, string>> = Object.freeze({
   'free-line': 'Свободная линия',
   line: 'Линия по точкам',
+  rectangle: 'Прямоугольник',
+  ellipse: 'Эллипс',
+  polygon: 'Многоугольник',
+});
+
+/** Короткие подписи кнопок панели: в ряд помещается только короткое имя. */
+export const TOOL_LABELS: Readonly<Record<ToolId, string>> = Object.freeze({
+  'free-line': 'Свободная',
+  line: 'Линия',
   rectangle: 'Прямоугольник',
   ellipse: 'Эллипс',
   polygon: 'Многоугольник',
@@ -58,6 +74,14 @@ export const TOOL_HINTS: Readonly<Record<ToolId, string>> = Object.freeze({
   polygon: 'Клики ставят вершины; Enter или двойной клик замыкают, Esc отменяет.',
 });
 
+export function isToolId(value: unknown): value is ToolId {
+  return typeof value === 'string' && (TOOL_IDS as readonly string[]).includes(value);
+}
+
+export function toolInput(tool: ToolId): ToolInput {
+  return TOOL_INPUT[tool];
+}
+
 /** Замкнутые фигуры: только они получают площадь и, значит, заливку. */
 export function toolCloses(tool: ToolId): boolean {
   return tool === 'rectangle' || tool === 'ellipse' || tool === 'polygon';
@@ -69,6 +93,19 @@ export const OPEN_MIN_POINTS = 2;
 export const CLOSED_MIN_VERTICES = 3;
 /** Точек на окружность эллипса: достаточно для плавности и не раздувает документ. */
 export const ELLIPSE_SEGMENTS = 32;
+
+/* ----------------------------------------------------------------- приведение */
+
+/** Приводит координату к карте `0…mapSize`: фигура не должна ломать разбор. */
+function clampCoord(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(SECTOR_AREAS_MAP_SIZE, value));
+}
+
+/** Точка в пределах карты: перетаскивание легко уводит курсор за край. */
+export function clampPoint(point: readonly [number, number]): AreaPoint {
+  return [clampCoord(point[0]), clampCoord(point[1])];
+}
 
 /* -------------------------------------------------------------------- состояние */
 
@@ -125,31 +162,42 @@ export function cancelInput(state: ToolState): ToolState {
 
 /* --------------------------------------------------------- перетаскивание */
 
-export function beginDrag(state: ToolState, point: AreaPoint): ToolState {
-  return { ...state, phase: 'drag', path: [point], vertices: [], cursor: point };
+export function beginDrag(state: ToolState, point: readonly [number, number]): ToolState {
+  const start = clampPoint(point);
+  return { ...state, phase: 'drag', path: [start], vertices: [], cursor: start };
 }
 
 /**
  * Шаг перетаскивания. Точки ближе `minStep` не несут формы, но раздувают
  * документ, поэтому они отбрасываются; курсор обновляется всегда.
  */
-export function moveDrag(state: ToolState, point: AreaPoint, minStep = 0): ToolState {
+export function moveDrag(state: ToolState, point: readonly [number, number], minStep = 0): ToolState {
   if (state.phase !== 'drag') return state;
+  const next = clampPoint(point);
   const last = state.path[state.path.length - 1];
-  if (last === undefined) return { ...state, path: [point], cursor: point };
-  const far = !(minStep > 0) || Math.hypot(point[0] - last[0], point[1] - last[1]) >= minStep;
-  return { ...state, path: far ? [...state.path, point] : state.path, cursor: point };
+  if (last === undefined) return { ...state, path: [next], cursor: next };
+  const far = !(minStep > 0) || Math.hypot(next[0] - last[0], next[1] - last[1]) >= minStep;
+  return { ...state, path: far ? [...state.path, next] : state.path, cursor: next };
 }
 
 /* --------------------------------------------------------------- вершины */
 
-export function addVertex(state: ToolState, point: AreaPoint): ToolState {
-  return { ...state, phase: 'vertices', vertices: [...state.vertices, point], cursor: point };
+/**
+ * Клик ставит вершину. Повторная точка в том же месте игнорируется: иначе
+ * двойной клик, завершающий ввод, удваивал бы последнюю вершину.
+ */
+export function addVertex(state: ToolState, point: readonly [number, number]): ToolState {
+  const next = clampPoint(point);
+  const last = state.vertices[state.vertices.length - 1];
+  if (last !== undefined && last[0] === next[0] && last[1] === next[1]) {
+    return { ...state, phase: 'vertices', cursor: next };
+  }
+  return { ...state, phase: 'vertices', vertices: [...state.vertices, next], cursor: next };
 }
 
-export function moveCursor(state: ToolState, point: AreaPoint): ToolState {
+export function moveCursor(state: ToolState, point: readonly [number, number]): ToolState {
   if (state.phase === 'idle') return state;
-  return { ...state, cursor: point };
+  return { ...state, cursor: clampPoint(point) };
 }
 
 /* ------------------------------------------------------------------- фигуры */
@@ -163,14 +211,15 @@ function rectangleCorners(a: AreaPoint, b: AreaPoint): AreaPoint[] {
 }
 
 function ellipsePoints(a: AreaPoint, b: AreaPoint, segments = ELLIPSE_SEGMENTS): AreaPoint[] {
+  const count = Math.max(CLOSED_MIN_VERTICES, Math.round(segments));
   const rx = Math.abs(b[0] - a[0]) / 2;
   const ry = Math.abs(b[1] - a[1]) / 2;
   const cx = (a[0] + b[0]) / 2;
   const cy = (a[1] + b[1]) / 2;
   const points: AreaPoint[] = [];
-  for (let i = 0; i < segments; i += 1) {
-    const t = (i / segments) * Math.PI * 2;
-    points.push([cx + rx * Math.cos(t), cy + ry * Math.sin(t)]);
+  for (let i = 0; i < count; i += 1) {
+    const t = (i / count) * Math.PI * 2;
+    points.push(clampPoint([cx + rx * Math.cos(t), cy + ry * Math.sin(t)]));
   }
   return points;
 }
@@ -260,15 +309,19 @@ export function undoVertex(state: ToolState): ToolState {
 
 function uniqueCount(points: readonly AreaPoint[]): number {
   const seen = new Set<string>();
-  for (const [x, y] of points) seen.add(`${x},${y}`);
+  for (const point of points) seen.add(`${point[0]},${point[1]}`);
   return seen.size;
 }
 
 /**
  * Проверка черновика существующими правилами контракта: замкнутому кольцу
- * нужны три уникальные вершины, открытому — две точки. Вырожденный прямоугольник
- * или эллипс (нулевая ширина или высота) документ не портит: фигура просто
- * не создаётся, а причина показывается администратору.
+ * нужны три уникальные вершины, открытому — две точки.
+ *
+ * Вырожденность ловит не самодельный перебор случаев, а существующая геометрия:
+ * нулевая площадь у замкнутой фигуры и нулевая длина у открытой. Так отказ
+ * получают и нулевой прямоугольник, и три точки на одной прямой — то, что
+ * простой проверкой совпадающих вершин не ловится. Документ при этом не
+ * портится: фигура просто не создаётся, а причина показывается администратору.
  */
 export function validateDraft(draft: ShapeDraft | null): DraftCheck {
   if (draft === null) return { ok: false, reason: 'Фигура не начата: ввода не было.' };
@@ -282,19 +335,16 @@ export function validateDraft(draft: ShapeDraft | null): DraftCheck {
     if (uniqueCount(draft.points) < CLOSED_MIN_VERTICES) {
       return { ok: false, reason: 'Фигура вырождена: вершины совпадают, площади нет.' };
     }
-    if (draft.tool === 'rectangle' || draft.tool === 'ellipse') {
-      const xs = draft.points.map((point) => point[0]);
-      const ys = draft.points.map((point) => point[1]);
-      const width = Math.max(...xs) - Math.min(...xs);
-      const height = Math.max(...ys) - Math.min(...ys);
-      if (!(width > 0) || !(height > 0)) {
-        return { ok: false, reason: 'Фигура без площади: тяните от угла к противоположному углу.' };
-      }
+    if (ringArea(draftRing(draft), true) <= 0) {
+      return { ok: false, reason: 'Фигура без площади: вершины лежат на одной линии.' };
     }
     return { ok: true, reason: null };
   }
   if (draft.points.length < OPEN_MIN_POINTS) {
     return { ok: false, reason: `Открытой линии нужно минимум ${OPEN_MIN_POINTS} точки.` };
+  }
+  if (ringLength(draftRing(draft), false) <= 0) {
+    return { ok: false, reason: 'Открытая линия без длины: её точки совпадают.' };
   }
   return { ok: true, reason: null };
 }
