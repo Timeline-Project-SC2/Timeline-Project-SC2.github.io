@@ -47,16 +47,41 @@ export interface EditorSession {
   readonly sequence: number;
 }
 
+/**
+ * Следующий свободный номер для `area-*`, `state-*`, `ev-*` и `force-*`.
+ *
+ * Номер обязан продолжаться, а не начинаться заново: иначе загрузка черновика
+ * и импорт документа давали бы повторяющиеся идентификаторы. Считаем по
+ * числовым хвостам уже существующих идентификаторов.
+ */
+export function nextSequence(doc: SectorAreasDoc): number {
+  let maximum = 0;
+  const consider = (id: string): void => {
+    const match = /-(\d+)$/.exec(id);
+    if (match === null) return;
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) maximum = Math.max(maximum, value);
+  };
+  for (const area of doc.areas) {
+    consider(area.id);
+    for (const state of area.states) consider(state.id);
+  }
+  for (const override of doc.overrides) consider(override.id);
+  for (const event of doc.events) consider(event.id);
+  return maximum + 1;
+}
+
 export function createEditorSession(doc?: SectorAreasDoc): EditorSession {
+  const initial = doc ?? emptySectorAreasDoc();
   return {
-    doc: doc ?? emptySectorAreasDoc(),
+    doc: initial,
     past: [],
     future: [],
     mode: 'political',
     snapMode: 'free',
     brushWidthPx: 8,
     selection: null,
-    sequence: 1,
+    sequence: nextSequence(initial),
   };
 }
 
@@ -230,6 +255,12 @@ export interface SectorCellInput {
   readonly y: number;
   /** Глубина адреса `0…7`; по умолчанию — пять букв (`T5`). */
   readonly letters?: AddressLetters;
+  /**
+   * Состояние, создаваемое вместе с областью. Без него область остаётся
+   * невидимой: рендер показывает только области с состоянием на этом уровне.
+   * Передаётся сразу, чтобы «создать» и «показать» были одной отменой.
+   */
+  readonly state?: AreaState;
 }
 
 /**
@@ -257,7 +288,7 @@ export function addAreaFromSectorCell(session: EditorSession, input: SectorCellI
     ? null
     : (session.doc.areas.find((area) => area.address === parentAddress)?.id ?? null);
 
-  const area = createArea({
+  const created = createArea({
     id: input.id,
     name: input.name,
     rings: [ring],
@@ -265,6 +296,7 @@ export function addAreaFromSectorCell(session: EditorSession, input: SectorCellI
     address: formatAddress(address),
     source: 'sector',
   });
+  const area: Area = input.state === undefined ? created : { ...created, states: [input.state] };
 
   const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
   return {
