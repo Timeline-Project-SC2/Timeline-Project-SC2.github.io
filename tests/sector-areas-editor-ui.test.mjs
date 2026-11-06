@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { createArea, emptySectorAreasDoc, parseSectorAreas } from '../src/atlas/sector-areas-contract.ts';
+import { createArea, emptySectorAreasDoc, parseSectorAreas, validateSectorAreas } from '../src/atlas/sector-areas-contract.ts';
 import { helpTitle, markdownToHtml } from '../src/atlas/sector-areas-help.ts';
 import {
   CLICK_POINTS,
@@ -24,7 +24,15 @@ import {
   requestMaterial,
   strokePoints,
 } from '../src/atlas/sector-areas-editor-ui.ts';
-import { addAreaFromStroke, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
+import { addAreaFromSectorCell, addAreaFromStroke, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
+import {
+  PLANE_TITLES,
+  SECTOR_MODULES,
+  STATUS_TITLES,
+  documentReport,
+  moduleById,
+  moduleRows,
+} from '../src/atlas/sector-areas-registry.ts';
 
 const root = new URL('..', import.meta.url);
 const read = (relative) => readFileSync(new URL(relative, root), 'utf8');
@@ -292,4 +300,123 @@ test('редактор подключается только там, где ес
   assert.match(variant, /data-admin-editor/);
   const sectorVariant = /const sector[\s\S]*?adminEditorPanel: '([\s\S]*?)'/.exec(read('src/atlas/atlas-variants.ts'));
   assert.equal(sectorVariant === null || !/data-editor-block/.test(sectorVariant[1]), true);
+});
+
+
+test('реестр модулей ссылается на существующие файлы и держит три плоскости', () => {
+  assert.ok(SECTOR_MODULES.length >= 12, 'реестр не должен быть демонстрационным списком');
+  const planes = new Set(SECTOR_MODULES.map((module) => module.plane));
+  assert.deepEqual([...planes].sort(), ['data', 'order', 'spatial']);
+  for (const module of SECTOR_MODULES) {
+    assert.ok(STATUS_TITLES[module.status], `нет подписи статуса у ${module.id}`);
+    assert.ok(PLANE_TITLES[module.plane], `нет подписи плоскости у ${module.id}`);
+    assert.ok(module.note.length > 20, `модуль ${module.id} без пояснения`);
+    // Файл модуля действительно есть в репозитории: реестр ссылается на код.
+    assert.doesNotThrow(() => read(module.source), `нет файла ${module.source}`);
+  }
+  const ids = new Set(SECTOR_MODULES.map((module) => module.id));
+  for (const id of ['sector-areas-journal', 'sector-areas-scope', 'sector-areas-border-world']) {
+    assert.ok(ids.has(id), `в реестре нет модуля ${id}`);
+  }
+  assert.equal(moduleById('нет-такого-модуля'), null);
+});
+
+test('свойства модуля считаются по документу, а не берутся из литерала', () => {
+  const journal = moduleById('sector-areas-journal');
+  assert.ok(journal !== null);
+  const context = { session: createEditorSession(emptySectorAreasDoc()), bounds: null, systems: [], scale: 1 };
+  const empty = moduleRows(journal, context);
+  const filled = moduleRows(journal, { ...context, session: createEditorSession(docWithArea()) });
+  assert.notDeepEqual(empty, filled, 'свойства обязаны зависеть от документа');
+  for (const item of filled) {
+    assert.equal(typeof item.label, 'string');
+    assert.equal(typeof item.value, 'string');
+    assert.ok(item.value.length > 0, `пустое значение у «${item.label}»`);
+  }
+});
+
+test('состояние по умолчанию нейтральное и проходит семантическую проверку', () => {
+  const state = createDefaultState('state-1', 'political');
+  assert.equal(state.factionMode, 'neutral');
+  assert.deepEqual(state.factionIds, []);
+  const doc = parseSectorAreas({
+    ...emptySectorAreasDoc(),
+    areas: [{ ...createArea({ id: 'area-1', name: 'Область 1', rings: [SQUARE] }), states: [state] }],
+  });
+  const report = validateSectorAreas(doc);
+  assert.equal(report.ok, true, report.errors.join(' '));
+});
+
+test('проверка документа возвращает замечания, но не блокирует документ', () => {
+  const broken = parseSectorAreas({
+    ...emptySectorAreasDoc(),
+    areas: [{
+      ...createArea({ id: 'area-1', name: 'Область 1', rings: [SQUARE] }),
+      states: [{ ...createDefaultState('state-1', 'political'), factionMode: 'single', factionIds: [] }],
+    }],
+  });
+  const report = documentReport(broken);
+  assert.equal(report.ok, false);
+  assert.ok(report.errors.length > 0);
+  // Документ при этом остаётся рабочим: проверка — предупреждение, а не запрет.
+  assert.equal(broken.areas.length, 1);
+  assert.equal(documentReport(parseSectorAreas(emptySectorAreasDoc())).errors.length, 0);
+});
+
+test('секторный снап делает площадью ячейку адреса и сразу даёт состояние', () => {
+  const session = createEditorSession(emptySectorAreasDoc());
+  const next = addAreaFromSectorCell(session, {
+    id: 'area-1',
+    name: 'Ячейка 1',
+    x: 5720,
+    y: 6257,
+    letters: 5,
+    state: createDefaultState('state-area-1', 'political'),
+  });
+  const area = next.doc.areas[0];
+  assert.equal(area.source, 'sector');
+  assert.equal(area.states.length, 1, 'область без состояния осталась бы невидимой');
+  assert.match(area.address, /^KP/);
+  const ring = area.rings[0];
+  const width = Math.max(...ring.map((point) => point[0])) - Math.min(...ring.map((point) => point[0]));
+  assert.ok(width > 0, 'площадь ячейки не должна быть точкой');
+  assert.throws(() => addAreaFromSectorCell(session, { id: 'bad', name: 'Мелко', x: 5720, y: 6257, letters: 4 }), RangeError);
+});
+
+test('нумерация продолжается после загрузки документа, а не начинается заново', () => {
+  const doc = parseSectorAreas({
+    ...emptySectorAreasDoc(),
+    areas: [{ ...createArea({ id: 'area-7', name: 'Область 7', rings: [SQUARE] }) }],
+  });
+  const session = createEditorSession(doc);
+  assert.equal(session.sequence, 8);
+  const first = addAreaFromStroke(session, { id: 'area-' + session.sequence, name: 'Новая', points: SQUARE });
+  const second = addAreaFromStroke(first, { id: 'area-' + first.sequence, name: 'Ещё', points: SQUARE });
+  const ids = second.doc.areas.map((area) => area.id);
+  assert.equal(new Set(ids).size, ids.length, 'идентификаторы не должны повторяться');
+});
+
+test('служебный раздел проверок не попадает в окно справки', () => {
+  const html = markdownToHtml(read('docs/admins/sector-areas-editor.md'));
+  assert.match(html, /Порядок работы/);
+  assert.match(html, /Чего в редакторе нет/);
+  assert.doesNotMatch(html, /Проверки перед заявкой/, 'служебный раздел скрыт от администратора');
+});
+
+test('материал заявки не выдаёт проверки за выполненные', () => {
+  const text = requestMaterial(docWithArea());
+  assert.match(text, /## Проверки/);
+  assert.match(text, /не запускались/);
+  assert.match(text, /демо, не отправлено/);
+  assert.doesNotMatch(text, /типы без замечаний/);
+  assert.doesNotMatch(text, /документация актуальна/);
+});
+
+test('стили панели описывают реестр, статус и проверку документа', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(css, /\.admin-editor-module \{/);
+  assert.match(css, /\.admin-editor-status\[data-status="working"\]/);
+  assert.match(css, /\.admin-editor-table \{/);
+  assert.match(css, /\.admin-editor-check\[data-state="error"\]/);
+  assert.match(css, /\.admin-editor-demo \{/);
 });
