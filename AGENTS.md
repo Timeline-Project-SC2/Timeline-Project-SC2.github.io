@@ -65,8 +65,10 @@
 npm ci
 
 # Локальный запуск и сборка статической публикации (.publish/)
-npm run dev                                     # локальный dev-сервер Vite
 npm run build                                   # проверка типов (tsc --noEmit) + сборка Vite в .publish/
+npm run serve                                   # показать собранное: vite preview на .publish, порт 8080
+npm run dev                                     # сборка + serve одним шагом (без hot-reload)
+npm run assets:build                            # картинки assets/*.webp (нужен Pillow): сборка их не делает
 
 # Статический анализ типов, линтер и компиляция Wasm
 npm run typecheck                               # строгая проверка типов TypeScript (tsc --noEmit)
@@ -82,6 +84,11 @@ npm run verify:publish                          # проверка 7 маршр�
 npm run verify:contract                         # кросс-проверка Python ↔ TS контракта planet_generation и PG1
 python3 tools/sync.py --strict                  # строгая проверка CSV, координат 0..mapSize, привязок places и дублей ID
 python3 tools/planet_generation.py validate     # валидация снимка профилей планет против data/places.csv
+
+> `vite dev` для проверки интерфейса не используется: плагин публикации подставляет
+> хешированные имена бандлов (`/shared/app-<hash>.js`), которых в режиме разработки нет.
+> Смотреть только собранный `.publish/` через `npm run serve`. Без `npm run assets:build`
+> картинки `assets/*.webp` отдают 404 — в Git лежат только исходники `assets/src/`.
 python3 tools/build_assets.py --check           # проверка свежести WebP и тайлов (на cache hit в CI: --sync-only)
 git diff --check                                # проверка отсутствия конфликтных маркеров и пробельных ошибок
 ```

@@ -4,6 +4,8 @@
   "scripts": {
     "prebuild": "npm run test:sector-admin-edit",
     "build": "tsc --noEmit && vite build",
+    "serve": "vite preview --port 8080 --host",
+    "dev": "npm run build && npm run serve",
     "typecheck": "tsc --noEmit",
     "lint": "eslint site src tools tests",
     "pretest": "npm run test:sector-admin-edit",
