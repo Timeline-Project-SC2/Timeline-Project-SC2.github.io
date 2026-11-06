@@ -38,7 +38,7 @@ export function inlineMarkup(text: string): string {
 }
 
 /** Разделы, которые в окне сайта не показываются (навигация репозитория). */
-const SKIPPED_SECTIONS = ['Назад:', '## 7. Проверки перед заявкой'];
+const SKIPPED_SECTIONS = ['Назад:', '## 8. Проверки перед заявкой'];
 
 function skipped(title: string): boolean {
   return SKIPPED_SECTIONS.some((prefix) => title.startsWith(prefix));

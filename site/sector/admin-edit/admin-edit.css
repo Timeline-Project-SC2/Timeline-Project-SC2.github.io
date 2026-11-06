@@ -127,6 +127,90 @@
 .admin-editor-log { margin: 0; padding-left: 18px; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .admin-editor-log li { margin-bottom: 3px; }
 
+/* Реестр модулей: три плоскости, у каждой свой заголовок и честный статус.
+   Шкала приоритетов не вводится — плоскость остаётся именем, а не числом. */
+.admin-editor-planes { display: grid; gap: 12px; }
+.admin-editor-plane { display: grid; gap: 4px; }
+.admin-editor-plane-title {
+  margin: 2px 0 0;
+  color: var(--admin-topbar-ink, var(--muted));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.admin-editor-modules { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.admin-editor-module {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid rgba(212, 112, 133, .22);
+  border-radius: 6px;
+  background: rgba(21, 10, 14, .5);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-editor-module:hover { border-color: rgba(240, 163, 177, .5); background: rgba(182, 63, 89, .12); }
+.admin-editor-module.is-current {
+  border-color: rgba(240, 163, 177, .68);
+  background: rgba(143, 40, 61, .26);
+  color: var(--white);
+}
+.admin-editor-module:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
+.admin-editor-module-name { flex: 1 1 auto; }
+.admin-editor-status {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 9.5px;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.admin-editor-status[data-status="working"] { color: #9fe0b6; }
+.admin-editor-status[data-status="view"] { color: #d9c79a; }
+.admin-editor-status[data-status="offline"] { color: #d08d92; }
+
+/* Свойства модуля: две колонки «поле — значение», значения считает сам модуль. */
+.admin-editor-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.admin-editor-table th,
+.admin-editor-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(212, 112, 133, .18);
+  text-align: left;
+  vertical-align: top;
+}
+.admin-editor-table th { width: 52%; color: var(--muted); font-weight: 400; }
+.admin-editor-table td { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* Проверка документа: предупреждение, а не запрет. */
+.admin-editor-check {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(212, 112, 133, .3);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: rgba(21, 10, 14, .45);
+}
+.admin-editor-check[data-state="error"] { border-left-color: #d08d92; }
+.admin-editor-check[data-state="warning"] { border-left-color: #d9c79a; }
+.admin-editor-demo {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px dashed rgba(212, 112, 133, .44);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* Слой предпросмотра штриха: живёт только во время рисования, мышь сквозь него
    проходит к карте, поэтому панорама и подсказки не ломаются. */
 .admin-editor-brush-preview {

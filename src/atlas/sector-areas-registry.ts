@@ -27,8 +27,15 @@ import { buildJournal } from './sector-areas-journal.ts';
 import { LOD_PRESETS, effectiveLevel, lodEpsilon, roundingIterations } from './sector-areas-lod.ts';
 import { buildAreaPaints, areaSize } from './sector-areas-render.ts';
 import { classifyArea, scopeCrossings, scopesFromBounds } from './sector-areas-scope.ts';
-import { DEFAULT_BANDS, bandAt, bandIds, createBorderWorld, distanceToCentral } from './sector-areas-border-world.ts';
-import { CENTRAL_SYSTEM_KORHAL, BORDER_SYSTEM_KOLO } from './sector-areas-border-world.ts';
+import {
+  BORDER_SYSTEM_KOLO,
+  CENTRAL_SYSTEM_KORHAL,
+  DEFAULT_BANDS,
+  bandAt,
+  bandIds,
+  createBorderWorld,
+  distanceToCentral,
+} from './sector-areas-border-world.ts';
 import { enumerate, polygonAt, smoothPolyline } from './sector-bounds.ts';
 import type { SectorBounds } from './sector-bounds.ts';
 import { clipHalo } from './sector-halo-clip.ts';
@@ -384,8 +391,9 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
     source: 'src/atlas/sector-areas-scope.ts',
     note: 'Области действия строятся из границ сектора. Пересечения с областями видны, но правила разрешения конфликтов в панель не выведены: редактор ничего не решает молча.',
     rows: (context) => {
-      if (context.bounds === null) return [row('Области действия', 'границы сектора не загружены')];
-      const scopes = safe(() => scopesFromBounds(context.bounds), []);
+      const bounds = context.bounds;
+      if (bounds === null) return [row('Области действия', 'границы сектора не загружены')];
+      const scopes = safe(() => scopesFromBounds(bounds), []);
       const area = selectedArea(context);
       const crossings = area === null ? null : safe(() => scopeCrossings(area, scopes).length, Number.NaN);
       const first = scopes[0];
