@@ -49,7 +49,7 @@ import {
   modulesByPlane,
 } from './sector-areas-registry.ts';
 import type { RegistryContext, RegistrySystem, SectorModule } from './sector-areas-registry.ts';
-import type { AtlasView } from './config.ts';
+import type { AtlasView, SystemRecord } from './config.ts';
 import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule } from './pointer-rules.ts';
 import { brushWidthInWorld, thickenStroke } from './sector-areas-editor.ts';
 import type { AtlasKernel } from './config.ts';
@@ -329,10 +329,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   function registryContext(): RegistryContext {
     const state = kernel.state;
     const view: AtlasView | undefined = state.view;
-    const systems: readonly { readonly name: string; readonly coord: { readonly x: number; readonly y: number } | null }[] =
-      state.systems ?? [];
+    const systems: readonly SystemRecord[] = state.systems ?? [];
+    // Координата системы — пара `[x, y]`, а не объект: приводим к виду реестра.
     const projected = systems
-      .map((system) => (system.coord === null ? null : { name: system.name, x: system.coord.x, y: system.coord.y }))
+      .map((system) => {
+        const coord = system.coord;
+        return coord === null ? null : { name: system.name, x: coord[0], y: coord[1] };
+      })
       .filter((item): item is RegistrySystem => item !== null);
     return {
       session,
