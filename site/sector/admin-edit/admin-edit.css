@@ -177,6 +177,38 @@
 .admin-editor-status[data-status="view"] { color: #d9c79a; }
 .admin-editor-status[data-status="offline"] { color: #d08d92; }
 
+/* Инструменты рисования: пять кнопок, выбранный виден сразу. Переключение —
+   состояние панели, поэтому отдельной записи в истории оно не даёт. */
+.admin-editor-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.admin-editor-tool {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  border: 1px solid rgba(212, 112, 133, .22);
+  border-radius: 6px;
+  background: rgba(21, 10, 14, .5);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.admin-editor-tool:hover { border-color: rgba(240, 163, 177, .5); background: rgba(182, 63, 89, .12); }
+.admin-editor-tool[aria-pressed="true"] {
+  border-color: rgba(240, 163, 177, .68);
+  background: rgba(143, 40, 61, .26);
+  color: var(--white);
+}
+.admin-editor-tool:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
+
+/* Образец цвета фракции: цвет приходит из данных, а не подбирается панелью. */
+.admin-editor-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
 /* Свойства модуля: две колонки «поле — значение», значения считает сам модуль. */
 .admin-editor-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .admin-editor-table th,

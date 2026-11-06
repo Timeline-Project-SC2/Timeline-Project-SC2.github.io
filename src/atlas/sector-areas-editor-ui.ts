@@ -18,10 +18,12 @@ import {
   addAreaFromSectorCell,
   addAreaFromStroke,
   addForceFill,
+  canFillArea,
   canRedo,
   canUndo,
   createEditorSession,
   exportDoc,
+  fillShapeAsState,
   importDoc,
   redo,
   removeArea,
@@ -37,6 +39,28 @@ import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
 import { areaSize } from './sector-areas-render.ts';
 import { pointInArea, totalVertices } from './sector-areas-geometry.ts';
 import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
+import { createFactionPalette } from './sector-areas-color.ts';
+import type { FactionPalette } from './sector-areas-color.ts';
+import {
+  TOOL_HINTS,
+  TOOL_IDS,
+  TOOL_LABELS,
+  TOOL_TITLES,
+  addVertex,
+  beginDrag,
+  cancelInput,
+  createToolState,
+  endDrag,
+  finishVertices,
+  isToolId,
+  moveCursor,
+  moveDrag,
+  previewDraft,
+  selectTool,
+  toolInput,
+  validateDraft,
+} from './sector-areas-tools.ts';
+import type { ShapeDraft } from './sector-areas-tools.ts';
 import {
   DEFAULT_MODULE_ID,
   PLANE_QUESTIONS,
@@ -50,6 +74,7 @@ import {
 } from './sector-areas-registry.ts';
 import type { RegistryContext, RegistrySystem, SectorModule } from './sector-areas-registry.ts';
 import type { AtlasView, SystemRecord } from './config.ts';
+import { NO_FACTION_KEY } from './config.ts';
 import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule } from './pointer-rules.ts';
 import { brushWidthInWorld, thickenStroke } from './sector-areas-editor.ts';
 import type { AtlasKernel } from './config.ts';
@@ -128,6 +153,39 @@ export function strokePoints(points: readonly AreaPoint[], minDistance: number):
   const tail = points[points.length - 1]!;
   if (kept.length === 0 || kept[kept.length - 1] !== tail) kept.push(tail);
   return kept;
+}
+
+/** Команда редактора, которую несёт клавиша. */
+export type EditorHotkey = 'undo' | 'redo' | 'force' | 'finish' | 'cancel' | null;
+
+/**
+ * Разбор клавиши редактора: чистая функция, обработчик только вызывает её.
+ *
+ * Клавиша берётся по `event.code` — физическому коду, а не по `event.key`.
+ * На кириллической раскладке `Ctrl+Z` приходит как «я» и `F` — как «а»:
+ * сравнение по `event.key` молча не срабатывало, и отмена казалась
+ * неработающей. Физический код от раскладки не зависит.
+ *
+ * Сочетание с `Ctrl`/`Cmd`, отличное от `Z`, редактору не принадлежит:
+ * `Ctrl+F` остаётся поиском браузера.
+ */
+export function editorHotkey(event: {
+  readonly code?: string;
+  readonly key?: string;
+  readonly ctrlKey?: boolean;
+  readonly metaKey?: boolean;
+  readonly shiftKey?: boolean;
+}): EditorHotkey {
+  const withModifier = event.ctrlKey === true || event.metaKey === true;
+  if (withModifier) {
+    // Повтор — `Ctrl+Shift+Z`: сочетание из руководства, а не выдуманное здесь.
+    if (event.code === 'KeyZ') return event.shiftKey === true ? 'redo' : 'undo';
+    return null;
+  }
+  if (event.code === 'KeyF') return 'force';
+  if (event.key === 'Enter') return 'finish';
+  if (event.key === 'Escape') return 'cancel';
+  return null;
 }
 
 /** Строка журнала: `override · a-1 · Форс-закрашивание force-3 цветом #00ff00`. */
@@ -248,7 +306,16 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   let session: EditorSession = createEditorSession(kernel.state.sectorAreas ?? emptySectorAreasDoc());
   let on = false;
   let drawing = false;
-  let stroke: AreaPoint[] = [];
+  /**
+   * Инструмент и его незавершённый ввод — состояние интерфейса, а не документа:
+   * переключение не попадает ни в журнал, ни в историю отмен.
+   */
+  let toolState = createToolState('free-line');
+  /**
+   * Фракция новой области. `null` — нейтральная: по решению владельца новая
+   * область начинает нейтральной, пока администратор не выберет фракцию.
+   */
+  let faction: string | null = null;
   let color = '#ffcc00';
   let notice: string | null = null;
   let capturedId: number | null = null;
@@ -399,10 +466,19 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     }
   }
 
-  /** «Резиновая нить»: сам штрих и линия от курсора к началу (замыкание). */
+  /**
+   * «Резиновая нить»: черновик текущего инструмента. Замкнутая фигура
+   * показывается замкнутой, открытая линия — открытой: предпросмотр не должен
+   * обещать замыкания, которого не будет.
+   */
   function drawStroke(ctx: CanvasRenderingContext2D): void {
+    const draft = previewDraft(toolState);
+    if (draft === null) return;
+    const ring = draft.closed && draft.points.length > 1
+      ? [...draft.points, draft.points[0]!]
+      : draft.points;
     const points: { x: number; y: number }[] = [];
-    for (const point of stroke) {
+    for (const point of ring) {
       const screen = screenOf(point);
       if (screen !== null) points.push(screen);
     }
@@ -416,11 +492,12 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     ctx.beginPath();
     ctx.moveTo(points[0]!.x, points[0]!.y);
     for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i]!.x, points[i]!.y);
-    if (points.length > 2) ctx.lineTo(points[0]!.x, points[0]!.y);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(255, 226, 231, .95)';
-    for (const point of points) {
+    // У вершинных инструментов показываются сами вершины; штрих точек не копит.
+    const markers = toolInput(toolState.tool) === 'vertices' ? points : points.slice(0, 1);
+    for (const point of markers) {
       ctx.beginPath();
       ctx.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
       ctx.fill();
@@ -567,13 +644,31 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<label class="admin-editor-field">Кисть, px <input type="number" min="1" max="40" step="1" value="' + session.brushWidthPx + '" data-action="width"></label>',
       snapLettersHtml(),
       '</div>',
-      '<p class="admin-editor-hint">ЛКМ — контур. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
+      toolsHtml(),
+      '<p class="admin-editor-hint">ЛКМ — контур. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
       '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Предпросмотр «было → стало»</label>',
       previewOn
         ? '<p class="admin-editor-hint">Красная линия — область, которой в загруженном документе не станет; зелёная — новая; голубая — без изменений. Данные при предпросмотре не меняются.</p>'
         : '',
       '<div class="admin-editor-planes">' + planes + '</div>',
     ].join('');
+  }
+
+  /**
+   * Инструменты рисования: пять базовых, как в Paint. Переключение — состояние
+   * интерфейса: оно не коммитит документ и не оставляет записи в истории.
+   */
+  function toolsHtml(): string {
+    const buttons = TOOL_IDS.map((tool) => {
+      const current = tool === toolState.tool;
+      return '<button type="button" class="admin-editor-tool' + (current ? ' is-current' : '') + '"'
+        + ' data-action="tool" data-tool="' + escapeHtml(tool) + '"'
+        + ' aria-pressed="' + (current ? 'true' : 'false') + '"'
+        + ' title="' + escapeHtml(TOOL_TITLES[tool]) + '">' + escapeHtml(TOOL_LABELS[tool]) + '</button>';
+    }).join('');
+    return '<p class="admin-editor-meta"><strong>Инструмент</strong> · ' + escapeHtml(TOOL_TITLES[toolState.tool]) + '</p>'
+      + '<div class="admin-editor-tools" role="group" aria-label="Инструменты рисования">' + buttons + '</div>'
+      + '<p class="admin-editor-hint">' + escapeHtml(TOOL_HINTS[toolState.tool]) + '</p>';
   }
 
   /** Тир секторного снапа выбирается явно: 5, 6 или 7 букв адреса. */
@@ -618,6 +713,48 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     )).join('') + '</div>';
   }
 
+  /**
+   * Палитра фракций из существующего источника данных: имена и цвета приходят
+   * из `data/factions.csv` через уже готовую функцию палитры. Панель не держит
+   * своего списка фракций и не касается данных.
+   */
+  function factionPalette(): FactionPalette | null {
+    const data = kernel.data;
+    if (data === null || data === undefined || typeof data.factionsByName !== 'function') return null;
+    const entries = [...data.factionsByName().entries()].map(([name, details]) => ({ name, color: details.color }));
+    return createFactionPalette(entries);
+  }
+
+  /** Список фракций: служебная строка «—» означает «фракции нет» и не предлагается. */
+  function factionNames(): readonly string[] {
+    const palette = factionPalette();
+    if (palette === null) return [];
+    return palette.names.filter((name) => name.trim().length > 0 && name !== NO_FACTION_KEY);
+  }
+
+  /**
+   * Выбор фракции для новой области. Первый вариант — нейтральная: по решению
+   * владельца новая область начинает нейтральной, пока не выбрана фракция.
+   */
+  function factionHtml(): string {
+    const names = factionNames();
+    if (names.length === 0) {
+      return '<p class="admin-editor-hint">Палитра фракций недоступна: новая область получит нейтральный цвет.</p>';
+    }
+    const palette = factionPalette();
+    const swatch = faction === null ? '' : (palette?.cssOf(faction) ?? '');
+    const options = ['<option value=""' + (faction === null ? ' selected' : '') + '>Без фракции (нейтральная)</option>']
+      .concat(names.map((name) => (
+        '<option value="' + escapeHtml(name) + '"' + (faction === name ? ' selected' : '') + '>' + escapeHtml(name) + '</option>'
+      )))
+      .join('');
+    return '<label class="admin-editor-field">Фракция новой области <select data-action="faction">' + options + '</select></label>'
+      + (swatch === ''
+        ? ''
+        : '<p class="admin-editor-meta">Цвет фракции: <span class="admin-editor-swatch" style="background:' + escapeHtml(swatch) + '"></span> '
+          + escapeHtml(swatch) + '</p>');
+  }
+
   /** Непосредственная правка области: это часть модуля команд, а не реестра. */
   function areaEditorHtml(): string {
     const areas = session.doc.areas;
@@ -638,7 +775,15 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<button type="button" data-action="remove">Удалить</button>',
       '</div>',
       '<label class="admin-editor-field admin-editor-field-inline">Цвет заливки <input type="color" value="' + color + '" data-field="color"></label>',
-      '<div class="admin-editor-row"><button type="button" data-action="force">Закрасить (F)</button></div>',
+      // Два разных действия заливки: override поверх выбранной области и
+      // заливка новой замкнутой фигуры как её состояние. Кнопки разные всегда,
+      // второе недоступно на открытой линии — до её выбора, а не после отказа.
+      '<div class="admin-editor-row">',
+      '<button type="button" data-action="force">Закрасить (F)</button>',
+      '<button type="button" data-action="fill-state"' + (canFillArea(area).ok ? '' : ' disabled')
+        + ' title="' + escapeHtml(canFillArea(area).reason ?? 'Залить замкнутую фигуру как её состояние') + '">Залить фигуру</button>',
+      '</div>',
+      factionHtml(),
       '<p class="admin-editor-meta">',
       'Вершин: ' + totalVertices(area) + ' · площадь: ' + Math.round(areaSize(area)).toLocaleString('ru-RU'),
       ' · состояний: ' + area.states.length,
@@ -744,7 +889,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const state = on ? 'рисование включено' : 'рисование выключено';
     const snap = session.snapMode === 'sector' ? `к ячейке (${snapLetters} букв)` : 'свободная';
     const preview = previewOn ? ' · предпросмотр «было → стало»' : '';
-    return `${state} · режим: ${modeLabel(session.mode)} · кисть: ${session.brushWidthPx} px · привязка: ${snap}${preview}`;
+    const pending = drawing ? ' · ввод не завершён' : '';
+    return `${state} · инструмент: ${TOOL_TITLES[toolState.tool]} · режим: ${modeLabel(session.mode)}`
+      + ` · кисть: ${session.brushWidthPx} px · привязка: ${snap}${preview}${pending}`;
   }
 
   /* --------------------------------------------------------------- сворачивание */
@@ -779,8 +926,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /* ------------------------------------------------------------------- команды */
 
   function closeStroke(): void {
+    // Незавершённый ввод отбрасывается: документ и история при этом не меняются.
+    toolState = cancelInput(toolState);
     drawing = false;
-    stroke = [];
     clearPreview();
     if (canvas !== null) canvas.classList.remove('editor-drawing');
     if (stage !== null && capturedId !== null) {
@@ -828,12 +976,21 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     }
   }
 
-  function finishStroke(): void {
-    const points = strokePoints(stroke, MIN_STEP_PX);
-    const start = stroke[0] ?? null;
-    closeStroke();
+  /**
+   * Завершение ввода инструмента.
+   *
+   * Порядок прежний: сначала привязка к ячейке адреса, затем выделение щелчком
+   * у свободной линии, затем фигура. Фигура проверяется существующими правилами,
+   * и только годная уходит в документ одной командой — значит, и одной записью
+   * в историю. Недопустимая фигуру не создаёт, а говорит, что не так.
+   */
+  function completeInput(): void {
+    const byVertices = toolInput(toolState.tool) === 'vertices';
+    const start = byVertices ? (toolState.vertices[0] ?? null) : (toolState.path[0] ?? null);
+
     // Привязка «к ячейке адреса»: и щелчок, и штрих дают площадь ячейки.
-    if (start !== null && session.snapMode === 'sector') {
+    if (start !== null && session.snapMode === 'sector' && !byVertices) {
+      closeStroke();
       const under = areaAt(start);
       if (under !== null) {
         notice = 'Выбрана область: ' + under.name + '.';
@@ -844,34 +1001,51 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       createFromSectorCell(start);
       return;
     }
-    // Щелчок без движения — это выделение, а не попытка нарисовать точку.
-    if (points.length < CLICK_POINTS) {
-      if (start !== null) {
-        const area = areaAt(start);
-        if (area !== null) {
-          notice = 'Выбрана область: ' + area.name + '.';
-          session = selectArea(session, area.id);
-          refresh();
-          return;
-        }
+
+    // Щелчок без движения у свободной линии — это выделение, а не точка.
+    if (toolState.tool === 'free-line' && start !== null && toolState.path.length < CLICK_POINTS) {
+      closeStroke();
+      const area = areaAt(start);
+      if (area !== null) {
+        notice = 'Выбрана область: ' + area.name + '.';
+        session = selectArea(session, area.id);
+        refresh();
+        return;
       }
       notice = 'Короткий штрих: нужно не меньше трёх точек.';
       refresh();
       return;
     }
-    notice = null;
+
+    const finished = byVertices ? finishVertices(toolState) : endDrag(toolState);
+    toolState = finished.state;
+    closeStroke();
+    const check = validateDraft(finished.draft);
+    if (!check.ok || finished.draft === null) {
+      notice = check.reason ?? 'Фигура не создана.';
+      refresh();
+      return;
+    }
+    const draft: ShapeDraft = finished.draft;
     const id = nextId();
-    // Область сразу получает состояние текущего режима: иначе она создаётся,
-    // но остаётся невидимой — рендер показывает только области с состояниями.
-    commit(addAreaFromStroke(session, {
-      id,
-      name: 'Область ' + (session.doc.areas.length + 1),
-      points,
-      closed: true,
-      // Привязка «к ячейке» уходит своей командой выше, поэтому здесь — кисть.
-      source: 'brush',
-      state: createDefaultState('state-' + id, session.mode),
-    }));
+    notice = null;
+    try {
+      // Область сразу получает состояние текущего режима: иначе она создаётся,
+      // но остаётся невидимой — рендер показывает только области с состояниями.
+      commit(addAreaFromStroke(session, {
+        id,
+        name: TOOL_TITLES[draft.tool] + ' ' + (session.doc.areas.length + 1),
+        points: draft.points,
+        closed: draft.closed,
+        source: 'brush',
+        state: createDefaultState('state-' + id, session.mode),
+        // Открытой линии площади нет: её положение `unknown`, а не догадка.
+        location: draft.closed ? null : 'unknown',
+      }));
+    } catch (error) {
+      notice = 'Фигура не создана: ' + (error instanceof Error ? error.message : 'неизвестная ошибка') + '.';
+      refresh();
+    }
   }
 
   function nextId(): string {
@@ -892,6 +1066,39 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       color,
       areaId: area.id,
     }));
+  }
+
+  /**
+   * Заливка новой замкнутой фигуры как её состояния — второе действие заливки.
+   *
+   * Отличие от «закрасить» принципиальное, и его не прячут: состояние пишется
+   * в саму область, а слой `overrides` не трогается вовсе. Открытая линия не
+   * заливается — площади у неё нет; кнопка недоступна заранее, а команда и тут
+   * откажет, если вызов всё же дошёл.
+   */
+  function fillState(): void {
+    const area = selected();
+    const check = canFillArea(area);
+    if (!check.ok || area === null) {
+      notice = check.reason ?? 'Залить фигуру нельзя.';
+      refresh();
+      return;
+    }
+    const palette = factionPalette();
+    // Нейтральная по умолчанию: фракция не выбрана или её нет в палитре данных.
+    const chosen = faction !== null && (palette?.has(faction) ?? false) ? faction : null;
+    // Состояние того же режима заменяется, а не копится: иначе в одном режиме
+    // оказалось бы несколько состояний и проверка документа это отмечала бы.
+    const existing = area.states.find((item) => item.mode === session.mode);
+    const id = existing?.id ?? ('state-' + area.id + '-' + String(area.states.length + 1));
+    const base = createDefaultState(id, session.mode);
+    const state: AreaState = chosen === null
+      ? base
+      : { ...base, factionMode: 'single', factionIds: [chosen] };
+    notice = chosen === null
+      ? 'Фигура залита нейтральным состоянием.'
+      : 'Фигура залита фракцией «' + chosen + '».';
+    commit(fillShapeAsState(session, { areaId: area.id, state }));
   }
 
   function rename(): void {
@@ -979,6 +1186,17 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         break;
       }
       case 'snap-letters': snapLetters = clampLetters(Number(input.value)); refresh(); break;
+      // Инструмент и фракция — состояние интерфейса: `refresh`, а не `commit`,
+      // поэтому в журнале и в истории отмен они не оставляют следов.
+      case 'tool': {
+        const tool = control.getAttribute('data-tool') ?? '';
+        if (!isToolId(tool)) break;
+        toolState = selectTool(toolState, tool);
+        notice = null;
+        refresh();
+        break;
+      }
+      case 'faction': faction = input.value.trim().length === 0 ? null : input.value; refresh(); break;
       case 'module': moduleId = control.getAttribute('data-module') ?? moduleId; refresh(); break;
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
       case 'preview': {
@@ -1002,6 +1220,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         break;
       }
       case 'force': forceFill(); break;
+      case 'fill-state': fillState(); break;
       case 'undo': if (canUndo(session)) commit(undo(session)); break;
       case 'redo': if (canRedo(session)) commit(redo(session)); break;
       case 'draft-save': notice = draft.save() ? 'Черновик сохранён.' : 'Черновик не сохранился.'; refresh(); break;
@@ -1037,14 +1256,19 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     // левой кнопкой и никогда — на органе интерфейса. Панели лежат внутри
     // `.map-stage`, поэтому без этой проверки перехватчик глушил бы их клики.
     if (!on || !canStartStroke(event, canvas)) return;
-    // Перехват раньше обработчиков карты: панорама не должна мешать штриху.
-    event.stopPropagation();
-    event.preventDefault();
     const point = pointAt(event);
     if (point === null) return;
+    // Перехват раньше обработчиков карты: панорама не должна мешать вводу.
+    event.stopPropagation();
+    const byVertices = toolInput(toolState.tool) === 'vertices';
+    // Кликовым инструментам нужен `dblclick`: `preventDefault` на `pointerdown`
+    // отменяет совместимые события мыши, и двойной клик дошёл бы мёртвым.
+    if (!byVertices) event.preventDefault();
+    toolState = byVertices ? addVertex(toolState, point) : beginDrag(toolState, point);
     drawing = true;
-    stroke = [point];
-    if (stage !== null) {
+    // Захват указателя нужен только перетаскиванию: клики ставят вершины по
+    // одному, и удерживать ввод на стадии было бы незачем.
+    if (!byVertices && stage !== null) {
       try {
         stage.setPointerCapture(event.pointerId);
         capturedId = event.pointerId;
@@ -1061,31 +1285,47 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     event.stopPropagation();
     const point = pointAt(event);
     if (point === null) return;
-    const last = stroke[stroke.length - 1];
-    if (last !== undefined) {
-      const dx = point[0] - last[0];
-      const dy = point[1] - last[1];
-      if (Math.hypot(dx, dy) < minStepWorld()) return;
+    if (toolState.phase !== 'drag') {
+      // Вершины уже поставлены: курсор тянет «резиновую нить» до следующей.
+      toolState = moveCursor(toolState, point);
+    } else if (toolState.tool === 'free-line') {
+      // Штрих прореживается по шагу в мировых единицах: точки ближе порога
+      // не несут формы, но раздувают документ.
+      toolState = moveDrag(toolState, point, minStepWorld());
+    } else {
+      // Прямоугольнику и эллипсу нужны две опорные точки, а не весь путь.
+      toolState = moveCursor(toolState, point);
     }
-    stroke.push(point);
     paintOverlay();
   }
 
   function onPointerUp(event: PointerEvent): void {
     if (!drawing) return;
-    // Отпускание любой другой кнопки штрих не завершает.
+    // Отпускание любой другой кнопки ввод не завершает.
     if (event.button !== 0) return;
+    // Кликовые инструменты завершаются `Enter` или двойным кликом: отпускание
+    // здесь не трогаем вовсе, чтобы событие мыши дошло до браузера.
+    if (toolInput(toolState.tool) === 'vertices') return;
     event.stopPropagation();
     event.preventDefault();
-    finishStroke();
+    completeInput();
   }
 
-  /** Правая кнопка во время штриха — отмена, как в классическом лассо. */
+  /** Двойной клик завершает ввод по вершинам; масштаб карте при этом не меняем. */
+  function onDoubleClick(event: Event): void {
+    if (!on || !drawing || toolInput(toolState.tool) !== 'vertices') return;
+    if (!canContinueStroke(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    completeInput();
+  }
+
+  /** Правая кнопка во время ввода — отмена, как в классическом лассо. */
   function onContextMenu(event: Event): void {
     if (!drawing) return;
     event.preventDefault();
     event.stopPropagation();
-    notice = 'Штрих отменён.';
+    notice = 'Ввод отменён.';
     closeStroke();
     refresh();
   }
@@ -1111,18 +1351,35 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;
     if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return;
     if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return;
-    const key = event.key.toLowerCase();
-    if ((event.ctrlKey || event.metaKey) && key === 'z') {
+    // Разбор клавиши вынесен в чистую функцию: ею же проверяется раскладка.
+    const hotkey = editorHotkey(event);
+    if (hotkey === 'undo') {
       event.preventDefault();
-      commit(event.shiftKey ? (canRedo(session) ? redo(session) : session) : (canUndo(session) ? undo(session) : session));
+      commit(canUndo(session) ? undo(session) : session);
       return;
     }
-    if (key === 'f') {
+    if (hotkey === 'redo') {
+      event.preventDefault();
+      commit(canRedo(session) ? redo(session) : session);
+      return;
+    }
+    if (hotkey === 'force') {
       event.preventDefault();
       forceFill();
       return;
     }
-    if (event.key === 'Escape' && drawing) closeStroke();
+    // `Enter` завершает ввод по вершинам — то же, что двойной клик.
+    if (hotkey === 'finish' && drawing && toolInput(toolState.tool) === 'vertices') {
+      event.preventDefault();
+      completeInput();
+      return;
+    }
+    if (hotkey === 'cancel' && drawing) {
+      event.preventDefault();
+      notice = 'Ввод отменён.';
+      closeStroke();
+      refresh();
+    }
   }
 
   function insideHelp(target: EventTarget | null): boolean {
@@ -1212,6 +1469,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   bind(inputTarget, 'pointerup', onPointerUp as unknown as Handler, true);
   bind(inputTarget, 'pointercancel', onPointerUp as unknown as Handler, true);
   bind(inputTarget, 'contextmenu', onContextMenu, true);
+  // Двойной клик завершает ввод по вершинам. Перехват на стадии: канва слушает
+  // `dblclick` для масштаба, и её обработчик не должен получать этот жест.
+  bind(inputTarget, 'dblclick', onDoubleClick, true);
   // Фаза перехвата на `window`: карта слушает `document` в фазе всплытия,
   // поэтому `Escape` и ввод в админском интерфейсе доходят сначала сюда.
   bind(typeof window === 'undefined' ? null : window, 'keydown', onKeyDown as unknown as Handler, true);
