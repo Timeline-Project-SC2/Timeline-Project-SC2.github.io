@@ -15,10 +15,12 @@
 | [`workflow-faq-checklist.md`](workflow-faq-checklist.md) | Шесть шагов от `places` до заморозки, чек-лист, частые вопросы, открытые решения |
 | [`load-and-timing.md`](load-and-timing.md) | Бюджеты загрузки и времени генерации |
 | [`sector-areas-editor.md`](sector-areas-editor.md) | Редактор границ сектора: панель, кисть, свойства, черновик и заявка; как должно работать и как не должно |
+| [`sector-editor/`](sector-editor/README.md) | Карта модулей редактора: что каждый модуль берёт и отдаёт, сквозные цепочки связей |
 
 ## Связи
 
-- [Руководство администратора по таблице](../ADMIN_GUIDE.md), [по редактору границ](sector-areas-editor.md).
+- [Руководство администратора по таблице](../ADMIN_GUIDE.md), [по редактору границ](sector-areas-editor.md),
+  [карта модулей редактора](sector-editor/README.md).
 - [Редактор границ: отчёт о реализации](../stages/stage-09-12-sector/notes/brush-core-implementation.md).
 - [Контракт и пресеты](../plan/data-profiles.md), [жизненный цикл данных](../plan/product-and-roadmap.md).
 - [Этап 2 — данные и синхронизация](../stages/stage-02/plan.md), [ошибки по данным](../registers/bugs-data-and-contracts.md).
