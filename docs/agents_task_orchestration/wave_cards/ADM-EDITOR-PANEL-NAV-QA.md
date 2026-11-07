@@ -1,8 +1,8 @@
 # ADM-EDITOR-PANEL-NAV-QA: независимая проверка навигационной панели
 
-> **Статус:** первый независимый прогон PR #362 вернул `HOLD`; повторить только после карточки [`ADM-EDITOR-PANEL-NAV-FIX`](ADM-EDITOR-PANEL-NAV-FIX.md).
+> **Статус:** отчёт на `7b2fb79` был не на HEAD PR #362 и не применим к кандидату. Владелец разрешил пропустить отдельную Chromium-проверку на `a20400d` (waiver, не PASS), но визуально отверг компоновку. Повторное использование карточки — только после page-level переделки по [`ADM-EDITOR-PANEL-NAV`](ADM-EDITOR-PANEL-NAV.md).
 > **Роль:** независимая проверка (`rc-04`), без исправлений и коммитов.
-> **Вход:** обновлённый PR, отчёт исполнителя и критерии [`ADM-EDITOR-PANEL-NAV.md`](ADM-EDITOR-PANEL-NAV.md) / [`ADM-EDITOR-PANEL-NAV-FIX`](ADM-EDITOR-PANEL-NAV-FIX.md).
+> **Вход:** новый кандидатный PR/HEAD и критерии page-level компоновки из [`ADM-EDITOR-PANEL-NAV.md`](ADM-EDITOR-PANEL-NAV.md).
 
 ## 1. Границы
 
