@@ -18,13 +18,15 @@ import {
   PANEL_KEY,
   createDefaultState,
   createSectorAreasEditorUi,
+  editorHotkey,
   eventLine,
   isDrawButton,
   parseExported,
   requestMaterial,
   strokePoints,
 } from '../src/atlas/sector-areas-editor-ui.ts';
-import { addAreaFromSectorCell, addAreaFromStroke, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
+import { addAreaFromSectorCell, addAreaFromStroke, canFillArea, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
+import { TOOL_IDS } from '../src/atlas/sector-areas-tools.ts';
 import {
   PLANE_TITLES,
   SECTOR_MODULES,
@@ -419,4 +421,359 @@ test('стили панели описывают реестр, статус и �
   assert.match(css, /\.admin-editor-table \{/);
   assert.match(css, /\.admin-editor-check\[data-state="error"\]/);
   assert.match(css, /\.admin-editor-demo \{/);
+});
+
+/* --------------------------------------------------- инструменты рисования (P2) */
+
+/* Минимальная опора панели: тест идёт в Node без DOM, а разметку панели и
+   реакцию на клики проверить надо. Опора лишь принимает разметку и клики —
+   не более. */
+class FakeElement {
+  constructor(attrs = {}) {
+    this.attrs = attrs;
+    this.innerHTML = '';
+    this.textContent = '';
+    this.value = attrs.value ?? '';
+    this.checked = false;
+  }
+
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+  }
+
+  setAttribute(name, value) { this.attrs[name] = value; }
+
+  closest(selector) {
+    return selector === '[data-action]' && Object.prototype.hasOwnProperty.call(this.attrs, 'data-action')
+      ? this
+      : null;
+  }
+
+  contains() { return false; }
+  focus() {}
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+}
+
+// `onPanelClick` проверяет `target instanceof Element`: в Node такого глобала нет.
+globalThis.Element = FakeElement;
+
+/** Панель-заглушка: запоминает разметку блоков и обработчик клика. */
+function fakePanel() {
+  const blocks = new Map();
+  const handlers = new Map();
+  return {
+    blocks,
+    handlers,
+    addEventListener(type, handler) { handlers.set(type, handler); },
+    removeEventListener() {},
+    querySelector(selector) {
+      if (!blocks.has(selector)) blocks.set(selector, new FakeElement());
+      return blocks.get(selector);
+    },
+    // `insidePanel` спрашивает панель про цель события: в заглушке цель вне неё.
+    contains() { return false; },
+    classList: { toggle() {}, contains() { return false; } },
+  };
+}
+
+/** Разметка блока панели: «Модули», «Свойства» или «Изменения». */
+const blockHtml = (panel, name) => panel.blocks.get(`[data-editor-block="${name}"]`).innerHTML;
+
+/** Клик по органу панели с нужным `data-action`. */
+function clickPanel(panel, action, attrs = {}) {
+  const handler = panel.handlers.get('click');
+  handler({ target: new FakeElement({ 'data-action': action, ...attrs }) });
+}
+
+/** Ядро с источником цветов фракций: тот же, что читает карта. */
+function fakeKernelWithFactions(doc) {
+  const kernel = fakeKernel(doc);
+  kernel.data = {
+    factionsByName() {
+      return new Map([
+        // Служебная строка «—»: фракции нет, её цвет — нейтральный.
+        ['\u2014', { color: '#dfe7f2', short: '', order: null }],
+        ['Доминион Терран', { color: '#fe0000', short: 'Доминион', order: 1 }],
+        ['Кел-Морийский Синдикат', { color: '#17b111', short: 'КМС', order: 2 }],
+      ]);
+    },
+  };
+  return kernel;
+}
+
+test('панель показывает все пять инструментов, выбранный помечен', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null,
+  });
+  const html = blockHtml(panel, 'modules');
+  for (const tool of TOOL_IDS) {
+    assert.match(html, new RegExp(`data-tool="${tool}"`), `нет кнопки инструмента ${tool}`);
+  }
+  assert.match(html, /admin-editor-tools/);
+  // По умолчанию — свободная линия: именно она даёт открытый контур.
+  assert.match(html, /data-tool="free-line" aria-pressed="true"/);
+  assert.match(html, /data-tool="polygon" aria-pressed="false"/);
+  api.destroy();
+});
+
+test('переключение инструмента и выбор фракции — состояние интерфейса, не документа', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const before = api.doc();
+  clickPanel(panel, 'tool', { 'data-tool': 'polygon' });
+  assert.equal(api.doc(), before, 'смена инструмента не коммитит документ');
+  assert.match(blockHtml(panel, 'modules'), /data-tool="polygon" aria-pressed="true"/);
+
+  clickPanel(panel, 'faction', { value: 'Доминион Терран' });
+  assert.equal(api.doc(), before, 'выбор фракции не коммитит документ');
+
+  // В журнале и в истории — ничего: ни событий, ни шага отмены.
+  assert.equal(api.doc().events.length, before.events.length);
+  assert.equal(api.session().past.length, 0);
+  assert.equal(api.session().future.length, 0);
+  api.destroy();
+});
+
+test('две заливки в панели различимы и не подменяют друг друга', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const html = blockHtml(panel, 'properties');
+  assert.match(html, /data-action="force"/, 'заливка-override');
+  assert.match(html, /data-action="fill-state"/, 'заливка фигуры как состояние');
+  // Замкнутую область залить можно: кнопка доступна.
+  assert.doesNotMatch(html, /data-action="fill-state" disabled/);
+  api.destroy();
+});
+
+test('палитра фракций — из существующего источника, начало нейтральное', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const html = blockHtml(panel, 'properties');
+  // Первый и выбранный вариант — нейтральная: новая область начинает без фракции.
+  assert.match(html, /<option value="" selected>Без фракции/);
+  assert.match(html, /Доминион Терран/);
+  assert.match(html, /Кел-Морийский Синдикат/);
+  // Служебная строка «—» означает «фракции нет» и в списке не предлагается.
+  assert.doesNotMatch(html, /<option value="\u2014"/);
+  api.destroy();
+});
+
+test('заливка фигуры как состояние пишет область, а не мазок override', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const areaId = api.doc().areas[0].id;
+  clickPanel(panel, 'select', { value: areaId });
+  clickPanel(panel, 'faction', { value: 'Доминион Терран' });
+  clickPanel(panel, 'fill-state');
+
+  const area = api.doc().areas[0];
+  assert.equal(area.states.length, 1, 'состояние записано в саму область');
+  assert.deepEqual(area.states[0].factionIds, ['Доминион Терран']);
+  assert.equal(api.doc().overrides.length, 0, 'override не подменяет заливку состоянием');
+  assert.equal(api.doc().events.at(-1).kind, 'state');
+  api.destroy();
+});
+
+test('открытую линию залить нельзя: кнопка недоступна, команда отказывает', () => {
+  const open = parseSectorAreas({
+    ...emptySectorAreasDoc(),
+    areas: [{
+      ...createArea({
+        id: 'area-1',
+        name: 'Линия',
+        rings: [[[1000, 1000], [2000, 2000], [3000, 1500]]],
+        closed: false,
+        location: 'unknown',
+      }),
+    }],
+  });
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(open), panel, canvas: null, stage: null, storage: null,
+  });
+  const html = blockHtml(panel, 'properties');
+  assert.match(html, /data-action="fill-state" disabled/, 'на открытой линии заливка недоступна');
+  assert.match(html, /не заливается/, 'причина видна заранее');
+  assert.equal(canFillArea(api.doc().areas[0]).ok, false);
+
+  // Если вызов всё же дошёл, команда отказывает и документ не портит.
+  clickPanel(panel, 'fill-state');
+  assert.equal(api.doc().areas[0].states.length, 0, 'открытая линия не заливается');
+  assert.equal(api.doc().events.length, 0);
+  api.destroy();
+});
+
+test('хоткей отмены срабатывает на любой раскладке', () => {
+  // Ловушка, из-за которой отмена казалась неработающей: на русской раскладке
+  // `Ctrl+Z` приходит как `key` «я», и сравнение по `key` молча не срабатывало.
+  assert.notEqual('я'.toLowerCase(), 'z');
+  // Физический код клавиши от раскладки не зависит.
+  assert.equal(editorHotkey({ code: 'KeyZ', key: 'z', ctrlKey: true }), 'undo');
+  assert.equal(editorHotkey({ code: 'KeyZ', key: 'я', ctrlKey: true }), 'undo', 'русская раскладка');
+  assert.equal(editorHotkey({ code: 'KeyZ', key: 'я', metaKey: true }), 'undo', 'Cmd на macOS');
+  assert.equal(editorHotkey({ code: 'KeyZ', key: 'Z', ctrlKey: true, shiftKey: true }), 'redo');
+  assert.equal(editorHotkey({ code: 'KeyZ', key: 'Я', ctrlKey: true, shiftKey: true }), 'redo');
+  assert.equal(editorHotkey({ code: 'KeyF', key: 'f' }), 'force');
+  assert.equal(editorHotkey({ code: 'KeyF', key: 'а' }), 'force', 'русская раскладка');
+  assert.equal(editorHotkey({ code: 'Enter', key: 'Enter' }), 'finish');
+  assert.equal(editorHotkey({ code: 'Escape', key: 'Escape' }), 'cancel');
+  // Чужие сочетания редактору не принадлежат: `Ctrl+F` остаётся поиском браузера.
+  assert.equal(editorHotkey({ code: 'KeyF', key: 'f', ctrlKey: true }), null);
+  assert.equal(editorHotkey({ code: 'KeyY', key: 'y', ctrlKey: true }), null);
+  assert.equal(editorHotkey({}), null);
+});
+
+test('руководство описывает инструменты и обе заливки', () => {
+  const guide = read('docs/admins/sector-areas-editor.md');
+  for (const tool of ['Свободная линия', 'Линия по точкам', 'Прямоугольник', 'Эллипс', 'Многоугольник']) {
+    assert.ok(guide.includes(tool), `в руководстве нет инструмента «${tool}»`);
+  }
+  assert.ok(guide.includes('Залить фигуру'), 'в руководстве нет заливки фигуры');
+  assert.ok(guide.includes('Закрасить'), 'в руководстве нет закраски-override');
+  assert.ok(guide.includes('location'), 'в руководстве не сказано про положение области');
+  // Отмена вне режима рисования — поведение, которого раньше не было.
+  assert.ok(guide.includes('независимо от режима рисования'), 'в руководстве не сказано про отмену вне режима рисования');
+});
+
+test('стили панели описывают инструменты и образец цвета', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(css, /\.admin-editor-tools \{/);
+  assert.match(css, /\.admin-editor-tool\[aria-pressed="true"\]/);
+  assert.match(css, /\.admin-editor-swatch \{/);
+});
+
+/* ------------------------------------------- хоткеи редактора: режим и поля ввода */
+
+/* `onKeyDown` подписан на `window` в фазе перехвата. В Node `window` нет, поэтому
+   без подмены обработчик не привязывается вовсе и проверить сочетания нечем. */
+function fakeWindow() {
+  const handlers = new Map();
+  return {
+    handlers,
+    addEventListener(type, handler) { handlers.set(type, handler); },
+    removeEventListener(type) { handlers.delete(type); },
+    // Кадра нет: 0 означает «петля не запущена» — так же считает и сам модуль.
+    requestAnimationFrame() { return 0; },
+    cancelAnimationFrame() {},
+    devicePixelRatio: 1,
+  };
+}
+
+/** Редактор с перехваченным обработчиком `keydown`. */
+function editorWithKeys(doc = docWithArea()) {
+  const win = fakeWindow();
+  const panel = fakePanel();
+  // Глобал нужен только на время привязки: сам обработчик к `window` не ходит.
+  globalThis.window = win;
+  let api;
+  try {
+    api = createSectorAreasEditorUi({ kernel: fakeKernelWithFactions(doc), panel, canvas: null, storage: fakeStorage() });
+  } finally {
+    delete globalThis.window;
+  }
+  return { api, panel, keydown: win.handlers.get('keydown') };
+}
+
+/** Нажатие: событие-заглушка с теми полями, что читает `editorHotkey`. */
+function pressKey(keydown, init, target = null) {
+  const event = {
+    target,
+    prevented: false,
+    stopPropagation() {},
+    preventDefault() { event.prevented = true; },
+    ...init,
+  };
+  keydown(event);
+  return event;
+}
+
+test('отмена и повтор работают при выключенном режиме рисования', () => {
+  const { api, panel, keydown } = editorWithKeys();
+  assert.equal(typeof keydown, 'function', 'обработчик keydown привязан');
+  // Выделение и удаление идут через панель: им режим рисования не нужен.
+  clickPanel(panel, 'select', { value: 'area-1' });
+  clickPanel(panel, 'remove');
+  assert.equal(api.doc().areas.length, 0, 'область удалена');
+
+  api.setEnabled(false);
+  assert.equal(api.enabled(), false, 'рисование выключено');
+
+  // Клавиши намеренно кириллические: физический код от раскладки не зависит.
+  const undoPress = pressKey(keydown, { code: 'KeyZ', key: 'я', ctrlKey: true });
+  assert.equal(api.doc().areas.length, 1, 'Ctrl+Z вернул область и при выключенном рисовании');
+  assert.equal(undoPress.prevented, true, 'сочетание перехвачено редактором');
+
+  const redoPress = pressKey(keydown, { code: 'KeyZ', key: 'Я', ctrlKey: true, shiftKey: true });
+  assert.equal(api.doc().areas.length, 0, 'Ctrl+Shift+Z повторил удаление');
+  assert.equal(redoPress.prevented, true);
+
+  api.destroy();
+});
+
+test('F и команды ввода фигуры молчат вне режима рисования', () => {
+  const { api, panel, keydown } = editorWithKeys();
+  clickPanel(panel, 'select', { value: 'area-1' });
+  const events = api.doc().events.length;
+
+  api.setEnabled(false);
+  const off = pressKey(keydown, { code: 'KeyF', key: 'а' });
+  assert.equal(api.doc().events.length, events, 'вне режима рисования F ничего не закрашивает');
+  assert.equal(off.prevented, false, 'чужую клавишу редактор не перехватывает');
+
+  api.setEnabled(true);
+  assert.equal(api.enabled(), true);
+  const on = pressKey(keydown, { code: 'KeyF', key: 'а' });
+  assert.equal(api.doc().events.length, events + 1, 'в режиме рисования F закрашивает');
+  assert.equal(on.prevented, true);
+
+  api.destroy();
+});
+
+test('в полях ввода редактор не перехватывает клавиши', () => {
+  const { api, panel, keydown } = editorWithKeys();
+  clickPanel(panel, 'select', { value: 'area-1' });
+  clickPanel(panel, 'remove');
+  api.setEnabled(true);
+  assert.equal(api.doc().areas.length, 0);
+
+  // Конструкторы полей нужны самой проверке: без них охранник `instanceof`
+  // не срабатывает, и тест проверял бы отсутствие конструктора, а не охранник.
+  class InputField extends FakeElement {}
+  globalThis.HTMLInputElement = InputField;
+  globalThis.HTMLSelectElement = FakeElement;
+  globalThis.HTMLTextAreaElement = FakeElement;
+  try {
+    const fields = [['инпуте', InputField], ['списке', FakeElement], ['многострочном поле', FakeElement]];
+    for (const [where, Field] of fields) {
+      const before = api.doc().areas.length;
+      const press = pressKey(keydown, { code: 'KeyZ', key: 'я', ctrlKey: true }, new Field());
+      assert.equal(api.doc().areas.length, before, `Ctrl+Z в ${where} не трогает документ`);
+      assert.equal(press.prevented, false, `Ctrl+Z в ${where} не перехвачен`);
+    }
+    // `F` — тоже: иначе в имени области нельзя набрать слово с буквой «ф».
+    const pressF = pressKey(keydown, { code: 'KeyF', key: 'а' }, new InputField());
+    assert.equal(pressF.prevented, false, 'F в поле ввода не перехвачен');
+
+    // И наоборот: вне поля то же сочетание редактор забирает себе.
+    const outside = pressKey(keydown, { code: 'KeyZ', key: 'я', ctrlKey: true });
+    assert.equal(outside.prevented, true, 'вне поля Ctrl+Z принадлежит редактору');
+    assert.equal(api.doc().areas.length, 1, 'отмена вернула удалённую область');
+  } finally {
+    delete globalThis.HTMLInputElement;
+    delete globalThis.HTMLSelectElement;
+    delete globalThis.HTMLTextAreaElement;
+  }
+
+  api.destroy();
 });

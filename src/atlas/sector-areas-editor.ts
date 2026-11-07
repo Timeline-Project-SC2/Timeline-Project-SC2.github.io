@@ -218,6 +218,12 @@ export interface StrokeInput {
    * Передаётся сразу, чтобы «создать» и «показать» были одной отменой.
    */
   readonly state?: AreaState;
+  /**
+   * Положение области. Открытая линия площади не имеет, поэтому для неё
+   * передаётся `unknown`: классифицировать несуществующую площадь нельзя.
+   * Без параметра поле остаётся `null`.
+   */
+  readonly location?: AreaLocation | null;
 }
 
 /** Свободная кисть: произвольный полигон в мировых координатах. */
@@ -239,7 +245,12 @@ export function addAreaFromStroke(session: EditorSession, input: StrokeInput): E
   });
   // `createArea` всегда создаёт область без состояний; состояние прикладываем
   // сразу, иначе область появляется в документе, но остаётся невидимой.
-  const area: Area = input.state === undefined ? created : { ...created, states: [input.state] };
+  const withState: Area = input.state === undefined ? created : { ...created, states: [input.state] };
+  // Положение задаётся вызывающей стороной: у открытой линии нет площади,
+  // поэтому её `location` — `unknown`, а не результат классификации по ней.
+  const area: Area = input.location === undefined
+    ? withState
+    : { ...withState, location: input.location };
 
   const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
   return {
@@ -336,7 +347,13 @@ function syncClosure(ring: Ring, closed: boolean): Ring {
   return closeRing(ring);
 }
 
-function updateArea(session: EditorSession, areaId: string, update: (area: Area) => Area, note: string): EditorSession {
+function updateArea(
+  session: EditorSession,
+  areaId: string,
+  update: (area: Area) => Area,
+  note: string,
+  kind = 'edit',
+): EditorSession {
   const target = session.doc.areas.find((area) => area.id === areaId);
   if (target === undefined) throw new RangeError(`Область ${areaId} не найдена`);
   const next = update(target);
@@ -344,7 +361,7 @@ function updateArea(session: EditorSession, areaId: string, update: (area: Area)
     ...session.doc,
     areas: session.doc.areas.map((area) => (area.id === areaId ? next : area)),
   };
-  return commit(session, doc, { kind: 'edit', areaId, mode: session.mode, note });
+  return commit(session, doc, { kind, areaId, mode: session.mode, note });
 }
 
 export function moveVertex(
@@ -446,6 +463,64 @@ export function removeState(session: EditorSession, areaId: string, stateId: str
     ...area,
     states: area.states.filter((item) => item.id !== stateId),
   }), `Удалено состояние ${stateId}`);
+}
+
+/* -------------------------------------------------------------- две заливки */
+
+export interface FillCheck {
+  readonly ok: boolean;
+  /** Причина отказа; `null` — заливка применима. */
+  readonly reason: string | null;
+}
+
+/**
+ * Годится ли область для заливки. Открытая линия площади не имеет: заливать её
+ * нечем, поэтому оба действия заливки на ней отказывают, а не делают вид работы.
+ */
+export function canFillArea(area: Area | null): FillCheck {
+  if (area === null) return { ok: false, reason: 'Область не выбрана.' };
+  if (!area.closed) return { ok: false, reason: 'Открытая линия не заливается: площади у неё нет.' };
+  return { ok: true, reason: null };
+}
+
+export interface StateFillInput {
+  readonly areaId: string;
+  /**
+   * Готовое состояние: его собирает интерфейс из выбранной фракции, чтобы слой
+   * команд не знал про палитру. Нейтральная фракция — `factionMode: 'neutral'`.
+   */
+  readonly state: AreaState;
+}
+
+/**
+ * Заливка замкнутой фигуры как её состояния — второе, отдельное действие.
+ *
+ * Отличие от форс-закрашивания принципиальное и его нельзя прятать: здесь
+ * меняется `area.states`, то есть сама окраска области в документе, а слой
+ * `overrides` не трогается вовсе. Форс-закрашивание делает наоборот — кладёт
+ * мазок поверх и состояния сохраняет.
+ */
+export function fillShapeAsState(session: EditorSession, input: StateFillInput): EditorSession {
+  const area = session.doc.areas.find((item) => item.id === input.areaId) ?? null;
+  const check = canFillArea(area);
+  if (!check.ok) throw new RangeError(check.reason ?? 'Залить фигуру нельзя.');
+  return updateArea(
+    session,
+    input.areaId,
+    (item) => {
+      const exists = item.states.some((state) => state.id === input.state.id);
+      return {
+        ...item,
+        states: exists
+          ? item.states.map((state) => (state.id === input.state.id ? input.state : state))
+          : [...item.states, input.state],
+      };
+    },
+    `Заливка как состояние ${input.state.id} режима ${input.state.mode}`,
+    // Вид события `state`, а не `edit`: в журнале обе заливки различимы сразу —
+    // форс-закрашивание пишется видом `override` и лежит в слое `overrides`.
+    'state',
+  );
 }
 
 export function setGradient(session: EditorSession, areaId: string, stateId: string, gradient: GradientSpec): EditorSession {

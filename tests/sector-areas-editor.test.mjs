@@ -20,8 +20,10 @@ import {
   brushWidthInWorld,
   canRedo,
   canUndo,
+  canFillArea,
   createEditorSession,
   exportDoc,
+  fillShapeAsState,
   importDoc,
   insertVertex,
   moveVertex,
@@ -46,7 +48,7 @@ import {
 } from '../src/atlas/sector-areas-editor.ts';
 import { createScope } from '../src/atlas/sector-areas-scope.ts';
 import { ringArea } from '../src/atlas/sector-areas-geometry.ts';
-import { validateSectorAreas } from '../src/atlas/sector-areas-contract.ts';
+import { DEFAULT_GRADIENT, validateSectorAreas } from '../src/atlas/sector-areas-contract.ts';
 import { resolvePaint } from '../src/atlas/sector-areas-force.ts';
 
 const state = (overrides = {}) => ({
@@ -308,4 +310,163 @@ test('выделение области и адрес по центру коль
   assert.equal(selectedArea(session).id, 'a-1');
   assert.equal(selectedArea(selectArea(session, null)), null);
   assert.match(addressForRing([[5720, 6257], [5721, 6257], [5721, 6258], [5720, 6258]]), /^KP·[A-Y]{5}$/);
+});
+
+/* ---------------------------------------------- инструменты рисования (карточка P2) */
+
+const OPEN_LINE = [[1000, 1000], [2000, 2000], [3000, 1500]];
+const CLOSED_SQUARE = [[1000, 1000], [4000, 1000], [4000, 4000], [1000, 4000]];
+
+/** Заливка состояния: градиент полный, иначе проверка документа упадёт на стопах. */
+const fillState = (overrides = {}) => state({ id: 'st-fill', gradient: DEFAULT_GRADIENT, ...overrides });
+
+test('открытая линия сохраняется незамкнутой и получает location = unknown', () => {
+  const session = addAreaFromStroke(createEditorSession(), {
+    id: 'a-1',
+    name: 'Открытая линия',
+    points: OPEN_LINE,
+    closed: false,
+    location: 'unknown',
+  });
+  const area = areaById(session, 'a-1');
+  assert.equal(area.closed, false, 'линия не замыкается');
+  assert.equal(area.location, 'unknown', 'площади нет — классифицировать нечего');
+  const ring = area.rings[0];
+  assert.notDeepEqual(ring[0], ring[ring.length - 1], 'замыкающей копии первой точки нет');
+  assert.deepEqual([...ring], OPEN_LINE, 'точки линии сохранены как есть');
+  // Площадь открытой линии документом не классифицируется: `location` — unknown,
+  // а `ringArea` — примитив геометрии, который о намерении инструмента не знает.
+  assert.deepEqual(validateSectorAreas(session.doc).errors, []);
+});
+
+test('замкнутая фигура остаётся замкнутой без навязанного положения', () => {
+  const session = addAreaFromStroke(createEditorSession(), {
+    id: 'a-1',
+    name: 'Прямоугольник',
+    points: CLOSED_SQUARE,
+    closed: true,
+  });
+  const area = areaById(session, 'a-1');
+  assert.equal(area.closed, true);
+  assert.equal(area.location, null, 'положение считает scope, а не инструмент');
+  const ring = area.rings[0];
+  assert.deepEqual(ring[0], ring[ring.length - 1], 'кольцо замкнуто');
+  assert.ok(ringArea(ring, true) > 0);
+  assert.deepEqual(validateSectorAreas(session.doc).errors, []);
+});
+
+test('две заливки различны: override идёт в overrides, состояние — в саму область', () => {
+  let session = addAreaFromStroke(createEditorSession(), {
+    id: 'a-1',
+    name: 'Фигура',
+    points: CLOSED_SQUARE,
+    closed: true,
+  });
+  const before = session.doc.events.length;
+
+  // Первая заливка — существующий мазок форс-закрашивания поверх области.
+  session = addForceFill(session, {
+    id: 'force-1',
+    rings: session.doc.areas[0].rings,
+    color: '#ff0000',
+    areaId: 'a-1',
+  });
+  assert.equal(session.doc.overrides.length, 1);
+  assert.equal(session.doc.areas[0].states.length, 0, 'override состояний не пишет');
+  assert.equal(session.doc.events.at(-1).kind, 'override');
+
+  // Вторая заливка — состояние самой фигуры, и это другое действие.
+  session = fillShapeAsState(session, { areaId: 'a-1', state: fillState() });
+  assert.equal(session.doc.overrides.length, 1, 'заливка состоянием не трогает override');
+  assert.equal(session.doc.areas[0].states.length, 1);
+  assert.equal(session.doc.events.at(-1).kind, 'state');
+  assert.equal(session.doc.areas[0].states[0].id, 'st-fill');
+
+  // Каждая завершённая операция — ровно одна запись в журнале.
+  assert.equal(session.doc.events.length, before + 2);
+  assert.deepEqual(validateSectorAreas(session.doc).errors, []);
+});
+
+test('повторная заливка заменяет состояние того же режима, а не копит их', () => {
+  let session = addAreaFromStroke(createEditorSession(), {
+    id: 'a-1', name: 'Фигура', points: CLOSED_SQUARE, closed: true,
+  });
+  session = fillShapeAsState(session, { areaId: 'a-1', state: fillState({ factionIds: ['Доминион Терран'] }) });
+  session = fillShapeAsState(session, { areaId: 'a-1', state: fillState({ factionIds: ['Умоджанский Протекторат'] }) });
+  assert.equal(session.doc.areas[0].states.length, 1, 'в одном режиме — одно состояние');
+  assert.deepEqual(session.doc.areas[0].states[0].factionIds, ['Умоджанский Протекторат']);
+  // Иначе проверка документа честно предупреждала бы о нескольких состояниях.
+  assert.deepEqual(validateSectorAreas(session.doc).warnings, []);
+});
+
+test('открытую линию заливать нечем: обе заливки отказывают понятно', () => {
+  const session = addAreaFromStroke(createEditorSession(), {
+    id: 'a-1', name: 'Линия', points: OPEN_LINE, closed: false, location: 'unknown',
+  });
+  const area = areaById(session, 'a-1');
+  const check = canFillArea(area);
+  assert.equal(check.ok, false);
+  assert.match(check.reason, /не заливается/);
+  assert.equal(canFillArea(null).ok, false);
+  assert.match(canFillArea(null).reason, /не выбрана/);
+
+  assert.throws(
+    () => fillShapeAsState(session, { areaId: 'a-1', state: fillState() }),
+    /не заливается/,
+  );
+  // Документ не испорчен: ни состояния, ни мазка, ни лишнего события.
+  assert.equal(session.doc.areas[0].states.length, 0);
+  assert.equal(session.doc.overrides.length, 0);
+  assert.equal(session.doc.events.length, 1, 'неудачная заливка не пишет в журнал');
+});
+
+test('инструмент, режим, ширина и привязка не попадают в историю документа', () => {
+  const start = createEditorSession();
+  const tweaked = selectArea(setBrushWidth(setSnapMode(setMode(start, 'military'), 'sector'), 12), null);
+  assert.equal(tweaked.doc, start.doc, 'документ тот же объект: правки не было');
+  assert.equal(tweaked.doc.events.length, 0);
+  assert.equal(canUndo(tweaked), false);
+  assert.equal(canRedo(tweaked), false);
+
+  // Выделение области — тоже состояние интерфейса, а не правка документа.
+  const withArea = addAreaFromStroke(tweaked, { id: 'a-1', name: 'Фигура', points: CLOSED_SQUARE });
+  const created = withArea.doc.events.length;
+  const selected = selectArea(withArea, 'a-1');
+  assert.equal(selected.doc.events.length, created, 'выделение не пишет в журнал');
+  assert.equal(canUndo(selected), canUndo(withArea), 'выделение не добавляет шаг отмены');
+});
+
+test('отмена и повтор после заливки, создания фигуры и загрузки документа', () => {
+  let session = addAreaFromStroke(createEditorSession(), {
+    id: 'a-1', name: 'Фигура', points: CLOSED_SQUARE, closed: true,
+  });
+  session = fillShapeAsState(session, { areaId: 'a-1', state: fillState() });
+  assert.equal(session.doc.areas[0].states.length, 1);
+
+  // Отмена снимает ровно последнее завершённое изменение, а не всё сразу.
+  const back = undo(session);
+  assert.equal(back.doc.areas[0].states.length, 0, 'заливка отменена');
+  assert.equal(back.doc.areas.length, 1, 'сама фигура осталась: отмена не прыгает через шаги');
+  assert.equal(canRedo(back), true);
+
+  // Повтор возвращает заливку: это и есть проверенная работа redo.
+  const forward = redo(back);
+  assert.equal(forward.doc.areas[0].states.length, 1);
+  assert.equal(forward.doc.areas[0].states[0].id, 'st-fill');
+
+  // Ещё один шаг назад — и фигуры нет: две операции отменяются по одной.
+  assert.equal(undo(back).doc.areas.length, 0);
+
+  // Загруженный документ начинает чистую историю: ни отмены, ни повтора.
+  const loaded = importDoc(exportDoc(forward));
+  assert.equal(canUndo(loaded), false);
+  assert.equal(canRedo(loaded), false);
+  assert.equal(loaded.doc.areas[0].states.length, 1, 'документ перенесён целиком');
+  // Нумерация продолжается: новая область не получает занятый номер.
+  const after = addAreaFromStroke(loaded, {
+    id: 'a-' + loaded.sequence, name: 'Новая', points: CLOSED_SQUARE, closed: true,
+  });
+  const ids = after.doc.areas.map((area) => area.id);
+  assert.equal(new Set(ids).size, ids.length, 'идентификаторы не повторяются');
+  assert.deepEqual(validateSectorAreas(after.doc).errors, []);
 });
