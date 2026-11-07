@@ -2,18 +2,36 @@
  * Редактор границ собран на админских токенах (--admin-*), поэтому панель,
  * её органы и свёрнутый рейл держат один красноватый цвет интерфейса. */
 
+/* ------------------------------------------------ верхний слой навигации систем */
+
+/* Жёсткий инвариант навигации: левая панель «Системы» (.left-panel) является
+ * глобальным верхним слоем внутри сцены карты и остаётся кликабельной выше
+ * панели редактора, инспектора (.detail-panel) и выезжающих экранов. */
+.map-stage .left-panel { z-index: 19; }
+.map-stage .left-panel:not(.collapsed) { pointer-events: auto; }
+.map-stage .detail-panel,
+.map-stage .travel-panel { z-index: 14; }
+
 /* ------------------------------------------------------------- панель редактора */
 
 .admin-editor-panel {
   position: absolute;
-  z-index: 12;
+  z-index: 15;
   top: 86px;
   right: 14px;
   bottom: 14px;
-  width: min(640px, 46vw, calc(100vw - 28px));
-  padding: 20px;
+  box-sizing: border-box;
+  width: min(548px, 42vw, calc(100vw - 28px));
+  padding: 16px 18px;
+  overflow-x: hidden;
   overflow-y: auto;
   transition: width .22s ease, padding .22s ease, height .22s ease;
+}
+
+@media (min-width: 701px) {
+  .map-stage:has(.left-panel:not(.collapsed)) .admin-editor-panel:not(.is-collapsed) {
+    max-width: calc(100vw - 348px);
+  }
 }
 
 .admin-editor-heading {
@@ -179,10 +197,10 @@
 
 /* Полоса тумблеров, активной области и индикатора яруса сетки. */
 .admin-editor-toggles {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
+  display: grid;
+  gap: 5px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(212, 112, 133, .2);
 }
 .admin-editor-field-label { font-size: 11px; color: var(--muted); }
 .admin-editor-tier-badge {
@@ -228,15 +246,131 @@
   outline-offset: 2px;
 }
 
-/* Двухколоночная рабочая область: граф модулей слева, карточка узла справа. */
-.admin-editor-workbench {
+/* Каркас в духе Obsidian: постоянная навигация систем слева (верхний слой
+ * внутри панели) и ровно один выбранный рабочий экран справа. */
+.admin-editor-panel[data-active-screen] > .admin-editor-body > section > h2 {
+  display: none;
+}
+.admin-editor-panel[data-active-screen="module"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="module"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3) {
+  display: none;
+}
+.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body {
   display: grid;
-  grid-template-columns: minmax(252px, 1.06fr) minmax(236px, 1fr);
+  grid-template-columns: 186px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: start;
+}
+.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > .admin-editor-notice,
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > .admin-editor-notice {
+  grid-column: 1 / -1;
+}
+.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(1),
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(1) {
+  grid-column: 1;
+  padding: 0;
+  border-top: 0;
+  min-width: 0;
+}
+.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(2) {
+  display: none;
+}
+.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
+  position: relative;
+  z-index: 1;
+  grid-column: 2;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(212, 112, 133, .24);
+  border-radius: 8px;
+  background: rgba(16, 8, 12, .52);
+}
+
+.admin-editor-shell {
+  display: grid;
+  grid-template-columns: 186px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
+.admin-editor-shell-nav-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+.admin-editor-nav {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  pointer-events: auto;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(218, 128, 149, .32);
+  border-radius: 8px;
+  background: rgba(19, 9, 13, .95);
+}
+.admin-editor-nav-group {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.admin-editor-nav-title {
+  margin: 0;
+  color: var(--admin-topbar-ink);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.admin-editor-nav-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.admin-editor-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgba(212, 112, 133, .24);
+  border-radius: 6px;
+  background: rgba(25, 11, 16, .58);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-editor-nav-item:hover {
+  border-color: rgba(240, 163, 177, .54);
+  background: rgba(182, 63, 89, .14);
+}
+.admin-editor-nav-item.is-current {
+  border-color: rgba(240, 163, 177, .72);
+  background: rgba(143, 40, 61, .3);
+  color: var(--white);
+}
+.admin-editor-nav-item:focus-visible {
+  outline: 2px solid rgba(240, 163, 177, .7);
+  outline-offset: 2px;
+}
+
+.admin-editor-stage,
 .admin-editor-graph-pane,
 .admin-editor-node-card {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
   display: grid;
   gap: 8px;
   padding: 10px;
@@ -244,7 +378,11 @@
   border-radius: 8px;
   background: rgba(16, 8, 12, .52);
 }
-.admin-editor-node-card { position: sticky; top: 0; }
+.admin-editor-stage > .admin-editor-graph-pane {
+  padding: 0;
+  border: 0;
+  background: none;
+}
 .admin-editor-graph-head {
   display: flex;
   flex-wrap: wrap;

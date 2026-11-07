@@ -129,6 +129,8 @@ export interface SectorAreasEditorDraft {
 export interface SectorAreasEditorUiApi {
   session(): EditorSession;
   doc(): SectorAreasDoc;
+  screen(): EditorScreen;
+  setScreen(screen: EditorScreen): void;
   refresh(): void;
   setEnabled(on: boolean): void;
   enabled(): boolean;
@@ -303,6 +305,17 @@ function escapeHtml(value: string): string {
 
 /** Фильтр отображаемых рёбер графа по плоскости связи. */
 export type RelationFilter = 'all' | ModuleRelationKind;
+
+/** Активный рабочий экран правой панели: в каждый момент открыт ровно один. */
+export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes';
+
+export function isEditorScreen(value: string): value is EditorScreen {
+  return value === 'module'
+    || value === 'dependencies'
+    || value === 'draw'
+    || value === 'properties'
+    || value === 'changes';
+}
 
 interface GraphNodeBox {
   readonly x: number;
@@ -543,6 +556,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   /* Выбранный в реестре модуль: панель показывает его свойства. */
   let moduleId = DEFAULT_MODULE_ID;
+  /* Активный экран рабочей области: как в Obsidian, одновременно открыт один экран. */
+  let activeScreen: EditorScreen = 'module';
   /* Фильтр отображаемых рёбер графа модулей: состояние интерфейса, не документа. */
   let relationFilter: RelationFilter = 'all';
   /* Предпросмотр «было → стало»: сравнение с документом на момент открытия. */
@@ -918,37 +933,115 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '</div>';
   }
 
-  function modulesHtml(): string {
+  function systemsNavHtml(): string {
+    const isolated = new Set(isolatedModuleIds());
+    const navTabs: readonly { readonly id: Exclude<EditorScreen, 'module'>; readonly label: string }[] = [
+      { id: 'draw', label: 'Инструменты карты' },
+      { id: 'properties', label: 'Свойства области' },
+      { id: 'changes', label: 'Журнал и выгрузка' },
+      { id: 'dependencies', label: 'Зависимости' },
+    ];
+    const screenItems = navTabs.map((tab) => {
+      const current = activeScreen === tab.id;
+      return '<li><button type="button" class="admin-editor-nav-item' + (current ? ' is-current' : '') + '"'
+        + ' data-action="screen" data-screen="' + tab.id + '"'
+        + (current ? ' aria-current="page"' : '')
+        + ' aria-pressed="' + (current ? 'true' : 'false') + '">'
+        + escapeHtml(tab.label) + '</button></li>';
+    }).join('');
+
+    const planes = (['data', 'spatial', 'order'] as const).map((plane) => {
+      const items = modulesByPlane(plane).map((mod) => {
+        const current = activeScreen === 'module' && mod.id === moduleId;
+        const isIsolated = isolated.has(mod.id);
+        return '<li><button type="button" class="admin-editor-module' + (current ? ' is-current' : '') + '"'
+          + ' data-action="module" data-module="' + escapeHtml(mod.id) + '"'
+          + (isIsolated ? ' data-isolated="true"' : '')
+          + (current ? ' aria-current="page"' : '')
+          + ' aria-pressed="' + (current ? 'true' : 'false') + '"'
+          + ' title="' + escapeHtml(mod.label + ' · ' + STATUS_TITLES[mod.status]) + '">'
+          + '<span class="admin-editor-module-name">' + escapeHtml(mod.label)
+          + (isIsolated ? ' <em class="admin-editor-isolated-tag">изолирован</em>' : '')
+          + '</span>'
+          + '<span class="admin-editor-status" data-status="' + mod.status + '">'
+          + escapeHtml(STATUS_TITLES[mod.status]) + '</span></button></li>';
+      }).join('');
+      return '<div class="admin-editor-plane">'
+        + '<h3 class="admin-editor-plane-title" title="' + escapeHtml(PLANE_QUESTIONS[plane]) + '">'
+        + escapeHtml(PLANE_TITLES[plane]) + '</h3>'
+        + '<ul class="admin-editor-modules">' + items + '</ul></div>';
+    }).join('');
+
+    return [
+      '<nav class="admin-editor-nav" data-editor-nav aria-label="Системы и разделы редактора">',
+      '  <div class="admin-editor-toggles">',
+      '    <label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
+      '    <label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Было → стало</label>',
+      '  </div>',
+      '  <div class="admin-editor-nav-group">',
+      '    <p class="admin-editor-nav-title">Контекст карты</p>',
+      '    <ul class="admin-editor-nav-list">' + screenItems + '</ul>',
+      '  </div>',
+      '  <div class="admin-editor-nav-group">',
+      '    <p class="admin-editor-nav-title">Системы</p>',
+      '    <div class="admin-editor-planes">' + planes + '</div>',
+      '  </div>',
+      '</nav>',
+    ].join('');
+  }
+
+  function drawScreenHtml(): string {
     const modeOptions = MODES.map((mode) => (
       `<option value="${mode}"${mode === session.mode ? ' selected' : ''}>${modeLabel(mode)}</option>`
     )).join('');
-    const selectedModule: SectorModule | null = moduleById(moduleId);
-    const nodeCard = selectedModule === null
-      ? '<div class="admin-editor-node-card" data-editor-node-card><p class="admin-editor-hint">Модуль не выбран.</p></div>'
-      : '<div class="admin-editor-node-card" data-editor-node-card>' + modulePropertiesHtml(selectedModule) + '</div>';
     return [
-      '<div class="admin-editor-toggles">',
-      '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
-      '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Предпросмотр «было → стало»</label>',
-      '</div>',
-      '<div class="admin-editor-grid">',
-      '<label class="admin-editor-field">Режим <select data-action="mode">' + modeOptions + '</select></label>',
-      '<label class="admin-editor-field">Привязка <select data-action="snap">',
-      '<option value="free"' + (session.snapMode === 'free' ? ' selected' : '') + '>свободная</option>',
-      '<option value="grid"' + (session.snapMode === 'grid' ? ' selected' : '') + '>к рёбрам сетки</option>',
-      '<option value="sector"' + (session.snapMode === 'sector' ? ' selected' : '') + '>к ячейке адреса</option>',
-      '</select></label>',
-      '<label class="admin-editor-field">Кисть, px <input type="number" min="1" max="40" step="1" value="' + session.brushWidthPx + '" data-action="width"></label>',
+      '<div class="admin-editor-stage" data-editor-stage data-editor-screen="draw">',
+      '  <p class="admin-editor-meta"><strong>Инструменты карты</strong> · контекст около полотна</p>',
+      '  <div class="admin-editor-grid">',
+      '    <label class="admin-editor-field">Режим <select data-action="mode">' + modeOptions + '</select></label>',
+      '    <label class="admin-editor-field">Привязка <select data-action="snap">',
+      '      <option value="free"' + (session.snapMode === 'free' ? ' selected' : '') + '>свободная</option>',
+      '      <option value="grid"' + (session.snapMode === 'grid' ? ' selected' : '') + '>к рёбрам сетки</option>',
+      '      <option value="sector"' + (session.snapMode === 'sector' ? ' selected' : '') + '>к ячейке адреса</option>',
+      '    </select></label>',
+      '    <label class="admin-editor-field">Кисть, px <input type="number" min="1" max="40" step="1" value="' + session.brushWidthPx + '" data-action="width"></label>',
       snapDetailsHtml(),
-      '</div>',
+      '  </div>',
       toolsHtml(),
       activeAreaBarHtml(),
-      '<p class="admin-editor-hint">ЛКМ — штрих в активную область. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
+      '  <p class="admin-editor-hint">ЛКМ — штрих в активную область. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
       previewOn
-        ? '<p class="admin-editor-hint">Красная линия — область, которой в загруженном документе не станет; зелёная — новая; голубая — без изменений. Данные при предпросмотре не меняются.</p>'
+        ? '  <p class="admin-editor-hint">Красная линия — область, которой в загруженном документе не станет; зелёная — новая; голубая — без изменений. Данные при предпросмотре не меняются.</p>'
         : '',
-      '<div class="admin-editor-workbench">' + moduleGraphHtml(moduleId, relationFilter) + nodeCard + '</div>',
+      '</div>',
     ].join('');
+  }
+
+  function moduleScreenHtml(): string {
+    const selectedModule: SectorModule | null = moduleById(moduleId);
+    const body = selectedModule === null
+      ? '<p class="admin-editor-hint">Модуль не выбран.</p>'
+      : modulePropertiesHtml(selectedModule);
+    return '<div class="admin-editor-stage admin-editor-node-card" data-editor-stage data-editor-screen="module" data-editor-node-card>'
+      + body
+      + '</div>';
+  }
+
+  function dependenciesScreenHtml(): string {
+    return '<div class="admin-editor-stage" data-editor-stage data-editor-screen="dependencies">'
+      + moduleGraphHtml(moduleId, relationFilter)
+      + '</div>';
+  }
+
+  function modulesHtml(): string {
+    const nav = systemsNavHtml();
+    if (activeScreen === 'properties' || activeScreen === 'changes') {
+      return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
+    }
+    const stageHtml = activeScreen === 'draw'
+      ? drawScreenHtml()
+      : (activeScreen === 'dependencies' ? dependenciesScreenHtml() : moduleScreenHtml());
+    return '<div class="admin-editor-shell">' + nav + stageHtml + '</div>';
   }
 
   /**
@@ -1204,6 +1297,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /** Перерисовка блоков панели без потери недопечатанного названия области. */
   function refresh(): void {
     if (panel === null) return;
+    if (typeof panel.setAttribute === 'function') {
+      panel.setAttribute('data-active-screen', activeScreen);
+    }
     const active = typeof document === 'undefined' ? null : document.activeElement;
     const editing = typeof HTMLInputElement !== 'undefined'
       && active instanceof HTMLInputElement
@@ -1532,6 +1628,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     }
   }
 
+  function setScreen(next: EditorScreen): void {
+    activeScreen = next;
+    refresh();
+  }
+
   function setEnabled(value: boolean): void {
     on = value;
     if (!on) closeStroke();
@@ -1622,6 +1723,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         refresh();
         break;
       }
+      case 'screen': {
+        const next = control.getAttribute('data-screen') ?? '';
+        if (!isEditorScreen(next)) break;
+        activeScreen = next;
+        refresh();
+        break;
+      }
       case 'relation-filter': {
         const plane = control.getAttribute('data-plane') ?? '';
         if (!isRelationFilter(plane)) break;
@@ -1629,7 +1737,15 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         refresh();
         break;
       }
-      case 'module': moduleId = control.getAttribute('data-module') ?? moduleId; refresh(); break;
+      case 'module': {
+        const nextModule = control.getAttribute('data-module') ?? '';
+        if (nextModule.length > 0 && moduleById(nextModule) !== null) {
+          moduleId = nextModule;
+          activeScreen = 'module';
+        }
+        refresh();
+        break;
+      }
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
       case 'create-area': createNewArea(); break;
       case 'preview': {
@@ -1663,6 +1779,23 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       case 'request': download('sector-areas-request.md', requestMaterial(session.doc), 'text/markdown'); break;
       default: break;
     }
+  }
+
+  function onPanelKeyDown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    // Родные кнопки, ссылки и поля ввода обрабатывают Enter/Пробел сами.
+    const tag = (target as { tagName?: string }).tagName?.toUpperCase() ?? '';
+    if (tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'A') return;
+    if (typeof HTMLButtonElement !== 'undefined' && target instanceof HTMLButtonElement) return;
+    if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;
+    if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return;
+    if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return;
+    const control = target.closest('[data-action]');
+    if (control === null) return;
+    event.preventDefault();
+    onPanelClick(event);
   }
 
   function onColorInput(): void {
@@ -1907,6 +2040,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
   bind(panel, 'change', onPanelChange);
+  bind(panel, 'keydown', onPanelKeyDown as unknown as Handler);
   bind(panel, 'input', onColorInput);
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as Handler, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as Handler, true);
@@ -1926,6 +2060,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   return {
     session(): EditorSession { return session; },
     doc(): SectorAreasDoc { return session.doc; },
+    screen(): EditorScreen { return activeScreen; },
+    setScreen,
     refresh,
     setEnabled,
     enabled(): boolean { return on; },
