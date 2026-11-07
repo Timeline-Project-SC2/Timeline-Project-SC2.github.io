@@ -30,6 +30,7 @@ import type { NebulaBlink } from './nebula-model.ts';
 import type { LabelLayoutResult, LabelRect } from './label-layout.ts';
 import { LABEL_BUDGET, LABEL_GAP, estimateLabelSize, layoutLabels } from './label-layout.ts';
 import type { FrameViewport, LadderFrame } from './level-ladder.ts';
+export type { FrameViewport } from './level-ladder.ts';
 import {
   DEEPEST_SECTOR_LEVEL,
   edgeDistance,
@@ -773,7 +774,7 @@ export interface DisplayedGridTier {
   /** Числовой индекс яруса в `ADDRESS_TIERS` (`1…7`). */
   readonly tier: number;
   /** Обозначение яруса (`T1…T7`). */
-  readonly id: AddressTierId;
+  readonly id: string;
   /** Размер ячейки выбранного яруса в мировых единицах (`cellSize`). */
   readonly cellSize: number;
 }

@@ -222,7 +222,7 @@ function paintRingsWithGradient(
   rings: readonly PaintedRing[],
   state: AreaState,
   closed: boolean,
-  accent: Rgb,
+  accent: Rgb | null,
   options: AreaPaintOptions,
 ): readonly PaintedRing[] {
   const gradient = resolveGradient(state.gradient, {
