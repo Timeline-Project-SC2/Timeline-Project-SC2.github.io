@@ -113,6 +113,8 @@ export interface SectorAreasEditorUiOptions {
    */
   readonly stage: HTMLElement | null;
   readonly canvas: HTMLCanvasElement | null;
+  /** Существующий host глобальной навигации; без него host создаётся в `stage`. */
+  readonly navigation?: HTMLElement | null;
   /** Текст справки в разметке Markdown; пусто — кнопка «?» показывает заглушку. */
   readonly helpText?: string;
   /** Хранилище черновика и состояния панели; `null` — отключены. */
@@ -518,6 +520,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   const storage = options.storage === undefined
     ? (typeof window === 'undefined' ? null : window.localStorage)
     : options.storage;
+  const ownsNavigation = options.navigation === undefined;
+  const navigation = ownsNavigation ? mountNavigation() : (options.navigation ?? null);
 
   let session: EditorSession = createEditorSession(kernel.state.sectorAreas ?? emptySectorAreasDoc());
   let on = false;
@@ -915,6 +919,50 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '</div>';
   }
 
+  /** Глобальная левая оболочка: сосед карты и правой панели, не их содержимое. */
+  function mountNavigation(): HTMLElement | null {
+    if (stage === null || typeof document === 'undefined') return null;
+    const existing = stage.querySelector<HTMLElement>('[data-editor-navigation]');
+    if (existing !== null) return existing;
+    const host = document.createElement('aside');
+    host.className = 'admin-editor-navigation panel';
+    // Общий gate распознаёт этот маркер и не отдаёт клавиши навигации карте.
+    host.setAttribute('data-admin-editor', '');
+    host.setAttribute('data-editor-navigation', '');
+    host.setAttribute('aria-label', 'Системы и разделы редактора');
+    host.innerHTML = [
+      '<div class="admin-editor-navigation-head">',
+      '  <div><p class="eyebrow">РАБОЧАЯ ОБОЛОЧКА</p><h2>Системы</h2></div>',
+      '  <button class="admin-editor-navigation-close icon-button" type="button" data-action="navigation-collapse"',
+      '    aria-expanded="true" aria-controls="adminEditorNavigationContent" title="Скрыть системы" aria-label="Скрыть системы">',
+      '    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>',
+      '</div>',
+      '<div class="admin-editor-navigation-content" id="adminEditorNavigationContent" data-editor-navigation-content></div>',
+      '<button class="admin-editor-navigation-rail" type="button" data-action="navigation-expand"',
+      '  aria-expanded="false" aria-controls="adminEditorNavigationContent" title="Показать системы" aria-label="Показать системы">',
+      '  <span class="admin-editor-navigation-rail-label">Системы</span>',
+      '</button>',
+    ].join('');
+    stage.appendChild(host);
+    return host;
+  }
+
+  function setNavigationCollapsed(value: boolean): void {
+    if (navigation === null) return;
+    navigation.classList.toggle('is-collapsed', value);
+    const collapse = navigation.querySelector<HTMLElement>('[data-action="navigation-collapse"]');
+    const expand = navigation.querySelector<HTMLElement>('[data-action="navigation-expand"]');
+    if (collapse !== null) collapse.setAttribute('aria-expanded', value ? 'false' : 'true');
+    if (expand !== null) expand.setAttribute('aria-expanded', value ? 'false' : 'true');
+  }
+
+  function closeNavigationOnCompact(): void {
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 900px)').matches) {
+      setNavigationCollapsed(true);
+    }
+  }
+
   function systemsNavHtml(): string {
     const isolated = new Set(isolatedModuleIds());
     const navTabs: readonly { readonly id: Exclude<EditorScreen, 'module'>; readonly label: string }[] = [
@@ -1016,14 +1064,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function modulesHtml(): string {
-    const nav = systemsNavHtml();
-    if (activeScreen === 'properties' || activeScreen === 'changes') {
-      return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
-    }
+    if (activeScreen === 'properties' || activeScreen === 'changes') return '';
     const stageHtml = activeScreen === 'draw'
       ? drawScreenHtml()
       : (activeScreen === 'dependencies' ? dependenciesScreenHtml() : moduleScreenHtml());
-    return '<div class="admin-editor-shell">' + nav + stageHtml + '</div>';
+    return '<div class="admin-editor-shell">' + stageHtml + '</div>';
   }
 
   /**
@@ -1297,6 +1342,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const properties = panel.querySelector('[data-editor-block="properties"]');
     const changes = panel.querySelector('[data-editor-block="changes"]');
     if (summary !== null) summary.textContent = summaryText();
+    if (navigation !== null) {
+      navigation.setAttribute('data-active-screen', activeScreen);
+      const content = navigation.querySelector('[data-editor-navigation-content]');
+      if (content !== null) content.innerHTML = systemsNavHtml();
+    }
     if (modules !== null) modules.innerHTML = modulesHtml();
     if (properties !== null) properties.innerHTML = propertiesHtml();
     if (changes !== null) changes.innerHTML = changesHtml();
@@ -1617,6 +1667,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   function setScreen(next: EditorScreen): void {
     activeScreen = next;
     refresh();
+    closeNavigationOnCompact();
   }
 
   function setEnabled(value: boolean): void {
@@ -1688,6 +1739,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     switch (action) {
       case 'help': openHelp(); break;
       case 'help-close': closeHelp(); break;
+      case 'navigation-collapse': setNavigationCollapsed(true); break;
+      case 'navigation-expand': setNavigationCollapsed(false); break;
       case 'collapse': setCollapsed(true); break;
       case 'expand': setCollapsed(false); break;
       case 'toggle-enable': setEnabled(input.checked); break;
@@ -1712,8 +1765,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       case 'screen': {
         const next = control.getAttribute('data-screen') ?? '';
         if (!isEditorScreen(next)) break;
-        activeScreen = next;
-        refresh();
+        setScreen(next);
         break;
       }
       case 'relation-filter': {
@@ -1730,6 +1782,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
           activeScreen = 'module';
         }
         refresh();
+        closeNavigationOnCompact();
         break;
       }
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
@@ -1953,7 +2006,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function insidePanel(target: EventTarget | null): boolean {
-    return panel !== null && typeof Element !== 'undefined' && target instanceof Element && panel.contains(target);
+    if (typeof Element === 'undefined' || !(target instanceof Element)) return false;
+    return (panel !== null && panel.contains(target)) || (navigation !== null && navigation.contains(target));
   }
 
   async function copyJson(): Promise<boolean> {
@@ -2035,6 +2089,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   bind(panel, 'change', onPanelChange);
   bind(panel, 'keydown', onPanelKeyDown as unknown as Handler);
   bind(panel, 'input', onColorInput);
+  bind(navigation, 'click', onPanelClick);
+  bind(navigation, 'change', onPanelChange);
+  bind(navigation, 'keydown', onPanelKeyDown as unknown as Handler);
+  bind(navigation, 'input', onColorInput);
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as Handler, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as Handler, true);
   bind(inputTarget, 'pointerup', onPointerUp as unknown as Handler, true);
@@ -2078,6 +2136,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         help = null;
         helpReturn = null;
       }
+      if (ownsNavigation && navigation !== null) navigation.remove();
     },
   };
 }

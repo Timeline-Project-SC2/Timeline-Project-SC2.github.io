@@ -4,11 +4,15 @@
 
 /* ------------------------------------------------ верхний слой навигации систем */
 
-/* Жёсткий инвариант навигации: левая панель «Системы» (.left-panel) является
- * глобальным верхним слоем внутри сцены карты и остаётся кликабельной выше
- * панели редактора, инспектора (.detail-panel) и выезжающих экранов. */
-.map-stage .left-panel { z-index: 19; }
-.map-stage .left-panel:not(.collapsed) { pointer-events: auto; }
+/* Глобальная оболочка редактора: самостоятельная левая навигация, центральное
+ * полотно и одна правая рабочая панель. Обычный каталог здесь уступает место
+ * системам редактора; на публичной /sector/ эти правила не действуют. */
+.admin-editor-authorized .map-stage,
+.admin-editor-authorized .map-stage.wide { left: 0; }
+.admin-editor-authorized .left-panel,
+.admin-editor-authorized #toggleSidePanel,
+.admin-editor-authorized .map-page-intro { display: none; }
+.map-stage .admin-editor-navigation { z-index: 30; }
 .map-stage .detail-panel,
 .map-stage .travel-panel { z-index: 14; }
 
@@ -21,17 +25,11 @@
   right: 14px;
   bottom: 14px;
   box-sizing: border-box;
-  width: min(548px, 42vw, calc(100vw - 28px));
+  width: min(420px, 38vw, calc(100vw - 340px));
   padding: 16px 18px;
   overflow-x: hidden;
   overflow-y: auto;
   transition: width .22s ease, padding .22s ease, height .22s ease;
-}
-
-@media (min-width: 701px) {
-  .map-stage:has(.left-panel:not(.collapsed)) .admin-editor-panel:not(.is-collapsed) {
-    max-width: calc(100vw - 348px);
-  }
 }
 
 .admin-editor-heading {
@@ -250,38 +248,116 @@
   outline-offset: 2px;
 }
 
-/* Каркас в духе Obsidian: постоянная навигация систем слева (верхний слой
- * внутри панели) и ровно один выбранный рабочий экран справа. */
-.admin-editor-panel[data-active-screen] > .admin-editor-body > section > h2 {
+/* Obsidian разделяет ribbon, sidebar, editor и view; Photoshop/GIMP —
+ * инструменты, центральное полотно и свойства. Здесь те же самостоятельные
+ * уровни: этот aside не является потомком правой #adminEditorPanel. */
+.admin-editor-navigation {
+  --panel: linear-gradient(180deg, rgba(31, 14, 20, .94), rgba(14, 8, 11, .96));
+  --line: rgba(212, 112, 133, .26);
+  --line-strong: rgba(218, 128, 149, .46);
+  --accent: #e4a3b0;
+  --accent-2: #d4707f;
+  --accent-outline: rgba(240, 163, 177, .6);
+  position: absolute;
+  top: 86px;
+  left: 14px;
+  bottom: 14px;
   display: none;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 288px;
+  overflow: hidden;
+  pointer-events: auto;
 }
+.admin-editor-authorized .admin-editor-navigation { display: flex; }
+.admin-editor-navigation-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 14px 11px;
+  border-bottom: 1px solid rgba(212, 112, 133, .24);
+}
+.admin-editor-navigation-head p { margin: 0 0 4px; }
+.admin-editor-navigation-head h2 {
+  margin: 0;
+  color: var(--white);
+  font-size: 18px;
+  line-height: 1.1;
+}
+.admin-editor-navigation .admin-editor-navigation-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid rgba(212, 112, 133, .32);
+  color: #f0a3b1;
+}
+.admin-editor-navigation-close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.admin-editor-navigation-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: rgba(182, 63, 89, .5) transparent;
+}
+.admin-editor-navigation-rail { display: none; }
+.admin-editor-navigation.is-collapsed {
+  top: 50%;
+  bottom: auto;
+  width: 46px;
+  height: 216px;
+  padding: 10px 8px;
+  transform: translateY(-50%);
+}
+.admin-editor-navigation.is-collapsed .admin-editor-navigation-head,
+.admin-editor-navigation.is-collapsed .admin-editor-navigation-content { display: none; }
+.admin-editor-navigation.is-collapsed .admin-editor-navigation-rail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--admin-topbar-ink);
+  cursor: pointer;
+}
+.admin-editor-navigation-rail-label {
+  writing-mode: vertical-rl;
+  font: 10px/1 var(--mono);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+.admin-editor-navigation-rail:focus-visible {
+  outline: 1px solid rgba(240, 163, 177, .7);
+  outline-offset: 2px;
+}
+
+/* В правой рабочей панели остаётся ровно один активный экран. */
+.admin-editor-panel[data-active-screen] > .admin-editor-body > section > h2 { display: none; }
 .admin-editor-panel[data-active-screen="module"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="module"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(2),
-.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3) {
-  display: none;
-}
-.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
-.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body {
-  display: grid;
-  grid-template-columns: 186px minmax(0, 1fr);
-  gap: 10px 12px;
-  align-items: start;
-}
-.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > .admin-editor-notice,
-.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > .admin-editor-notice {
-  grid-column: 1 / -1;
-}
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(1),
-.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(1) {
-  grid-column: 1;
-  padding: 0;
-  border-top: 0;
-  min-width: 0;
-}
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(1),
 .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(2) {
   display: none;
 }
@@ -289,35 +365,18 @@
 .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
   position: relative;
   z-index: 1;
-  grid-column: 2;
   min-width: 0;
   padding: 10px;
   border: 1px solid rgba(212, 112, 133, .24);
   border-radius: 8px;
   background: rgba(16, 8, 12, .52);
 }
-
-.admin-editor-shell {
-  display: grid;
-  grid-template-columns: 186px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-}
-.admin-editor-shell-nav-only {
-  grid-template-columns: minmax(0, 1fr);
-}
+.admin-editor-shell { display: block; }
 .admin-editor-nav {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  pointer-events: auto;
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 9px;
-  border: 1px solid rgba(218, 128, 149, .32);
-  border-radius: 8px;
-  background: rgba(19, 9, 13, .95);
+  pointer-events: auto;
 }
 .admin-editor-nav-group {
   display: grid;
@@ -956,64 +1015,34 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   .admin-editor-help-body { padding: 4px 14px 16px; }
 }
 
-@media (max-width: 1020px) {
+@media (max-width: 900px) {
+  /* Один экран за раз: раскрытая левая шторка закрывает рабочую панель,
+   * выбор системы сворачивает шторку. Две узкие колонки не образуются. */
+  .admin-editor-navigation {
+    top: 72px;
+    left: 8px;
+    bottom: 8px;
+    width: min(320px, calc(100vw - 64px));
+  }
+  .admin-editor-nav-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .map-stage:has(.admin-editor-navigation:not(.is-collapsed)) .admin-editor-panel {
+    visibility: hidden;
+    pointer-events: none;
+  }
   .admin-editor-panel {
-    width: min(430px, calc(100vw - 20px));
-  }
-  .admin-editor-shell,
-  .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
-  .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(2),
-  .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
-    grid-column: 1;
-  }
-  .admin-editor-nav {
-    position: sticky;
-    top: 0;
-    z-index: 8;
-    pointer-events: auto;
-    gap: 8px;
-    padding: 8px;
-    background: rgba(19, 9, 13, .97);
-  }
-  .admin-editor-nav-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .admin-editor-nav .admin-editor-planes {
-    max-height: 148px;
-    overflow-y: auto;
-    padding-right: 2px;
+    top: 72px;
+    right: 8px;
+    bottom: 8px;
+    width: min(420px, calc(100vw - 72px));
+    max-width: calc(100vw - 72px);
+    max-height: none;
+    padding: 14px;
   }
 }
 
 @media (max-width: 700px) {
-  /* На узком viewport глобальная панель «Системы» (.left-panel) сохраняет
-   * верхний слой навигации поверх панели редактора и инспектора. */
-  .map-stage .left-panel { z-index: 19; }
-  .map-stage .admin-editor-panel { z-index: 15; }
-  .map-stage .detail-panel,
-  .map-stage .travel-panel { z-index: 14; }
   .admin-editor-gate { top: 50%; padding: 20px; }
-  .admin-editor-panel {
-    top: 72px;
-    right: 8px;
-    bottom: auto;
-    width: min(360px, calc(100vw - 16px));
-    max-width: calc(100vw - 16px);
-    max-height: min(56dvh, 440px);
-    padding: 12px;
-  }
-  .admin-editor-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .admin-editor-panel.is-collapsed {
-    top: 50%;
-    bottom: auto;
-    width: 42px;
-    height: 180px;
-    padding: 8px 6px;
-    max-height: none;
-  }
+  .admin-editor-panel { padding: 12px; }
+  .admin-editor-navigation-content { padding: 10px; }
+  .admin-editor-grid { grid-template-columns: minmax(0, 1fr); }
 }
