@@ -1347,12 +1347,18 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       return;
     }
     if (insidePanel(target)) event.stopPropagation();
-    if (!on) return;
+    // Поля ввода не отдаём редактору ни при каких условиях: иначе `Ctrl+Z`
+    // ломает правку текста в инпуте, а `F` не даёт написать слово с буквой «ф».
     if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;
     if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return;
     if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return;
     // Разбор клавиши вынесен в чистую функцию: ею же проверяется раскладка.
     const hotkey = editorHotkey(event);
+    //
+    // `Ctrl+Z` и `Ctrl+Shift+Z` — журнал редактора. Пока редактор открыт, они
+    // работают независимо от режима рисования: выключив «Рисовать границы»,
+    // нужно иметь возможность отменить только что сделанное. Решение владельца
+    // по карточке P2; раньше охранник ниже глушил отмену вместе с рисованием.
     if (hotkey === 'undo') {
       event.preventDefault();
       commit(canUndo(session) ? undo(session) : session);
@@ -1363,6 +1369,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       commit(canRedo(session) ? redo(session) : session);
       return;
     }
+    // Ниже — только режим рисования: `F` и команды ввода фигуры.
+    if (!on) return;
     if (hotkey === 'force') {
       event.preventDefault();
       forceFill();

@@ -472,6 +472,8 @@ function fakePanel() {
       if (!blocks.has(selector)) blocks.set(selector, new FakeElement());
       return blocks.get(selector);
     },
+    // `insidePanel` спрашивает панель про цель события: в заглушке цель вне неё.
+    contains() { return false; },
     classList: { toggle() {}, contains() { return false; } },
   };
 }
@@ -640,6 +642,8 @@ test('руководство описывает инструменты и обе
   assert.ok(guide.includes('Залить фигуру'), 'в руководстве нет заливки фигуры');
   assert.ok(guide.includes('Закрасить'), 'в руководстве нет закраски-override');
   assert.ok(guide.includes('location'), 'в руководстве не сказано про положение области');
+  // Отмена вне режима рисования — поведение, которого раньше не было.
+  assert.ok(guide.includes('независимо от режима рисования'), 'в руководстве не сказано про отмену вне режима рисования');
 });
 
 test('стили панели описывают инструменты и образец цвета', () => {
@@ -647,4 +651,129 @@ test('стили панели описывают инструменты и об�
   assert.match(css, /\.admin-editor-tools \{/);
   assert.match(css, /\.admin-editor-tool\[aria-pressed="true"\]/);
   assert.match(css, /\.admin-editor-swatch \{/);
+});
+
+/* ------------------------------------------- хоткеи редактора: режим и поля ввода */
+
+/* `onKeyDown` подписан на `window` в фазе перехвата. В Node `window` нет, поэтому
+   без подмены обработчик не привязывается вовсе и проверить сочетания нечем. */
+function fakeWindow() {
+  const handlers = new Map();
+  return {
+    handlers,
+    addEventListener(type, handler) { handlers.set(type, handler); },
+    removeEventListener(type) { handlers.delete(type); },
+    // Кадра нет: 0 означает «петля не запущена» — так же считает и сам модуль.
+    requestAnimationFrame() { return 0; },
+    cancelAnimationFrame() {},
+    devicePixelRatio: 1,
+  };
+}
+
+/** Редактор с перехваченным обработчиком `keydown`. */
+function editorWithKeys(doc = docWithArea()) {
+  const win = fakeWindow();
+  const panel = fakePanel();
+  // Глобал нужен только на время привязки: сам обработчик к `window` не ходит.
+  globalThis.window = win;
+  let api;
+  try {
+    api = createSectorAreasEditorUi({ kernel: fakeKernelWithFactions(doc), panel, canvas: null, storage: fakeStorage() });
+  } finally {
+    delete globalThis.window;
+  }
+  return { api, panel, keydown: win.handlers.get('keydown') };
+}
+
+/** Нажатие: событие-заглушка с теми полями, что читает `editorHotkey`. */
+function pressKey(keydown, init, target = null) {
+  const event = {
+    target,
+    prevented: false,
+    stopPropagation() {},
+    preventDefault() { event.prevented = true; },
+    ...init,
+  };
+  keydown(event);
+  return event;
+}
+
+test('отмена и повтор работают при выключенном режиме рисования', () => {
+  const { api, panel, keydown } = editorWithKeys();
+  assert.equal(typeof keydown, 'function', 'обработчик keydown привязан');
+  // Выделение и удаление идут через панель: им режим рисования не нужен.
+  clickPanel(panel, 'select', { value: 'area-1' });
+  clickPanel(panel, 'remove');
+  assert.equal(api.doc().areas.length, 0, 'область удалена');
+
+  api.setEnabled(false);
+  assert.equal(api.enabled(), false, 'рисование выключено');
+
+  // Клавиши намеренно кириллические: физический код от раскладки не зависит.
+  const undoPress = pressKey(keydown, { code: 'KeyZ', key: 'я', ctrlKey: true });
+  assert.equal(api.doc().areas.length, 1, 'Ctrl+Z вернул область и при выключенном рисовании');
+  assert.equal(undoPress.prevented, true, 'сочетание перехвачено редактором');
+
+  const redoPress = pressKey(keydown, { code: 'KeyZ', key: 'Я', ctrlKey: true, shiftKey: true });
+  assert.equal(api.doc().areas.length, 0, 'Ctrl+Shift+Z повторил удаление');
+  assert.equal(redoPress.prevented, true);
+
+  api.destroy();
+});
+
+test('F и команды ввода фигуры молчат вне режима рисования', () => {
+  const { api, panel, keydown } = editorWithKeys();
+  clickPanel(panel, 'select', { value: 'area-1' });
+  const events = api.doc().events.length;
+
+  api.setEnabled(false);
+  const off = pressKey(keydown, { code: 'KeyF', key: 'а' });
+  assert.equal(api.doc().events.length, events, 'вне режима рисования F ничего не закрашивает');
+  assert.equal(off.prevented, false, 'чужую клавишу редактор не перехватывает');
+
+  api.setEnabled(true);
+  assert.equal(api.enabled(), true);
+  const on = pressKey(keydown, { code: 'KeyF', key: 'а' });
+  assert.equal(api.doc().events.length, events + 1, 'в режиме рисования F закрашивает');
+  assert.equal(on.prevented, true);
+
+  api.destroy();
+});
+
+test('в полях ввода редактор не перехватывает клавиши', () => {
+  const { api, panel, keydown } = editorWithKeys();
+  clickPanel(panel, 'select', { value: 'area-1' });
+  clickPanel(panel, 'remove');
+  api.setEnabled(true);
+  assert.equal(api.doc().areas.length, 0);
+
+  // Конструкторы полей нужны самой проверке: без них охранник `instanceof`
+  // не срабатывает, и тест проверял бы отсутствие конструктора, а не охранник.
+  class InputField extends FakeElement {}
+  globalThis.HTMLInputElement = InputField;
+  globalThis.HTMLSelectElement = FakeElement;
+  globalThis.HTMLTextAreaElement = FakeElement;
+  try {
+    const fields = [['инпуте', InputField], ['списке', FakeElement], ['многострочном поле', FakeElement]];
+    for (const [where, Field] of fields) {
+      const before = api.doc().areas.length;
+      const press = pressKey(keydown, { code: 'KeyZ', key: 'я', ctrlKey: true }, new Field());
+      assert.equal(api.doc().areas.length, before, `Ctrl+Z в ${where} не трогает документ`);
+      assert.equal(press.prevented, false, `Ctrl+Z в ${where} не перехвачен`);
+    }
+    // `F` — тоже: иначе в имени области нельзя набрать слово с буквой «ф».
+    const pressF = pressKey(keydown, { code: 'KeyF', key: 'а' }, new InputField());
+    assert.equal(pressF.prevented, false, 'F в поле ввода не перехвачен');
+
+    // И наоборот: вне поля то же сочетание редактор забирает себе.
+    const outside = pressKey(keydown, { code: 'KeyZ', key: 'я', ctrlKey: true });
+    assert.equal(outside.prevented, true, 'вне поля Ctrl+Z принадлежит редактору');
+    assert.equal(api.doc().areas.length, 1, 'отмена вернула удалённую область');
+  } finally {
+    delete globalThis.HTMLInputElement;
+    delete globalThis.HTMLSelectElement;
+    delete globalThis.HTMLTextAreaElement;
+  }
+
+  api.destroy();
 });
