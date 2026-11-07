@@ -14,6 +14,7 @@ import {
   addAreaFromSectorCell,
   addAreaFromStroke,
   addForceFill,
+  addStrokeToArea,
   addressForRing,
   areaById,
   assignScope,
@@ -22,11 +23,14 @@ import {
   canUndo,
   canFillArea,
   createEditorSession,
+  createEmptyArea,
   exportDoc,
   fillShapeAsState,
   importDoc,
   insertVertex,
   moveVertex,
+  nextSequence,
+  recordCompletedStroke,
   redo,
   removeArea,
   removeState,
@@ -43,6 +47,7 @@ import {
   setSnapMode,
   setState,
   setVisibility,
+  snapAndRecordStroke,
   thickenStroke,
   undo,
 } from '../src/atlas/sector-areas-editor.ts';
@@ -469,4 +474,143 @@ test('отмена и повтор после заливки, создания �
   const ids = after.doc.areas.map((area) => area.id);
   assert.equal(new Set(ids).size, ids.length, 'идентификаторы не повторяются');
   assert.deepEqual(validateSectorAreas(after.doc).errors, []);
+});
+
+test('несколько отдельных штрихов продолжают активную область, undo/redo снимает и возвращает их поштучно', () => {
+  let session = createEditorSession();
+  const s1 = { id: 'stroke-1', points: [[200, 200], [800, 200]], closed: false };
+  const s2 = { id: 'stroke-2', points: [[1000, 1000], [1600, 1000], [1600, 1600], [1000, 1600]], closed: true };
+  const s3 = { id: 'stroke-3', points: [[2000, 400], [2400, 800]], closed: false };
+
+  // Первый штрих при отсутствии выбора создаёт активную область и делает её выбранной.
+  session = recordCompletedStroke(session, {
+    stroke: s1,
+    areaIdIfNew: 'area-1',
+    areaNameIfNew: 'Составная',
+    state: state(),
+  });
+  assert.equal(session.selection, 'area-1');
+  assert.equal(session.doc.areas.length, 1);
+  assert.deepEqual(session.doc.areas[0].rings, [], 'rings не переиспользуется для штрихов');
+  assert.equal(session.doc.areas[0].strokes.length, 1);
+
+  // Второй и третий штрихи продолжают ту же активную область по одной команде истории.
+  session = recordCompletedStroke(session, { stroke: s2, state: state() });
+  session = recordCompletedStroke(session, { stroke: s3, state: state() });
+  assert.equal(session.doc.areas.length, 1, 'штрихи идут в ту же активную область');
+  assert.deepEqual(session.doc.areas[0].strokes.map((item) => item.id), ['stroke-1', 'stroke-2', 'stroke-3']);
+  assert.equal(session.past.length, 3, 'каждый завершённый штрих — отдельная команда истории');
+
+  // Замкнутый штрих внутри области делает заливку допустимой.
+  assert.equal(canFillArea(selectedArea(session)).ok, true);
+
+  // Поштучный откат завершённых штрихов.
+  const back1 = undo(session);
+  assert.deepEqual(back1.doc.areas[0].strokes.map((item) => item.id), ['stroke-1', 'stroke-2']);
+  assert.equal(back1.selection, 'area-1');
+
+  const back2 = undo(back1);
+  assert.deepEqual(back2.doc.areas[0].strokes.map((item) => item.id), ['stroke-1']);
+  assert.equal(canFillArea(selectedArea(back2)).ok, false, 'остался только открытый штрих');
+
+  const back3 = undo(back2);
+  assert.equal(back3.doc.areas.length, 0);
+  assert.equal(back3.selection, null);
+
+  // Поштучный повтор возвращает штрихи по одному.
+  const fwd1 = redo(back3);
+  assert.deepEqual(fwd1.doc.areas[0].strokes.map((item) => item.id), ['stroke-1']);
+  assert.equal(fwd1.selection, 'area-1');
+  const fwd2 = redo(fwd1);
+  assert.deepEqual(fwd2.doc.areas[0].strokes.map((item) => item.id), ['stroke-1', 'stroke-2']);
+  const fwd3 = redo(fwd2);
+  assert.deepEqual(fwd3.doc.areas[0].strokes.map((item) => item.id), ['stroke-1', 'stroke-2', 'stroke-3']);
+
+  // Выгрузка и повторный импорт сохраняют все штрихи и продолжают нумерацию.
+  const reloaded = importDoc(exportDoc(fwd3));
+  assert.deepEqual(reloaded.doc.areas[0].strokes, fwd3.doc.areas[0].strokes);
+  assert.ok(nextSequence(reloaded.doc) > 3);
+  assert.deepEqual(validateSectorAreas(reloaded.doc).errors, []);
+});
+
+test('штрихи добавляются к области с существующими rings и дыркой, не меняя их смысл', () => {
+  const hole = [[1200, 1200], [1400, 1200], [1400, 1400], [1200, 1400], [1200, 1200]];
+  let session = addAreaFromStroke(createEditorSession(), {
+    id: 'area-ring',
+    name: 'С кольцом и дыркой',
+    points: CLOSED_SQUARE,
+    closed: true,
+    state: fillState(),
+  });
+  // Добавим дырку во внешнее кольцо классическим полем rings[1].
+  session = {
+    ...session,
+    doc: {
+      ...session.doc,
+      areas: session.doc.areas.map((area) => ({ ...area, rings: [area.rings[0], hole] })),
+    },
+  };
+  const beforeRings = session.doc.areas[0].rings;
+
+  session = addStrokeToArea(session, {
+    areaId: 'area-ring',
+    stroke: { id: 'stroke-extra', points: [[3000, 3000], [3500, 3000]], closed: false },
+  });
+  assert.deepEqual(session.doc.areas[0].rings, beforeRings, 'rings и дырка неизменны');
+  assert.equal(session.doc.areas[0].strokes.length, 1);
+  assert.deepEqual(validateSectorAreas(session.doc).errors, []);
+});
+
+test('команда «Создать новую область» создаёт пустую область, а undo удаляет её и возвращает прежний активный ID', () => {
+  let session = addAreaFromStroke(createEditorSession(), {
+    id: 'area-1',
+    name: 'Первая',
+    points: CLOSED_SQUARE,
+    closed: true,
+    state: state(),
+  });
+  assert.equal(session.selection, 'area-1');
+
+  // Создаём новую пустую область при активной area-1.
+  const withEmpty = createEmptyArea(session, { id: 'area-2', name: 'Вторая пустая', state: state({ id: 'st-2' }) });
+  assert.equal(withEmpty.selection, 'area-2', 'активный выбор переключён на новую пустую область');
+  assert.equal(withEmpty.doc.areas.length, 2);
+  const emptyArea = areaById(withEmpty, 'area-2');
+  assert.deepEqual(emptyArea.rings, []);
+  assert.deepEqual(emptyArea.strokes, []);
+  assert.equal(canFillArea(emptyArea).ok, false);
+
+  // Отмена создания пустой области удаляет её и возвращает выбор на area-1!
+  const undone = undo(withEmpty);
+  assert.equal(undone.doc.areas.length, 1);
+  assert.equal(areaById(undone, 'area-2'), null);
+  assert.equal(undone.selection, 'area-1', 'восстановлен прежний активный ID');
+
+  // Повтор снова создаёт пустую область и делает её активной.
+  const redone = redo(undone);
+  assert.equal(redone.doc.areas.length, 2);
+  assert.equal(redone.selection, 'area-2');
+
+  // Если до создания пустой области активного выбора не было (null), undo возвращает null.
+  const fromNull = createEmptyArea(createEditorSession(), { id: 'area-empty' });
+  assert.equal(fromNull.selection, 'area-empty');
+  const undoneNull = undo(fromNull);
+  assert.equal(undoneNull.doc.areas.length, 0);
+  assert.equal(undoneNull.selection, null);
+});
+
+test('snapAndRecordStroke привязывает штрих к рёбрам отображаемой адресной сетки в режиме grid', () => {
+  let session = setSnapMode(createEditorSession(), 'grid');
+  session = snapAndRecordStroke(
+    session,
+    {
+      stroke: { id: 'stroke-grid-1', points: [[40, 78], [220, 77]], closed: false },
+      areaIdIfNew: 'area-grid',
+      state: state(),
+    },
+    { w: 1000, h: 800 },
+    { centerX: 500, centerY: 500, visibleWidth: 2000 },
+  );
+  // Ярус T3 (cellSize = 80): линия около y = 78 притягивается к горизонтальному ребру y = 80.
+  assert.deepEqual(session.doc.areas[0].strokes[0].points, [[40, 80], [220, 80]]);
 });

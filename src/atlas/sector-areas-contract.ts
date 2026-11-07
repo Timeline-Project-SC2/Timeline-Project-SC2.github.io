@@ -86,6 +86,16 @@ export const DEFAULT_DETAIL_IDS: readonly string[] = Object.freeze([
 export type AreaPoint = readonly [number, number];
 export type Ring = readonly AreaPoint[];
 
+/**
+ * Отдельный штрих области: устойчивый идентификатор, точки и собственный признак
+ * замкнутости (`closed`). Хранится отдельно от `rings` и отверстий.
+ */
+export interface AreaStroke {
+  readonly id: string;
+  readonly points: readonly AreaPoint[];
+  readonly closed: boolean;
+}
+
 /* ------------------------------------------------------------------ градиент */
 
 export interface GradientStop {
@@ -182,6 +192,8 @@ export interface Area {
   readonly closed: boolean;
   /** Первое кольцо — внешнее, остальные — дырки. */
   readonly rings: readonly Ring[];
+  /** Необязательный список отдельных штрихов области (не переиспользует `rings`). */
+  readonly strokes?: readonly AreaStroke[];
   readonly states: readonly AreaState[];
   readonly scopeId: string | null;
   readonly location: AreaLocation | null;
@@ -303,6 +315,31 @@ function parseRings(value: unknown, message: string): readonly Ring[] {
   });
 }
 
+function parseAreaRings(value: unknown, message: string): readonly Ring[] {
+  if (!Array.isArray(value)) return invalid(message);
+  return value.map((ring: unknown) => {
+    if (!Array.isArray(ring) || ring.length < 2) return invalid(`${message}: кольцо должно иметь минимум 2 точки`);
+    return ring.map((point: unknown) => parsePoint(point, `${message}: точка кольца`));
+  });
+}
+
+function parseStroke(value: unknown, message: string): AreaStroke {
+  const raw = asRecord(value, message);
+  const id = requireString(raw.id, `${message}: идентификатор штриха`);
+  const closed = requireBoolean(raw.closed, `${message}: признак замкнутости штриха`);
+  if (!Array.isArray(raw.points) || raw.points.length < 2) {
+    return invalid(`${message}: штрих ${id} должен иметь минимум 2 точки`);
+  }
+  const points = raw.points.map((point: unknown) => parsePoint(point, `${message}: точка штриха ${id}`));
+  return { id, points, closed };
+}
+
+function parseStrokes(value: unknown, message: string): readonly AreaStroke[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return invalid(`${message}: штрихи должны быть массивом`);
+  return value.map((entry: unknown) => parseStroke(entry, `${message}: штрих`));
+}
+
 function parseGradient(value: unknown, message: string): GradientSpec {
   if (value === null || value === undefined) return DEFAULT_GRADIENT;
   const raw = asRecord(value, `${message}: градиент должен быть объектом`);
@@ -399,7 +436,8 @@ function parseArea(value: unknown, message: string): Area {
     address,
     source: requireOneOf(raw.source ?? 'brush', AREA_SOURCES, `${message}: источник области`),
     closed: raw.closed === undefined ? true : requireBoolean(raw.closed, `${message}: замкнутость области`),
-    rings: parseRings(raw.rings, `${message}: геометрия области`),
+    rings: parseAreaRings(raw.rings, `${message}: геометрия области`),
+    strokes: parseStrokes(raw.strokes, `${message}: штрихи области`),
     states,
     scopeId: requireNullableString(raw.scopeId, `${message}: область действия`),
     location: location === null ? null : (requireOneOf(location, AREA_LOCATIONS, `${message}: положение области`) as AreaLocation),
@@ -501,13 +539,17 @@ export function validateSectorAreas(doc: SectorAreasDoc, context?: ValidationCon
     areaIds.add(area.id);
   }
 
+  const strokeIds = new Set<string>();
   for (const area of doc.areas) {
     if (area.parentId !== null && !areaIds.has(area.parentId)) {
       errors.push(`Область ${area.id}: родитель ${area.parentId} не найден.`);
     }
     if (area.parentId === area.id) errors.push(`Область ${area.id}: ссылается сама на себя.`);
 
-    if (area.rings.length === 0) errors.push(`Область ${area.id}: нет геометрии.`);
+    const strokes = area.strokes ?? [];
+    if (area.rings.length === 0 && strokes.length === 0) {
+      warnings.push(`Область ${area.id}: пока нет геометрии (колец или штрихов).`);
+    }
     area.rings.forEach((ring, index) => {
       const closedRing = isClosedRing(ring);
       if (area.closed && !closedRing) {
@@ -517,7 +559,53 @@ export function validateSectorAreas(doc: SectorAreasDoc, context?: ValidationCon
       if (ring.length < minimum) {
         errors.push(`Область ${area.id}: кольцо ${index} должно иметь минимум ${minimum} точек.`);
       }
+      for (const point of ring) {
+        if (
+          !Number.isFinite(point[0])
+          || !Number.isFinite(point[1])
+          || point[0] < 0
+          || point[0] > SECTOR_AREAS_MAP_SIZE
+          || point[1] < 0
+          || point[1] > SECTOR_AREAS_MAP_SIZE
+        ) {
+          errors.push(`Область ${area.id}: точка кольца ${index} вне границ карты.`);
+          break;
+        }
+      }
     });
+    if (!area.closed && area.rings.length > 1) {
+      errors.push(`Область ${area.id}: открытая линия не может содержать дырки.`);
+    }
+
+    for (const stroke of strokes) {
+      if (stroke.id.trim().length === 0) {
+        errors.push(`Область ${area.id}: пустой идентификатор штриха.`);
+      } else if (strokeIds.has(stroke.id)) {
+        errors.push(`Область ${area.id}: штрих ${stroke.id} повторяется.`);
+      } else {
+        strokeIds.add(stroke.id);
+      }
+      const uniquePoints = stroke.closed && isClosedRing(stroke.points)
+        ? stroke.points.length - 1
+        : stroke.points.length;
+      const minPoints = stroke.closed ? 3 : 2;
+      if (uniquePoints < minPoints) {
+        errors.push(`Область ${area.id}, штрих ${stroke.id}: нужно минимум ${minPoints} вершин.`);
+      }
+      for (const point of stroke.points) {
+        if (
+          !Number.isFinite(point[0])
+          || !Number.isFinite(point[1])
+          || point[0] < 0
+          || point[0] > SECTOR_AREAS_MAP_SIZE
+          || point[1] < 0
+          || point[1] > SECTOR_AREAS_MAP_SIZE
+        ) {
+          errors.push(`Область ${area.id}, штрих ${stroke.id}: точка вне границ карты.`);
+          break;
+        }
+      }
+    }
 
     if (area.scopeId !== null && context?.scopeIds !== undefined && !context.scopeIds.has(area.scopeId)) {
       errors.push(`Область ${area.id}: область действия ${area.scopeId} не найдена.`);
@@ -662,6 +750,7 @@ export function createArea(input: {
   readonly id: string;
   readonly name: string;
   readonly rings: readonly Ring[];
+  readonly strokes?: readonly AreaStroke[];
   readonly parentId?: string | null;
   readonly address?: string | null;
   readonly closed?: boolean;
@@ -675,6 +764,13 @@ export function createArea(input: {
     source: input.source ?? 'brush',
     closed: input.closed ?? true,
     rings: input.rings,
+    strokes: input.strokes === undefined
+      ? []
+      : input.strokes.map((stroke) => ({
+        id: stroke.id,
+        points: stroke.points.map((point): AreaPoint => [point[0], point[1]]),
+        closed: stroke.closed,
+      })),
     states: [],
     scopeId: null,
     location: null,

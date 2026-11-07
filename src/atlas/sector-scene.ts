@@ -755,6 +755,199 @@ export function gridFor(
   return { lines, labels };
 }
 
+/** Ориентация мирового ребра адресной сетки. */
+export type GridEdgeOrientation = 'horizontal' | 'vertical';
+
+/** Прямоугольное окно выборки рёбер адресной сетки в мировых координатах. */
+export interface GridWorldBounds {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/** Мельчайший отображаемый в текущем кадре ярус адресной сетки. */
+export interface DisplayedGridTier {
+  /** Роль яруса в кадре: вложенный (`nested`), если виден, иначе старший (`primary`). */
+  readonly role: 'nested' | 'primary';
+  /** Числовой индекс яруса в `ADDRESS_TIERS` (`1…7`). */
+  readonly tier: number;
+  /** Обозначение яруса (`T1…T7`). */
+  readonly id: AddressTierId;
+  /** Размер ячейки выбранного яруса в мировых единицах (`cellSize`). */
+  readonly cellSize: number;
+}
+
+/**
+ * Сегмент ребра одной ячейки адресной сетки в мировых координатах карты.
+ *
+ * Ключ `(tier, row, col, orientation)` однозначно задаёт ребро:
+ * - `'horizontal'`: отрезок `(col·s, row·s) → ((col + 1)·s, row·s)`,
+ *   `row ∈ [0, N]`, `col ∈ [0, N − 1]`;
+ * - `'vertical'`: отрезок `(col·s, row·s) → (col·s, (row + 1)·s)`,
+ *   `col ∈ [0, N]`, `row ∈ [0, N − 1]`,
+ * где `s = cellSize`, `N = round(MAP_SIZE / s)`.
+ */
+export interface GridWorldEdge {
+  readonly tier: number;
+  readonly row: number;
+  readonly col: number;
+  readonly orientation: GridEdgeOrientation;
+  readonly cellSize: number;
+  readonly x1: number;
+  readonly y1: number;
+  readonly x2: number;
+  readonly y2: number;
+}
+
+/**
+ * Определяет мельчайший реально отображаемый ярус адресной сетки для кадра:
+ * `nested`, если вложенная сетка активна и проходит предохранитель `MAX_GRID_LINES`,
+ * иначе `primary`; если сетка на уровне скрыта или срезана предохранителем — `null`.
+ */
+export function displayedGridTierFor(
+  viewport: FrameViewport,
+  camera: SceneCamera,
+  level?: number,
+): DisplayedGridTier | null {
+  const frame = resolveViewport(viewport);
+  const cam = resolveCamera(camera);
+  const resolvedLevel = level ?? sceneLevel(cam.visibleWidth);
+  if (resolvedLevel < GRID_FIRST_LEVEL || resolvedLevel > GRID_LAST_LEVEL) return null;
+
+  const scale = frame.w / cam.visibleWidth;
+  const tiers = gridTiersFor(scale);
+  const primaryTier = addressTierAt(tiers.primary);
+  if (primaryTier === undefined) return null;
+
+  const primaryLines = gridLinesForTier(frame, cam, tiers.primary, GRID_LINE_ALPHA_PRIMARY);
+  if (primaryLines.length > MAX_GRID_LINES) return null;
+
+  if (tiers.nested !== tiers.primary) {
+    const nestedTier = addressTierAt(tiers.nested);
+    const nestedLines = gridLinesForTier(frame, cam, tiers.nested, GRID_LINE_ALPHA_NESTED);
+    if (nestedTier !== undefined && primaryLines.length + nestedLines.length <= MAX_GRID_LINES) {
+      return {
+        role: 'nested',
+        tier: tiers.nested,
+        id: nestedTier.id,
+        cellSize: nestedTier.cellSize,
+      };
+    }
+  }
+
+  return {
+    role: 'primary',
+    tier: tiers.primary,
+    id: primaryTier.id,
+    cellSize: primaryTier.cellSize,
+  };
+}
+
+/**
+ * Мировые сегменты рёбер ячеек указанного яруса адресной сетки в заданном окне
+ * (по умолчанию — во всём поле карты `[0, MAP_SIZE]²`) в каноническом порядке
+ * `(tier, row, col, orientation)`.
+ */
+export function gridEdgesForTierInBounds(
+  tier: number,
+  bounds?: GridWorldBounds,
+): readonly GridWorldEdge[] {
+  const tierInfo = addressTierAt(tier);
+  if (tierInfo === undefined) return [];
+
+  const { cellSize } = tierInfo;
+  const columns = Math.round(MAP_SIZE / cellSize);
+  const minX = bounds === undefined ? 0 : Math.min(bounds.x0, bounds.x1);
+  const maxX = bounds === undefined ? MAP_SIZE : Math.max(bounds.x0, bounds.x1);
+  const minY = bounds === undefined ? 0 : Math.min(bounds.y0, bounds.y1);
+  const maxY = bounds === undefined ? MAP_SIZE : Math.max(bounds.y0, bounds.y1);
+  const eps = 1e-9;
+  if (maxX < -eps || minX > MAP_SIZE + eps || maxY < -eps || minY > MAP_SIZE + eps) return [];
+
+  const coord = (index: number): number => {
+    if (index <= 0) return 0;
+    if (index >= columns) return MAP_SIZE;
+    return index * cellSize;
+  };
+
+  const firstRow = Math.max(0, Math.floor(minY / cellSize) - 1);
+  const lastRow = Math.min(columns, Math.ceil(maxY / cellSize) + 1);
+  const firstCol = Math.max(0, Math.floor(minX / cellSize) - 1);
+  const lastCol = Math.min(columns, Math.ceil(maxX / cellSize) + 1);
+
+  const edges: GridWorldEdge[] = [];
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    const y0 = coord(row);
+    const y1 = coord(row + 1);
+    for (let col = firstCol; col <= lastCol; col += 1) {
+      const x0 = coord(col);
+      const x1 = coord(col + 1);
+      if (
+        col < columns
+        && y0 >= minY - eps
+        && y0 <= maxY + eps
+        && x1 >= minX - eps
+        && x0 <= maxX + eps
+      ) {
+        edges.push({
+          tier,
+          row,
+          col,
+          orientation: 'horizontal',
+          cellSize,
+          x1: x0,
+          y1: y0,
+          x2: x1,
+          y2: y0,
+        });
+      }
+      if (
+        row < columns
+        && x0 >= minX - eps
+        && x0 <= maxX + eps
+        && y1 >= minY - eps
+        && y0 <= maxY + eps
+      ) {
+        edges.push({
+          tier,
+          row,
+          col,
+          orientation: 'vertical',
+          cellSize,
+          x1: x0,
+          y1: y0,
+          x2: x0,
+          y2: y1,
+        });
+      }
+    }
+  }
+
+  return edges;
+}
+
+/**
+ * Рёбра мельчайшего отображаемого яруса адресной сетки в мировых координатах
+ * (в переданном мировом окне или в видимой части мира по камере).
+ */
+export function displayedGridEdgesFor(
+  viewport: FrameViewport,
+  camera: SceneCamera,
+  worldBounds?: GridWorldBounds,
+): { readonly tier: DisplayedGridTier | null; readonly edges: readonly GridWorldEdge[] } {
+  const frame = resolveViewport(viewport);
+  const cam = resolveCamera(camera);
+  const tier = displayedGridTierFor(frame, cam);
+  if (tier === null) return { tier: null, edges: [] };
+
+  const bounds = worldBounds ?? visibleWorldBounds(frame, cam);
+  return {
+    tier,
+    edges: gridEdgesForTierInBounds(tier.tier, bounds),
+  };
+}
+
 /* ------------------------------------------------------------------ режим осмотра (Z-4c) */
 
 /** Прямоугольник окна лупы на экране, px. */

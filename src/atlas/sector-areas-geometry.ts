@@ -8,7 +8,7 @@
  * «плывёт» при панорамировании и смене LOD.
  */
 
-import type { Area, AreaPoint, Ring } from './sector-areas-contract.ts';
+import type { Area, AreaPoint, AreaStroke, Ring } from './sector-areas-contract.ts';
 
 /** Ломаная с параметрами вершин — результат упрощения и сглаживания. */
 export interface ParametrizedRing {
@@ -342,4 +342,143 @@ export function pointAt(ring: ParametrizedRing, t: number): AreaPoint {
     }
   }
   return points[0]!;
+}
+
+/* ----------------------------------------------------------- геометрия штрихов */
+
+/** Замкнутое кольцо для замкнутого штриха (для совместимости с операциями колец, например `override`). */
+export function closedStrokeRing(stroke: AreaStroke): Ring {
+  const vertices = workRing(stroke.points, stroke.closed);
+  if (!stroke.closed || vertices.length === 0) return vertices;
+  const first = vertices[0]!;
+  return [...vertices, [first[0], first[1]]];
+}
+
+/** Длина отдельного штриха в мировых единицах. */
+export function strokeLength(stroke: AreaStroke): number {
+  return ringLength(stroke.points, stroke.closed);
+}
+
+/** Площадь отдельного штриха (`0` для незамкнутого штриха). */
+export function strokeArea(stroke: AreaStroke): number {
+  if (!stroke.closed) return 0;
+  return ringArea(stroke.points, true);
+}
+
+/** Суммарная площадь всех замкнутых штрихов списка (не смешивается с дырками `rings`). */
+export function strokesArea(strokes: readonly AreaStroke[]): number {
+  let total = 0;
+  for (const stroke of strokes) {
+    total += strokeArea(stroke);
+  }
+  return total;
+}
+
+/** Центроид отдельного штриха. */
+export function strokeCentroid(stroke: AreaStroke): AreaPoint {
+  return ringCentroid(stroke.points, stroke.closed);
+}
+
+/** Охватывающий прямоугольник набора штрихов (`null`, если точек нет). */
+export function strokesBBox(strokes: readonly AreaStroke[]): BBox | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let count = 0;
+  for (const stroke of strokes) {
+    for (const point of stroke.points) {
+      minX = Math.min(minX, point[0]);
+      minY = Math.min(minY, point[1]);
+      maxX = Math.max(maxX, point[0]);
+      maxY = Math.max(maxY, point[1]);
+      count += 1;
+    }
+  }
+  if (count === 0) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+/** Справочный центр области по внешнему кольцу или (при пустых `rings`) по штрихам. */
+export function areaCentroid(area: Area): AreaPoint | null {
+  const outer = area.rings[0];
+  if (outer !== undefined && outer.length > 0) {
+    return ringCentroid(outer, area.closed);
+  }
+  const strokes = area.strokes ?? [];
+  if (strokes.length === 0) return null;
+  let sx = 0;
+  let sy = 0;
+  let count = 0;
+  for (const stroke of strokes) {
+    if (stroke.points.length === 0) continue;
+    const c = strokeCentroid(stroke);
+    sx += c[0];
+    sy += c[1];
+    count += 1;
+  }
+  if (count === 0) return null;
+  return [sx / count, sy / count];
+}
+
+/** Параметризация отдельного штриха (`0…1` вдоль исходной ломаной). */
+export function parametrizeStroke(stroke: AreaStroke): ParametrizedRing {
+  return parametrize(stroke.points, stroke.closed);
+}
+
+/** Упрощение и сглаживание отдельного штриха для отрисовки на заданном уровне детализации. */
+export function simplifyStroke(
+  stroke: AreaStroke,
+  eps: number,
+  roundingPasses: number = 0,
+): ParametrizedRing {
+  const simplified = simplify(parametrizeStroke(stroke), eps);
+  return roundingPasses > 0 ? smooth(simplified, roundingPasses) : simplified;
+}
+
+/** Расстояние от точки до контура штриха в мировых единицах. */
+export function distanceToStroke(stroke: AreaStroke, x: number, y: number): number {
+  return distanceToRing(stroke.points, x, y, stroke.closed);
+}
+
+/**
+ * Попадание точки в отдельный штрих: для замкнутого — внутри контура (или в пределах
+ * `hitTolerance` от границы), для открытого — в пределах `hitTolerance` от ломаной.
+ */
+export function pointInStroke(
+  stroke: AreaStroke,
+  x: number,
+  y: number,
+  hitTolerance: number = 0,
+): boolean {
+  const vertices = workRing(stroke.points, stroke.closed);
+  if (vertices.length < 2) return false;
+  if (stroke.closed && vertices.length >= 3 && pointInRing(vertices, x, y)) {
+    return true;
+  }
+  return hitTolerance > 0 && distanceToStroke(stroke, x, y) <= hitTolerance;
+}
+
+/** Число самопересечений отдельного штриха. */
+export function strokeSelfIntersections(stroke: AreaStroke): number {
+  return selfIntersections(stroke.points, stroke.closed);
+}
+
+/** Число точек во всех штрихах области (отдельно от `totalVertices`, считающего `rings`). */
+export function strokeVertices(area: Area): number {
+  return (area.strokes ?? []).reduce((sum, stroke) => sum + stroke.points.length, 0);
+}
+
+/** Попадание указателя в область: `pointInArea` по кольцам (с учётом дырок) либо попадание в любой штрих. */
+export function pointHitsArea(
+  area: Area,
+  x: number,
+  y: number,
+  openStrokeTolerance: number = 0,
+): boolean {
+  if (pointInArea(area, x, y)) return true;
+  for (const stroke of area.strokes ?? []) {
+    if (pointInStroke(stroke, x, y, openStrokeTolerance)) return true;
+  }
+  return false;
 }

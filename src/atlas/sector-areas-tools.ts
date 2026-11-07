@@ -21,7 +21,7 @@
  */
 
 import { SECTOR_AREAS_MAP_SIZE } from './sector-areas-contract.ts';
-import type { AreaPoint, Ring } from './sector-areas-contract.ts';
+import type { AreaPoint, AreaStroke, Ring } from './sector-areas-contract.ts';
 import { ringArea, ringLength } from './sector-areas-geometry.ts';
 
 /* ------------------------------------------------------------------ справочник */
@@ -358,4 +358,37 @@ export function draftRing(draft: ShapeDraft): Ring {
   const last = points[points.length - 1];
   if (last !== undefined && last[0] === first[0] && last[1] === first[1]) return [...points];
   return [...points, [first[0], first[1]]];
+}
+
+/**
+ * Обновляет точки незавершённого черновика (например, после привязки к рёбрам
+ * отображаемой адресной сетки), зажимая координаты в границы карты и сохраняя
+ * инструмент и признак замкнутости. Документ при этом не затрагивается.
+ */
+export function applyDraftPoints(
+  draft: ShapeDraft,
+  points: readonly AreaPoint[],
+): ShapeDraft {
+  const clamped = points.map((point): AreaPoint => clampPoint(point));
+  if (draft.closed && clamped.length >= 2) {
+    const first = clamped[0]!;
+    const last = clamped[clamped.length - 1]!;
+    if (first[0] === last[0] && first[1] === last[1]) {
+      clamped.pop();
+    }
+  }
+  return {
+    tool: draft.tool,
+    closed: draft.closed,
+    points: clamped,
+  };
+}
+
+/** Превращает проверенный черновик фигуры в отдельный штрих `AreaStroke` документа. */
+export function draftStroke(id: string, draft: ShapeDraft): AreaStroke {
+  return {
+    id,
+    points: draft.points.map((point): AreaPoint => clampPoint(point)),
+    closed: draft.closed,
+  };
 }
