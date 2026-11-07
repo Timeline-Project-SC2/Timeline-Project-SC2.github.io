@@ -451,7 +451,7 @@
   font-size: 8.5px;
   letter-spacing: .03em;
 }
-.admin-editor-graph-node { cursor: pointer; }
+.admin-editor-graph-node { cursor: pointer; outline: none; }
 .admin-editor-graph-node rect {
   fill: rgba(24, 11, 16, .88);
   stroke: rgba(212, 112, 133, .34);
@@ -462,9 +462,14 @@
 .admin-editor-graph-node[data-plane="order"] rect { stroke: rgba(158, 197, 255, .38); }
 .admin-editor-graph-node[data-isolated="true"] rect { stroke-dasharray: 3 2; }
 .admin-editor-graph-node:hover rect,
+.admin-editor-graph-node:focus-visible rect,
 .admin-editor-graph-node.is-linked rect {
   fill: rgba(58, 21, 33, .9);
-  stroke: rgba(240, 163, 177, .66);
+  stroke: rgba(240, 163, 177, .82);
+}
+.admin-editor-graph-node:focus-visible rect {
+  stroke: #ffe2e7;
+  stroke-width: 1.8;
 }
 .admin-editor-graph-node.is-current rect {
   fill: rgba(132, 36, 56, .62);
@@ -561,7 +566,14 @@
 }
 
 /* Свойства модуля: две колонки «поле — значение», значения считает сам модуль. */
-.admin-editor-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.admin-editor-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 11px;
+  word-break: break-word;
+}
+.admin-editor-hint code { overflow-wrap: anywhere; }
 .admin-editor-table th,
 .admin-editor-table td {
   padding: 4px 6px;
@@ -936,23 +948,53 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   .admin-editor-panel {
     width: min(430px, calc(100vw - 20px));
   }
-  .admin-editor-workbench {
-    grid-template-columns: 1fr;
+  .admin-editor-shell,
+  .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
+  .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .admin-editor-node-card {
-    position: static;
+  .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(2),
+  .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
+    grid-column: 1;
+  }
+  .admin-editor-nav {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    pointer-events: auto;
+    gap: 8px;
+    padding: 8px;
+    background: rgba(19, 9, 13, .97);
+  }
+  .admin-editor-nav-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .admin-editor-nav .admin-editor-planes {
+    max-height: 148px;
+    overflow-y: auto;
+    padding-right: 2px;
   }
 }
 
 @media (max-width: 700px) {
+  /* На узком viewport глобальная панель «Системы» (.left-panel) сохраняет
+   * верхний слой навигации поверх панели редактора и инспектора. */
+  .map-stage .left-panel { z-index: 19; }
+  .map-stage .admin-editor-panel { z-index: 15; }
+  .map-stage .detail-panel,
+  .map-stage .travel-panel { z-index: 14; }
   .admin-editor-gate { top: 50%; padding: 20px; }
   .admin-editor-panel {
-    top: 78px;
+    top: 72px;
     right: 8px;
-    bottom: max(8px, env(safe-area-inset-bottom));
+    bottom: auto;
     width: min(360px, calc(100vw - 16px));
-    max-height: calc(100dvh - 94px - env(safe-area-inset-bottom));
-    padding: 16px;
+    max-width: calc(100vw - 16px);
+    max-height: min(56dvh, 440px);
+    padding: 12px;
+  }
+  .admin-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .admin-editor-panel.is-collapsed {
     top: 50%;

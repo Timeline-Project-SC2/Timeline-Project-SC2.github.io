@@ -979,3 +979,82 @@ test('несколько штрихов подряд записываются в
   assert.equal(api.doc().areas.length, 0);
   api.destroy();
 });
+
+test('постоянная навигация сохраняется на всех экранах и отмечает активный раздел без записи в историю', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const initialDoc = api.doc();
+
+  for (const screen of ['draw', 'properties', 'changes', 'dependencies']) {
+    clickPanel(panel, 'screen', { 'data-screen': screen });
+    assert.equal(api.screen(), screen);
+    assert.equal(panel.getAttribute('data-active-screen'), screen);
+    const modules = blockHtml(panel, 'modules');
+    assert.match(modules, /data-editor-nav/, `на экране ${screen} навигация остаётся видимой`);
+    assert.match(modules, new RegExp(`data-screen="${screen}" aria-current="page"`));
+    if (screen !== 'dependencies') {
+      assert.doesNotMatch(modules, /data-editor-graph/, `на экране ${screen} граф не занимает место`);
+    }
+  }
+
+  // Переход по зависимости внутри карточки модуля и клавиатурный выбор узла SVG ведут к модулю.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-editor' });
+  assert.equal(api.screen(), 'module');
+  assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-editor" aria-current="page"/);
+
+  clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+  const graphHtml = blockHtml(panel, 'modules');
+  assert.match(graphHtml, /role="button" tabindex="0" aria-label="Привязка к адресной сетке — открыть модуль"/);
+  assert.doesNotMatch(moduleGraphHtml('sector-areas-editor', 'all'), /admin-editor-planes/, 'список систем не дублируется под SVG-графом');
+
+  // Нажатие Enter по узлу SVG-графа (`<g role="button">`) открывает карточку выбранного модуля.
+  const svgNode = new FakeElement({ 'data-action': 'module', 'data-module': 'sector-areas-snap' });
+  svgNode.tagName = 'g';
+  let prevented = false;
+  panel.handlers.get('keydown')({
+    key: 'Enter',
+    target: svgNode,
+    preventDefault() { prevented = true; },
+  });
+  assert.equal(prevented, true);
+  assert.equal(api.screen(), 'module');
+  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-snap" aria-current="page"/);
+  assert.doesNotMatch(blockHtml(panel, 'modules'), /data-editor-graph/);
+
+  assert.equal(api.doc(), initialDoc, 'навигация по экранам и системам не трогает документ');
+  assert.equal(api.session().past.length, 0);
+  api.destroy();
+});
+
+test('жёсткий инвариант верхнего слоя навигации «Системы» и защита от горизонтального переполнения закреплены в CSS и руководстве', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+
+  const leftPanelZ = Number(/\.map-stage \.left-panel\s*\{\s*z-index:\s*(\d+)/.exec(css)?.[1]);
+  const editorPanelZ = Number(/\.admin-editor-panel\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
+  const detailPanelZ = Number(/\.map-stage \.detail-panel,\s*\.map-stage \.travel-panel\s*\{\s*z-index:\s*(\d+)/.exec(css)?.[1]);
+  assert.ok(Number.isFinite(leftPanelZ) && Number.isFinite(editorPanelZ) && Number.isFinite(detailPanelZ));
+  assert.ok(leftPanelZ > editorPanelZ, `глобальная панель «Системы» (${leftPanelZ}) выше панели редактора (${editorPanelZ})`);
+  assert.ok(leftPanelZ > detailPanelZ, `глобальная панель «Системы» (${leftPanelZ}) выше инспектора (${detailPanelZ})`);
+  assert.match(css, /\.map-stage \.left-panel:not\(\.collapsed\)\s*\{\s*pointer-events:\s*auto;\s*\}/);
+  assert.match(css, /\.map-stage:has\(\.left-panel:not\(\.collapsed\)\) \.admin-editor-panel:not\(\.is-collapsed\)\s*\{\s*max-width:\s*calc\(100vw - 348px\);/);
+
+  // Внутри самой панели редактора левая навигация держит верхний слой относительно рабочих экранов.
+  const navZ = Number(/\.admin-editor-nav\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
+  const stageZ = Number(/\.admin-editor-stage,\s*\.admin-editor-graph-pane,\s*\.admin-editor-node-card\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
+  assert.ok(navZ > stageZ, `навигация редактора (${navZ}) выше рабочей области модуля и графа (${stageZ})`);
+  assert.match(css, /\.admin-editor-nav\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?pointer-events:\s*auto;/);
+
+  // Адаптивность на узком viewport: компактная навигация остаётся сверху, горизонтального переполнения нет.
+  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?overflow-x:\s*hidden;/);
+  assert.match(css, /@media \(max-width: 1020px\)[\s\S]*?\.admin-editor-nav\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?z-index:\s*8;/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.map-stage \.left-panel\s*\{\s*z-index:\s*19;\s*\}/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?max-height:\s*min\(56dvh,\s*440px\)/);
+
+  const guide = read('docs/admins/sector-areas-editor.md');
+  assert.match(guide, /Панель и навигация «Системы»/);
+  assert.match(guide, /глобальный верхний слой навигации/);
+  assert.match(guide, /Экран «Зависимости»/);
+});

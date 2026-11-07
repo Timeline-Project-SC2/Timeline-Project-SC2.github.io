@@ -450,6 +450,8 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     const dotX = (box.x + box.w - 7).toFixed(1);
     const dotY = (box.y + 7).toFixed(1);
     return `<g class="admin-editor-graph-node${current ? ' is-current' : ''}${linked ? ' is-linked' : ''}"`
+      + ` role="button" tabindex="0"`
+      + ` aria-label="${escapeHtml(mod.label + ' — открыть модуль')}"`
       + ` data-action="module" data-module="${escapeHtml(mod.id)}" data-plane="${mod.plane}"`
       + ` data-status="${mod.status}" data-isolated="${isIsolated ? 'true' : 'false'}">`
       + `<title>${escapeHtml(mod.label)} · ${escapeHtml(PLANE_TITLES[mod.plane])} · ${escapeHtml(STATUS_TITLES[mod.status])}${isIsolated ? ' (самостоятельный узел без связей)' : ''}</title>`
@@ -466,38 +468,19 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
       + `${escapeHtml(RELATION_FILTER_LABELS[plane])}</button>`;
   }).join('');
 
-  const planes = (['data', 'spatial', 'order'] as const).map((plane) => {
-    const items = modulesByPlane(plane).map((mod) => {
-      const current = mod.id === selectedId;
-      const isIsolated = isolated.has(mod.id);
-      return '<li><button type="button" class="admin-editor-module' + (current ? ' is-current' : '') + '"'
-        + ' data-action="module" data-module="' + escapeHtml(mod.id) + '"'
-        + (isIsolated ? ' data-isolated="true"' : '')
-        + ' aria-pressed="' + (current ? 'true' : 'false') + '">'
-        + '<span class="admin-editor-module-name">' + escapeHtml(mod.label)
-        + (isIsolated ? ' <em class="admin-editor-isolated-tag">изолирован</em>' : '')
-        + '</span>'
-        + '<span class="admin-editor-status" data-status="' + mod.status + '">'
-        + escapeHtml(STATUS_TITLES[mod.status]) + '</span></button></li>';
-    }).join('');
-    return '<div class="admin-editor-plane">'
-      + '<h3 class="admin-editor-plane-title">' + escapeHtml(PLANE_TITLES[plane]) + '</h3>'
-      + '<p class="admin-editor-hint">' + escapeHtml(PLANE_QUESTIONS[plane]) + '</p>'
-      + '<ul class="admin-editor-modules">' + items + '</ul></div>';
-  }).join('');
-
   return [
     '<div class="admin-editor-graph-pane" data-editor-graph>',
     '  <div class="admin-editor-graph-head">',
-    '    <p class="admin-editor-meta"><strong>Граф модулей</strong> · рёбер: ' + visibleRelations.length + '</p>',
+    '    <p class="admin-editor-meta"><strong>Зависимости систем</strong> · рёбер: ' + visibleRelations.length + '</p>',
     '    <div class="admin-editor-graph-filters" role="group" aria-label="Плоскость связей графа">' + filterButtons + '</div>',
     '  </div>',
     '  <p class="admin-editor-graph-legend">',
-    '    <span data-kind="data">● данные</span>',
-    '    <span data-kind="spatial">● геометрия</span>',
-    '    <span data-kind="order">● порядок</span>',
+    '    <span data-kind="data">● связи данных</span>',
+    '    <span data-kind="spatial">● пространственное влияние</span>',
+    '    <span data-kind="order">● порядок отрисовки</span>',
     '  </p>',
-    `  <svg class="admin-editor-graph-svg" viewBox="0 0 320 ${svgHeight}" role="img" aria-label="Граф подтверждённых связей модулей">`,
+    '  <p class="admin-editor-hint">Выбор узла на схеме (мышью или клавишей <kbd>Enter</kbd>) открывает рабочую область этого модуля.</p>',
+    `  <svg class="admin-editor-graph-svg" viewBox="0 0 320 ${svgHeight}" role="group" aria-label="Граф подтверждённых связей модулей">`,
     '    <defs>',
     '      <marker id="adminGraphArrow-data" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#f0a3b1"></path></marker>',
     '      <marker id="adminGraphArrow-spatial" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#8ad7c2"></path></marker>',
@@ -508,7 +491,6 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     '    <text class="admin-editor-graph-caption" x="160" y="297" text-anchor="middle">Самостоятельные узлы (без подтверждённых связей)</text>',
     '    <g class="admin-editor-graph-nodes">' + nodesSvg + '</g>',
     '  </svg>',
-    '  <div class="admin-editor-planes">' + planes + '</div>',
     '</div>',
   ].join('');
 }
@@ -1101,10 +1083,14 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function moduleRelationsHtml(targetId: string): string {
     const { incoming, outgoing } = relationsForModule(targetId);
+    const graphButton = '<div class="admin-editor-row">'
+      + '<button type="button" data-action="screen" data-screen="dependencies">Открыть экран «Зависимости»</button>'
+      + '</div>';
     if (incoming.length === 0 && outgoing.length === 0) {
       return '<div class="admin-editor-relations">'
-        + '<p class="admin-editor-meta"><strong>Связи в графе</strong></p>'
+        + '<p class="admin-editor-meta"><strong>Связи модуля</strong></p>'
         + '<p class="admin-editor-hint">Подтверждённых связей в коде нет: модуль отображается самостоятельным узлом.</p>'
+        + graphButton
         + '</div>';
     }
     const inBlock = incoming.length === 0
@@ -1115,7 +1101,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       ? ''
       : '<p class="admin-editor-meta"><strong>Влияет на (' + outgoing.length + ')</strong></p>'
         + '<ul class="admin-editor-rel-list">' + outgoing.map((rel) => relationItemHtml(rel, 'out')).join('') + '</ul>';
-    return '<div class="admin-editor-relations">' + inBlock + outBlock + '</div>';
+    return '<div class="admin-editor-relations">' + inBlock + outBlock + graphButton + '</div>';
   }
 
   /** Карточка выбранного узла: значения, подтверждённые связи и действия модуля. */
