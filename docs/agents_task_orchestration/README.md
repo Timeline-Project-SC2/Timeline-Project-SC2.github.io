@@ -79,7 +79,8 @@
 | [`wave_cards/ADM-EDITOR-BUBBLE-CUT.md`](wave_cards/ADM-EDITOR-BUBBLE-CUT.md) | `ED-1`: ореол выделенного маркера, архив | **Выполнена** 05.11.2026: [PR #351](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/351) в `main`; ждёт подтверждения подмены цели |
 | [`wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md`](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) | `ED-2`: скан модулей редактора → имплементация → примерный конечный рабочий вид | Историческая карточка; не использовать для текущей переделки панели |
 | [`wave_cards/ADM-EDITOR-PANEL-NAV.md`](wave_cards/ADM-EDITOR-PANEL-NAV.md) | `ADM-EDITOR-PANEL-NAV`: навигация по системам и рабочая область модуля | Подготовлена по решению владельца; исполнение ждёт доступного воркера |
-| [`wave_cards/ADM-EDITOR-PANEL-NAV-QA.md`](wave_cards/ADM-EDITOR-PANEL-NAV-QA.md) | `ADM-EDITOR-PANEL-NAV-QA`: независимая проверка реализации | Запускать после UI-реализации; без правок; стоп перед merge |
+| [`wave_cards/ADM-EDITOR-PANEL-NAV-QA.md`](wave_cards/ADM-EDITOR-PANEL-NAV-QA.md) | `ADM-EDITOR-PANEL-NAV-QA`: независимая проверка реализации | Первый прогон — `HOLD`; повторить после исправлений |
+| [`wave_cards/ADM-EDITOR-PANEL-NAV-FIX.md`](wave_cards/ADM-EDITOR-PANEL-NAV-FIX.md) | `ADM-EDITOR-PANEL-NAV-FIX`: два blocker-а Chromium QA | Подготовлена после `HOLD`; исправить Enter/Space и наложение на desktop |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
