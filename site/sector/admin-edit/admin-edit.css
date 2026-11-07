@@ -181,7 +181,11 @@
   color: var(--white);
 }
 .admin-editor-module:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
-.admin-editor-module-name { flex: 1 1 auto; }
+.admin-editor-module-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .admin-editor-status {
   flex: 0 0 auto;
   padding: 1px 6px;
@@ -318,6 +322,14 @@
 .admin-editor-nav-group {
   display: grid;
   gap: 5px;
+  min-width: 0;
+}
+/* У Grid-детей auto min-size иначе возвращает min-content всей ветки: на
+   узкой desktop-панели вложенные плоскости выталкивают имена за её границу. */
+.admin-editor-nav-group > *,
+.admin-editor-planes > *,
+.admin-editor-plane > *,
+.admin-editor-modules > li {
   min-width: 0;
 }
 .admin-editor-nav-title {

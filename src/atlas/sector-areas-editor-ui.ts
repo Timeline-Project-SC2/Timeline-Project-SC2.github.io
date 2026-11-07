@@ -1767,21 +1767,22 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     }
   }
 
-  function onPanelKeyDown(event: KeyboardEvent): void {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
+  function onPanelKeyDown(event: KeyboardEvent): boolean {
+    if (event.key !== 'Enter' && event.key !== ' ') return false;
     const target = event.target;
-    if (!(target instanceof Element)) return;
+    if (!(target instanceof Element)) return false;
     // Родные кнопки, ссылки и поля ввода обрабатывают Enter/Пробел сами.
     const tag = (target as { tagName?: string }).tagName?.toUpperCase() ?? '';
-    if (tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'A') return;
-    if (typeof HTMLButtonElement !== 'undefined' && target instanceof HTMLButtonElement) return;
-    if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;
-    if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return;
-    if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return;
+    if (tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'A') return false;
+    if (typeof HTMLButtonElement !== 'undefined' && target instanceof HTMLButtonElement) return false;
+    if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return false;
+    if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return false;
+    if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return false;
     const control = target.closest('[data-action]');
-    if (control === null) return;
+    if (control === null) return false;
     event.preventDefault();
     onPanelClick(event);
+    return true;
   }
 
   function onColorInput(): void {
@@ -1897,7 +1898,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       event.stopPropagation();
       return;
     }
-    if (insidePanel(target)) event.stopPropagation();
+    if (insidePanel(target)) {
+      // Capture на window срабатывает раньше bubble-обработчика панели. Сначала
+      // даём SVG-органам панели их клавиатурную активацию, затем изолируем карту.
+      const handled = onPanelKeyDown(event);
+      event.stopPropagation();
+      if (handled) return;
+    }
     // Поля ввода не отдаём редактору ни при каких условиях: иначе `Ctrl+Z`
     // ломает правку текста в инпуте, а `F` не даёт написать слово с буквой «ф».
     if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;

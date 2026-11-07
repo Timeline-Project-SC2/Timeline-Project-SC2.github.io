@@ -700,7 +700,8 @@ function pressKey(keydown, init, target = null) {
   const event = {
     target,
     prevented: false,
-    stopPropagation() {},
+    stopped: false,
+    stopPropagation() { event.stopped = true; },
     preventDefault() { event.prevented = true; },
     ...init,
   };
@@ -1009,16 +1010,8 @@ test('постоянная навигация сохраняется на все
   assert.match(graphHtml, /role="button" tabindex="0" aria-label="Привязка к адресной сетке — открыть модуль"/);
   assert.doesNotMatch(moduleGraphHtml('sector-areas-editor', 'all'), /admin-editor-planes/, 'список систем не дублируется под SVG-графом');
 
-  // Нажатие Enter по узлу SVG-графа (`<g role="button">`) открывает карточку выбранного модуля.
-  const svgNode = new FakeElement({ 'data-action': 'module', 'data-module': 'sector-areas-snap' });
-  svgNode.tagName = 'g';
-  let prevented = false;
-  panel.handlers.get('keydown')({
-    key: 'Enter',
-    target: svgNode,
-    preventDefault() { prevented = true; },
-  });
-  assert.equal(prevented, true);
+  // Мышь по-прежнему открывает модуль через обычное делегирование клика панели.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-snap' });
   assert.equal(api.screen(), 'module');
   assert.equal(panel.getAttribute('data-active-screen'), 'module');
   assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-snap" aria-current="page"/);
@@ -1026,6 +1019,49 @@ test('постоянная навигация сохраняется на все
 
   assert.equal(api.doc(), initialDoc, 'навигация по экранам и системам не трогает документ');
   assert.equal(api.session().past.length, 0);
+  api.destroy();
+});
+
+test('Enter и Space на SVG-узле проходят window-capture, а родные кнопки и поля сохраняют поведение', () => {
+  const { api, panel, keydown } = editorWithKeys();
+
+  for (const key of ['Enter', ' ']) {
+    clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+    const svgNode = new FakeElement({ 'data-action': 'module', 'data-module': 'sector-areas-snap' });
+    svgNode.tagName = 'g';
+    panel.contains = (target) => target === svgNode;
+
+    // Полный путь события: именно window-capture, а не прямой вызов bubble-обработчика панели.
+    const press = pressKey(keydown, { key }, svgNode);
+    assert.equal(press.prevented, true, `${key}: браузер не прокручивает страницу`);
+    assert.equal(press.stopped, true, `${key}: событие не доходит до карты`);
+    assert.equal(api.screen(), 'module', `${key}: открыта карточка SVG-узла`);
+    assert.equal(panel.getAttribute('data-active-screen'), 'module');
+    assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-snap" aria-current="page"/);
+    assert.doesNotMatch(blockHtml(panel, 'modules'), /data-editor-graph/);
+  }
+
+  // Capture по-прежнему изолирует карту, но не подменяет нативную активацию кнопки.
+  clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+  const button = new FakeElement({ 'data-action': 'screen', 'data-screen': 'draw' });
+  button.tagName = 'BUTTON';
+  panel.contains = (target) => target === button;
+  const buttonPress = pressKey(keydown, { key: 'Enter' }, button);
+  assert.equal(buttonPress.prevented, false);
+  assert.equal(buttonPress.stopped, true);
+  assert.equal(api.screen(), 'dependencies', 'тест не имитирует нативный click кнопки');
+
+  const input = new FakeElement({ value: '12' });
+  input.tagName = 'INPUT';
+  panel.contains = (target) => target === input;
+  const inputPress = pressKey(keydown, { key: ' ' }, input);
+  assert.equal(inputPress.prevented, false);
+  assert.equal(inputPress.stopped, true);
+  assert.equal(api.screen(), 'dependencies');
+
+  // Обычный click не зависит от contains(), использованного выше для keyboard-цепочки.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-snap' });
+  assert.equal(api.screen(), 'module');
   api.destroy();
 });
 
@@ -1046,6 +1082,8 @@ test('жёсткий инвариант верхнего слоя навигац
   const stageZ = Number(/\.admin-editor-stage,\s*\.admin-editor-graph-pane,\s*\.admin-editor-node-card\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
   assert.ok(navZ > stageZ, `навигация редактора (${navZ}) выше рабочей области модуля и графа (${stageZ})`);
   assert.match(css, /\.admin-editor-nav\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?pointer-events:\s*auto;/);
+  assert.match(css, /\.admin-editor-nav-group\s*>\s*\*,[\s\S]*?\.admin-editor-modules\s*>\s*li\s*\{[\s\S]*?min-width:\s*0;/);
+  assert.match(css, /\.admin-editor-module-name\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
 
   // Адаптивность на узком viewport: компактная навигация остаётся сверху, горизонтального переполнения нет.
   assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?overflow-x:\s*hidden;/);
