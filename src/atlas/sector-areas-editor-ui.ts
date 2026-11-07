@@ -16,12 +16,13 @@ import { DEFAULT_GRADIENT, MODES, emptySectorAreasDoc, parseSectorAreas } from '
 import type { Area, AreaEvent, AreaPoint, AreaState, Mode, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
 import {
   addAreaFromSectorCell,
-  addAreaFromStroke,
   addForceFill,
+  brushWidthInWorld,
   canFillArea,
   canRedo,
   canUndo,
   createEditorSession,
+  createEmptyArea,
   exportDoc,
   fillShapeAsState,
   importDoc,
@@ -33,11 +34,16 @@ import {
   setMode,
   setSnapMode,
   setState,
+  snapAndRecordStroke,
+  thickenStroke,
   undo,
 } from './sector-areas-editor.ts';
 import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
+import { displayedGridTierFor } from './sector-scene.ts';
+import type { FrameViewport, SceneCamera } from './sector-scene.ts';
+import { snapStrokeToDisplayedGrid } from './sector-areas-snap.ts';
 import { areaSize } from './sector-areas-render.ts';
-import { pointInArea, totalVertices } from './sector-areas-geometry.ts';
+import { closedStrokeRing, pointHitsArea, strokeVertices, totalVertices } from './sector-areas-geometry.ts';
 import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
 import { createFactionPalette } from './sector-areas-color.ts';
 import type { FactionPalette } from './sector-areas-color.ts';
@@ -63,20 +69,31 @@ import {
 import type { ShapeDraft } from './sector-areas-tools.ts';
 import {
   DEFAULT_MODULE_ID,
+  MODULE_RELATIONS,
   PLANE_QUESTIONS,
   PLANE_TITLES,
+  RELATION_KIND_TITLES,
+  SECTOR_MODULES,
   STATUS_TITLES,
   documentReport,
+  isolatedModuleIds,
   modeLabel,
+  moduleActions,
   moduleById,
   moduleRows,
   modulesByPlane,
+  relationsForModule,
 } from './sector-areas-registry.ts';
-import type { RegistryContext, RegistrySystem, SectorModule } from './sector-areas-registry.ts';
+import type {
+  ModuleRelation,
+  ModuleRelationKind,
+  RegistryContext,
+  RegistrySystem,
+  SectorModule,
+} from './sector-areas-registry.ts';
 import type { AtlasView, SystemRecord } from './config.ts';
 import { NO_FACTION_KEY } from './config.ts';
 import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule } from './pointer-rules.ts';
-import { brushWidthInWorld, thickenStroke } from './sector-areas-editor.ts';
 import type { AtlasKernel } from './config.ts';
 
 export const DRAFT_KEY = 'timeline.sector-areas.draft.v1';
@@ -195,9 +212,13 @@ export function eventLine(event: AreaEvent): string {
   return `${event.kind}${area} · ${note}`;
 }
 
-/** Заголовок области в списке: имя плюс число вершин. */
+/** Заголовок области в списке: имя, вершины и (при наличии) число штрихов. */
 export function areaLabel(area: Area): string {
-  return `${area.name} (${totalVertices(area)} верш.)`;
+  const vertices = totalVertices(area) + strokeVertices(area);
+  const strokes = area.strokes?.length ?? 0;
+  return strokes > 0
+    ? `${area.name} (${vertices} верш., штрихов: ${strokes})`
+    : `${area.name} (${vertices} верш.)`;
 }
 
 /**
@@ -247,6 +268,7 @@ export function requestMaterial(doc: SectorAreasDoc, options: { readonly title?:
   }
   lines.push('## Состав документа', '');
   lines.push(`- Областей: ${doc.areas.length}`);
+  lines.push(`- Штрихов в областях: ${doc.areas.reduce((sum, area) => sum + (area.strokes?.length ?? 0), 0)}`);
   lines.push(`- Состояний: ${doc.areas.reduce((sum, area) => sum + area.states.length, 0)}`);
   lines.push(`- Мазков форс-закрашивания: ${doc.overrides.length}`);
   lines.push(`- Событий в журнале: ${doc.events.length}`);
@@ -277,6 +299,205 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Фильтр отображаемых рёбер графа по плоскости связи. */
+export type RelationFilter = 'all' | ModuleRelationKind;
+
+interface GraphNodeBox {
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+  readonly short: string;
+}
+
+const GRAPH_NODE_BOXES: Readonly<Record<string, GraphNodeBox>> = Object.freeze({
+  'sector-areas-contract': { x: 6, y: 8, w: 72, h: 34, short: 'Контракт v1' },
+  'sector-areas-snap': { x: 84, y: 8, w: 72, h: 34, short: 'Снап к сетке' },
+  'sector-bounds': { x: 162, y: 8, w: 72, h: 34, short: 'Границы' },
+  'sector-areas-color': { x: 240, y: 8, w: 74, h: 34, short: 'Палитра' },
+
+  'sector-areas-geometry': { x: 8, y: 64, w: 96, h: 34, short: 'Геометрия' },
+  'nebula-model': { x: 112, y: 64, w: 96, h: 34, short: 'Туманности' },
+  'sector-halo-clip': { x: 216, y: 64, w: 98, h: 34, short: 'Обрезка гало' },
+
+  'sector-areas-cascade': { x: 6, y: 120, w: 72, h: 34, short: 'Каскад' },
+  'sector-areas-scope': { x: 84, y: 120, w: 72, h: 34, short: 'Scope' },
+  'sector-areas-lod': { x: 162, y: 120, w: 72, h: 34, short: 'LOD' },
+  'sector-areas-gradient': { x: 240, y: 120, w: 74, h: 34, short: 'Градиент' },
+
+  'sector-areas-journal': { x: 16, y: 176, w: 138, h: 34, short: 'Журнал и вес' },
+  'sector-areas-force': { x: 166, y: 176, w: 138, h: 34, short: 'Форс-закраска' },
+
+  'sector-areas-editor': { x: 16, y: 232, w: 138, h: 34, short: 'Команды' },
+  'sector-areas-render': { x: 166, y: 232, w: 138, h: 34, short: 'Отрисовка' },
+
+  'sector-areas-border-world': { x: 46, y: 306, w: 228, h: 34, short: 'Пограничный мир' },
+});
+
+const RELATION_FILTER_LABELS: Readonly<Record<RelationFilter, string>> = Object.freeze({
+  all: 'Все',
+  data: 'Данные',
+  spatial: 'Геометрия',
+  order: 'Порядок',
+});
+
+function portCoordinate(box: GraphNodeBox, index: number, count: number): number {
+  if (count <= 1) return box.x + box.w / 2;
+  const pad = Math.min(14, box.w * 0.22);
+  const span = Math.max(0, box.w - pad * 2);
+  return box.x + pad + (span * index) / (count - 1);
+}
+
+export function isRelationFilter(value: string): value is RelationFilter {
+  return value === 'all' || value === 'data' || value === 'spatial' || value === 'order';
+}
+
+/**
+ * Чистая разметка графа модулей: рёбра строятся только по подтверждённым
+ * `MODULE_RELATIONS`, а узлы без рёбер выводятся в отдельной зоне внизу.
+ */
+export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'all'): string {
+  const isolated = new Set(isolatedModuleIds());
+  const visibleRelations: readonly ModuleRelation[] = filter === 'all'
+    ? MODULE_RELATIONS
+    : MODULE_RELATIONS.filter((item) => item.kind === filter);
+
+  const fallbackBoxes = new Map<string, GraphNodeBox>();
+  let fallbackIndex = 0;
+  for (const mod of SECTOR_MODULES) {
+    if (GRAPH_NODE_BOXES[mod.id] === undefined) {
+      fallbackBoxes.set(mod.id, {
+        x: 12 + (fallbackIndex % 2) * 152,
+        y: 348 + Math.floor(fallbackIndex / 2) * 42,
+        w: 140,
+        h: 34,
+        short: mod.label.slice(0, 16),
+      });
+      fallbackIndex += 1;
+    }
+  }
+  const boxOf = (id: string): GraphNodeBox | null => GRAPH_NODE_BOXES[id] ?? fallbackBoxes.get(id) ?? null;
+
+  const outByNode = new Map<string, ModuleRelation[]>();
+  const inByNode = new Map<string, ModuleRelation[]>();
+  for (const rel of visibleRelations) {
+    const outList = outByNode.get(rel.from) ?? [];
+    outList.push(rel);
+    outByNode.set(rel.from, outList);
+    const inList = inByNode.get(rel.to) ?? [];
+    inList.push(rel);
+    inByNode.set(rel.to, inList);
+  }
+  for (const list of outByNode.values()) {
+    list.sort((a, b) => ((boxOf(a.to)?.x ?? 0) - (boxOf(b.to)?.x ?? 0)));
+  }
+  for (const list of inByNode.values()) {
+    list.sort((a, b) => ((boxOf(a.from)?.x ?? 0) - (boxOf(b.from)?.x ?? 0)));
+  }
+
+  const neighborIds = new Set<string>();
+  for (const rel of visibleRelations) {
+    if (rel.from === selectedId) neighborIds.add(rel.to);
+    if (rel.to === selectedId) neighborIds.add(rel.from);
+  }
+
+  const edgesSvg = visibleRelations.map((rel) => {
+    const fromBox = boxOf(rel.from);
+    const toBox = boxOf(rel.to);
+    if (fromBox === null || toBox === null) return '';
+    const outList = outByNode.get(rel.from) ?? [];
+    const inList = inByNode.get(rel.to) ?? [];
+    const outIdx = Math.max(0, outList.indexOf(rel));
+    const inIdx = Math.max(0, inList.indexOf(rel));
+    const x1 = portCoordinate(fromBox, outIdx, outList.length);
+    const y1 = fromBox.y + fromBox.h;
+    const x2 = portCoordinate(toBox, inIdx, inList.length);
+    const y2 = toBox.y - 2;
+    const dy = Math.max(16, (y2 - y1) * 0.48);
+    const active = rel.from === selectedId || rel.to === selectedId;
+    return `<path class="admin-editor-graph-edge" data-kind="${rel.kind}" data-from="${escapeHtml(rel.from)}"`
+      + ` data-to="${escapeHtml(rel.to)}" data-active="${active ? 'true' : 'false'}"`
+      + ` marker-end="url(#adminGraphArrow-${rel.kind})"`
+      + ` d="M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${x1.toFixed(1)} ${(y1 + dy).toFixed(1)}, ${x2.toFixed(1)} ${(y2 - dy).toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}">`
+      + `<title>${escapeHtml(rel.from)} → ${escapeHtml(rel.to)} (${escapeHtml(RELATION_KIND_TITLES[rel.kind])}): ${escapeHtml(rel.note)}</title>`
+      + '</path>';
+  }).join('');
+
+  const svgHeight = fallbackIndex > 0 ? 356 + Math.ceil(fallbackIndex / 2) * 42 : 350;
+  const nodesSvg = SECTOR_MODULES.map((mod) => {
+    const box = boxOf(mod.id);
+    if (box === null) return '';
+    const current = mod.id === selectedId;
+    const linked = neighborIds.has(mod.id);
+    const isIsolated = isolated.has(mod.id);
+    const cx = (box.x + box.w / 2).toFixed(1);
+    const cy = (box.y + box.h / 2 + 3.5).toFixed(1);
+    const dotX = (box.x + box.w - 7).toFixed(1);
+    const dotY = (box.y + 7).toFixed(1);
+    return `<g class="admin-editor-graph-node${current ? ' is-current' : ''}${linked ? ' is-linked' : ''}"`
+      + ` data-action="module" data-module="${escapeHtml(mod.id)}" data-plane="${mod.plane}"`
+      + ` data-status="${mod.status}" data-isolated="${isIsolated ? 'true' : 'false'}">`
+      + `<title>${escapeHtml(mod.label)} · ${escapeHtml(PLANE_TITLES[mod.plane])} · ${escapeHtml(STATUS_TITLES[mod.status])}${isIsolated ? ' (самостоятельный узел без связей)' : ''}</title>`
+      + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="5"></rect>`
+      + `<circle class="admin-editor-graph-dot" cx="${dotX}" cy="${dotY}" r="2.5"></circle>`
+      + `<text x="${cx}" y="${cy}" text-anchor="middle">${escapeHtml(box.short)}</text>`
+      + '</g>';
+  }).join('');
+
+  const filterButtons = (['all', 'data', 'spatial', 'order'] as const).map((plane) => {
+    const current = plane === filter;
+    return `<button type="button" class="admin-editor-graph-filter${current ? ' is-current' : ''}"`
+      + ` data-action="relation-filter" data-plane="${plane}" aria-pressed="${current ? 'true' : 'false'}">`
+      + `${escapeHtml(RELATION_FILTER_LABELS[plane])}</button>`;
+  }).join('');
+
+  const planes = (['data', 'spatial', 'order'] as const).map((plane) => {
+    const items = modulesByPlane(plane).map((mod) => {
+      const current = mod.id === selectedId;
+      const isIsolated = isolated.has(mod.id);
+      return '<li><button type="button" class="admin-editor-module' + (current ? ' is-current' : '') + '"'
+        + ' data-action="module" data-module="' + escapeHtml(mod.id) + '"'
+        + (isIsolated ? ' data-isolated="true"' : '')
+        + ' aria-pressed="' + (current ? 'true' : 'false') + '">'
+        + '<span class="admin-editor-module-name">' + escapeHtml(mod.label)
+        + (isIsolated ? ' <em class="admin-editor-isolated-tag">изолирован</em>' : '')
+        + '</span>'
+        + '<span class="admin-editor-status" data-status="' + mod.status + '">'
+        + escapeHtml(STATUS_TITLES[mod.status]) + '</span></button></li>';
+    }).join('');
+    return '<div class="admin-editor-plane">'
+      + '<h3 class="admin-editor-plane-title">' + escapeHtml(PLANE_TITLES[plane]) + '</h3>'
+      + '<p class="admin-editor-hint">' + escapeHtml(PLANE_QUESTIONS[plane]) + '</p>'
+      + '<ul class="admin-editor-modules">' + items + '</ul></div>';
+  }).join('');
+
+  return [
+    '<div class="admin-editor-graph-pane" data-editor-graph>',
+    '  <div class="admin-editor-graph-head">',
+    '    <p class="admin-editor-meta"><strong>Граф модулей</strong> · рёбер: ' + visibleRelations.length + '</p>',
+    '    <div class="admin-editor-graph-filters" role="group" aria-label="Плоскость связей графа">' + filterButtons + '</div>',
+    '  </div>',
+    '  <p class="admin-editor-graph-legend">',
+    '    <span data-kind="data">● данные</span>',
+    '    <span data-kind="spatial">● геометрия</span>',
+    '    <span data-kind="order">● порядок</span>',
+    '  </p>',
+    `  <svg class="admin-editor-graph-svg" viewBox="0 0 320 ${svgHeight}" role="img" aria-label="Граф подтверждённых связей модулей">`,
+    '    <defs>',
+    '      <marker id="adminGraphArrow-data" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#f0a3b1"></path></marker>',
+    '      <marker id="adminGraphArrow-spatial" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#8ad7c2"></path></marker>',
+    '      <marker id="adminGraphArrow-order" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#9ec5ff"></path></marker>',
+    '    </defs>',
+    '    <g class="admin-editor-graph-edges">' + edgesSvg + '</g>',
+    '    <line class="admin-editor-graph-divider" x1="12" y1="282" x2="308" y2="282"></line>',
+    '    <text class="admin-editor-graph-caption" x="160" y="297" text-anchor="middle">Самостоятельные узлы (без подтверждённых связей)</text>',
+    '    <g class="admin-editor-graph-nodes">' + nodesSvg + '</g>',
+    '  </svg>',
+    '  <div class="admin-editor-planes">' + planes + '</div>',
+    '</div>',
+  ].join('');
 }
 
 function download(name: string, text: string, type: string): void {
@@ -322,6 +543,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   /* Выбранный в реестре модуль: панель показывает его свойства. */
   let moduleId = DEFAULT_MODULE_ID;
+  /* Фильтр отображаемых рёбер графа модулей: состояние интерфейса, не документа. */
+  let relationFilter: RelationFilter = 'all';
   /* Предпросмотр «было → стало»: сравнение с документом на момент открытия. */
   let previewOn = false;
   /* Тир секторного снапа: 5, 6 или 7 букв адреса (глубже — мельче ячейка). */
@@ -361,7 +584,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /* ------------------------------------------------------- предпросмотр штриха */
 
   function previewCanvas(): CanvasRenderingContext2D | null {
-    if (stage === null) return null;
+    if (stage === null || typeof document === 'undefined') return null;
     if (preview === null) {
       const node = document.createElement('canvas');
       node.className = 'admin-editor-brush-preview';
@@ -412,6 +635,32 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     };
   }
 
+  /** Текущий кадр для выбора отображаемого яруса сетки: те же размеры, что у рендерера. */
+  function currentViewport(): FrameViewport {
+    const vp = kernel.state.viewport;
+    const w = vp !== undefined && Number.isFinite(vp.w) && vp.w > 0
+      ? vp.w
+      : Math.max(1, stage?.clientWidth ?? canvas?.clientWidth ?? 1000);
+    const h = vp !== undefined && Number.isFinite(vp.h) && vp.h > 0
+      ? vp.h
+      : Math.max(1, stage?.clientHeight ?? canvas?.clientHeight ?? 1000);
+    return { w, h };
+  }
+
+  /** Камера сцены в мировых координатах — совпадает с `sceneCamera` в `canvas-renderer.ts`. */
+  function currentCamera(): SceneCamera {
+    const vp = currentViewport();
+    const scale = registryContext().scale;
+    const center = typeof kernel.renderer.toWorld === 'function'
+      ? kernel.renderer.toWorld(vp.w / 2, vp.h / 2)
+      : { x: 5000, y: 5000 };
+    return {
+      centerX: Number.isFinite(center.x) ? center.x : 5000,
+      centerY: Number.isFinite(center.y) ? center.y : 5000,
+      visibleWidth: vp.w / scale,
+    };
+  }
+
   /* ------------------------------------------------ предпросмотр «было → стало» */
 
   /** Подпись состояния кадра: по ней видно, что карту сдвинули или приблизили. */
@@ -425,14 +674,18 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     return `${scale}|${tx}|${ty}|${width}x${height}`;
   }
 
-  function traceRing(ctx: CanvasRenderingContext2D, area: Area, color: string, dash: readonly number[]): void {
-    const ring = area.rings[0];
-    if (ring === undefined || ring.length < 2) return;
+  function tracePolyline(
+    ctx: CanvasRenderingContext2D,
+    points: readonly AreaPoint[],
+    color: string,
+    dash: readonly number[],
+  ): void {
+    if (points.length < 2) return;
     let started = false;
     ctx.beginPath();
     ctx.setLineDash([...dash]);
     ctx.strokeStyle = color;
-    for (const point of ring) {
+    for (const point of points) {
       const screen = screenOf(point);
       if (screen === null) continue;
       if (started) ctx.lineTo(screen.x, screen.y);
@@ -444,6 +697,19 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (!started) return;
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  function traceRing(ctx: CanvasRenderingContext2D, area: Area, color: string, dash: readonly number[]): void {
+    const ring = area.rings[0];
+    if (ring !== undefined && ring.length >= 2) {
+      tracePolyline(ctx, ring, color, dash);
+    }
+    for (const stroke of area.strokes ?? []) {
+      const pts = stroke.closed && stroke.points.length > 1
+        ? [...stroke.points, stroke.points[0]!]
+        : stroke.points;
+      tracePolyline(ctx, pts, color, dash);
+    }
   }
 
   /**
@@ -469,7 +735,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /**
    * «Резиновая нить»: черновик текущего инструмента. Замкнутая фигура
    * показывается замкнутой, открытая линия — открытой: предпросмотр не должен
-   * обещать замыкания, которого не будет.
+   * обещать замыкания, которого не будет. При привязке «к рёбрам сетки» поверх
+   * пунктирной траектории курсора сразу рисуется живой контур по рёбрам сетки
+   * (само состояние инструмента и документ до завершения ввода не меняются).
    */
   function drawStroke(ctx: CanvasRenderingContext2D): void {
     const draft = previewDraft(toolState);
@@ -484,16 +752,40 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     }
     if (points.length === 0) return;
 
+    const gridSnapActive = session.snapMode === 'grid' && draft.points.length >= 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.lineWidth = Math.max(1.2, session.brushWidthPx / 2);
     ctx.setLineDash([7, 5]);
-    ctx.strokeStyle = 'rgba(255, 226, 231, .92)';
+    ctx.strokeStyle = gridSnapActive ? 'rgba(255, 226, 231, .42)' : 'rgba(255, 226, 231, .92)';
     ctx.beginPath();
     ctx.moveTo(points[0]!.x, points[0]!.y);
     for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i]!.x, points[i]!.y);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    if (gridSnapActive) {
+      const snapped = snapStrokeToDisplayedGrid(draft.points, currentViewport(), currentCamera(), {
+        closed: draft.closed,
+      }).points;
+      const snappedRing = draft.closed && snapped.length > 1
+        ? [...snapped, snapped[0]!]
+        : snapped;
+      const snappedScreen: { x: number; y: number }[] = [];
+      for (const point of snappedRing) {
+        const screen = screenOf(point);
+        if (screen !== null) snappedScreen.push(screen);
+      }
+      if (snappedScreen.length >= 2) {
+        ctx.lineWidth = Math.max(1.8, session.brushWidthPx / 2 + 0.6);
+        ctx.strokeStyle = 'rgba(138, 215, 194, .96)';
+        ctx.beginPath();
+        ctx.moveTo(snappedScreen[0]!.x, snappedScreen[0]!.y);
+        for (let i = 1; i < snappedScreen.length; i += 1) ctx.lineTo(snappedScreen[i]!.x, snappedScreen[i]!.y);
+        ctx.stroke();
+      }
+    }
+
     ctx.fillStyle = 'rgba(255, 226, 231, .95)';
     // У вершинных инструментов показываются сами вершины; штрих точек не копит.
     const markers = toolInput(toolState.tool) === 'vertices' ? points : points.slice(0, 1);
@@ -614,43 +906,48 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   /* ------------------------------------------------------------------- панель */
 
+  function activeAreaBarHtml(): string {
+    const active = selected();
+    const label = active === null
+      ? 'Активная область: <strong>нет</strong> (первый штрих создаст новую)'
+      : 'Активная область: <strong>' + escapeHtml(active.name) + '</strong> · штрихов: '
+        + String(active.strokes?.length ?? 0);
+    return '<div class="admin-editor-active-bar">'
+      + '<p class="admin-editor-meta">' + label + '</p>'
+      + '<button type="button" class="admin-editor-create-area" data-action="create-area">+ Создать новую область</button>'
+      + '</div>';
+  }
+
   function modulesHtml(): string {
     const modeOptions = MODES.map((mode) => (
       `<option value="${mode}"${mode === session.mode ? ' selected' : ''}>${modeLabel(mode)}</option>`
     )).join('');
-    const planes = (['data', 'spatial', 'order'] as const).map((plane) => {
-      const items = modulesByPlane(plane).map((module) => {
-        const current = module.id === moduleId;
-        return '<li><button type="button" class="admin-editor-module' + (current ? ' is-current' : '') + '"'
-          + ' data-action="module" data-module="' + escapeHtml(module.id) + '"'
-          + ' aria-pressed="' + (current ? 'true' : 'false') + '">'
-          + '<span class="admin-editor-module-name">' + escapeHtml(module.label) + '</span>'
-          + '<span class="admin-editor-status" data-status="' + module.status + '">'
-          + escapeHtml(STATUS_TITLES[module.status]) + '</span></button></li>';
-      }).join('');
-      return '<div class="admin-editor-plane">'
-        + '<h3 class="admin-editor-plane-title">' + escapeHtml(PLANE_TITLES[plane]) + '</h3>'
-        + '<p class="admin-editor-hint">' + escapeHtml(PLANE_QUESTIONS[plane]) + '</p>'
-        + '<ul class="admin-editor-modules">' + items + '</ul></div>';
-    }).join('');
+    const selectedModule: SectorModule | null = moduleById(moduleId);
+    const nodeCard = selectedModule === null
+      ? '<div class="admin-editor-node-card" data-editor-node-card><p class="admin-editor-hint">Модуль не выбран.</p></div>'
+      : '<div class="admin-editor-node-card" data-editor-node-card>' + modulePropertiesHtml(selectedModule) + '</div>';
     return [
+      '<div class="admin-editor-toggles">',
       '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
+      '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Предпросмотр «было → стало»</label>',
+      '</div>',
       '<div class="admin-editor-grid">',
       '<label class="admin-editor-field">Режим <select data-action="mode">' + modeOptions + '</select></label>',
       '<label class="admin-editor-field">Привязка <select data-action="snap">',
       '<option value="free"' + (session.snapMode === 'free' ? ' selected' : '') + '>свободная</option>',
+      '<option value="grid"' + (session.snapMode === 'grid' ? ' selected' : '') + '>к рёбрам сетки</option>',
       '<option value="sector"' + (session.snapMode === 'sector' ? ' selected' : '') + '>к ячейке адреса</option>',
       '</select></label>',
       '<label class="admin-editor-field">Кисть, px <input type="number" min="1" max="40" step="1" value="' + session.brushWidthPx + '" data-action="width"></label>',
-      snapLettersHtml(),
+      snapDetailsHtml(),
       '</div>',
       toolsHtml(),
-      '<p class="admin-editor-hint">ЛКМ — контур. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
-      '<label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Предпросмотр «было → стало»</label>',
+      activeAreaBarHtml(),
+      '<p class="admin-editor-hint">ЛКМ — штрих в активную область. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
       previewOn
         ? '<p class="admin-editor-hint">Красная линия — область, которой в загруженном документе не станет; зелёная — новая; голубая — без изменений. Данные при предпросмотре не меняются.</p>'
         : '',
-      '<div class="admin-editor-planes">' + planes + '</div>',
+      '<div class="admin-editor-workbench">' + moduleGraphHtml(moduleId, relationFilter) + nodeCard + '</div>',
     ].join('');
   }
 
@@ -671,26 +968,67 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '<p class="admin-editor-hint">' + escapeHtml(TOOL_HINTS[toolState.tool]) + '</p>';
   }
 
-  /** Тир секторного снапа выбирается явно: 5, 6 или 7 букв адреса. */
-  function snapLettersHtml(): string {
-    if (session.snapMode !== 'sector') return '';
-    const options = [5, 6, 7].map((value) => (
-      `<option value="${value}"${value === snapLetters ? ' selected' : ''}>${value} букв</option>`
-    )).join('');
-    return '<label class="admin-editor-field">Глубина адреса <select data-action="snap-letters">' + options + '</select></label>';
+  /** Детали выбранного режима привязки: ярус сетки или глубина букв адреса. */
+  function snapDetailsHtml(): string {
+    if (session.snapMode === 'sector') {
+      const options = [5, 6, 7].map((value) => (
+        `<option value="${value}"${value === snapLetters ? ' selected' : ''}>${value} букв</option>`
+      )).join('');
+      return '<label class="admin-editor-field">Глубина адреса <select data-action="snap-letters">' + options + '</select></label>';
+    }
+    if (session.snapMode === 'grid') {
+      const tier = displayedGridTierFor(currentViewport(), currentCamera());
+      const text = tier === null
+        ? 'нет видимого яруса'
+        : `${tier.id} · ${String(tier.cellSize).replace('.', ',')} св. л.`;
+      return '<div class="admin-editor-field"><span class="admin-editor-field-label">Ярус сетки</span>'
+        + '<span class="admin-editor-tier-badge">' + escapeHtml(text) + '</span></div>';
+    }
+    return '';
   }
 
   function propertiesHtml(): string {
-    const module: SectorModule | null = moduleById(moduleId);
-    const head = module === null
-      ? '<p class="admin-editor-hint">Модуль не выбран.</p>'
-      : modulePropertiesHtml(module);
-    return head + areaEditorHtml();
+    return areaEditorHtml();
   }
 
-  /** Свойства выбранного модуля: значения приходят из его собственных функций. */
+  function relationItemHtml(relation: ModuleRelation, direction: 'in' | 'out'): string {
+    const peerId = direction === 'in' ? relation.from : relation.to;
+    const peer = moduleById(peerId);
+    const peerTitle = peer?.label ?? peerId;
+    const arrow = direction === 'in' ? '←' : '→';
+    return '<li class="admin-editor-rel-item">'
+      + '<div class="admin-editor-rel-head">'
+      + '<button type="button" class="admin-editor-rel-target" data-action="module" data-module="' + escapeHtml(peerId) + '">'
+      + arrow + ' ' + escapeHtml(peerTitle) + '</button>'
+      + '<span class="admin-editor-rel-kind" data-kind="' + relation.kind + '">' + escapeHtml(RELATION_KIND_TITLES[relation.kind]) + '</span>'
+      + '</div>'
+      + '<p class="admin-editor-hint">' + escapeHtml(relation.note) + '</p>'
+      + '</li>';
+  }
+
+  function moduleRelationsHtml(targetId: string): string {
+    const { incoming, outgoing } = relationsForModule(targetId);
+    if (incoming.length === 0 && outgoing.length === 0) {
+      return '<div class="admin-editor-relations">'
+        + '<p class="admin-editor-meta"><strong>Связи в графе</strong></p>'
+        + '<p class="admin-editor-hint">Подтверждённых связей в коде нет: модуль отображается самостоятельным узлом.</p>'
+        + '</div>';
+    }
+    const inBlock = incoming.length === 0
+      ? ''
+      : '<p class="admin-editor-meta"><strong>Зависит от (' + incoming.length + ')</strong></p>'
+        + '<ul class="admin-editor-rel-list">' + incoming.map((rel) => relationItemHtml(rel, 'in')).join('') + '</ul>';
+    const outBlock = outgoing.length === 0
+      ? ''
+      : '<p class="admin-editor-meta"><strong>Влияет на (' + outgoing.length + ')</strong></p>'
+        + '<ul class="admin-editor-rel-list">' + outgoing.map((rel) => relationItemHtml(rel, 'out')).join('') + '</ul>';
+    return '<div class="admin-editor-relations">' + inBlock + outBlock + '</div>';
+  }
+
+  /** Карточка выбранного узла: значения, подтверждённые связи и действия модуля. */
   function modulePropertiesHtml(module: SectorModule): string {
-    const rows = moduleRows(module, registryContext());
+    const context = registryContext();
+    const rows = moduleRows(module, context);
     return [
       '<p class="admin-editor-meta"><strong>' + escapeHtml(module.label) + '</strong><br>'
         + escapeHtml(PLANE_TITLES[module.plane]) + ' · <span class="admin-editor-status" data-status="'
@@ -699,13 +1037,14 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<table class="admin-editor-table"><tbody>' + rows.map((item) => (
         '<tr><th scope="row">' + escapeHtml(item.label) + '</th><td>' + escapeHtml(item.value) + '</td></tr>'
       )).join('') + '</tbody></table>',
-      moduleActionsHtml(module),
+      moduleRelationsHtml(module.id),
+      moduleActionsHtml(module, context),
       '<p class="admin-editor-hint">Файл: <code>' + escapeHtml(module.source) + '</code></p>',
     ].join('');
   }
 
-  function moduleActionsHtml(module: SectorModule): string {
-    const actions = module.actions ?? [];
+  function moduleActionsHtml(module: SectorModule, context: RegistryContext): string {
+    const actions = moduleActions(module, context);
     if (actions.length === 0) return '<p class="admin-editor-hint">Действий в панели нет: модуль только показывает значения.</p>';
     return '<div class="admin-editor-row">' + actions.map((action) => (
       '<button type="button" data-action="module-run" data-run="' + escapeHtml(action.id) + '"'
@@ -759,14 +1098,23 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   function areaEditorHtml(): string {
     const areas = session.doc.areas;
     if (areas.length === 0) {
-      return '<p class="admin-editor-hint">Областей пока нет: проведите контур на карте.</p>';
+      return '<div class="admin-editor-row"><button type="button" data-action="create-area">+ Создать новую область</button></div>'
+        + '<p class="admin-editor-hint">Областей пока нет: нажмите «Создать новую область» или проведите первый штрих на карте.</p>';
     }
-    const options = areas.map((area) => (
+    const placeholder = session.selection === null
+      ? '<option value="" disabled selected>Выберите активную область…</option>'
+      : '';
+    const options = placeholder + areas.map((area) => (
       `<option value="${escapeHtml(area.id)}"${area.id === session.selection ? ' selected' : ''}>${escapeHtml(areaLabel(area))}</option>`
     )).join('');
     const area = selected() ?? areas[0]!;
+    const vertices = totalVertices(area) + strokeVertices(area);
+    const strokesCount = area.strokes?.length ?? 0;
     return [
       '<p class="admin-editor-meta"><strong>Область</strong> · правка командой</p>',
+      '<div class="admin-editor-row">',
+      '<button type="button" data-action="create-area">+ Создать новую область</button>',
+      '</div>',
       '<label class="admin-editor-field">Область <select data-action="select">' + options + '</select></label>',
       '<label class="admin-editor-field">Название <input type="text" value="' + escapeHtml(area.name) + '" data-field="name"></label>',
       '<div class="admin-editor-row">',
@@ -785,7 +1133,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '</div>',
       factionHtml(),
       '<p class="admin-editor-meta">',
-      'Вершин: ' + totalVertices(area) + ' · площадь: ' + Math.round(areaSize(area)).toLocaleString('ru-RU'),
+      'Штрихов: ' + strokesCount + ' · вершин: ' + vertices + ' · площадь: ' + Math.round(areaSize(area)).toLocaleString('ru-RU'),
       ' · состояний: ' + area.states.length,
       (area.address ? ' · адрес: ' + escapeHtml(area.address) : ''),
       '</p>',
@@ -887,11 +1235,16 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /** Сводка в шапке: режим, кисть и привязка видны и при свёрнутых разделах. */
   function summaryText(): string {
     const state = on ? 'рисование включено' : 'рисование выключено';
-    const snap = session.snapMode === 'sector' ? `к ячейке (${snapLetters} букв)` : 'свободная';
+    const gridTier = session.snapMode === 'grid' ? displayedGridTierFor(currentViewport(), currentCamera()) : null;
+    const snap = session.snapMode === 'grid'
+      ? (gridTier === null ? 'к рёбрам сетки' : `к рёбрам сетки (${gridTier.id})`)
+      : (session.snapMode === 'sector' ? `к ячейке (${snapLetters} букв)` : 'свободная');
+    const active = selected();
+    const activePart = active === null ? '' : ` · область: ${active.name} (штрихов: ${active.strokes?.length ?? 0})`;
     const preview = previewOn ? ' · предпросмотр «было → стало»' : '';
     const pending = drawing ? ' · ввод не завершён' : '';
     return `${state} · инструмент: ${TOOL_TITLES[toolState.tool]} · режим: ${modeLabel(session.mode)}`
-      + ` · кисть: ${session.brushWidthPx} px · привязка: ${snap}${preview}${pending}`;
+      + ` · кисть: ${session.brushWidthPx} px · привязка: ${snap}${activePart}${preview}${pending}`;
   }
 
   /* --------------------------------------------------------------- сворачивание */
@@ -941,14 +1294,32 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     }
   }
 
-  /** Область под курсором: верхняя из подходящих (последняя нарисованная). */
+  /** Область под курсором: верхняя из подходящих (кольца и отдельные штрихи). */
   function areaAt(point: AreaPoint): Area | null {
     const areas = session.doc.areas;
+    const hitTolerance = 8 / registryContext().scale;
     for (let i = areas.length - 1; i >= 0; i -= 1) {
       const area = areas[i]!;
-      if (pointInArea(area, point[0], point[1])) return area;
+      if (pointHitsArea(area, point[0], point[1], hitTolerance)) return area;
     }
     return null;
+  }
+
+  /**
+   * Явное создание новой пустой области и переключение активного выбора на неё.
+   * Отмена (`Ctrl+Z`) удаляет пустую область и возвращает прежний выбор.
+   */
+  function createNewArea(): void {
+    const id = nextId();
+    const name = 'Область ' + String(session.doc.areas.length + 1);
+    try {
+      const next = createEmptyArea(session, { id, name });
+      notice = 'Создана пустая область «' + name + '». Новые штрихи записываются в неё.';
+      commit(next);
+    } catch (error) {
+      notice = 'Область не создана: ' + (error instanceof Error ? error.message : 'неизвестная ошибка') + '.';
+      refresh();
+    }
   }
 
   /**
@@ -979,10 +1350,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   /**
    * Завершение ввода инструмента.
    *
-   * Порядок прежний: сначала привязка к ячейке адреса, затем выделение щелчком
-   * у свободной линии, затем фигура. Фигура проверяется существующими правилами,
-   * и только годная уходит в документ одной командой — значит, и одной записью
-   * в историю. Недопустимая фигуру не создаёт, а говорит, что не так.
+   * Сначала привязка к ячейке адреса, затем выделение щелчком у свободной линии,
+   * затем завершённый штрих: при активной области он дописывается в её список
+   * `strokes`, иначе создаёт первую область и делает её активной. При режиме
+   * привязки `grid` точки штриха притягиваются к отображаемым рёбрам сетки.
    */
   function completeInput(): void {
     const byVertices = toolInput(toolState.tool) === 'vertices';
@@ -1027,21 +1398,29 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       return;
     }
     const draft: ShapeDraft = finished.draft;
-    const id = nextId();
+    const active = selected();
+    const areaId = nextId();
+    const strokeId = 'stroke-' + String(session.sequence);
+    const stateId = active === null ? ('state-' + areaId) : ('state-' + active.id + '-1');
     notice = null;
     try {
-      // Область сразу получает состояние текущего режима: иначе она создаётся,
-      // но остаётся невидимой — рендер показывает только области с состояниями.
-      commit(addAreaFromStroke(session, {
-        id,
-        name: TOOL_TITLES[draft.tool] + ' ' + (session.doc.areas.length + 1),
-        points: draft.points,
-        closed: draft.closed,
-        source: 'brush',
-        state: createDefaultState('state-' + id, session.mode),
-        // Открытой линии площади нет: её положение `unknown`, а не догадка.
-        location: draft.closed ? null : 'unknown',
-      }));
+      // Пустая или новая область сразу получает состояние текущего режима,
+      // чтобы завершённый штрих был виден на карте одной командой истории.
+      commit(snapAndRecordStroke(
+        session,
+        {
+          stroke: {
+            id: strokeId,
+            points: draft.points,
+            closed: draft.closed,
+          },
+          areaIdIfNew: areaId,
+          areaNameIfNew: TOOL_TITLES[draft.tool] + ' ' + String(session.doc.areas.length + 1),
+          state: createDefaultState(stateId, session.mode),
+        },
+        currentViewport(),
+        currentCamera(),
+      ));
     } catch (error) {
       notice = 'Фигура не создана: ' + (error instanceof Error ? error.message : 'неизвестная ошибка') + '.';
       refresh();
@@ -1059,10 +1438,20 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       refresh();
       return;
     }
+    const fillCheck = canFillArea(area);
+    if (!fillCheck.ok) {
+      notice = fillCheck.reason ?? 'Закрасить область нельзя.';
+      refresh();
+      return;
+    }
+    const strokeRings = (area.strokes ?? [])
+      .filter((stroke) => stroke.closed)
+      .map((stroke) => closedStrokeRing(stroke));
+    const rings: readonly Ring[] = [...(area.rings as readonly Ring[]), ...strokeRings];
     notice = null;
     commit(addForceFill(session, {
       id: 'force-' + String(session.sequence),
-      rings: area.rings as readonly Ring[],
+      rings,
       color,
       areaId: area.id,
     }));
@@ -1126,6 +1515,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   /** Действия, объявленные модулем: выполняются его же командами. */
   function runModuleAction(action: string): void {
+    if (action === 'create-area') {
+      createNewArea();
+      return;
+    }
     if (action === 'undo') {
       commit(canUndo(session) ? undo(session) : session);
       return;
@@ -1147,23 +1540,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   /* ------------------------------------------------------------------- события */
 
-  function onPanelClick(event: Event): void {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    // Кнопка реестра состоит из подписей внутри: цель клика — вложенный узел,
-    // поэтому действие ищем по ближайшему предку, а не по самой цели.
-    const control = target.closest('[data-action]');
-    if (control === null) return;
-    const action = control.getAttribute('data-action');
-    if (action === null) return;
-    const input = control as HTMLInputElement;
-
+  function applyValueAction(action: string, input: HTMLInputElement): void {
     switch (action) {
-      case 'help': openHelp(); break;
-      case 'help-close': closeHelp(); break;
-      case 'collapse': setCollapsed(true); break;
-      case 'expand': setCollapsed(false); break;
-      case 'toggle-enable': setEnabled(input.checked); break;
       case 'mode': commit(setMode(session, input.value as Mode)); break;
       case 'snap': commit(setSnapMode(session, input.value as SnapMode)); break;
       case 'width': {
@@ -1186,8 +1564,56 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         break;
       }
       case 'snap-letters': snapLetters = clampLetters(Number(input.value)); refresh(); break;
-      // Инструмент и фракция — состояние интерфейса: `refresh`, а не `commit`,
-      // поэтому в журнале и в истории отмен они не оставляют следов.
+      case 'faction': faction = input.value.trim().length === 0 ? null : input.value; refresh(); break;
+      case 'select': commit(selectArea(session, input.value === '' ? null : input.value)); break;
+      default: break;
+    }
+  }
+
+  function onPanelChange(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const control = target.closest('[data-action]');
+    if (control === null) return;
+    const action = control.getAttribute('data-action');
+    if (action === null) return;
+    applyValueAction(action, control as HTMLInputElement);
+  }
+
+  function onPanelClick(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    // Кнопка реестра и узел графа состоят из вложенных тегов: цель клика —
+    // потомок, поэтому действие ищем по ближайшему предку с `[data-action]`.
+    const control = target.closest('[data-action]');
+    if (control === null) return;
+    const action = control.getAttribute('data-action');
+    if (action === null) return;
+    // В реальном браузере клик по `<select>` или числовому `<input>` открывает
+    // список/фокус: перерисовка `innerHTML` на `click` закрыла бы список до
+    // выбора пункта. Для них ждём `change` (`onPanelChange`), а в Node-заглушках
+    // без DOM-классов оставляем прямое срабатывание по `click`.
+    const isNativeSelectOrNumber = (typeof HTMLSelectElement !== 'undefined' && control instanceof HTMLSelectElement)
+      || (typeof HTMLInputElement !== 'undefined' && control instanceof HTMLInputElement && control.type === 'number');
+    if (isNativeSelectOrNumber) return;
+    const input = control as HTMLInputElement;
+
+    switch (action) {
+      case 'help': openHelp(); break;
+      case 'help-close': closeHelp(); break;
+      case 'collapse': setCollapsed(true); break;
+      case 'expand': setCollapsed(false); break;
+      case 'toggle-enable': setEnabled(input.checked); break;
+      case 'mode':
+      case 'snap':
+      case 'width':
+      case 'snap-letters':
+      case 'faction':
+      case 'select':
+        applyValueAction(action, input);
+        break;
+      // Инструмент, фильтр графа и выбор модуля — состояние интерфейса: `refresh`,
+      // а не `commit`, поэтому в журнале и в истории отмен следов не оставляют.
       case 'tool': {
         const tool = control.getAttribute('data-tool') ?? '';
         if (!isToolId(tool)) break;
@@ -1196,9 +1622,16 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         refresh();
         break;
       }
-      case 'faction': faction = input.value.trim().length === 0 ? null : input.value; refresh(); break;
+      case 'relation-filter': {
+        const plane = control.getAttribute('data-plane') ?? '';
+        if (!isRelationFilter(plane)) break;
+        relationFilter = plane;
+        refresh();
+        break;
+      }
       case 'module': moduleId = control.getAttribute('data-module') ?? moduleId; refresh(); break;
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
+      case 'create-area': createNewArea(); break;
       case 'preview': {
         previewOn = input.checked;
         if (previewOn) {
@@ -1211,7 +1644,6 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         refresh();
         break;
       }
-      case 'select': commit(selectArea(session, input.value)); break;
       case 'rename': rename(); break;
       case 'add-state': addState(); break;
       case 'remove': {
@@ -1440,6 +1872,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
           snapMode: session.snapMode,
           brushWidthPx: session.brushWidthPx,
           past: [...session.past, session.doc],
+          pastSelections: [...(session.pastSelections ?? session.past.map(() => null)), session.selection],
+          future: [],
+          futureSelections: [],
         };
         apply();
         return true;
@@ -1471,6 +1906,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // обработчики панорамы на ней просто не получают событий рисования.
   const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
+  bind(panel, 'change', onPanelChange);
   bind(panel, 'input', onColorInput);
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as Handler, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as Handler, true);

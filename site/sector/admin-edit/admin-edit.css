@@ -10,7 +10,7 @@
   top: 86px;
   right: 14px;
   bottom: 14px;
-  width: min(360px, calc(100vw - 28px));
+  width: min(640px, 46vw, calc(100vw - 28px));
   padding: 20px;
   overflow-y: auto;
   transition: width .22s ease, padding .22s ease, height .22s ease;
@@ -176,6 +176,219 @@
 .admin-editor-status[data-status="working"] { color: #9fe0b6; }
 .admin-editor-status[data-status="view"] { color: #d9c79a; }
 .admin-editor-status[data-status="offline"] { color: #d08d92; }
+
+/* Полоса тумблеров, активной области и индикатора яруса сетки. */
+.admin-editor-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.admin-editor-field-label { font-size: 11px; color: var(--muted); }
+.admin-editor-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(138, 215, 194, .42);
+  border-radius: 6px;
+  background: rgba(18, 36, 33, .45);
+  color: #a8ebdb;
+  font: 11px/1.2 var(--mono);
+}
+.admin-editor-active-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(212, 112, 133, .28);
+  border-radius: 6px;
+  background: rgba(21, 10, 14, .48);
+}
+.admin-editor-create-area {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(240, 163, 177, .48);
+  border-radius: 6px;
+  background: rgba(153, 52, 74, .2);
+  color: var(--admin-topbar-ink-strong, var(--white));
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.admin-editor-create-area:hover {
+  border-color: rgba(240, 163, 177, .74);
+  background: rgba(182, 63, 89, .28);
+}
+.admin-editor-create-area:focus-visible {
+  outline: 2px solid rgba(240, 163, 177, .7);
+  outline-offset: 2px;
+}
+
+/* Двухколоночная рабочая область: граф модулей слева, карточка узла справа. */
+.admin-editor-workbench {
+  display: grid;
+  grid-template-columns: minmax(252px, 1.06fr) minmax(236px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.admin-editor-graph-pane,
+.admin-editor-node-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(212, 112, 133, .24);
+  border-radius: 8px;
+  background: rgba(16, 8, 12, .52);
+}
+.admin-editor-node-card { position: sticky; top: 0; }
+.admin-editor-graph-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.admin-editor-graph-filters { display: flex; flex-wrap: wrap; gap: 3px; }
+.admin-editor-graph-filter {
+  padding: 3px 7px;
+  border: 1px solid rgba(212, 112, 133, .24);
+  border-radius: 999px;
+  background: rgba(21, 10, 14, .55);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.admin-editor-graph-filter:hover { border-color: rgba(240, 163, 177, .5); color: var(--text); }
+.admin-editor-graph-filter.is-current {
+  border-color: rgba(240, 163, 177, .68);
+  background: rgba(143, 40, 61, .28);
+  color: var(--white);
+}
+.admin-editor-graph-filter:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 1px; }
+
+.admin-editor-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.admin-editor-graph-legend [data-kind="data"] { color: #f0a3b1; }
+.admin-editor-graph-legend [data-kind="spatial"] { color: #8ad7c2; }
+.admin-editor-graph-legend [data-kind="order"] { color: #9ec5ff; }
+
+.admin-editor-graph-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid rgba(212, 112, 133, .18);
+  border-radius: 6px;
+  background: rgba(9, 5, 8, .66);
+}
+.admin-editor-graph-edge {
+  fill: none;
+  stroke-width: 1.15;
+  opacity: .32;
+  transition: opacity .15s ease, stroke-width .15s ease;
+}
+.admin-editor-graph-edge[data-kind="data"] { stroke: #f0a3b1; }
+.admin-editor-graph-edge[data-kind="spatial"] { stroke: #8ad7c2; }
+.admin-editor-graph-edge[data-kind="order"] { stroke: #9ec5ff; }
+.admin-editor-graph-edge[data-active="true"] {
+  stroke-width: 1.85;
+  opacity: .96;
+}
+.admin-editor-graph-divider {
+  stroke: rgba(212, 112, 133, .32);
+  stroke-dasharray: 4 3;
+  stroke-width: 1;
+}
+.admin-editor-graph-caption {
+  fill: var(--muted);
+  font-size: 8.5px;
+  letter-spacing: .03em;
+}
+.admin-editor-graph-node { cursor: pointer; }
+.admin-editor-graph-node rect {
+  fill: rgba(24, 11, 16, .88);
+  stroke: rgba(212, 112, 133, .34);
+  stroke-width: 1;
+  transition: fill .15s ease, stroke .15s ease;
+}
+.admin-editor-graph-node[data-plane="spatial"] rect { stroke: rgba(138, 215, 194, .38); }
+.admin-editor-graph-node[data-plane="order"] rect { stroke: rgba(158, 197, 255, .38); }
+.admin-editor-graph-node[data-isolated="true"] rect { stroke-dasharray: 3 2; }
+.admin-editor-graph-node:hover rect,
+.admin-editor-graph-node.is-linked rect {
+  fill: rgba(58, 21, 33, .9);
+  stroke: rgba(240, 163, 177, .66);
+}
+.admin-editor-graph-node.is-current rect {
+  fill: rgba(132, 36, 56, .62);
+  stroke: #ffe2e7;
+  stroke-width: 1.5;
+}
+.admin-editor-graph-node text {
+  fill: var(--text);
+  font-size: 8.6px;
+  pointer-events: none;
+}
+.admin-editor-graph-node.is-current text { fill: var(--white); font-weight: 600; }
+.admin-editor-graph-node[data-status="working"] .admin-editor-graph-dot { fill: #9fe0b6; }
+.admin-editor-graph-node[data-status="view"] .admin-editor-graph-dot { fill: #d9c79a; }
+.admin-editor-graph-node[data-status="offline"] .admin-editor-graph-dot { fill: #d08d92; }
+.admin-editor-isolated-tag {
+  margin-left: 4px;
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
+/* Входящие и исходящие подтверждённые связи в карточке узла. */
+.admin-editor-relations { display: grid; gap: 6px; padding-top: 4px; border-top: 1px solid rgba(212, 112, 133, .18); }
+.admin-editor-rel-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.admin-editor-rel-item {
+  display: grid;
+  gap: 3px;
+  padding: 5px 7px;
+  border: 1px solid rgba(212, 112, 133, .18);
+  border-radius: 6px;
+  background: rgba(21, 10, 14, .44);
+}
+.admin-editor-rel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.admin-editor-rel-target {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--admin-topbar-ink-strong, var(--white));
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-editor-rel-target:hover { text-decoration: underline; text-underline-offset: 2px; }
+.admin-editor-rel-target:focus-visible { outline: 1px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
+.admin-editor-rel-kind {
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.admin-editor-rel-kind[data-kind="data"] { color: #f0a3b1; }
+.admin-editor-rel-kind[data-kind="spatial"] { color: #8ad7c2; }
+.admin-editor-rel-kind[data-kind="order"] { color: #9ec5ff; }
 
 /* Инструменты рисования: пять кнопок, выбранный виден сразу. Переключение —
    состояние панели, поэтому отдельной записи в истории оно не даёт. */
@@ -579,6 +792,18 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   .admin-editor-help-backdrop { padding: 12px 8px; }
   .admin-editor-help-dialog { max-height: 86vh; }
   .admin-editor-help-body { padding: 4px 14px 16px; }
+}
+
+@media (max-width: 1020px) {
+  .admin-editor-panel {
+    width: min(430px, calc(100vw - 20px));
+  }
+  .admin-editor-workbench {
+    grid-template-columns: 1fr;
+  }
+  .admin-editor-node-card {
+    position: static;
+  }
 }
 
 @media (max-width: 700px) {

@@ -23,9 +23,9 @@ import { ancestorsOf, checkContainment, hierarchyDepth, statesByMode } from './s
 import { NEUTRAL_COLOR, TASK_STYLES, modeStyle, toCss } from './sector-areas-color.ts';
 import { overridesFor, resolvePaint } from './sector-areas-force.ts';
 import {
+  areaCentroid,
   bboxOf,
   ringArea,
-  ringCentroid,
   selfIntersections,
   strokesArea,
   strokesBBox,
@@ -452,14 +452,15 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
       if (world === null) return [row('Пограничный мир', 'нет данных')];
       const toKolo = safe(() => distanceToCentral(world, BORDER_SYSTEM_KOLO.x, BORDER_SYSTEM_KOLO.y), Number.NaN);
       const area = selectedArea(context);
-      const band = area === null ? null : safe(() => bandAt(world, ...ringCentroid(area.rings[0] ?? [])), null);
+      const center = area === null ? null : areaCentroid(area);
+      const band = center === null ? null : safe(() => bandAt(world, center[0], center[1]), null);
       return [
         row('Полос', String(bandIds(world).length)),
         row('Полосы', DEFAULT_BANDS.map((item) => item.label).join(' · ')),
         row('Центров отсчёта', num(world.centralSystems.length) + ' (Корхал)'),
         row('Корхал → Коло', `${fixed(toKolo)} мировых единиц`),
         row('Полоса Коло', safe(() => bandAt(world, BORDER_SYSTEM_KOLO.x, BORDER_SYSTEM_KOLO.y)?.label ?? EMPTY, EMPTY)),
-        row('Полоса выбранной', band === null ? 'выберите область' : band.label),
+        row('Полоса выбранной', area === null ? 'выберите область' : (band?.label ?? 'нет геометрии')),
         row('Систем загружено', num(context.systems.length)),
       ];
     },

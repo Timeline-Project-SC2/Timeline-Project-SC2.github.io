@@ -21,6 +21,7 @@ import {
   editorHotkey,
   eventLine,
   isDrawButton,
+  moduleGraphHtml,
   parseExported,
   requestMaterial,
   strokePoints,
@@ -28,6 +29,7 @@ import {
 import { addAreaFromSectorCell, addAreaFromStroke, canFillArea, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
 import { TOOL_IDS } from '../src/atlas/sector-areas-tools.ts';
 import {
+  MODULE_RELATIONS,
   PLANE_TITLES,
   SECTOR_MODULES,
   STATUS_TITLES,
@@ -775,5 +777,186 @@ test('в полях ввода редактор не перехватывает 
     delete globalThis.HTMLTextAreaElement;
   }
 
+  api.destroy();
+});
+
+/* -------------------------------- граф модулей, снап к сетке и мульти-штрихи */
+
+test('правая панель размещает граф слева и карточку узла справа внутри блока modules', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const modules = blockHtml(panel, 'modules');
+  const properties = blockHtml(panel, 'properties');
+  const changes = blockHtml(panel, 'changes');
+
+  const graphAt = modules.indexOf('data-editor-graph');
+  const cardAt = modules.indexOf('data-editor-node-card');
+  assert.ok(graphAt > 0 && cardAt > graphAt, 'граф модулей расположен левее карточки выбранного узла');
+  assert.match(modules, /class="admin-editor-workbench"/);
+  assert.match(properties, /data-action="select"/, 'свойства области остаются в опорном блоке properties ниже');
+  assert.match(changes, /data-action="download"/, 'журнал и выгрузка остаются в опорном блоке changes');
+
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(css, /\.admin-editor-workbench\s*\{[\s\S]*?grid-template-columns:/);
+  assert.match(css, /\.admin-editor-graph-svg\s*\{/);
+  assert.match(css, /\.admin-editor-node-card/);
+  api.destroy();
+});
+
+test('граф модулей рисует только подтверждённые рёбра, фильтрует плоскости и выделяет изолированный узел', () => {
+  const allGraph = moduleGraphHtml('sector-areas-editor', 'all');
+  const allEdges = allGraph.match(/class="admin-editor-graph-edge"/g) ?? [];
+  assert.equal(allEdges.length, MODULE_RELATIONS.length, 'число стрелок совпадает с подтверждёнными связями');
+  assert.doesNotMatch(allGraph, /data-from="sector-areas-border-world"/);
+  assert.doesNotMatch(allGraph, /data-to="sector-areas-border-world"/);
+  assert.match(allGraph, /data-module="sector-areas-border-world"[^>]*data-isolated="true"/);
+
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null,
+  });
+  const docBefore = api.doc();
+  clickPanel(panel, 'relation-filter', { 'data-plane': 'spatial' });
+  const spatialModules = blockHtml(panel, 'modules');
+  const spatialCount = MODULE_RELATIONS.filter((rel) => rel.kind === 'spatial').length;
+  assert.equal((spatialModules.match(/class="admin-editor-graph-edge"/g) ?? []).length, spatialCount);
+  assert.doesNotMatch(spatialModules, /class="admin-editor-graph-edge" data-kind="data"/);
+  assert.equal(api.doc(), docBefore, 'фильтр графа — чистое состояние интерфейса');
+  assert.equal(api.session().past.length, 0);
+
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-border-world' });
+  assert.match(blockHtml(panel, 'modules'), /Подтверждённых связей в коде нет/);
+  api.destroy();
+});
+
+test('режим привязки «к рёбрам сетки» доступен в списке и работает через событие change в браузере', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null,
+  });
+  assert.match(blockHtml(panel, 'modules'), /<option value="grid">к рёбрам сетки<\/option>/);
+
+  class SelectControl extends FakeElement {}
+  globalThis.HTMLSelectElement = SelectControl;
+  try {
+    const select = new SelectControl({ 'data-action': 'snap', value: 'grid' });
+    // В реальном браузере клик открывает список и не должен перерисовывать панель.
+    panel.handlers.get('click')({ target: select });
+    assert.equal(api.session().snapMode, 'free', 'клик по открытому списку не сбрасывает DOM');
+    // А выбор пункта присылает событие change.
+    panel.handlers.get('change')({ target: select });
+    assert.equal(api.session().snapMode, 'grid');
+    assert.match(blockHtml(panel, 'modules'), /admin-editor-tier-badge/);
+    assert.equal(api.session().past.length, 0, 'переключение снапа не засоряет историю');
+  } finally {
+    delete globalThis.HTMLSelectElement;
+  }
+
+  api.destroy();
+});
+
+test('кнопка «Создать новую область» переключает активную область, а отмена возвращает прежний выбор', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  clickPanel(panel, 'select', { value: 'area-1' });
+  assert.equal(api.session().selection, 'area-1');
+
+  clickPanel(panel, 'create-area');
+  assert.equal(api.doc().areas.length, 2);
+  const created = api.doc().areas[1];
+  assert.equal(api.session().selection, created.id);
+  assert.deepEqual(created.rings, []);
+  assert.deepEqual(created.strokes, []);
+
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas.length, 1, 'пустая область удалена отменой');
+  assert.equal(api.session().selection, 'area-1', 'активный выбор возвращён к прежней области');
+  api.destroy();
+});
+
+test('несколько штрихов подряд записываются в активную область и притягиваются к рёбрам сетки', () => {
+  const stageHandlers = new Map();
+  const canvas = {
+    clientWidth: 1000,
+    clientHeight: 1000,
+    classList: { add() {}, remove() {} },
+    getBoundingClientRect() { return { left: 0, top: 0, width: 1000, height: 1000 }; },
+    contains(node) { return node === canvas; },
+  };
+  const stage = {
+    clientWidth: 1000,
+    clientHeight: 1000,
+    addEventListener(type, handler) { stageHandlers.set(type, handler); },
+    removeEventListener() {},
+    setPointerCapture() {},
+    hasPointerCapture() { return false; },
+    releasePointerCapture() {},
+    appendChild() {},
+  };
+  const kernel = {
+    state: {
+      sectorAreas: emptySectorAreasDoc(),
+      viewport: { w: 1000, h: 1000 },
+      view: { scale: 1, tx: 0, ty: 0 },
+    },
+    renderer: {
+      requestRender() {},
+      toWorld(x, y) { return { x, y }; },
+      toScreen(x, y) { return { x, y }; },
+    },
+  };
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel, panel, stage, canvas, storage: null });
+  api.setEnabled(true);
+  clickPanel(panel, 'snap', { value: 'grid' });
+  clickPanel(panel, 'module-run', { 'data-run': 'create-area' });
+  assert.equal(api.doc().areas.length, 1);
+  const activeId = api.session().selection;
+
+  const drawSegment = (pts) => {
+    const mk = (x, y) => ({
+      target: canvas,
+      button: 0,
+      buttons: 1,
+      pointerId: 1,
+      clientX: x,
+      clientY: y,
+      stopPropagation() {},
+      preventDefault() {},
+    });
+    stageHandlers.get('pointerdown')(mk(pts[0][0], pts[0][1]));
+    for (let i = 1; i < pts.length; i += 1) {
+      stageHandlers.get('pointermove')(mk(pts[i][0], pts[i][1]));
+    }
+    stageHandlers.get('pointerup')(mk(pts.at(-1)[0], pts.at(-1)[1]));
+  };
+
+  // При viewport 1000x1000 и scale=1 мельчайший отображаемый ярус — T3 (шаг 80).
+  drawSegment([[83, 162], [160, 161], [238, 162]]);
+  drawSegment([[322, 82], [321, 160], [322, 239]]);
+
+  assert.equal(api.doc().areas.length, 1, 'оба штриха попали в одну активную область');
+  const area = api.doc().areas[0];
+  assert.equal(area.id, activeId);
+  assert.equal(area.strokes.length, 2, 'оба завершённых штриха сохранены по отдельности');
+  for (const stroke of area.strokes) {
+    for (const [x, y] of stroke.points) {
+      const onVertical = Math.abs(x - Math.round(x / 80) * 80) < 1e-6;
+      const onHorizontal = Math.abs(y - Math.round(y / 80) * 80) < 1e-6;
+      assert.ok(onVertical || onHorizontal, `вершина [${x}, ${y}] должна лежать на ребре яруса 80`);
+    }
+  }
+
+  // Поштучная отмена: сначала снимается второй штрих, затем первый, затем пустая область.
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas[0].strokes.length, 1);
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas[0].strokes.length, 0);
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas.length, 0);
   api.destroy();
 });
