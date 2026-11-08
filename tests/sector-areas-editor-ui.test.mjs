@@ -287,9 +287,11 @@ test('панель администратора держит три якоря �
   assert.match(css, /\.admin-editor-panel\.is-collapsed/);
   assert.match(css, /@keyframes admin-rail-arrow/);
   assert.match(css, /prefers-reduced-motion[\s\S]*?\.admin-editor-rail-arrows i \{ animation: none/);
-  // Левая панель каталога перекрашена в красноватую тему администратора.
+  // Красная «сигнатура» удалена: рабочие поверхности графитовые, текст укрупнен вдвое.
   assert.match(css, /\.admin-editor-authorized \.left-panel \{/);
-  assert.match(css, /--line-strong: rgba\(218, 128, 149, \.46\)/);
+  assert.doesNotMatch(css, /rgba\(212, 112, 133|#b63f59|#e4a3b0|#f0a3b1/i);
+  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?font-size: 22px;/);
+  assert.match(css, /html\.admin-editor-authorized body\.admin-editor-authorized \.toast\.admin-access-notice\s*\{[\s\S]*?border-color: #7895a1;/);
 });
 
 test('редактор подключается только там, где есть панель администратора', () => {
@@ -803,7 +805,7 @@ test('в полях ввода редактор не перехватывает 
 
 /* -------------------------------- граф модулей, снап к сетке и мульти-штрихи */
 
-test('глобальная навигация «Системы» отделена от единственного рабочего экрана', () => {
+test('верхняя options bar переключает плоскости, а правый dock делит модуль на блоки', () => {
   const panel = fakePanel();
   const navigation = fakePanel();
   const api = createSectorAreasEditorUi({
@@ -816,16 +818,44 @@ test('глобальная навигация «Системы» отделен�
   const nav = navigationHtml(navigation);
 
   assert.match(nav, /data-editor-nav/);
+  assert.match(nav, /admin-editor-options-bar/);
+  assert.match(nav, /admin-editor-modules-bar/);
   assert.match(nav, /data-action="toggle-enable"/);
+  assert.match(nav, /data-action="plane" data-plane="data" aria-pressed="true"/);
+  assert.match(nav, /class="admin-editor-plane" data-plane="spatial" hidden/);
   assert.doesNotMatch(modules, /data-editor-nav/, 'навигации больше нет внутри правой рабочей панели');
   assert.match(modules, /class="admin-editor-shell"/);
   assert.match(modules, /data-editor-screen="module"/);
+  assert.match(modules, /admin-editor-module-overview/);
+  assert.match(modules, /Выбранный модуль · демо, не отправлено/);
+  assert.match(modules, /Живые значения/);
+  assert.match(modules, /admin-editor-dependency-block" data-direction="in"/);
+  assert.match(modules, /admin-editor-dependency-block" data-direction="out"/);
+  assert.match(modules, /Действия модуля/);
+  const blockOrder = [
+    'admin-editor-module-description',
+    'data-direction="in"',
+    'data-direction="out"',
+    'admin-editor-context-block',
+    'admin-editor-values-block',
+    'admin-editor-actions-block',
+  ].map((marker) => modules.indexOf(marker));
+  assert.ok(blockOrder.every((index) => index >= 0));
+  assert.ok(blockOrder.every((index, i) => i === 0 || index > blockOrder[i - 1]), 'описание → связи → контекст → значения → действия');
   assert.doesNotMatch(modules, /data-editor-graph/, 'граф не открыт одновременно с карточкой модуля');
   assert.doesNotMatch(modules, /admin-editor-tools/, 'инструменты рисования не открыты одновременно с карточкой модуля');
   assert.match(properties, /data-action="select"/, 'свойства области формируются в опорном блоке properties');
   assert.match(changes, /data-action="download"/, 'журнал и выгрузка формируются в опорном блоке changes');
 
-  // Переключение системы из независимой навигации меняет только рабочий экран.
+  const before = api.doc();
+  clickPanel(navigation, 'plane', { 'data-plane': 'spatial' });
+  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  assert.equal(navigation.getAttribute('data-active-plane'), 'spatial');
+  assert.match(blockHtml(panel, 'modules'), /Области действия \(Scope\)/);
+  assert.match(navigationHtml(navigation), /class="admin-editor-plane" data-plane="data" hidden/);
+  assert.equal(api.doc(), before, 'смена плоскости не меняет документ');
+
+  // Выбор модуля в верхней панели меняет только содержимое правого dock.
   clickPanel(navigation, 'module', { 'data-module': 'sector-areas-snap' });
   assert.equal(panel.getAttribute('data-active-screen'), 'module');
   assert.match(blockHtml(panel, 'modules'), /Привязка к адресной сетке/);
@@ -1118,7 +1148,7 @@ test('Enter и Space на SVG-узле проходят window-capture, а ро�
   api.destroy();
 });
 
-test('глобальная оболочка, верхний слой навигации и защита от переполнения закреплены в CSS и руководстве', () => {
+test('верхняя панель, узкий Toolbox и правый dock закреплены в CSS и руководстве', () => {
   const css = read('site/sector/admin-edit/admin-edit.css');
   const source = read('src/atlas/sector-areas-editor-ui.ts');
 
@@ -1126,24 +1156,33 @@ test('глобальная оболочка, верхний слой навиг�
   const editorPanelZ = Number(/\.admin-editor-panel\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
   const detailPanelZ = Number(/\.map-stage \.detail-panel,\s*\.map-stage \.travel-panel\s*\{\s*z-index:\s*(\d+)/.exec(css)?.[1]);
   assert.ok(Number.isFinite(navigationZ) && Number.isFinite(editorPanelZ) && Number.isFinite(detailPanelZ));
-  assert.ok(navigationZ > editorPanelZ, `глобальная навигация (${navigationZ}) выше рабочей панели (${editorPanelZ})`);
-  assert.ok(navigationZ > detailPanelZ, `глобальная навигация (${navigationZ}) выше инспектора (${detailPanelZ})`);
+  assert.ok(navigationZ > editorPanelZ, `верхняя навигация (${navigationZ}) выше рабочей панели (${editorPanelZ})`);
+  assert.ok(navigationZ > detailPanelZ, `верхняя навигация (${navigationZ}) выше инспектора (${detailPanelZ})`);
   assert.match(source, /stage\.appendChild\(host\)/, 'host монтируется непосредственно в сцену карты');
   assert.match(source, /host\.setAttribute\('data-editor-navigation', ''\)/);
+  assert.match(source, /host\.setAttribute\('data-editor-tool-rail', ''\)/);
+  assert.match(source, /bind\(toolRail, 'click', onPanelClick\)/);
   assert.match(css, /\.admin-editor-authorized \.admin-editor-navigation\s*\{\s*display:\s*flex;\s*\}/);
   assert.match(css, /\.admin-editor-authorized \.left-panel,\s*\.admin-editor-authorized #toggleSidePanel,\s*\.admin-editor-authorized \.map-page-intro\s*\{\s*display:\s*none;\s*\}/);
 
-  assert.match(css, /\.admin-editor-nav-group\s*>\s*\*,[\s\S]*?\.admin-editor-modules\s*>\s*li\s*\{[\s\S]*?min-width:\s*0;/);
-  assert.match(css, /\.admin-editor-module-name\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
+  assert.match(css, /\.admin-editor-navigation\s*\{[\s\S]*?top: 14px;[\s\S]*?right: 14px;[\s\S]*?left: 14px;/);
+  assert.match(css, /\.admin-editor-options-bar\s*\{/);
+  assert.match(css, /\.admin-editor-modules-bar\s*\{/);
+  assert.match(css, /\.admin-editor-tool-rail\s*\{[\s\S]*?width: 118px;/);
   assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?overflow-x:\s*hidden;/);
+  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?width: min\(600px, 44vw, calc\(100vw - 170px\)\);[\s\S]*?font-size: 22px;/);
+  assert.match(css, /\.admin-editor-panel\[data-active-screen="module"\] \.admin-editor-body > \.admin-editor-notice \{ display: none; \}/);
+  assert.doesNotMatch(css, /> \.admin-editor-panel \.admin-editor-notice/);
+  assert.match(css, /\.admin-editor-panel\[data-active-screen="module"\] \.admin-editor-heading > div:first-child \{ display: none; \}/);
   assert.match(css, /@media \(max-width: 900px\)[\s\S]*?:has\(\.admin-editor-navigation:not\(\.is-collapsed\)\) \.admin-editor-panel\s*\{[\s\S]*?visibility:\s*hidden;/);
-  assert.match(css, /@media \(max-width: 900px\)[\s\S]*?width:\s*min\(420px, calc\(100vw - 72px\)\)/);
+  assert.match(css, /@media \(max-width: 900px\)[\s\S]*?width: min\(600px, calc\(100vw - 150px\)\)/);
 
   const guide = read('docs/admins/sector-areas-editor.md');
-  assert.match(guide, /Панель и навигация «Системы»/);
+  assert.match(guide, /Верхняя панель модулей и правые dock-блоки/);
   assert.match(guide, /снаружи правой рабочей панели/);
   assert.match(guide, /Obsidian/);
   assert.match(guide, /Photoshop/);
   assert.match(guide, /GIMP/);
   assert.match(guide, /Экран «Зависимости»/);
+  assert.match(guide, /вдвое/);
 });
