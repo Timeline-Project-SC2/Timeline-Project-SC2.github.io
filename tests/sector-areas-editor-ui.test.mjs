@@ -290,11 +290,11 @@ test('панель администратора держит три якоря �
   assert.match(css, /\.admin-editor-panel\.is-collapsed/);
   assert.match(css, /@keyframes admin-rail-arrow/);
   assert.match(css, /prefers-reduced-motion[\s\S]*?\.admin-editor-rail-arrows i \{ animation: none/);
-  // Красная «сигнатура» удалена: рабочие поверхности графитовые, текст укрупнен вдвое.
+  // Красная и серая «сигнатуры» удалены: прежняя бирюзовая тема, крупный текст.
   assert.match(css, /\.admin-editor-authorized \.left-panel \{/);
-  assert.doesNotMatch(css, /rgba\(212, 112, 133|#b63f59|#e4a3b0|#f0a3b1/i);
+  assert.doesNotMatch(css, /rgba\(212, 112, 133|rgba\(25, 11, 16|rgba\(20, 10, 14|#b63f59|#e4a3b0|#f0a3b1/i);
   assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?font-size: 22px;/);
-  assert.match(css, /html\.admin-editor-authorized body\.admin-editor-authorized \.toast\.admin-access-notice\s*\{[\s\S]*?border-color: #7895a1;/);
+  assert.match(css, /html\.admin-editor-authorized body\.admin-editor-authorized \.toast\.admin-access-notice\s*\{[\s\S]*?border-color: rgba\(46, 245, 230, \.72\);/);
 });
 
 test('редактор подключается только там, где есть панель администратора', () => {
@@ -808,7 +808,7 @@ test('в полях ввода редактор не перехватывает 
 
 /* -------------------------------- граф модулей, снап к сетке и мульти-штрихи */
 
-test('верхняя options bar переключает плоскости, а правый dock делит модуль на блоки', () => {
+test('системная шторка показывает все плоскости, а правый редактор делит модуль на блоки', () => {
   const panel = fakePanel();
   const navigation = fakePanel();
   const api = createSectorAreasEditorUi({
@@ -821,12 +821,16 @@ test('верхняя options bar переключает плоскости, а �
   const nav = navigationHtml(navigation);
 
   assert.match(nav, /data-editor-nav/);
-  assert.match(nav, /admin-editor-options-bar/);
-  assert.match(nav, /admin-editor-modules-bar/);
+  assert.match(nav, /Контекст карты/);
+  assert.match(nav, /Системы/);
+  assert.match(nav, /Связи данных/);
+  assert.match(nav, /Пространственное влияние/);
+  assert.match(nav, /Порядок отрисовки/);
+  assert.equal((nav.match(/class="admin-editor-plane"/g) ?? []).length, 3, 'все три плоскости видимы одновременно');
+  assert.equal((nav.match(/data-action="module"/g) ?? []).length, SECTOR_MODULES.length);
   assert.match(nav, /data-action="toggle-enable"/);
-  assert.match(nav, /data-action="plane" data-plane="data" aria-pressed="true"/);
-  assert.match(nav, /class="admin-editor-plane" data-plane="spatial" hidden/);
-  assert.doesNotMatch(modules, /data-editor-nav/, 'навигации больше нет внутри правой рабочей панели');
+  assert.doesNotMatch(nav, /admin-editor-options-bar|admin-editor-modules-bar|data-action="plane"/);
+  assert.doesNotMatch(modules, /data-editor-nav/, 'системной шторки нет внутри правого редактора');
   assert.match(modules, /class="admin-editor-shell"/);
   assert.match(modules, /data-editor-screen="module"/);
   assert.match(modules, /admin-editor-module-overview/);
@@ -850,16 +854,10 @@ test('верхняя options bar переключает плоскости, а �
   assert.match(properties, /data-action="select"/, 'свойства области формируются в опорном блоке properties');
   assert.match(changes, /data-action="download"/, 'журнал и выгрузка формируются в опорном блоке changes');
 
+  // Выбор модуля в системной шторке меняет только содержимое правого редактора.
   const before = api.doc();
-  clickPanel(navigation, 'plane', { 'data-plane': 'spatial' });
-  assert.equal(panel.getAttribute('data-active-screen'), 'module');
-  assert.equal(navigation.getAttribute('data-active-plane'), 'spatial');
-  assert.match(blockHtml(panel, 'modules'), /Области действия \(Scope\)/);
-  assert.match(navigationHtml(navigation), /class="admin-editor-plane" data-plane="data" hidden/);
-  assert.equal(api.doc(), before, 'смена плоскости не меняет документ');
-
-  // Выбор модуля в верхней панели меняет только содержимое правого dock.
   clickPanel(navigation, 'module', { 'data-module': 'sector-areas-snap' });
+  assert.equal(api.doc(), before, 'смена модуля не меняет документ');
   assert.equal(panel.getAttribute('data-active-screen'), 'module');
   assert.match(blockHtml(panel, 'modules'), /Привязка к адресной сетке/);
   assert.match(navigationHtml(navigation), /data-module="sector-areas-snap" aria-current="page"/);
@@ -1183,7 +1181,7 @@ test('Enter и Space на SVG-узле проходят window-capture, а ро�
   api.destroy();
 });
 
-test('верхняя панель, узкий Toolbox и правый dock закреплены в CSS и руководстве', () => {
+test('системная шторка, прежняя компоновка и читаемый правый редактор закреплены в CSS и руководстве', () => {
   const css = read('site/sector/admin-edit/admin-edit.css');
   const source = read('src/atlas/sector-areas-editor-ui.ts');
 
@@ -1191,29 +1189,29 @@ test('верхняя панель, узкий Toolbox и правый dock за�
   const editorPanelZ = Number(/\.admin-editor-panel\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
   const detailPanelZ = Number(/\.map-stage \.detail-panel,\s*\.map-stage \.travel-panel\s*\{\s*z-index:\s*(\d+)/.exec(css)?.[1]);
   assert.ok(Number.isFinite(navigationZ) && Number.isFinite(editorPanelZ) && Number.isFinite(detailPanelZ));
-  assert.ok(navigationZ > editorPanelZ, `верхняя навигация (${navigationZ}) выше рабочей панели (${editorPanelZ})`);
-  assert.ok(navigationZ > detailPanelZ, `верхняя навигация (${navigationZ}) выше инспектора (${detailPanelZ})`);
+  assert.ok(navigationZ > editorPanelZ, `системная шторка (${navigationZ}) выше рабочей панели (${editorPanelZ})`);
+  assert.ok(navigationZ > detailPanelZ, `системная шторка (${navigationZ}) выше инспектора (${detailPanelZ})`);
   assert.match(source, /stage\.appendChild\(host\)/, 'host монтируется непосредственно в сцену карты');
   assert.match(source, /host\.setAttribute\('data-editor-navigation', ''\)/);
-  assert.match(source, /host\.setAttribute\('data-editor-tool-rail', ''\)/);
-  assert.match(source, /bind\(toolRail, 'click', onPanelClick\)/);
+  assert.doesNotMatch(source, /data-editor-tool-rail|toolRail|navigationPlane/);
   assert.match(css, /\.admin-editor-authorized \.admin-editor-navigation\s*\{\s*display:\s*flex;\s*\}/);
   assert.match(css, /\.admin-editor-authorized \.left-panel,\s*\.admin-editor-authorized #toggleSidePanel,\s*\.admin-editor-authorized \.map-page-intro\s*\{\s*display:\s*none;\s*\}/);
 
-  assert.match(css, /\.admin-editor-navigation\s*\{[\s\S]*?top: 14px;[\s\S]*?right: 14px;[\s\S]*?left: 14px;/);
-  assert.match(css, /\.admin-editor-options-bar\s*\{/);
-  assert.match(css, /\.admin-editor-modules-bar\s*\{/);
-  assert.match(css, /\.admin-editor-tool-rail\s*\{[\s\S]*?width: 118px;/);
+  assert.match(css, /\.admin-editor-navigation\s*\{[\s\S]*?top: 86px;[\s\S]*?left: 14px;[\s\S]*?bottom: 14px;[\s\S]*?width: 288px;/);
+  assert.match(css, /\.admin-editor-nav-group\s*>\s*\*,[\s\S]*?\.admin-editor-modules\s*>\s*li\s*\{[\s\S]*?min-width:\s*0;/);
+  assert.match(css, /\.admin-editor-module-name\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
+  assert.doesNotMatch(css, /\.admin-editor-options-bar|\.admin-editor-modules-bar|\.admin-editor-tool-rail/);
   assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?overflow-x:\s*hidden;/);
-  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?width: min\(600px, 44vw, calc\(100vw - 170px\)\);[\s\S]*?font-size: 22px;/);
+  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?width: min\(420px, 38vw, calc\(100vw - 340px\)\);/);
+  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?font-size: 22px;/);
+  assert.match(css, /\.admin-editor-detail-block/);
   assert.match(css, /\.admin-editor-panel\[data-active-screen="module"\] \.admin-editor-body > \.admin-editor-notice \{ display: none; \}/);
-  assert.doesNotMatch(css, /> \.admin-editor-panel \.admin-editor-notice/);
   assert.match(css, /\.admin-editor-panel\[data-active-screen="module"\] \.admin-editor-heading > div:first-child \{ display: none; \}/);
   assert.match(css, /@media \(max-width: 900px\)[\s\S]*?:has\(\.admin-editor-navigation:not\(\.is-collapsed\)\) \.admin-editor-panel\s*\{[\s\S]*?visibility:\s*hidden;/);
-  assert.match(css, /@media \(max-width: 900px\)[\s\S]*?width: min\(600px, calc\(100vw - 150px\)\)/);
+  assert.match(css, /@media \(max-width: 900px\)[\s\S]*?width:\s*min\(420px, calc\(100vw - 72px\)\)/);
 
   const guide = read('docs/admins/sector-areas-editor.md');
-  assert.match(guide, /Верхняя панель модулей и правые dock-блоки/);
+  assert.match(guide, /Панель и навигация «Системы»/);
   assert.match(guide, /снаружи правой рабочей панели/);
   assert.match(guide, /Obsidian/);
   assert.match(guide, /Photoshop/);
