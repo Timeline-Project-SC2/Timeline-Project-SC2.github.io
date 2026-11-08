@@ -51,6 +51,7 @@
 | История агентских сессий (бывший `HANDOFF.md`) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
 | Планетные промпты и Зерус | [`prompts/`](prompts/planet-seeds-from-reference.md), [`zerus/README.md`](zerus/README.md) |
 | Предварительная концепция правил взаимодействия модулей и редактора | [`concepts/module-interaction-rules.md`](concepts/module-interaction-rules.md) |
+| Ориентиры UI/UX веб-атласа (справочник ревью и вёрстки + предложения владельцу, не гейт слияния) | [`concepts/atlas-ui-ux-guidelines.md`](concepts/atlas-ui-ux-guidelines.md), [предложения и расхождения](concepts/atlas-ui-ux-proposals.md) |
 | Концепция процедурной станции (план, не спецификация реализации) | [`concepts/station-generator-plan.md`](concepts/station-generator-plan.md) |
 | Журнал изменений (append-only) | [`../CHANGELOG.md`](../CHANGELOG.md) |
 | Вводная для агента | [`HANDOFF.md`](HANDOFF.md), [`handoff/repo-zoom-and-rules.md`](handoff/repo-zoom-and-rules.md), [`../AGENTS.md`](../AGENTS.md) |
