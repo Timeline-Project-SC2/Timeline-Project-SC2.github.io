@@ -24,9 +24,12 @@ import {
   moduleGraphHtml,
   parseExported,
   requestMaterial,
+  snappedStrokePreviewPoints,
   strokePoints,
 } from '../src/atlas/sector-areas-editor-ui.ts';
-import { addAreaFromSectorCell, addAreaFromStroke, canFillArea, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
+import { addAreaFromSectorCell, addAreaFromStroke, canFillArea, createEditorSession, exportDoc, setSnapMode, snapAndRecordStroke } from '../src/atlas/sector-areas-editor.ts';
+import { buildAreaPaints } from '../src/atlas/sector-areas-render.ts';
+import { levelForWidth } from '../src/atlas/level-ladder.ts';
 import { TOOL_IDS } from '../src/atlas/sector-areas-tools.ts';
 import {
   MODULE_RELATIONS,
@@ -941,6 +944,38 @@ test('кнопка «Создать новую область» переключ
   assert.equal(api.doc().areas.length, 1, 'пустая область удалена отменой');
   assert.equal(api.session().selection, 'area-1', 'активный выбор возвращён к прежней области');
   api.destroy();
+});
+
+test('зелёный grid preview координатно совпадает с Chaikin-контуром итогового рендера', () => {
+  const viewport = { w: 1000, h: 1000 };
+  const camera = { centerX: 500, centerY: 500, visibleWidth: 1000 };
+  const input = [[83, 352], [483, 102], [963, 77], [884, 238], [643, 454]];
+
+  for (const closed of [false, true]) {
+    const suffix = closed ? 'closed' : 'open';
+    const preview = snappedStrokePreviewPoints(input, viewport, camera, { closed });
+    let session = createEditorSession(emptySectorAreasDoc());
+    session = setSnapMode(session, 'grid');
+    session = snapAndRecordStroke(session, {
+      stroke: { id: `stroke-preview-${suffix}`, points: input, closed },
+      areaIdIfNew: `area-preview-${suffix}`,
+      areaNameIfNew: 'Предпросмотр',
+      state: createDefaultState(`state-preview-${suffix}`, 'political'),
+    }, viewport, camera);
+    const saved = session.doc.areas[0].strokes[0];
+    const paints = buildAreaPaints(session.doc, { level: levelForWidth(camera.visibleWidth) });
+    const painted = paints.find((paint) => paint.strokeIds?.includes(`stroke-preview-${suffix}`));
+
+    assert.ok(painted, `${suffix}: сохранённый штрих реально попадает в итоговый слой отрисовки`);
+    assert.deepEqual(preview, painted.rings[0].points, `${suffix}: preview = RDP + Chaikin итогового состояния`);
+    assert.notDeepEqual(preview, saved.points, `${suffix}: диагональные срезы видны до завершения ввода`);
+    assert.ok(preview.length > saved.points.length, `${suffix}: один проход Chaikin добавляет вершины срезов`);
+    for (const [x, y] of saved.points) {
+      const onVertical = Math.abs(x - Math.round(x / 80) * 80) < 1e-6;
+      const onHorizontal = Math.abs(y - Math.round(y / 80) * 80) < 1e-6;
+      assert.ok(onVertical || onHorizontal, `${suffix}: сглаженные preview-точки не сохраняются вместо привязки к сетке`);
+    }
+  }
 });
 
 test('несколько штрихов подряд записываются в активную область и притягиваются к рёбрам сетки', () => {

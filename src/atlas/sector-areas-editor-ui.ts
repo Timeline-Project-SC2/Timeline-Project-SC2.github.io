@@ -41,9 +41,12 @@ import {
 import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
 import { displayedGridTierFor } from './sector-scene.ts';
 import type { FrameViewport, SceneCamera } from './sector-scene.ts';
+import { levelForWidth } from './level-ladder.ts';
 import { snapStrokeToDisplayedGrid } from './sector-areas-snap.ts';
 import { areaSize } from './sector-areas-render.ts';
-import { closedStrokeRing, pointHitsArea, strokeVertices, totalVertices } from './sector-areas-geometry.ts';
+import { lodEpsilon, roundingIterations } from './sector-areas-lod.ts';
+import { statesForLevel } from './sector-areas-cascade.ts';
+import { closedStrokeRing, pointHitsArea, simplifyStroke, strokeVertices, totalVertices } from './sector-areas-geometry.ts';
 import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
 import { createFactionPalette } from './sector-areas-color.ts';
 import type { FactionPalette } from './sector-areas-color.ts';
@@ -250,6 +253,34 @@ export function createDefaultState(id: string, mode: Mode): AreaState {
     override: false,
     label: null,
   };
+}
+
+export interface SnappedStrokePreviewOptions {
+  readonly closed: boolean;
+  readonly rounding?: AreaState['rounding'];
+  readonly lodBias?: number;
+}
+
+/**
+ * Зелёный preview повторяет геометрию итогового `buildAreaPaints`: сначала штрих
+ * привязывается к рёбрам, затем к нему применяются те же RDP и Chaikin, что и
+ * при отрисовке состояния. В документ это не пишется: сохранённый штрих остаётся
+ * привязанным к сетке, а срезы углов по-прежнему вычисляет рендер.
+ */
+export function snappedStrokePreviewPoints(
+  points: readonly AreaPoint[],
+  viewport: FrameViewport,
+  camera: SceneCamera,
+  options: SnappedStrokePreviewOptions,
+): readonly AreaPoint[] {
+  const snapped = snapStrokeToDisplayedGrid(points, viewport, camera, { closed: options.closed }).points;
+  const bias = options.lodBias ?? 0;
+  const rounding = options.rounding ?? 1;
+  return simplifyStroke(
+    { id: '__grid_preview__', points: snapped, closed: options.closed },
+    lodEpsilon(levelForWidth(camera.visibleWidth), bias),
+    roundingIterations(rounding),
+  ).points;
 }
 
 /**
@@ -666,6 +697,17 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     };
   }
 
+  /** LOD текущего слоя: preview нового штриха не должен обещать другую форму. */
+  function previewPaintState(): Pick<AreaState, 'rounding' | 'lodBias'> {
+    const fallback = createDefaultState('__grid_preview__', session.mode);
+    const area = selected();
+    if (area === null) return fallback;
+    // Force-override в итоговом рендере всегда использует один проход Chaikin.
+    if ((session.doc.overrides ?? []).some((override) => override.areaId === area.id)) return fallback;
+    const level = levelForWidth(currentCamera().visibleWidth);
+    return statesForLevel(session.doc, area.id, level, session.mode)[0]?.state ?? fallback;
+  }
+
   /* ------------------------------------------------ предпросмотр «было → стало» */
 
   /** Подпись состояния кадра: по ней видно, что карту сдвинули или приблизили. */
@@ -742,7 +784,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
    * показывается замкнутой, открытая линия — открытой: предпросмотр не должен
    * обещать замыкания, которого не будет. При привязке «к рёбрам сетки» поверх
    * пунктирной траектории курсора сразу рисуется живой контур по рёбрам сетки
-   * (само состояние инструмента и документ до завершения ввода не меняются).
+   * с LOD и Chaikin-срезами итогового состояния (само состояние инструмента
+   * и документ до завершения ввода не меняются).
    */
   function drawStroke(ctx: CanvasRenderingContext2D): void {
     const draft = previewDraft(toolState);
@@ -770,9 +813,12 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     ctx.setLineDash([]);
 
     if (gridSnapActive) {
-      const snapped = snapStrokeToDisplayedGrid(draft.points, currentViewport(), currentCamera(), {
+      const paintState = previewPaintState();
+      const snapped = snappedStrokePreviewPoints(draft.points, currentViewport(), currentCamera(), {
         closed: draft.closed,
-      }).points;
+        rounding: paintState.rounding,
+        lodBias: paintState.lodBias,
+      });
       const snappedRing = draft.closed && snapped.length > 1
         ? [...snapped, snapped[0]!]
         : snapped;
