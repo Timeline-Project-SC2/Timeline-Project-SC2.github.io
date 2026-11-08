@@ -16,13 +16,16 @@ import type { AddressLetters } from './sector-address.ts';
 import { createArea, emptySectorAreasDoc, parseSectorAreas } from './sector-areas-contract.ts';
 import { createOverrideStroke } from './sector-areas-force.ts';
 import { ringCentroid } from './sector-areas-geometry.ts';
-import { classifyArea } from './sector-areas-scope.ts';
+import { classifyArea, classifyLocation } from './sector-areas-scope.ts';
 import type { ClassifyOptions, Scope } from './sector-areas-scope.ts';
+import { snapStrokeToDisplayedGrid } from './sector-areas-snap.ts';
+import type { FrameViewport, SceneCamera } from './sector-scene.ts';
 import type {
   Area,
   AreaLocation,
   AreaPoint,
   AreaState,
+  AreaStroke,
   GradientSpec,
   Mode,
   Ring,
@@ -31,15 +34,19 @@ import type {
 } from './sector-areas-contract.ts';
 import { MAX_LEVEL, MIN_LEVEL } from './sector-areas-contract.ts';
 
-export type SnapMode = 'free' | 'sector';
+export type SnapMode = 'free' | 'sector' | 'grid';
 
 export interface EditorSession {
   readonly doc: SectorAreasDoc;
   readonly past: readonly SectorAreasDoc[];
   readonly future: readonly SectorAreasDoc[];
+  /** Активный выбор до каждого шага `past` — восстанавливается при `undo`. */
+  readonly pastSelections?: readonly (string | null)[];
+  /** Активный выбор на каждом шаге `future` — восстанавливается при `redo`. */
+  readonly futureSelections?: readonly (string | null)[];
   /** Режим по умолчанию для новой кисти: не меняет уже созданные состояния. */
   readonly mode: Mode;
-  /** `free` — произвольный полигон; `sector` — снап к ячейке адреса. */
+  /** `free` — без привязки; `grid` — к рёбрам отображаемой адресной сетки; `sector` — к ячейке. */
   readonly snapMode: SnapMode;
   /** Ширина кисти в экранных пикселях; переводится в мировые по масштабу. */
   readonly brushWidthPx: number;
@@ -48,7 +55,7 @@ export interface EditorSession {
 }
 
 /**
- * Следующий свободный номер для `area-*`, `state-*`, `ev-*` и `force-*`.
+ * Следующий свободный номер для `area-*`, `stroke-*`, `state-*`, `ev-*` и `force-*`.
  *
  * Номер обязан продолжаться, а не начинаться заново: иначе загрузка черновика
  * и импорт документа давали бы повторяющиеся идентификаторы. Считаем по
@@ -65,6 +72,7 @@ export function nextSequence(doc: SectorAreasDoc): number {
   for (const area of doc.areas) {
     consider(area.id);
     for (const state of area.states) consider(state.id);
+    for (const stroke of area.strokes ?? []) consider(stroke.id);
   }
   for (const override of doc.overrides) consider(override.id);
   for (const event of doc.events) consider(event.id);
@@ -77,6 +85,8 @@ export function createEditorSession(doc?: SectorAreasDoc): EditorSession {
     doc: initial,
     past: [],
     future: [],
+    pastSelections: [],
+    futureSelections: [],
     mode: 'political',
     snapMode: 'free',
     brushWidthPx: 8,
@@ -91,14 +101,23 @@ function commit(
   session: EditorSession,
   doc: SectorAreasDoc,
   event: { kind: string; areaId: string | null; mode: Mode | null; note: string },
+  nextSelection?: string | null,
 ): EditorSession {
   const id = `ev-${session.sequence}`;
+  const committedDoc: SectorAreasDoc = {
+    ...doc,
+    events: [...doc.events, { id, kind: event.kind, areaId: event.areaId, mode: event.mode, note: event.note }],
+  };
+  const pastSelections = session.pastSelections ?? session.past.map(() => null);
   return {
     ...session,
-    doc: { ...doc, events: [...doc.events, { id, kind: event.kind, areaId: event.areaId, mode: event.mode, note: event.note }] },
+    doc: committedDoc,
     past: [...session.past, session.doc],
+    pastSelections: [...pastSelections, session.selection],
     future: [],
-    sequence: session.sequence + 1,
+    futureSelections: [],
+    selection: nextSelection === undefined ? session.selection : nextSelection,
+    sequence: Math.max(session.sequence + 1, nextSequence(committedDoc)),
   };
 }
 
@@ -113,22 +132,42 @@ export function canRedo(session: EditorSession): boolean {
 export function undo(session: EditorSession): EditorSession {
   const previous = session.past.at(-1);
   if (previous === undefined) return session;
+  const pastSelections = session.pastSelections ?? [];
+  const hasTrackedSelection = pastSelections.length === session.past.length;
+  const fallbackSelection = session.selection !== null
+    && previous.areas.some((area) => area.id === session.selection)
+    ? session.selection
+    : null;
+  const restoredSelection = hasTrackedSelection
+    ? (pastSelections.at(-1) ?? null)
+    : fallbackSelection;
   return {
     ...session,
     doc: previous,
     past: session.past.slice(0, -1),
+    pastSelections: hasTrackedSelection ? pastSelections.slice(0, -1) : pastSelections,
     future: [session.doc, ...session.future],
+    futureSelections: [session.selection, ...(session.futureSelections ?? [])],
+    selection: restoredSelection,
   };
 }
 
 export function redo(session: EditorSession): EditorSession {
   const next = session.future[0];
   if (next === undefined) return session;
+  const futureSelections = session.futureSelections ?? [];
+  const hasTrackedSelection = futureSelections.length === session.future.length;
+  const restoredSelection = hasTrackedSelection
+    ? (futureSelections[0] ?? null)
+    : session.selection;
   return {
     ...session,
     doc: next,
     past: [...session.past, session.doc],
+    pastSelections: [...(session.pastSelections ?? session.past.map(() => null)), session.selection],
     future: session.future.slice(1),
+    futureSelections: hasTrackedSelection ? futureSelections.slice(1) : futureSelections,
+    selection: restoredSelection,
   };
 }
 
@@ -253,10 +292,12 @@ export function addAreaFromStroke(session: EditorSession, input: StrokeInput): E
     : { ...withState, location: input.location };
 
   const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
-  return {
-    ...commit(session, doc, { kind: 'create', areaId: area.id, mode: session.mode, note: `Создана область «${area.name}» кистью` }),
-    selection: area.id,
-  };
+  return commit(
+    session,
+    doc,
+    { kind: 'create', areaId: area.id, mode: session.mode, note: `Создана область «${area.name}» кистью` },
+    area.id,
+  );
 }
 
 export interface SectorCellInput {
@@ -310,10 +351,226 @@ export function addAreaFromSectorCell(session: EditorSession, input: SectorCellI
   const area: Area = input.state === undefined ? created : { ...created, states: [input.state] };
 
   const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
+  return commit(
+    session,
+    doc,
+    { kind: 'create', areaId: area.id, mode: session.mode, note: `Создана область «${area.name}» по ячейке ${area.address ?? ''}` },
+    area.id,
+  );
+}
+
+/* ------------------------------------------- пустая область и несколько штрихов */
+
+export interface CreateEmptyAreaInput {
+  readonly id?: string;
+  readonly name?: string;
+  readonly parentId?: string | null;
+  readonly source?: Area['source'];
+  readonly state?: AreaState;
+}
+
+/**
+ * Команда «Создать новую область»: создаёт пустую область (`rings: []`, `strokes: []`)
+ * и переключает активный выбор (`selection`) на её идентификатор.
+ * При отмене (`undo`) пустая область удаляется и восстанавливается прежний активный ID.
+ */
+export function createEmptyArea(
+  session: EditorSession,
+  input?: CreateEmptyAreaInput,
+): EditorSession {
+  const id = input?.id ?? `area-${session.sequence}`;
+  if (session.doc.areas.some((area) => area.id === id)) {
+    throw new RangeError(`Область ${id} уже существует`);
+  }
+  const name = input?.name ?? `Область ${session.sequence}`;
+  const created = createArea({
+    id,
+    name,
+    rings: [],
+    strokes: [],
+    parentId: input?.parentId ?? null,
+    address: null,
+    closed: true,
+    source: input?.source ?? 'brush',
+  });
+  const area: Area = input?.state === undefined ? created : { ...created, states: [input.state] };
+  const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
+  return commit(
+    session,
+    doc,
+    { kind: 'create', areaId: area.id, mode: session.mode, note: `Создана пустая область «${area.name}»` },
+    area.id,
+  );
+}
+
+function normalizeStrokeForArea(stroke: AreaStroke): AreaStroke {
+  if (stroke.id.trim().length === 0) {
+    throw new RangeError('Идентификатор штриха не может быть пустым');
+  }
+  const points = stroke.points.map((point): AreaPoint => [point[0], point[1]]);
+  if (stroke.closed && points.length >= 2) {
+    const first = points[0]!;
+    const last = points[points.length - 1]!;
+    if (first[0] === last[0] && first[1] === last[1]) {
+      points.pop();
+    }
+  }
+  const minimum = stroke.closed ? 3 : 2;
+  if (points.length < minimum) {
+    throw new RangeError(`Штрих должен содержать минимум ${minimum} вершин`);
+  }
   return {
-    ...commit(session, doc, { kind: 'create', areaId: area.id, mode: session.mode, note: `Создана область «${area.name}» по ячейке ${area.address ?? ''}` }),
-    selection: area.id,
+    id: stroke.id,
+    points,
+    closed: stroke.closed,
   };
+}
+
+function strokeIdExists(doc: SectorAreasDoc, strokeId: string): boolean {
+  for (const area of doc.areas) {
+    for (const stroke of area.strokes ?? []) {
+      if (stroke.id === strokeId) return true;
+    }
+  }
+  return false;
+}
+
+export interface AddStrokeInput {
+  readonly areaId: string;
+  readonly stroke: AreaStroke;
+  /** Если у целевой пустой области ещё нет состояний, прикладывает состояние в той же команде. */
+  readonly stateIfEmpty?: AreaState;
+}
+
+/**
+ * Добавляет один завершённый штрих в указанную область как одну команду истории,
+ * не переиспользуя и не изменяя `area.rings` и отверстия.
+ */
+export function addStrokeToArea(session: EditorSession, input: AddStrokeInput): EditorSession {
+  const normalized = normalizeStrokeForArea(input.stroke);
+  if (strokeIdExists(session.doc, normalized.id)) {
+    throw new RangeError(`Штрих ${normalized.id} уже существует в документе`);
+  }
+  const target = session.doc.areas.find((area) => area.id === input.areaId);
+  if (target === undefined) {
+    throw new RangeError(`Область ${input.areaId} не найдена`);
+  }
+
+  const nextAreas = session.doc.areas.map((area): Area => {
+    if (area.id !== input.areaId) return area;
+    const prevStrokes = area.strokes ?? [];
+    const nextStrokes = [...prevStrokes, normalized];
+    const nextAddress = area.address ?? addressForRing(normalized.points, normalized.closed);
+    const nextStates = area.states.length === 0 && input.stateIfEmpty !== undefined
+      ? [input.stateIfEmpty]
+      : area.states;
+    const hasClosedGeometry = (area.rings.length > 0 && area.closed)
+      || nextStrokes.some((item) => item.closed);
+    const nextLocation = area.scopeId === null && area.rings.length === 0
+      ? (hasClosedGeometry ? null : 'unknown')
+      : area.location;
+    return {
+      ...area,
+      address: nextAddress,
+      strokes: nextStrokes,
+      states: nextStates,
+      location: nextLocation,
+    };
+  });
+
+  const doc: SectorAreasDoc = { ...session.doc, areas: nextAreas };
+  return commit(
+    session,
+    doc,
+    {
+      kind: 'stroke',
+      areaId: input.areaId,
+      mode: session.mode,
+      note: `Добавлен штрих ${normalized.id} в область «${target.name}»`,
+    },
+    input.areaId,
+  );
+}
+
+export interface RecordStrokeInput {
+  readonly stroke: AreaStroke;
+  readonly areaIdIfNew?: string;
+  readonly areaNameIfNew?: string;
+  readonly state?: AreaState;
+}
+
+/**
+ * Завершение одного штриха — ровно одна команда истории:
+ * - если выбрана активная область (`selectedArea(session)`), продолжает её (`Area.strokes`);
+ * - иначе создаёт новую область с этим первым штрихом и делает её активной.
+ */
+export function recordCompletedStroke(
+  session: EditorSession,
+  input: RecordStrokeInput,
+): EditorSession {
+  const active = selectedArea(session);
+  if (active !== null) {
+    return addStrokeToArea(session, {
+      areaId: active.id,
+      stroke: input.stroke,
+      ...(input.state === undefined ? {} : { stateIfEmpty: input.state }),
+    });
+  }
+
+  const normalized = normalizeStrokeForArea(input.stroke);
+  if (strokeIdExists(session.doc, normalized.id)) {
+    throw new RangeError(`Штрих ${normalized.id} уже существует в документе`);
+  }
+  const areaId = input.areaIdIfNew ?? `area-${session.sequence}`;
+  const areaName = input.areaNameIfNew ?? `Область ${session.sequence}`;
+  const created = createArea({
+    id: areaId,
+    name: areaName,
+    rings: [],
+    strokes: [normalized],
+    address: addressForRing(normalized.points, normalized.closed),
+    closed: true,
+    source: 'brush',
+  });
+  const withState: Area = input.state === undefined ? created : { ...created, states: [input.state] };
+  const area: Area = {
+    ...withState,
+    location: normalized.closed ? null : 'unknown',
+  };
+  const doc: SectorAreasDoc = { ...session.doc, areas: [...session.doc.areas, area] };
+  return commit(
+    session,
+    doc,
+    {
+      kind: 'create',
+      areaId: area.id,
+      mode: session.mode,
+      note: `Создана область «${area.name}» со штрихом ${normalized.id}`,
+    },
+    area.id,
+  );
+}
+
+/**
+ * Привязывает точки штриха к отображаемой адресной сетке (когда `session.snapMode === 'grid'`)
+ * и записывает завершённый штрих в текущую активную область одной командой истории.
+ */
+export function snapAndRecordStroke(
+  session: EditorSession,
+  input: RecordStrokeInput,
+  viewport: FrameViewport,
+  camera: SceneCamera,
+): EditorSession {
+  const stroke = session.snapMode === 'grid'
+    ? {
+      id: input.stroke.id,
+      points: snapStrokeToDisplayedGrid(input.stroke.points, viewport, camera, {
+        closed: input.stroke.closed,
+      }).points,
+      closed: input.stroke.closed,
+    }
+    : input.stroke;
+  return recordCompletedStroke(session, { ...input, stroke });
 }
 
 /* ------------------------------------------------------------------ вершины */
@@ -437,10 +694,12 @@ export function removeArea(session: EditorSession, areaId: string): EditorSessio
       .map((area) => (area.parentId === areaId ? { ...area, parentId: null } : area)),
     overrides: session.doc.overrides.filter((override) => override.areaId !== areaId),
   };
-  return {
-    ...commit(session, doc, { kind: 'remove', areaId, mode: session.mode, note: `Область ${areaId} удалена` }),
-    selection: session.selection === areaId ? null : session.selection,
-  };
+  return commit(
+    session,
+    doc,
+    { kind: 'remove', areaId, mode: session.mode, note: `Область ${areaId} удалена` },
+    session.selection === areaId ? null : session.selection,
+  );
 }
 
 /* ---------------------------------------------------------------- состояния */
@@ -479,7 +738,14 @@ export interface FillCheck {
  */
 export function canFillArea(area: Area | null): FillCheck {
   if (area === null) return { ok: false, reason: 'Область не выбрана.' };
-  if (!area.closed) return { ok: false, reason: 'Открытая линия не заливается: площади у неё нет.' };
+  const hasClosedRing = area.rings.length > 0 && area.closed;
+  const hasClosedStroke = (area.strokes ?? []).some((stroke) => stroke.closed);
+  if (!hasClosedRing && !hasClosedStroke) {
+    if (area.rings.length === 0 && (area.strokes?.length ?? 0) === 0) {
+      return { ok: false, reason: 'Пустая область не заливается: добавьте замкнутый контур.' };
+    }
+    return { ok: false, reason: 'Открытая линия не заливается: площади у неё нет.' };
+  }
   return { ok: true, reason: null };
 }
 
@@ -576,7 +842,12 @@ export function assignScope(
   options: ClassifyOptions = {},
 ): EditorSession {
   return updateArea(session, areaId, (area) => {
-    const location = classifyArea(scope, area, options) as AreaLocation;
+    const firstClosedStroke = (area.strokes ?? []).find((stroke) => stroke.closed);
+    const location = area.rings.length > 0
+      ? (classifyArea(scope, area, options) as AreaLocation)
+      : (firstClosedStroke !== undefined
+        ? classifyLocation(scope, firstClosedStroke.points, true, options)
+        : 'unknown');
     const detail = area.detail ?? location;
     return { ...area, scopeId: scope.id, location, detail };
   }, `Область отнесена к scope ${scope.id}`);

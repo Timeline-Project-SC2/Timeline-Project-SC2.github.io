@@ -21,11 +21,13 @@ import {
   TOOL_LABELS,
   TOOL_TITLES,
   addVertex,
+  applyDraftPoints,
   beginDrag,
   cancelInput,
   clampPoint,
   createToolState,
   draftRing,
+  draftStroke,
   endDrag,
   finishVertices,
   isToolId,
@@ -315,4 +317,18 @@ test('завершение ввода не бывает в покое: поко�
   const result = endDrag(idle);
   assert.equal(result.draft, null);
   assert.equal(result.state, idle, 'состояние без ввода не подменяется новым объектом');
+});
+
+test('draftStroke и applyDraftPoints собирают отдельный штрих и отсеивают схлопнутую привязкой фигуру', () => {
+  const rect = drag('rectangle', [100, 100], [500, 400]).draft;
+  const stroke = draftStroke('stroke-1', rect);
+  assert.equal(stroke.id, 'stroke-1');
+  assert.equal(stroke.closed, true);
+  assert.equal(stroke.points.length, 4);
+
+  // Если привязка к сетке стянула мелкий прямоугольник на одну линию — валидатор отклоняет черновик.
+  const collapsed = applyDraftPoints(rect, [[100, 400], [500, 400]]);
+  const check = validateDraft(collapsed);
+  assert.equal(check.ok, false);
+  assert.match(check.reason, /минимум 3 вершины|без площади/);
 });

@@ -21,6 +21,7 @@ import {
   editorHotkey,
   eventLine,
   isDrawButton,
+  moduleGraphHtml,
   parseExported,
   requestMaterial,
   strokePoints,
@@ -28,6 +29,7 @@ import {
 import { addAreaFromSectorCell, addAreaFromStroke, canFillArea, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
 import { TOOL_IDS } from '../src/atlas/sector-areas-tools.ts';
 import {
+  MODULE_RELATIONS,
   PLANE_TITLES,
   SECTOR_MODULES,
   STATUS_TITLES,
@@ -463,9 +465,13 @@ globalThis.Element = FakeElement;
 function fakePanel() {
   const blocks = new Map();
   const handlers = new Map();
+  const attrs = new Map();
   return {
     blocks,
     handlers,
+    attrs,
+    setAttribute(name, value) { attrs.set(name, String(value)); },
+    getAttribute(name) { return attrs.has(name) ? attrs.get(name) : null; },
     addEventListener(type, handler) { handlers.set(type, handler); },
     removeEventListener() {},
     querySelector(selector) {
@@ -508,6 +514,9 @@ test('панель показывает все пять инструментов
   const api = createSectorAreasEditorUi({
     kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null,
   });
+  // По умолчанию открыт экран выбранного модуля без одновременного списка всех команд.
+  assert.doesNotMatch(blockHtml(panel, 'modules'), /admin-editor-tools/);
+  clickPanel(panel, 'screen', { 'data-screen': 'draw' });
   const html = blockHtml(panel, 'modules');
   for (const tool of TOOL_IDS) {
     assert.match(html, new RegExp(`data-tool="${tool}"`), `нет кнопки инструмента ${tool}`);
@@ -525,6 +534,7 @@ test('переключение инструмента и выбор фракци
     kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
   });
   const before = api.doc();
+  clickPanel(panel, 'screen', { 'data-screen': 'draw' });
   clickPanel(panel, 'tool', { 'data-tool': 'polygon' });
   assert.equal(api.doc(), before, 'смена инструмента не коммитит документ');
   assert.match(blockHtml(panel, 'modules'), /data-tool="polygon" aria-pressed="true"/);
@@ -690,7 +700,8 @@ function pressKey(keydown, init, target = null) {
   const event = {
     target,
     prevented: false,
-    stopPropagation() {},
+    stopped: false,
+    stopPropagation() { event.stopped = true; },
     preventDefault() { event.prevented = true; },
     ...init,
   };
@@ -776,4 +787,312 @@ test('в полях ввода редактор не перехватывает 
   }
 
   api.destroy();
+});
+
+/* -------------------------------- граф модулей, снап к сетке и мульти-штрихи */
+
+test('боковая навигация «Системы» стоит слева и показывает ровно один выбранный экран', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  const modules = blockHtml(panel, 'modules');
+  const properties = blockHtml(panel, 'properties');
+  const changes = blockHtml(panel, 'changes');
+
+  const navAt = modules.indexOf('data-editor-nav');
+  const stageAt = modules.indexOf('data-editor-stage');
+  assert.ok(navAt > 0 && stageAt > navAt, 'постоянная навигация расположена слева от рабочей области');
+  assert.match(modules, /class="admin-editor-shell"/);
+  assert.match(modules, /data-editor-screen="module"/);
+  assert.doesNotMatch(modules, /data-editor-graph/, 'граф не открыт одновременно с карточкой модуля');
+  assert.doesNotMatch(modules, /admin-editor-tools/, 'инструменты рисования не открыты одновременно с карточкой модуля');
+  assert.match(properties, /data-action="select"/, 'свойства области формируются в опорном блоке properties');
+  assert.match(changes, /data-action="download"/, 'журнал и выгрузка формируются в опорном блоке changes');
+
+  // Переключение системы из левой навигации меняет активный модуль и не открывает граф.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-snap' });
+  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  assert.match(blockHtml(panel, 'modules'), /Привязка к адресной сетке/);
+  assert.doesNotMatch(blockHtml(panel, 'modules'), /data-editor-graph/);
+  api.destroy();
+});
+
+test('граф модулей рисует только подтверждённые рёбра, фильтрует плоскости и выделяет изолированный узел', () => {
+  const allGraph = moduleGraphHtml('sector-areas-editor', 'all');
+  const allEdges = allGraph.match(/class="admin-editor-graph-edge"/g) ?? [];
+  assert.equal(allEdges.length, MODULE_RELATIONS.length, 'число стрелок совпадает с подтверждёнными связями');
+  assert.doesNotMatch(allGraph, /data-from="sector-areas-border-world"/);
+  assert.doesNotMatch(allGraph, /data-to="sector-areas-border-world"/);
+  assert.match(allGraph, /data-module="sector-areas-border-world"[^>]*data-isolated="true"/);
+
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null,
+  });
+  const docBefore = api.doc();
+  clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+  assert.equal(panel.getAttribute('data-active-screen'), 'dependencies');
+  assert.match(blockHtml(panel, 'modules'), /data-editor-graph/);
+
+  clickPanel(panel, 'relation-filter', { 'data-plane': 'spatial' });
+  const spatialModules = blockHtml(panel, 'modules');
+  const spatialCount = MODULE_RELATIONS.filter((rel) => rel.kind === 'spatial').length;
+  assert.equal((spatialModules.match(/class="admin-editor-graph-edge"/g) ?? []).length, spatialCount);
+  assert.doesNotMatch(spatialModules, /class="admin-editor-graph-edge" data-kind="data"/);
+  assert.equal(api.doc(), docBefore, 'фильтр графа — чистое состояние интерфейса');
+  assert.equal(api.session().past.length, 0);
+
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-border-world' });
+  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  assert.match(blockHtml(panel, 'modules'), /Подтверждённых связей в коде нет/);
+  api.destroy();
+});
+
+test('режим привязки «к рёбрам сетки» доступен в списке и работает через событие change в браузере', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null,
+  });
+  clickPanel(panel, 'screen', { 'data-screen': 'draw' });
+  assert.match(blockHtml(panel, 'modules'), /<option value="grid">к рёбрам сетки<\/option>/);
+
+  class SelectControl extends FakeElement {}
+  globalThis.HTMLSelectElement = SelectControl;
+  try {
+    const select = new SelectControl({ 'data-action': 'snap', value: 'grid' });
+    // В реальном браузере клик открывает список и не должен перерисовывать панель.
+    panel.handlers.get('click')({ target: select });
+    assert.equal(api.session().snapMode, 'free', 'клик по открытому списку не сбрасывает DOM');
+    // А выбор пункта присылает событие change.
+    panel.handlers.get('change')({ target: select });
+    assert.equal(api.session().snapMode, 'grid');
+    assert.match(blockHtml(panel, 'modules'), /admin-editor-tier-badge/);
+    assert.equal(api.session().past.length, 0, 'переключение снапа не засоряет историю');
+  } finally {
+    delete globalThis.HTMLSelectElement;
+  }
+
+  api.destroy();
+});
+
+test('кнопка «Создать новую область» переключает активную область, а отмена возвращает прежний выбор', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  clickPanel(panel, 'select', { value: 'area-1' });
+  assert.equal(api.session().selection, 'area-1');
+
+  clickPanel(panel, 'create-area');
+  assert.equal(api.doc().areas.length, 2);
+  const created = api.doc().areas[1];
+  assert.equal(api.session().selection, created.id);
+  assert.deepEqual(created.rings, []);
+  assert.deepEqual(created.strokes, []);
+
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas.length, 1, 'пустая область удалена отменой');
+  assert.equal(api.session().selection, 'area-1', 'активный выбор возвращён к прежней области');
+  api.destroy();
+});
+
+test('несколько штрихов подряд записываются в активную область и притягиваются к рёбрам сетки', () => {
+  const stageHandlers = new Map();
+  const canvas = {
+    clientWidth: 1000,
+    clientHeight: 1000,
+    classList: { add() {}, remove() {} },
+    getBoundingClientRect() { return { left: 0, top: 0, width: 1000, height: 1000 }; },
+    contains(node) { return node === canvas; },
+  };
+  const stage = {
+    clientWidth: 1000,
+    clientHeight: 1000,
+    addEventListener(type, handler) { stageHandlers.set(type, handler); },
+    removeEventListener() {},
+    setPointerCapture() {},
+    hasPointerCapture() { return false; },
+    releasePointerCapture() {},
+    appendChild() {},
+  };
+  const kernel = {
+    state: {
+      sectorAreas: emptySectorAreasDoc(),
+      viewport: { w: 1000, h: 1000 },
+      view: { scale: 1, tx: 0, ty: 0 },
+    },
+    renderer: {
+      requestRender() {},
+      toWorld(x, y) { return { x, y }; },
+      toScreen(x, y) { return { x, y }; },
+    },
+  };
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel, panel, stage, canvas, storage: null });
+  api.setEnabled(true);
+  clickPanel(panel, 'snap', { value: 'grid' });
+  clickPanel(panel, 'module-run', { 'data-run': 'create-area' });
+  assert.equal(api.doc().areas.length, 1);
+  const activeId = api.session().selection;
+
+  const drawSegment = (pts) => {
+    const mk = (x, y) => ({
+      target: canvas,
+      button: 0,
+      buttons: 1,
+      pointerId: 1,
+      clientX: x,
+      clientY: y,
+      stopPropagation() {},
+      preventDefault() {},
+    });
+    stageHandlers.get('pointerdown')(mk(pts[0][0], pts[0][1]));
+    for (let i = 1; i < pts.length; i += 1) {
+      stageHandlers.get('pointermove')(mk(pts[i][0], pts[i][1]));
+    }
+    stageHandlers.get('pointerup')(mk(pts.at(-1)[0], pts.at(-1)[1]));
+  };
+
+  // При viewport 1000x1000 и scale=1 мельчайший отображаемый ярус — T3 (шаг 80).
+  drawSegment([[83, 162], [160, 161], [238, 162]]);
+  drawSegment([[322, 82], [321, 160], [322, 239]]);
+
+  assert.equal(api.doc().areas.length, 1, 'оба штриха попали в одну активную область');
+  const area = api.doc().areas[0];
+  assert.equal(area.id, activeId);
+  assert.equal(area.strokes.length, 2, 'оба завершённых штриха сохранены по отдельности');
+  for (const stroke of area.strokes) {
+    for (const [x, y] of stroke.points) {
+      const onVertical = Math.abs(x - Math.round(x / 80) * 80) < 1e-6;
+      const onHorizontal = Math.abs(y - Math.round(y / 80) * 80) < 1e-6;
+      assert.ok(onVertical || onHorizontal, `вершина [${x}, ${y}] должна лежать на ребре яруса 80`);
+    }
+  }
+
+  // Поштучная отмена: сначала снимается второй штрих, затем первый, затем пустая область.
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas[0].strokes.length, 1);
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas[0].strokes.length, 0);
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas.length, 0);
+  api.destroy();
+});
+
+test('постоянная навигация сохраняется на всех экранах и отмечает активный раздел без записи в историю', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+  const initialDoc = api.doc();
+
+  for (const screen of ['draw', 'properties', 'changes', 'dependencies']) {
+    clickPanel(panel, 'screen', { 'data-screen': screen });
+    assert.equal(api.screen(), screen);
+    assert.equal(panel.getAttribute('data-active-screen'), screen);
+    const modules = blockHtml(panel, 'modules');
+    assert.match(modules, /data-editor-nav/, `на экране ${screen} навигация остаётся видимой`);
+    assert.match(modules, new RegExp(`data-screen="${screen}" aria-current="page"`));
+    if (screen !== 'dependencies') {
+      assert.doesNotMatch(modules, /data-editor-graph/, `на экране ${screen} граф не занимает место`);
+    }
+  }
+
+  // Переход по зависимости внутри карточки модуля и клавиатурный выбор узла SVG ведут к модулю.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-editor' });
+  assert.equal(api.screen(), 'module');
+  assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-editor" aria-current="page"/);
+
+  clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+  const graphHtml = blockHtml(panel, 'modules');
+  assert.match(graphHtml, /role="button" tabindex="0" aria-label="Привязка к адресной сетке — открыть модуль"/);
+  assert.doesNotMatch(moduleGraphHtml('sector-areas-editor', 'all'), /admin-editor-planes/, 'список систем не дублируется под SVG-графом');
+
+  // Мышь по-прежнему открывает модуль через обычное делегирование клика панели.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-snap' });
+  assert.equal(api.screen(), 'module');
+  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-snap" aria-current="page"/);
+  assert.doesNotMatch(blockHtml(panel, 'modules'), /data-editor-graph/);
+
+  assert.equal(api.doc(), initialDoc, 'навигация по экранам и системам не трогает документ');
+  assert.equal(api.session().past.length, 0);
+  api.destroy();
+});
+
+test('Enter и Space на SVG-узле проходят window-capture, а родные кнопки и поля сохраняют поведение', () => {
+  const { api, panel, keydown } = editorWithKeys();
+
+  for (const key of ['Enter', ' ']) {
+    clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+    const svgNode = new FakeElement({ 'data-action': 'module', 'data-module': 'sector-areas-snap' });
+    svgNode.tagName = 'g';
+    panel.contains = (target) => target === svgNode;
+
+    // Полный путь события: именно window-capture, а не прямой вызов bubble-обработчика панели.
+    const press = pressKey(keydown, { key }, svgNode);
+    assert.equal(press.prevented, true, `${key}: браузер не прокручивает страницу`);
+    assert.equal(press.stopped, true, `${key}: событие не доходит до карты`);
+    assert.equal(api.screen(), 'module', `${key}: открыта карточка SVG-узла`);
+    assert.equal(panel.getAttribute('data-active-screen'), 'module');
+    assert.match(blockHtml(panel, 'modules'), /data-module="sector-areas-snap" aria-current="page"/);
+    assert.doesNotMatch(blockHtml(panel, 'modules'), /data-editor-graph/);
+  }
+
+  // Capture по-прежнему изолирует карту, но не подменяет нативную активацию кнопки.
+  clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+  const button = new FakeElement({ 'data-action': 'screen', 'data-screen': 'draw' });
+  button.tagName = 'BUTTON';
+  panel.contains = (target) => target === button;
+  const buttonPress = pressKey(keydown, { key: 'Enter' }, button);
+  assert.equal(buttonPress.prevented, false);
+  assert.equal(buttonPress.stopped, true);
+  assert.equal(api.screen(), 'dependencies', 'тест не имитирует нативный click кнопки');
+
+  const input = new FakeElement({ value: '12' });
+  input.tagName = 'INPUT';
+  panel.contains = (target) => target === input;
+  const inputPress = pressKey(keydown, { key: ' ' }, input);
+  assert.equal(inputPress.prevented, false);
+  assert.equal(inputPress.stopped, true);
+  assert.equal(api.screen(), 'dependencies');
+
+  // Обычный click не зависит от contains(), использованного выше для keyboard-цепочки.
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-snap' });
+  assert.equal(api.screen(), 'module');
+  api.destroy();
+});
+
+test('жёсткий инвариант верхнего слоя навигации «Системы» и защита от горизонтального переполнения закреплены в CSS и руководстве', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+
+  const leftPanelZ = Number(/\.map-stage \.left-panel\s*\{\s*z-index:\s*(\d+)/.exec(css)?.[1]);
+  const editorPanelZ = Number(/\.admin-editor-panel\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
+  const detailPanelZ = Number(/\.map-stage \.detail-panel,\s*\.map-stage \.travel-panel\s*\{\s*z-index:\s*(\d+)/.exec(css)?.[1]);
+  assert.ok(Number.isFinite(leftPanelZ) && Number.isFinite(editorPanelZ) && Number.isFinite(detailPanelZ));
+  assert.ok(leftPanelZ > editorPanelZ, `глобальная панель «Системы» (${leftPanelZ}) выше панели редактора (${editorPanelZ})`);
+  assert.ok(leftPanelZ > detailPanelZ, `глобальная панель «Системы» (${leftPanelZ}) выше инспектора (${detailPanelZ})`);
+  assert.match(css, /\.map-stage \.left-panel:not\(\.collapsed\)\s*\{\s*pointer-events:\s*auto;\s*\}/);
+  assert.match(css, /\.map-stage:has\(\.left-panel:not\(\.collapsed\)\) \.admin-editor-panel:not\(\.is-collapsed\)\s*\{\s*max-width:\s*calc\(100vw - 348px\);/);
+
+  // Внутри самой панели редактора левая навигация держит верхний слой относительно рабочих экранов.
+  const navZ = Number(/\.admin-editor-nav\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
+  const stageZ = Number(/\.admin-editor-stage,\s*\.admin-editor-graph-pane,\s*\.admin-editor-node-card\s*\{[\s\S]*?z-index:\s*(\d+)/.exec(css)?.[1]);
+  assert.ok(navZ > stageZ, `навигация редактора (${navZ}) выше рабочей области модуля и графа (${stageZ})`);
+  assert.match(css, /\.admin-editor-nav\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?pointer-events:\s*auto;/);
+  assert.match(css, /\.admin-editor-nav-group\s*>\s*\*,[\s\S]*?\.admin-editor-modules\s*>\s*li\s*\{[\s\S]*?min-width:\s*0;/);
+  assert.match(css, /\.admin-editor-module-name\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
+
+  // Адаптивность на узком viewport: компактная навигация остаётся сверху, горизонтального переполнения нет.
+  assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?overflow-x:\s*hidden;/);
+  assert.match(css, /@media \(max-width: 1020px\)[\s\S]*?\.admin-editor-nav\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?z-index:\s*8;/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.map-stage \.left-panel\s*\{\s*z-index:\s*19;\s*\}/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?max-height:\s*min\(56dvh,\s*440px\)/);
+
+  const guide = read('docs/admins/sector-areas-editor.md');
+  assert.match(guide, /Панель и навигация «Системы»/);
+  assert.match(guide, /глобальный верхний слой навигации/);
+  assert.match(guide, /Экран «Зависимости»/);
 });

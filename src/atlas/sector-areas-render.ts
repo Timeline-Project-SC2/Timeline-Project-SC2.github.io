@@ -11,15 +11,15 @@
  */
 
 import { MODES } from './sector-areas-contract.ts';
-import type { Area, AreaPoint, AreaState, Mode, SectorAreasDoc } from './sector-areas-contract.ts';
+import type { Area, AreaPoint, AreaState, AreaStroke, Mode, SectorAreasDoc } from './sector-areas-contract.ts';
 import { focusAppearance, stateStyle, toCss } from './sector-areas-color.ts';
 import type { FactionPalette, FocusSettings, Rgb } from './sector-areas-color.ts';
 import { paintRing, resolveGradient } from './sector-areas-gradient.ts';
 import { statesForLevel } from './sector-areas-cascade.ts';
-import { computeLod, effectiveLevel } from './sector-areas-lod.ts';
+import { computeLod, effectiveLevel, lodEpsilon, roundingIterations } from './sector-areas-lod.ts';
 import type { LodCache } from './sector-areas-lod.ts';
 import { overridesFor } from './sector-areas-force.ts';
-import { ringArea } from './sector-areas-geometry.ts';
+import { ringArea, simplifyStroke, strokesArea } from './sector-areas-geometry.ts';
 
 export interface AreaPaintOptions {
   /** Уровень кадра `L0…L12`: отсекает состояния вне диапазона и задаёт LOD. */
@@ -68,6 +68,8 @@ export interface AreaPaint {
     readonly dash: readonly number[];
   };
   readonly rings: readonly PaintedRing[];
+  /** Идентификаторы отдельных штрихов `Area.strokes`, вошедших в этот слой отрисовки. */
+  readonly strokeIds?: readonly string[];
   /** `true` — мазок форс-закрашивания: цвет перебит, состояния сохранены. */
   readonly override: boolean;
   readonly label: string | null;
@@ -86,7 +88,7 @@ export function buildAreaPaints(doc: SectorAreasDoc, options: AreaPaintOptions):
   for (const area of doc.areas) {
     const override = overridesFor(doc, area.id).at(-1) ?? null;
     if (override !== null) {
-      paints.push(overridePaint(area, override.color, override.alpha, override.z, level, options));
+      paints.push(...overridePaints(area, override.color, override.alpha, override.z, level, options));
       continue;
     }
 
@@ -95,7 +97,7 @@ export function buildAreaPaints(doc: SectorAreasDoc, options: AreaPaintOptions):
       if (resolved === undefined) continue;
       const appearance = focusAppearance(mode, focusMode, focus);
       if (!appearance.visible) continue;
-      paints.push(statePaint(area, resolved.state, mode, level, appearance.alpha, options));
+      paints.push(...statePaints(area, resolved.state, mode, level, appearance.alpha, options));
     }
   }
 
@@ -122,55 +124,117 @@ function ringsFor(
   }));
 }
 
-function overridePaint(
+/** Геометрия отдельных штрихов `Area.strokes` без смешивания с `Area.rings`. */
+function strokesFor(
+  strokes: readonly AreaStroke[],
+  level: number,
+  bias: number,
+  rounding: 0 | 1 | 2,
+): readonly PaintedRing[] {
+  const eps = lodEpsilon(level, bias);
+  const passes = roundingIterations(rounding);
+  return strokes.map((stroke) => {
+    const reduced = simplifyStroke(stroke, eps, passes);
+    return {
+      points: reduced.points,
+      params: reduced.params,
+      colors: [],
+      alphas: [],
+      closed: stroke.closed,
+    };
+  });
+}
+
+function overridePaints(
   area: Area,
   color: string,
   alpha: number,
   z: number,
   level: number,
   options: AreaPaintOptions,
-): AreaPaint {
+): readonly AreaPaint[] {
   const rgb = hexToRgb(color);
-  return {
-    areaId: area.id,
-    stateId: null,
-    mode: options.focusMode ?? (MODES[0] ?? 'political'),
-    name: area.name,
-    z,
-    level,
-    visible: true,
-    fill: area.closed ? { rgb, alpha: alpha * 0.35 } : null,
-    stroke: { rgb, alpha, width: options.strokeWidth ?? 2, dash: [] },
-    rings: ringsFor(area, level, 0, 1, options),
-    override: true,
-    label: `${area.name} · override`,
-  };
+  const mode = options.focusMode ?? (MODES[0] ?? 'political');
+  const strokeStyle = { rgb, alpha, width: options.strokeWidth ?? 2, dash: [] as const };
+  const label = `${area.name} · override`;
+  const result: AreaPaint[] = [];
+
+  if (area.rings.length > 0) {
+    result.push({
+      areaId: area.id,
+      stateId: null,
+      mode,
+      name: area.name,
+      z,
+      level,
+      visible: true,
+      fill: area.closed ? { rgb, alpha: alpha * 0.35 } : null,
+      stroke: strokeStyle,
+      rings: ringsFor(area, level, 0, 1, options),
+      override: true,
+      label,
+    });
+  }
+
+  const strokes = area.strokes ?? [];
+  const closedStrokes = strokes.filter((item) => item.closed);
+  const openStrokes = strokes.filter((item) => !item.closed);
+
+  if (closedStrokes.length > 0) {
+    result.push({
+      areaId: area.id,
+      stateId: null,
+      mode,
+      name: area.name,
+      z,
+      level,
+      visible: true,
+      fill: { rgb, alpha: alpha * 0.35 },
+      stroke: strokeStyle,
+      rings: strokesFor(closedStrokes, level, 0, 1),
+      strokeIds: closedStrokes.map((item) => item.id),
+      override: true,
+      label,
+    });
+  }
+  if (openStrokes.length > 0) {
+    result.push({
+      areaId: area.id,
+      stateId: null,
+      mode,
+      name: area.name,
+      z,
+      level,
+      visible: true,
+      fill: null,
+      stroke: strokeStyle,
+      rings: strokesFor(openStrokes, level, 0, 1),
+      strokeIds: openStrokes.map((item) => item.id),
+      override: true,
+      label,
+    });
+  }
+
+  return result;
 }
 
-function statePaint(
-  area: Area,
+function paintRingsWithGradient(
+  rings: readonly PaintedRing[],
   state: AreaState,
-  mode: Mode,
-  level: number,
-  focusAlpha: number,
+  closed: boolean,
+  accent: Rgb | null,
   options: AreaPaintOptions,
-): AreaPaint {
-  const style = stateStyle(state, {
-    ...(options.palette === undefined ? {} : { palette: options.palette }),
-    ...(options.strokeSafe === undefined ? {} : { strokeSafe: options.strokeSafe }),
-    ...(options.fillAlpha === undefined ? {} : { fillAlpha: options.fillAlpha }),
-  });
-
+): readonly PaintedRing[] {
   const gradient = resolveGradient(state.gradient, {
     ...(options.palette === undefined ? {} : { palette: options.palette }),
     factionMode: state.factionMode,
     factionIds: state.factionIds,
     task: state.task,
-    closed: area.closed,
-    accent: style.accent,
+    closed,
+    accent,
   });
 
-  const rings = ringsFor(area, level, state.lodBias, state.rounding, options).map((ring) => {
+  return rings.map((ring) => {
     if (ring.points.length === 0) return ring;
     const painted = paintRing(gradient, {
       points: ring.points,
@@ -183,26 +247,92 @@ function statePaint(
       alphas: painted.map((entry) => entry.alpha),
     };
   });
+}
 
-  return {
-    areaId: area.id,
-    stateId: state.id,
-    mode,
-    name: area.name,
-    z: state.z,
-    level: effectiveLevel(level, state),
-    visible: true,
-    fill: area.closed ? { rgb: style.fill, alpha: style.fillAlpha * focusAlpha } : null,
-    stroke: {
-      rgb: style.stroke,
-      alpha: style.alpha * focusAlpha,
-      width: options.strokeWidth ?? Math.max(1, style.width),
-      dash: style.dash,
-    },
-    rings,
-    override: false,
-    label: state.label ?? area.name,
+function statePaints(
+  area: Area,
+  state: AreaState,
+  mode: Mode,
+  level: number,
+  focusAlpha: number,
+  options: AreaPaintOptions,
+): readonly AreaPaint[] {
+  const style = stateStyle(state, {
+    ...(options.palette === undefined ? {} : { palette: options.palette }),
+    ...(options.strokeSafe === undefined ? {} : { strokeSafe: options.strokeSafe }),
+    ...(options.fillAlpha === undefined ? {} : { fillAlpha: options.fillAlpha }),
+  });
+  const resolvedLevel = effectiveLevel(level, state);
+  const strokeStyle = {
+    rgb: style.stroke,
+    alpha: style.alpha * focusAlpha,
+    width: options.strokeWidth ?? Math.max(1, style.width),
+    dash: style.dash,
   };
+  const label = state.label ?? area.name;
+  const result: AreaPaint[] = [];
+
+  if (area.rings.length > 0) {
+    const rawRings = ringsFor(area, level, state.lodBias, state.rounding, options);
+    result.push({
+      areaId: area.id,
+      stateId: state.id,
+      mode,
+      name: area.name,
+      z: state.z,
+      level: resolvedLevel,
+      visible: true,
+      fill: area.closed ? { rgb: style.fill, alpha: style.fillAlpha * focusAlpha } : null,
+      stroke: strokeStyle,
+      rings: paintRingsWithGradient(rawRings, state, area.closed, style.accent, options),
+      override: false,
+      label,
+    });
+  }
+
+  const strokes = area.strokes ?? [];
+  const closedStrokes = strokes.filter((item) => item.closed);
+  const openStrokes = strokes.filter((item) => !item.closed);
+
+  if (closedStrokes.length > 0) {
+    const rawClosed = strokesFor(closedStrokes, level, state.lodBias, state.rounding);
+    result.push({
+      areaId: area.id,
+      stateId: state.id,
+      mode,
+      name: area.name,
+      z: state.z,
+      level: resolvedLevel,
+      visible: true,
+      fill: { rgb: style.fill, alpha: style.fillAlpha * focusAlpha },
+      stroke: strokeStyle,
+      rings: paintRingsWithGradient(rawClosed, state, true, style.accent, options),
+      strokeIds: closedStrokes.map((item) => item.id),
+      override: false,
+      label,
+    });
+  }
+
+  if (openStrokes.length > 0) {
+    const rawOpen = strokesFor(openStrokes, level, state.lodBias, state.rounding);
+    result.push({
+      areaId: area.id,
+      stateId: state.id,
+      mode,
+      name: area.name,
+      z: state.z,
+      level: resolvedLevel,
+      visible: true,
+      fill: null,
+      stroke: strokeStyle,
+      rings: paintRingsWithGradient(rawOpen, state, false, style.accent, options),
+      strokeIds: openStrokes.map((item) => item.id),
+      override: false,
+      label,
+    });
+  }
+
+  return result;
 }
 
 function hexToRgb(color: string): Rgb {
@@ -221,9 +351,9 @@ export function vertexCss(rgb: Rgb, alpha: number): string {
   return toCss(rgb, alpha);
 }
 
-/** Площадь внешнего кольца — для журнала и отсечения мелких областей. */
+/** Площадь области по внешнему кольцу и замкнутым штрихам (без смешивания с дырками). */
 export function areaSize(area: Area): number {
   const outer = area.rings[0];
-  if (outer === undefined) return 0;
-  return ringArea(outer, area.closed);
+  const ringsPart = outer === undefined ? 0 : ringArea(outer, area.closed);
+  return ringsPart + strokesArea(area.strokes ?? []);
 }

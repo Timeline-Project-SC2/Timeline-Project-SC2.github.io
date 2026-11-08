@@ -222,3 +222,44 @@ test('сцена учитывает области: примитив brush и с
   assert.ok(kinds.indexOf('marker') > -1, 'маркер системы должен быть в сцене');
   assert.ok(kinds.indexOf('brush') < kinds.indexOf('marker'));
 });
+
+test('отдельные штрихи области отрисовываются без смешивания с rings и сохраняют открытость и заливку', () => {
+  const hole = [[1500, 1500], [2000, 1500], [2000, 2000], [1500, 2000], [1500, 1500]];
+  const openStroke = { id: 's-open', points: [[5200, 5200], [6200, 5200]], closed: false };
+  const closedStroke = {
+    id: 's-closed',
+    points: [[7000, 7000], [8000, 7000], [8000, 8000], [7000, 8000]],
+    closed: true,
+  };
+  const area = {
+    ...createArea({
+      id: 'a-multi',
+      name: 'Мультиштриховая',
+      rings: [SQUARE, hole],
+      strokes: [openStroke, closedStroke],
+    }),
+    states: [state()],
+  };
+  const doc = docWith([area]);
+  const paints = buildAreaPaints(doc, base());
+
+  // Три отдельных слоя для одной области: (1) rings + дырка, (2) замкнутый штрих с заливкой, (3) открытый штрих без заливки.
+  assert.equal(paints.length, 3);
+  const ringsPaint = paints.find((item) => item.strokeIds === undefined);
+  const closedPaint = paints.find((item) => item.strokeIds?.[0] === 's-closed');
+  const openPaint = paints.find((item) => item.strokeIds?.[0] === 's-open');
+
+  assert.equal(ringsPaint.rings.length, 2, 'кольцо и отверстие остались парой');
+  assert.notEqual(ringsPaint.fill, null);
+  assert.notEqual(closedPaint.fill, null, 'замкнутый штрих получает заливку состояния');
+  assert.equal(closedPaint.rings[0].closed, true);
+  assert.equal(openPaint.fill, null, 'открытый штрих не заливается');
+  assert.equal(openPaint.rings[0].closed, false);
+
+  // Площадь учитывает внешнее кольцо и замкнутый штрих, но не открытый.
+  assert.equal(areaSize(area), 9_000_000 + 1_000_000);
+
+  // Проекция в экранную сцену сохраняет все три примитива brush.
+  const projected = areasFor(paints, { w: 1000, h: 800 }, { centerX: 5000, centerY: 5000, visibleWidth: 10000 });
+  assert.equal(projected.length, 3);
+});

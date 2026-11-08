@@ -22,7 +22,22 @@ import type { Area, AreaState, Mode, SectorAreasDoc, ValidationReport } from './
 import { ancestorsOf, checkContainment, hierarchyDepth, statesByMode } from './sector-areas-cascade.ts';
 import { NEUTRAL_COLOR, TASK_STYLES, modeStyle, toCss } from './sector-areas-color.ts';
 import { overridesFor, resolvePaint } from './sector-areas-force.ts';
-import { bboxOf, ringArea, ringCentroid, selfIntersections, totalVertices } from './sector-areas-geometry.ts';
+import {
+  areaCentroid,
+  bboxOf,
+  ringArea,
+  selfIntersections,
+  strokesArea,
+  strokesBBox,
+  strokeVertices,
+  totalVertices,
+} from './sector-areas-geometry.ts';
+import {
+  SNAP_COST_REL_TOLERANCE,
+  SNAP_DIRECTION_HALF_WINDOW_CELLS,
+  SNAP_DIRECTION_WEIGHT,
+} from './sector-areas-snap.ts';
+import { canRedo, canUndo } from './sector-areas-editor.ts';
 import { buildJournal } from './sector-areas-journal.ts';
 import { LOD_PRESETS, effectiveLevel, lodEpsilon, roundingIterations } from './sector-areas-lod.ts';
 import { buildAreaPaints, areaSize } from './sector-areas-render.ts';
@@ -206,11 +221,13 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
       const doc = context.session.doc;
       const report = documentReport(doc, { bounds: context.bounds });
       const states = doc.areas.reduce((sum, area) => sum + area.states.length, 0);
+      const strokes = doc.areas.reduce((sum, area) => sum + (area.strokes?.length ?? 0), 0);
       return [
         row('Версия схемы', String(SECTOR_AREAS_SCHEMA_VERSION)),
         row('Поле карты', `${num(doc.mapSize)} × ${num(doc.mapSize)}`),
         row('Режимы v1', MODES.map(modeLabel).join(', ')),
         row('Областей', num(doc.areas.length)),
+        row('Штрихов в областях', num(strokes)),
         row('Состояний', num(states)),
         row('Мазков закрашивания', num(doc.overrides.length)),
         row('Событий журнала', num(doc.events.length)),
@@ -225,13 +242,16 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
     plane: 'data',
     status: 'working',
     source: 'src/atlas/sector-areas-editor.ts',
-    note: 'Кисть, секторный снап, вершины, состояния, история и выгрузка. Каждая команда возвращает новую сессию, поэтому отмена и повтор идут по одной истории.',
+    note: 'Создание областей, добавление отдельных штрихов, вершины, состояния, история и выгрузка. Каждая команда возвращает новую сессию, отмена и повтор идут по одной истории.',
     rows: (context) => {
       const session = context.session;
       const world = safe(() => context.session.brushWidthPx / context.scale, Number.NaN);
+      const snapTitle = session.snapMode === 'grid'
+        ? 'по рёбрам адресной сетки'
+        : (session.snapMode === 'sector' ? 'к ячейке адреса' : 'свободная');
       return [
         row('Режим новой области', modeLabel(session.mode)),
-        row('Привязка', session.snapMode === 'sector' ? 'к ячейке адреса' : 'свободная'),
+        row('Привязка', snapTitle),
         row('Кисть', `${session.brushWidthPx} px · ${fixed(world)} мировых единиц`),
         row('Выбрано', areaTitle(context)),
         row('Шагов отмены', num(session.past.length)),
@@ -240,6 +260,7 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
       ];
     },
     actions: Object.freeze([
+      Object.freeze({ id: 'create-area', label: 'Создать новую область' }),
       Object.freeze({ id: 'undo', label: 'Отменить' }),
       Object.freeze({ id: 'redo', label: 'Повторить' }),
     ]),
@@ -250,10 +271,13 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
     plane: 'data',
     status: 'view',
     source: 'src/atlas/sector-areas-geometry.ts',
-    note: 'Вершины, площади, центроид и самопересечения считаются по исходным контурам. Самопересечения показываются как предупреждение, а не исправляются молча.',
+    note: 'Вершины, площади, центроид и самопересечения считаются отдельно по кольцам (с учётом дырок) и по штрихам области без смешивания геометрии.',
     rows: (context) => {
       const area = selectedArea(context);
-      const vertices = context.session.doc.areas.reduce((sum, item) => sum + totalVertices(item), 0);
+      const vertices = context.session.doc.areas.reduce(
+        (sum, item) => sum + totalVertices(item) + strokeVertices(item),
+        0,
+      );
       if (area === null) {
         return [
           row('Вершин в документе', num(vertices)),
@@ -261,12 +285,18 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
         ];
       }
       const ring = area.rings[0] ?? [];
-      const box = safe(() => bboxOf(ring), null);
+      const strokes = area.strokes ?? [];
+      const ringBox = ring.length > 0 ? safe(() => bboxOf(ring), null) : null;
+      const strokeBox = strokesBBox(strokes);
+      const box = ringBox ?? strokeBox;
+      const totalArea = (ring.length > 0 ? ringArea(ring, area.closed) : 0) + strokesArea(strokes);
       return [
         row('Вершин в документе', num(vertices)),
-        row('Вершин у выбранной', num(totalVertices(area))),
-        row('Площадь', num(ringArea(ring, area.closed))),
-        row('Самопересечения', num(safe(() => selfIntersections(ring, area.closed), Number.NaN))),
+        row('Вершин колец', num(totalVertices(area))),
+        row('Штрихов у выбранной', num(strokes.length)),
+        row('Вершин штрихов', num(strokeVertices(area))),
+        row('Площадь', num(totalArea)),
+        row('Самопересечения колец', ring.length > 0 ? num(safe(() => selfIntersections(ring, area.closed), Number.NaN)) : '0'),
         row('Габарит', box === null ? EMPTY : `${num(box.maxX - box.minX)} × ${num(box.maxY - box.minY)}`),
       ];
     },
@@ -422,14 +452,15 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
       if (world === null) return [row('Пограничный мир', 'нет данных')];
       const toKolo = safe(() => distanceToCentral(world, BORDER_SYSTEM_KOLO.x, BORDER_SYSTEM_KOLO.y), Number.NaN);
       const area = selectedArea(context);
-      const band = area === null ? null : safe(() => bandAt(world, ...ringCentroid(area.rings[0] ?? [])), null);
+      const center = area === null ? null : areaCentroid(area);
+      const band = center === null ? null : safe(() => bandAt(world, center[0], center[1]), null);
       return [
         row('Полос', String(bandIds(world).length)),
         row('Полосы', DEFAULT_BANDS.map((item) => item.label).join(' · ')),
         row('Центров отсчёта', num(world.centralSystems.length) + ' (Корхал)'),
         row('Корхал → Коло', `${fixed(toKolo)} мировых единиц`),
         row('Полоса Коло', safe(() => bandAt(world, BORDER_SYSTEM_KOLO.x, BORDER_SYSTEM_KOLO.y)?.label ?? EMPTY, EMPTY)),
-        row('Полоса выбранной', band === null ? 'выберите область' : band.label),
+        row('Полоса выбранной', area === null ? 'выберите область' : (band?.label ?? 'нет геометрии')),
         row('Систем загружено', num(context.systems.length)),
       ];
     },
@@ -539,6 +570,205 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
       ];
     },
   },
+  {
+    id: 'sector-areas-snap',
+    label: 'Привязка к адресной сетке',
+    plane: 'spatial',
+    status: 'working',
+    source: 'src/atlas/sector-areas-snap.ts',
+    note: 'Притягивает контур штриха к мировым рёбрам мельчайшего отображаемого яруса адресной сетки (nested, иначе primary) по локальной цене без ограничения одним прямоугольником.',
+    rows: (context) => {
+      const active = context.session.snapMode === 'grid';
+      return [
+        row('Состояние в сессии', active ? 'включена (по рёбрам сетки)' : 'выключена'),
+        row('Вес направления λ', String(SNAP_DIRECTION_WEIGHT).replace('.', ',')),
+        row('Численный допуск цен', String(SNAP_COST_REL_TOLERANCE)),
+        row('Полуокно направления', `${String(SNAP_DIRECTION_HALF_WINDOW_CELLS).replace('.', ',')} · s`),
+        row('Порог дальности', 'не вводится (глобальный поиск)'),
+      ];
+    },
+  },
+]);
+
+/** Тип подтверждённой связи между модулями: плоскости не смешиваются. */
+export type ModuleRelationKind = ModulePlane;
+
+export const RELATION_KIND_TITLES: Readonly<Record<ModuleRelationKind, string>> = Object.freeze({
+  data: 'связь данных',
+  spatial: 'геометрическое влияние',
+  order: 'отображение и порядок',
+});
+
+/** Явно подтверждённое кодом отношение между двумя модулями реестра. */
+export interface ModuleRelation {
+  readonly from: string;
+  readonly to: string;
+  readonly kind: ModuleRelationKind;
+  readonly note: string;
+}
+
+/**
+ * Только подтверждённые импортами и вызовами отношения модулей.
+ * Связи не выводятся из соседства, порядка списка или близости узлов;
+ * модули без подтверждённых связей (например, `sector-areas-border-world`)
+ * остаются самостоятельными узлами графа.
+ */
+export const MODULE_RELATIONS: readonly ModuleRelation[] = Object.freeze([
+  // Плоскость связей данных (data)
+  Object.freeze({
+    from: 'sector-areas-contract',
+    to: 'sector-areas-geometry',
+    kind: 'data',
+    note: 'Передаёт типы областей, колец и штрихов схемы v1 для геометрических расчётов.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-contract',
+    to: 'sector-areas-editor',
+    kind: 'data',
+    note: 'Задаёт схему документа v1, фабрики областей и разбор JSON в командах редактора.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-editor',
+    kind: 'data',
+    note: 'Вычисляет центроиды для справочного адреса и проверяет геометрию контуров.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-contract',
+    to: 'sector-areas-cascade',
+    kind: 'data',
+    note: 'Предоставляет иерархию parentId и состояния областей для каскада наследования.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-cascade',
+    kind: 'data',
+    note: 'Проверяет вложенность внешнего кольца дочерней области в родительскую.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-contract',
+    to: 'sector-areas-gradient',
+    kind: 'data',
+    note: 'Передаёт спецификацию градиента состояния и настройки по умолчанию.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-cascade',
+    to: 'sector-areas-journal',
+    kind: 'data',
+    note: 'Отдаёт собственные и унаследованные состояния областей для сводного журнала.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-journal',
+    kind: 'data',
+    note: 'Считает площади и число вершин для оценки веса набора.',
+  }),
+
+  // Плоскость геометрического / пространственного влияния (spatial)
+  Object.freeze({
+    from: 'sector-bounds',
+    to: 'sector-areas-scope',
+    kind: 'spatial',
+    note: 'Строит области действия (scope) из контуров границ сектора и туманностей.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-scope',
+    kind: 'spatial',
+    note: 'Определяет центроид области для классификации положения относительно scope.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-scope',
+    to: 'sector-areas-editor',
+    kind: 'spatial',
+    note: 'Классифицирует положение области при команде привязки к области действия.',
+  }),
+  Object.freeze({
+    from: 'sector-bounds',
+    to: 'nebula-model',
+    kind: 'spatial',
+    note: 'Задаёт исходный контур туманности из примитивов границ сектора.',
+  }),
+  Object.freeze({
+    from: 'sector-bounds',
+    to: 'sector-halo-clip',
+    kind: 'spatial',
+    note: 'Передаёт сглаженный контур границы сектора для обрезки гало по кадру без правки исходника.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-snap',
+    to: 'sector-areas-editor',
+    kind: 'spatial',
+    note: 'Привязывает точки штриха к мировым рёбрам отображаемой адресной сетки перед записью.',
+  }),
+
+  // Плоскость отображения и порядка отрисовки (order)
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-lod',
+    kind: 'order',
+    note: 'Упрощает и сглаживает контуры под уровень масштаба без изменения документа.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-color',
+    to: 'sector-areas-gradient',
+    kind: 'order',
+    note: 'Передаёт базовые цвета фракций и акцент режима для расчёта переходов.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-cascade',
+    to: 'sector-areas-force',
+    kind: 'order',
+    note: 'Определяет исходное состояние области перед наложением ручного перекрытия.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-force',
+    kind: 'order',
+    note: 'Проверяет попадание точки в контур мазка форс-закрашивания.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-force',
+    to: 'sector-areas-editor',
+    kind: 'order',
+    note: 'Создаёт мазок перекрытия поверх состояний в команде форс-закрашивания.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-cascade',
+    to: 'sector-areas-render',
+    kind: 'order',
+    note: 'Отбирает видимые на текущем уровне состояния областей для отрисовки.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-lod',
+    to: 'sector-areas-render',
+    kind: 'order',
+    note: 'Поставляет контуры нужной степени детализации и параметр уровня.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-color',
+    to: 'sector-areas-render',
+    kind: 'order',
+    note: 'Формирует цвета заливки, обводки и прозрачность фокуса режима.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-gradient',
+    to: 'sector-areas-render',
+    kind: 'order',
+    note: 'Окрашивает вершины колец и отдельных штрихов вдоль исходного пути.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-force',
+    to: 'sector-areas-render',
+    kind: 'order',
+    note: 'Перебивает цвет области мазками override и выносит их поверх обычных слоёв.',
+  }),
+  Object.freeze({
+    from: 'sector-areas-geometry',
+    to: 'sector-areas-render',
+    kind: 'order',
+    note: 'Подготавливает геометрию отдельных штрихов и считает площадь области.',
+  }),
 ]);
 
 export const DEFAULT_MODULE_ID = 'sector-areas-editor';
@@ -550,6 +780,41 @@ export function moduleById(id: string): SectorModule | null {
 /** Порядок разделов панели: плоскость, затем порядок объявления. */
 export function modulesByPlane(plane: ModulePlane): readonly SectorModule[] {
   return SECTOR_MODULES.filter((module) => module.plane === plane);
+}
+
+/** Входящие и исходящие подтверждённые связи конкретного узла графа модулей. */
+export function relationsForModule(moduleId: string): {
+  readonly incoming: readonly ModuleRelation[];
+  readonly outgoing: readonly ModuleRelation[];
+} {
+  return {
+    incoming: MODULE_RELATIONS.filter((relation) => relation.to === moduleId),
+    outgoing: MODULE_RELATIONS.filter((relation) => relation.from === moduleId),
+  };
+}
+
+/** Узлы реестра без подтверждённых связей в графе (допустимы по правилам графа). */
+export function isolatedModuleIds(): readonly string[] {
+  return SECTOR_MODULES
+    .filter((module) => !MODULE_RELATIONS.some((rel) => rel.from === module.id || rel.to === module.id))
+    .map((module) => module.id);
+}
+
+/** Действия выбранного узла с актуальной доступностью по текущей сессии. */
+export function moduleActions(module: SectorModule, context: RegistryContext): readonly ModuleAction[] {
+  if (module.actions === undefined) return [];
+  return module.actions.map((action): ModuleAction => {
+    if (action.id === 'undo') {
+      return { ...action, disabled: !canUndo(context.session) };
+    }
+    if (action.id === 'redo') {
+      return { ...action, disabled: !canRedo(context.session) };
+    }
+    if (action.id === 'force') {
+      return { ...action, disabled: selectedArea(context) === null };
+    }
+    return action;
+  });
 }
 
 /** Строки свойств выбранного модуля: значения считает сам модуль. */

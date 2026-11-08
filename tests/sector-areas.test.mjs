@@ -19,19 +19,52 @@ import {
 } from '../src/atlas/sector-areas-contract.ts';
 import {
   distanceToRing,
+  distanceToStroke,
   parametrize,
   pointAt,
+  pointHitsArea,
   pointInArea,
   pointInRing,
+  pointInStroke,
   ringArea,
   ringCentroid,
   ringContainsRing,
   ringLength,
   selfIntersections,
   simplify,
+  simplifyStroke,
   smooth,
+  strokeArea,
+  strokeCentroid,
+  strokeLength,
+  strokesArea,
+  strokeVertices,
   totalVertices,
 } from '../src/atlas/sector-areas-geometry.ts';
+import {
+  displayedGridEdgesFor,
+  displayedGridTierFor,
+  gridEdgesForTierInBounds,
+} from '../src/atlas/sector-scene.ts';
+import {
+  SNAP_COST_REL_TOLERANCE,
+  SNAP_DIRECTION_HALF_WINDOW_CELLS,
+  SNAP_DIRECTION_WEIGHT,
+  compareGridEdgeKey,
+  evaluateGridEdgeCost,
+  pickBestGridEdge,
+  snapPointToTierGrid,
+  snapStrokeToDisplayedGrid,
+  snapStrokeToEdges,
+  snapStrokeToTierGrid,
+} from '../src/atlas/sector-areas-snap.ts';
+import {
+  MODULE_RELATIONS,
+  RELATION_KIND_TITLES,
+  SECTOR_MODULES,
+  isolatedModuleIds,
+  relationsForModule,
+} from '../src/atlas/sector-areas-registry.ts';
 import {
   LOD_PRESETS,
   computeLod,
@@ -595,4 +628,338 @@ test('выгрузка журнала — простой JSON, пригодны�
   assert.equal(parsed.entries.length, 2);
   assert.equal(parsed.entries[0].areaId, 'parent');
   assert.equal(parsed.entries[1].effectiveByMode.political.inherited, true);
+});
+
+/* ------------------------------------------- привязка к рёбрам адресной сетки */
+
+test('отображаемый ярус сетки: nested при видимости, иначе primary', () => {
+  // Кадр 1000×800, видимая ширина 2000 → scale = 0,5 px/ед.:
+  // T2 (400 * 0,5 = 200 px ≤ 450 px) — primary, T3 (80 * 0,5 = 40 px ≥ 16 px) — nested.
+  const withNested = displayedGridTierFor(
+    { w: 1000, h: 800 },
+    { centerX: 5000, centerY: 5000, visibleWidth: 2000 },
+  );
+  assert.deepEqual(withNested, { role: 'nested', tier: 3, id: 'T3', cellSize: 80 });
+
+  // Кадр 220×220, видимая ширина 10000 → scale = 0,022 px/ед.:
+  // T1 (2000 * 0,022 = 44 px ≤ 450 px) — primary, а T2 (400 * 0,022 = 8,8 px < 16 px) скрыт!
+  const onlyPrimary = displayedGridTierFor(
+    { w: 220, h: 220 },
+    { centerX: 5000, centerY: 5000, visibleWidth: 10000 },
+  );
+  assert.deepEqual(onlyPrimary, { role: 'primary', tier: 1, id: 'T1', cellSize: 2000 });
+
+  const world = displayedGridEdgesFor(
+    { w: 220, h: 220 },
+    { centerX: 5000, centerY: 5000, visibleWidth: 10000 },
+    { x0: 0, y0: 0, x1: 2000, y1: 2000 },
+  );
+  assert.equal(world.tier?.id, 'T1');
+  assert.ok(world.edges.length >= 4);
+});
+
+test('снап: прямое ребро и переход на соседние рёбра без запирания в одной ячейке', () => {
+  assert.equal(SNAP_DIRECTION_WEIGHT, 0.25);
+  assert.equal(SNAP_COST_REL_TOLERANCE, 1e-9);
+  assert.equal(SNAP_DIRECTION_HALF_WINDOW_CELLS, 0.125);
+
+  const tier = { role: 'primary', tier: 2, id: 'T2', cellSize: 400 };
+
+  // Прямое горизонтальное ребро внутри одной ячейки.
+  const singleEdge = snapStrokeToTierGrid([[60, 392], [340, 395]], tier, { closed: false });
+  assert.deepEqual(singleEdge.points, [[60, 400], [340, 400]]);
+  assert.equal(singleEdge.runs.length, 1);
+  assert.equal(singleEdge.runs[0].edge.orientation, 'horizontal');
+  assert.equal(singleEdge.runs[0].edge.row, 1);
+  assert.equal(singleEdge.runs[0].edge.col, 0);
+
+  // Продолжение вдоль прямой через три соседние ячейки (col = 0 → 1 → 2).
+  const acrossCells = snapStrokeToTierGrid([[60, 392], [920, 396]], tier, { closed: false });
+  assert.deepEqual(acrossCells.points, [[60, 400], [920, 400]]);
+  assert.deepEqual(
+    acrossCells.runs.map((run) => [run.edge.row, run.edge.col, run.edge.orientation]),
+    [
+      [1, 0, 'horizontal'],
+      [1, 1, 'horizontal'],
+      [1, 2, 'horizontal'],
+    ],
+  );
+});
+
+test('снап: поворот около 90° начинает новый локальный сегмент через узел сетки', () => {
+  const tier = { role: 'primary', tier: 2, id: 'T2', cellSize: 400 };
+  // Эскиз слегка перелетает угол (400, 400) до x = 412 и поворачивает вниз к (412, 740).
+  const turned = snapStrokeToTierGrid(
+    [[60, 390], [412, 390], [412, 740]],
+    tier,
+    { closed: false },
+  );
+  assert.deepEqual(turned.points, [[60, 400], [400, 400], [400, 740]]);
+  // Контур не выпрямлен в одну длинную сторону и не дотянут до 800.
+  assert.equal(turned.points.at(-1)[1], 740);
+});
+
+test('снап: контур с несколькими поворотами и непрямоугольный замкнутый контур', () => {
+  const tier = { role: 'primary', tier: 2, id: 'T2', cellSize: 400 };
+
+  // Ступенчатая открытая ломаная с тремя поворотами по разным ячейкам.
+  const stairs = snapStrokeToTierGrid(
+    [
+      [50, 392],
+      [408, 392],
+      [408, 792],
+      [808, 792],
+      [808, 1140],
+    ],
+    tier,
+    { closed: false },
+  );
+  assert.deepEqual(stairs.points, [
+    [50, 400],
+    [400, 400],
+    [400, 800],
+    [800, 800],
+    [800, 1140],
+  ]);
+
+  // Замкнутая Г-образная фигура на нескольких ячейках не превращается в один прямоугольник.
+  const lShape = snapStrokeToTierGrid(
+    [
+      [15, 12],
+      [788, 14],
+      [790, 392],
+      [392, 392],
+      [392, 788],
+      [14, 790],
+    ],
+    tier,
+    { closed: true },
+  );
+  assert.deepEqual(lShape.points, [
+    [0, 0],
+    [800, 0],
+    [800, 400],
+    [400, 400],
+    [400, 800],
+    [0, 800],
+  ]);
+});
+
+test('снап: дальнее ребро выигрывает строго тогда, когда это даёт формула цены', () => {
+  const s = 100;
+  // Ближнее ребро перпендикулярно движению (вертикальное x = 10, d₁ = 10, |u·t| = 0):
+  // C_near = 10² + 0,25 · 100² · (1 − 0)² = 100 + 2500 = 2600.
+  const nearPerpendicular = {
+    tier: 3,
+    row: 0,
+    col: 0,
+    orientation: 'vertical',
+    cellSize: s,
+    x1: 10,
+    y1: 0,
+    x2: 10,
+    y2: 100,
+  };
+
+  // Дальнее сонаправленное ребро на d₂ = 45 (|u·t| = 1): C_far = 45² + 0 = 2025 < 2600 → выигрывает!
+  const farWinning = {
+    tier: 3,
+    row: 1,
+    col: 0,
+    orientation: 'horizontal',
+    cellSize: s,
+    x1: 0,
+    y1: 45,
+    x2: 100,
+    y2: 45,
+  };
+  const winEval = pickBestGridEdge([20, 0], [1, 0], [nearPerpendicular, farWinning]);
+  assert.equal(winEval.edge, farWinning);
+  assert.equal(evaluateGridEdgeCost([20, 0], [1, 0], nearPerpendicular).cost, 2600);
+  assert.equal(evaluateGridEdgeCost([20, 0], [1, 0], farWinning).cost, 2025);
+
+  // То же сонаправленное ребро на d₂ = 55: C_far = 55² = 3025 > 2600 → выигрывает ближнее!
+  const farLosing = {
+    ...farWinning,
+    y1: 55,
+    y2: 55,
+  };
+  const loseEval = pickBestGridEdge([20, 0], [1, 0], [nearPerpendicular, farLosing]);
+  assert.equal(loseEval.edge, nearPerpendicular);
+
+  // Порога максимальной дальности нет: единственный кандидат в 3000 единицах всё равно выбирается.
+  const veryFar = {
+    tier: 3,
+    row: 30,
+    col: 30,
+    orientation: 'horizontal',
+    cellSize: 80,
+    x1: 2400,
+    y1: 2400,
+    x2: 2480,
+    y2: 2400,
+  };
+  const unrestricted = pickBestGridEdge([100, 100], [1, 0], [veryFar]);
+  assert.equal(unrestricted.edge, veryFar);
+  assert.deepEqual(unrestricted.snappedPoint, [2400, 2400]);
+});
+
+test('снап: при равной цене кандидат выбирается детерминированно по (tier, row, col, orientation)', () => {
+  // Точка (200, 200) в центре ячейки 400×400 при диагональном направлении (1, 1)/√2:
+  // все четыре стороны ячейки (row=0 horiz, row=1 horiz, col=0 vert, col=1 vert) имеют абсолютно равную цену!
+  const edges = gridEdgesForTierInBounds(2, { x0: 0, y0: 0, x1: 400, y1: 400 });
+  const cellEdges = edges.filter((edge) => (
+    (edge.orientation === 'horizontal' && edge.col === 0 && (edge.row === 0 || edge.row === 1))
+    || (edge.orientation === 'vertical' && edge.row === 0 && (edge.col === 0 || edge.col === 1))
+  ));
+  assert.equal(cellEdges.length, 4);
+
+  const forward = pickBestGridEdge([200, 200], [1, 1], cellEdges);
+  const reversed = pickBestGridEdge([200, 200], [1, 1], [...cellEdges].reverse());
+  assert.deepEqual(
+    [forward.edge.tier, forward.edge.row, forward.edge.col, forward.edge.orientation],
+    [2, 0, 0, 'horizontal'],
+  );
+  assert.deepEqual(reversed.edge, forward.edge, 'порядок входного массива не меняет победителя');
+
+  // При совпадении (tier, row, col) horizontal строго раньше vertical.
+  const hEdge = cellEdges.find((e) => e.row === 0 && e.col === 0 && e.orientation === 'horizontal');
+  const vEdge = cellEdges.find((e) => e.row === 0 && e.col === 0 && e.orientation === 'vertical');
+  assert.ok(compareGridEdgeKey(hEdge, vEdge) < 0);
+  const cornerTie = pickBestGridEdge([0, 0], [1, 1], [vEdge, hEdge]);
+  assert.equal(cornerTie.edge.orientation, 'horizontal');
+});
+
+test('снап: границы карты 0 и 10000 обрабатываются точно на любом ярусе вплоть до T7', () => {
+  // Левый верхний край карты (0, 0) и правый нижний край (10000, 10000) на мельчайшем ярусе T7 (s = 0,128).
+  const topBorder = snapPointToTierGrid([-5, 0.01], [1, 0], 7, 0.128);
+  assert.deepEqual(topBorder.snappedPoint, [0, 0]);
+  assert.equal(topBorder.edge.row, 0);
+  assert.equal(topBorder.edge.col, 0);
+  assert.equal(topBorder.edge.orientation, 'horizontal');
+
+  const rightBorder = snapPointToTierGrid([10005, 9999.95], [0, 1], 7, 0.128);
+  assert.equal(rightBorder.snappedPoint[0], 10000);
+  assert.ok(Math.abs(rightBorder.snappedPoint[1] - 9999.95) < 1e-6);
+  assert.equal(rightBorder.edge.orientation, 'vertical');
+  assert.equal(rightBorder.edge.x1, 10000);
+
+  // Отображаемая сетка в кадре привязывает штрих вдоль верхней границы карты y = 0.
+  const borderStroke = snapStrokeToDisplayedGrid(
+    [[20, 3], [350, 2]],
+    { w: 1000, h: 800 },
+    { centerX: 500, centerY: 500, visibleWidth: 2000 },
+    { closed: false },
+  );
+  assert.equal(borderStroke.tier?.id, 'T3');
+  assert.deepEqual(borderStroke.points, [[20, 0], [350, 0]]);
+
+  // Для пустого списка кандидатов исходный штрих остаётся целым.
+  assert.deepEqual(snapStrokeToEdges([[10, 20], [30, 40]], []).points, [[10, 20], [30, 40]]);
+});
+
+/* ------------------------------------------- отдельные штрихи и граф реестра */
+
+test('старый документ без strokes читается с пустым списком, новые штрихи не смешиваются с rings и дырками', () => {
+  // Старый JSON без поля strokes: версия схемы остаётся 1, strokes === [].
+  const legacyRaw = JSON.stringify({
+    version: 1,
+    mapSize: 10000,
+    modes: ['political', 'military', 'economy', 'tension'],
+    experimentalModes: ['ecology', 'history'],
+    areas: [{
+      id: 'legacy-1',
+      name: 'Старая с дыркой',
+      parentId: null,
+      address: null,
+      source: 'brush',
+      closed: true,
+      rings: [BIG, SMALL],
+      states: [],
+      scopeId: null,
+      location: null,
+      detail: null,
+      distance: null,
+      band: null,
+      events: [],
+    }],
+    overrides: [],
+    events: [],
+  });
+  const parsedLegacy = parseSectorAreas(legacyRaw);
+  assert.equal(parsedLegacy.version, 1);
+  assert.deepEqual(parsedLegacy.areas[0].strokes, []);
+  // Смысл rings и отверстий сохранён: внутри дырки SMALL точка не принадлежит кольцам.
+  assert.equal(pointInArea(parsedLegacy.areas[0], 1750, 1750), false);
+  assert.equal(pointInArea(parsedLegacy.areas[0], 1200, 1200), true);
+
+  // Добавляем отдельные штрихи в ту же область: rings и дырка остаются нетронутыми.
+  const openStroke = { id: 's-open', points: [[5000, 5000], [5600, 5000]], closed: false };
+  const closedStroke = { id: 's-closed', points: [[6000, 6000], [6400, 6000], [6400, 6400], [6000, 6400]], closed: true };
+  const withStrokes = parseSectorAreas(JSON.stringify({
+    ...parsedLegacy,
+    areas: [{ ...parsedLegacy.areas[0], strokes: [openStroke, closedStroke] }],
+  }));
+  const area = withStrokes.areas[0];
+  assert.equal(area.rings.length, 2, 'кольцо и дырка не изменились');
+  assert.equal(area.strokes.length, 2);
+  assert.equal(pointInArea(area, 1750, 1750), false, 'дырка по-прежнему исключена');
+  assert.equal(pointInStroke(closedStroke, 6200, 6200), true);
+  assert.equal(pointInStroke(openStroke, 5300, 5005, 10), true);
+  assert.equal(pointHitsArea(area, 6200, 6200, 10), true);
+  assert.equal(strokeLength(openStroke), 600);
+  assert.equal(strokeArea(openStroke), 0);
+  assert.equal(strokeArea(closedStroke), 160000);
+  assert.equal(strokesArea(area.strokes), 160000);
+  assert.deepEqual(strokeCentroid(closedStroke), [6200, 6200]);
+  assert.equal(distanceToStroke(openStroke, 5300, 5015), 15);
+  assert.equal(strokeVertices(area), 6);
+  assert.equal(totalVertices(area), BIG.length + SMALL.length, 'totalVertices считает только rings');
+  assert.ok(simplifyStroke(closedStroke, 1, 1).points.length >= 4);
+  assert.deepEqual(validateSectorAreas(withStrokes).errors, []);
+});
+
+test('валидатор ловит повторяющиеся ID и вырожденные замкнутые штрихи', () => {
+  const badArea = createArea({
+    id: 'a-bad',
+    name: 'Проблемная',
+    rings: [],
+    strokes: [
+      { id: 'dup', points: [[100, 100], [200, 100]], closed: true },
+      { id: 'dup', points: [[300, 300], [400, 300]], closed: false },
+    ],
+  });
+  const report = validateSectorAreas(docWith([badArea]));
+  assert.equal(report.ok, false);
+  assert.ok(report.errors.some((msg) => msg.includes('повторяется')));
+  assert.ok(report.errors.some((msg) => msg.includes('минимум 3 вершин')));
+});
+
+test('граф модулей содержит только подтверждённые импортами связи и допускает изолированный узел', async () => {
+  const ids = new Set(SECTOR_MODULES.map((m) => m.id));
+  const sourceById = new Map(SECTOR_MODULES.map((m) => [m.id, m.source]));
+  const kinds = new Set(MODULE_RELATIONS.map((r) => r.kind));
+  assert.deepEqual([...kinds].sort(), ['data', 'order', 'spatial']);
+
+  for (const relation of MODULE_RELATIONS) {
+    assert.ok(ids.has(relation.from), `неизвестный источник связи: ${relation.from}`);
+    assert.ok(ids.has(relation.to), `неизвестный приёмник связи: ${relation.to}`);
+    assert.notEqual(relation.from, relation.to, 'модуль не должен ссылаться сам на себя');
+    assert.ok(RELATION_KIND_TITLES[relation.kind]);
+    assert.ok(relation.note.length > 15);
+
+    // Каждая связь обязана подтверждаться реальным импортом в исходном коде приёмника.
+    const toSource = await readFile(new URL(`../${sourceById.get(relation.to)}`, import.meta.url), 'utf8');
+    const fromFile = sourceById.get(relation.from).split('/').pop();
+    assert.ok(
+      toSource.includes(`./${fromFile}`),
+      `связь ${relation.from} -> ${relation.to} не подтверждена импортом ./${fromFile}`,
+    );
+  }
+
+  // Пограничный мир не импортируется другими модулями реестра и сам их не импортирует — остаётся отдельным узлом.
+  assert.ok(isolatedModuleIds().includes('sector-areas-border-world'));
+  const borderRel = relationsForModule('sector-areas-border-world');
+  assert.equal(borderRel.incoming.length, 0);
+  assert.equal(borderRel.outgoing.length, 0);
 });
