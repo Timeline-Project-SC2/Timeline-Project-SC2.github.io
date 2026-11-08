@@ -41,9 +41,12 @@ import {
 import type { EditorSession, SnapMode } from './sector-areas-editor.ts';
 import { displayedGridTierFor } from './sector-scene.ts';
 import type { FrameViewport, SceneCamera } from './sector-scene.ts';
+import { levelForWidth } from './level-ladder.ts';
 import { snapStrokeToDisplayedGrid } from './sector-areas-snap.ts';
 import { areaSize } from './sector-areas-render.ts';
-import { closedStrokeRing, pointHitsArea, strokeVertices, totalVertices } from './sector-areas-geometry.ts';
+import { lodEpsilon, roundingIterations } from './sector-areas-lod.ts';
+import { statesForLevel } from './sector-areas-cascade.ts';
+import { closedStrokeRing, pointHitsArea, simplifyStroke, strokeVertices, totalVertices } from './sector-areas-geometry.ts';
 import { helpTitle, markdownToHtml } from './sector-areas-help.ts';
 import { createFactionPalette } from './sector-areas-color.ts';
 import type { FactionPalette } from './sector-areas-color.ts';
@@ -113,6 +116,8 @@ export interface SectorAreasEditorUiOptions {
    */
   readonly stage: HTMLElement | null;
   readonly canvas: HTMLCanvasElement | null;
+  /** Существующий host глобальной навигации; без него host создаётся в `stage`. */
+  readonly navigation?: HTMLElement | null;
   /** Текст справки в разметке Markdown; пусто — кнопка «?» показывает заглушку. */
   readonly helpText?: string;
   /** Хранилище черновика и состояния панели; `null` — отключены. */
@@ -247,6 +252,34 @@ export function createDefaultState(id: string, mode: Mode): AreaState {
     override: false,
     label: null,
   };
+}
+
+export interface SnappedStrokePreviewOptions {
+  readonly closed: boolean;
+  readonly rounding?: AreaState['rounding'];
+  readonly lodBias?: number;
+}
+
+/**
+ * Зелёный preview повторяет геометрию итогового `buildAreaPaints`: сначала штрих
+ * привязывается к рёбрам, затем к нему применяются те же RDP и Chaikin, что и
+ * при отрисовке состояния. В документ это не пишется: сохранённый штрих остаётся
+ * привязанным к сетке, а срезы углов по-прежнему вычисляет рендер.
+ */
+export function snappedStrokePreviewPoints(
+  points: readonly AreaPoint[],
+  viewport: FrameViewport,
+  camera: SceneCamera,
+  options: SnappedStrokePreviewOptions,
+): readonly AreaPoint[] {
+  const snapped = snapStrokeToDisplayedGrid(points, viewport, camera, { closed: options.closed }).points;
+  const bias = options.lodBias ?? 0;
+  const rounding = options.rounding ?? 1;
+  return simplifyStroke(
+    { id: '__grid_preview__', points: snapped, closed: options.closed },
+    lodEpsilon(levelForWidth(camera.visibleWidth), bias),
+    roundingIterations(rounding),
+  ).points;
 }
 
 /**
@@ -482,7 +515,7 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     '  <p class="admin-editor-hint">Выбор узла на схеме (мышью или клавишей <kbd>Enter</kbd>) открывает рабочую область этого модуля.</p>',
     `  <svg class="admin-editor-graph-svg" viewBox="0 0 320 ${svgHeight}" role="group" aria-label="Граф подтверждённых связей модулей">`,
     '    <defs>',
-    '      <marker id="adminGraphArrow-data" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#f0a3b1"></path></marker>',
+    '      <marker id="adminGraphArrow-data" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#9fb9d1"></path></marker>',
     '      <marker id="adminGraphArrow-spatial" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#8ad7c2"></path></marker>',
     '      <marker id="adminGraphArrow-order" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#9ec5ff"></path></marker>',
     '    </defs>',
@@ -518,6 +551,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   const storage = options.storage === undefined
     ? (typeof window === 'undefined' ? null : window.localStorage)
     : options.storage;
+  const ownsNavigation = options.navigation === undefined;
+  const navigation = ownsNavigation ? mountNavigation() : (options.navigation ?? null);
 
   let session: EditorSession = createEditorSession(kernel.state.sectorAreas ?? emptySectorAreasDoc());
   let on = false;
@@ -658,6 +693,17 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     };
   }
 
+  /** LOD текущего слоя: preview нового штриха не должен обещать другую форму. */
+  function previewPaintState(): Pick<AreaState, 'rounding' | 'lodBias'> {
+    const fallback = createDefaultState('__grid_preview__', session.mode);
+    const area = selected();
+    if (area === null) return fallback;
+    // Force-override в итоговом рендере всегда использует один проход Chaikin.
+    if ((session.doc.overrides ?? []).some((override) => override.areaId === area.id)) return fallback;
+    const level = levelForWidth(currentCamera().visibleWidth);
+    return statesForLevel(session.doc, area.id, level, session.mode)[0]?.state ?? fallback;
+  }
+
   /* ------------------------------------------------ предпросмотр «было → стало» */
 
   /** Подпись состояния кадра: по ней видно, что карту сдвинули или приблизили. */
@@ -734,7 +780,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
    * показывается замкнутой, открытая линия — открытой: предпросмотр не должен
    * обещать замыкания, которого не будет. При привязке «к рёбрам сетки» поверх
    * пунктирной траектории курсора сразу рисуется живой контур по рёбрам сетки
-   * (само состояние инструмента и документ до завершения ввода не меняются).
+   * с LOD и Chaikin-срезами итогового состояния (само состояние инструмента
+   * и документ до завершения ввода не меняются).
    */
   function drawStroke(ctx: CanvasRenderingContext2D): void {
     const draft = previewDraft(toolState);
@@ -762,9 +809,12 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     ctx.setLineDash([]);
 
     if (gridSnapActive) {
-      const snapped = snapStrokeToDisplayedGrid(draft.points, currentViewport(), currentCamera(), {
+      const paintState = previewPaintState();
+      const snapped = snappedStrokePreviewPoints(draft.points, currentViewport(), currentCamera(), {
         closed: draft.closed,
-      }).points;
+        rounding: paintState.rounding,
+        lodBias: paintState.lodBias,
+      });
       const snappedRing = draft.closed && snapped.length > 1
         ? [...snapped, snapped[0]!]
         : snapped;
@@ -915,6 +965,50 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '</div>';
   }
 
+  /** Глобальная левая оболочка: сосед карты и правой панели, не их содержимое. */
+  function mountNavigation(): HTMLElement | null {
+    if (stage === null || typeof document === 'undefined') return null;
+    const existing = stage.querySelector<HTMLElement>('[data-editor-navigation]');
+    if (existing !== null) return existing;
+    const host = document.createElement('aside');
+    host.className = 'admin-editor-navigation panel';
+    // Общий gate распознаёт этот маркер и не отдаёт клавиши навигации карте.
+    host.setAttribute('data-admin-editor', '');
+    host.setAttribute('data-editor-navigation', '');
+    host.setAttribute('aria-label', 'Системы и разделы редактора');
+    host.innerHTML = [
+      '<div class="admin-editor-navigation-head">',
+      '  <div><p class="eyebrow">РАБОЧАЯ ОБОЛОЧКА</p><h2>Системы</h2></div>',
+      '  <button class="admin-editor-navigation-close icon-button" type="button" data-action="navigation-collapse"',
+      '    aria-expanded="true" aria-controls="adminEditorNavigationContent" title="Скрыть системы" aria-label="Скрыть системы">',
+      '    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>',
+      '</div>',
+      '<div class="admin-editor-navigation-content" id="adminEditorNavigationContent" data-editor-navigation-content></div>',
+      '<button class="admin-editor-navigation-rail" type="button" data-action="navigation-expand"',
+      '  aria-expanded="false" aria-controls="adminEditorNavigationContent" title="Показать системы" aria-label="Показать системы">',
+      '  <span class="admin-editor-navigation-rail-label">Системы</span>',
+      '</button>',
+    ].join('');
+    stage.appendChild(host);
+    return host;
+  }
+
+  function setNavigationCollapsed(value: boolean): void {
+    if (navigation === null) return;
+    navigation.classList.toggle('is-collapsed', value);
+    const collapse = navigation.querySelector<HTMLElement>('[data-action="navigation-collapse"]');
+    const expand = navigation.querySelector<HTMLElement>('[data-action="navigation-expand"]');
+    if (collapse !== null) collapse.setAttribute('aria-expanded', value ? 'false' : 'true');
+    if (expand !== null) expand.setAttribute('aria-expanded', value ? 'false' : 'true');
+  }
+
+  function closeNavigationOnCompact(): void {
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 900px)').matches) {
+      setNavigationCollapsed(true);
+    }
+  }
+
   function systemsNavHtml(): string {
     const isolated = new Set(isolatedModuleIds());
     const navTabs: readonly { readonly id: Exclude<EditorScreen, 'module'>; readonly label: string }[] = [
@@ -1016,14 +1110,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function modulesHtml(): string {
-    const nav = systemsNavHtml();
-    if (activeScreen === 'properties' || activeScreen === 'changes') {
-      return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
-    }
+    if (activeScreen === 'properties' || activeScreen === 'changes') return '';
     const stageHtml = activeScreen === 'draw'
       ? drawScreenHtml()
       : (activeScreen === 'dependencies' ? dependenciesScreenHtml() : moduleScreenHtml());
-    return '<div class="admin-editor-shell">' + nav + stageHtml + '</div>';
+    return '<div class="admin-editor-shell">' + stageHtml + '</div>';
   }
 
   /**
@@ -1083,42 +1174,78 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function moduleRelationsHtml(targetId: string): string {
     const { incoming, outgoing } = relationsForModule(targetId);
-    const graphButton = '<div class="admin-editor-row">'
-      + '<button type="button" data-action="screen" data-screen="dependencies">Открыть экран «Зависимости»</button>'
-      + '</div>';
-    if (incoming.length === 0 && outgoing.length === 0) {
-      return '<div class="admin-editor-relations">'
-        + '<p class="admin-editor-meta"><strong>Связи модуля</strong></p>'
-        + '<p class="admin-editor-hint">Подтверждённых связей в коде нет: модуль отображается самостоятельным узлом.</p>'
-        + graphButton
-        + '</div>';
-    }
-    const inBlock = incoming.length === 0
-      ? ''
-      : '<p class="admin-editor-meta"><strong>Зависит от (' + incoming.length + ')</strong></p>'
-        + '<ul class="admin-editor-rel-list">' + incoming.map((rel) => relationItemHtml(rel, 'in')).join('') + '</ul>';
-    const outBlock = outgoing.length === 0
-      ? ''
-      : '<p class="admin-editor-meta"><strong>Влияет на (' + outgoing.length + ')</strong></p>'
-        + '<ul class="admin-editor-rel-list">' + outgoing.map((rel) => relationItemHtml(rel, 'out')).join('') + '</ul>';
-    return '<div class="admin-editor-relations">' + inBlock + outBlock + graphButton + '</div>';
+    const dependencyBlock = (
+      direction: 'in' | 'out',
+      relations: readonly ModuleRelation[],
+    ): string => {
+      const incoming = direction === 'in';
+      const title = incoming ? 'Зависит от' : 'Влияет на';
+      const empty = incoming
+        ? 'Подтверждённых входящих связей нет.'
+        : 'Подтверждённых исходящих связей нет.';
+      const explanation = incoming
+        ? 'Модули, чьи значения или функции использует выбранный модуль.'
+        : 'Модули, которые используют результат выбранного модуля.';
+      return '<section class="admin-editor-detail-block admin-editor-dependency-block" data-direction="' + direction + '">'
+        + '<div class="admin-editor-detail-heading"><h2>' + title + ' (' + relations.length + ')</h2>'
+        + '<p class="admin-editor-hint">' + explanation + '</p></div>'
+        + (relations.length === 0
+          ? '<p class="admin-editor-hint">' + empty + '</p>'
+          : '<ul class="admin-editor-rel-list">' + relations.map((rel) => relationItemHtml(rel, direction)).join('') + '</ul>')
+        + '</section>';
+    };
+    const isolated = incoming.length === 0 && outgoing.length === 0
+      ? '<p class="admin-editor-hint">Подтверждённых связей в коде нет: модуль отображается самостоятельным узлом.</p>'
+      : '';
+    return '<div class="admin-editor-relations" aria-label="Подтверждённые зависимости модуля">'
+      + dependencyBlock('in', incoming)
+      + dependencyBlock('out', outgoing)
+      + '<section class="admin-editor-detail-block admin-editor-relations-footer">'
+      + isolated
+      + '<button type="button" data-action="screen" data-screen="dependencies">Открыть общий граф зависимостей</button>'
+      + '</section></div>';
   }
 
-  /** Карточка выбранного узла: значения, подтверждённые связи и действия модуля. */
+  /** Карточка узла: описание, живые значения, обе стороны связей и действия. */
   function modulePropertiesHtml(module: SectorModule): string {
     const context = registryContext();
     const rows = moduleRows(module, context);
+    const statusNote = module.status === 'working'
+      ? 'Модуль участвует в офлайн-работе редактора.'
+      : (module.status === 'view'
+        ? 'Значения настоящие, но этот модуль доступен только для просмотра.'
+        : 'Модуль существует в проекте, но к рабочей панели не подключён.');
     return [
-      '<p class="admin-editor-meta"><strong>' + escapeHtml(module.label) + '</strong><br>'
-        + escapeHtml(PLANE_TITLES[module.plane]) + ' · <span class="admin-editor-status" data-status="'
-        + module.status + '">' + escapeHtml(STATUS_TITLES[module.status]) + '</span></p>',
-      '<p class="admin-editor-hint">' + escapeHtml(module.note) + '</p>',
-      '<table class="admin-editor-table"><tbody>' + rows.map((item) => (
+      '<section class="admin-editor-detail-block admin-editor-module-overview">',
+      '  <p class="admin-editor-detail-kicker admin-editor-offline">Выбранный модуль · демо, не отправлено</p>',
+      '  <div class="admin-editor-module-title-row"><h2>' + escapeHtml(module.label) + '</h2>'
+        + '<span class="admin-editor-status" data-status="' + module.status + '">'
+        + escapeHtml(STATUS_TITLES[module.status]) + '</span></div>',
+      '  <p class="admin-editor-module-description">' + escapeHtml(module.note) + '</p>',
+      '</section>',
+      moduleRelationsHtml(module.id),
+      '<section class="admin-editor-detail-block admin-editor-context-block">',
+      '  <div class="admin-editor-detail-heading"><h2>Контекст модуля</h2>'
+        + '<p class="admin-editor-hint">Плоскость и режим доступа отделяют данные, пространственное влияние и порядок отрисовки.</p></div>',
+      '  <dl class="admin-editor-module-facts">',
+      '    <div><dt>Плоскость</dt><dd>' + escapeHtml(PLANE_TITLES[module.plane]) + '</dd></div>',
+      '    <div><dt>Вопрос плоскости</dt><dd>' + escapeHtml(PLANE_QUESTIONS[module.plane]) + '</dd></div>',
+      '    <div><dt>Режим доступа</dt><dd>' + escapeHtml(statusNote) + '</dd></div>',
+      '  </dl>',
+      '  <p class="admin-editor-source"><strong>Файл</strong><code>' + escapeHtml(module.source) + '</code></p>',
+      '</section>',
+      '<section class="admin-editor-detail-block admin-editor-values-block">',
+      '  <div class="admin-editor-detail-heading"><h2>Живые значения</h2>'
+        + '<p class="admin-editor-hint">Их вычисляют функции самого модуля по текущей сессии и данным карты.</p></div>',
+      '  <table class="admin-editor-table"><tbody>' + rows.map((item) => (
         '<tr><th scope="row">' + escapeHtml(item.label) + '</th><td>' + escapeHtml(item.value) + '</td></tr>'
       )).join('') + '</tbody></table>',
-      moduleRelationsHtml(module.id),
+      '</section>',
+      '<section class="admin-editor-detail-block admin-editor-actions-block">',
+      '  <div class="admin-editor-detail-heading"><h2>Действия модуля</h2>'
+        + '<p class="admin-editor-hint">Кнопки вызывают только команды, объявленные этим модулем.</p></div>',
       moduleActionsHtml(module, context),
-      '<p class="admin-editor-hint">Файл: <code>' + escapeHtml(module.source) + '</code></p>',
+      '</section>',
     ].join('');
   }
 
@@ -1297,6 +1424,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const properties = panel.querySelector('[data-editor-block="properties"]');
     const changes = panel.querySelector('[data-editor-block="changes"]');
     if (summary !== null) summary.textContent = summaryText();
+    if (navigation !== null) {
+      navigation.setAttribute('data-active-screen', activeScreen);
+      const content = navigation.querySelector('[data-editor-navigation-content]');
+      if (content !== null) content.innerHTML = systemsNavHtml();
+    }
     if (modules !== null) modules.innerHTML = modulesHtml();
     if (properties !== null) properties.innerHTML = propertiesHtml();
     if (changes !== null) changes.innerHTML = changesHtml();
@@ -1617,6 +1749,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   function setScreen(next: EditorScreen): void {
     activeScreen = next;
     refresh();
+    closeNavigationOnCompact();
   }
 
   function setEnabled(value: boolean): void {
@@ -1688,6 +1821,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     switch (action) {
       case 'help': openHelp(); break;
       case 'help-close': closeHelp(); break;
+      case 'navigation-collapse': setNavigationCollapsed(true); break;
+      case 'navigation-expand': setNavigationCollapsed(false); break;
       case 'collapse': setCollapsed(true); break;
       case 'expand': setCollapsed(false); break;
       case 'toggle-enable': setEnabled(input.checked); break;
@@ -1712,8 +1847,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       case 'screen': {
         const next = control.getAttribute('data-screen') ?? '';
         if (!isEditorScreen(next)) break;
-        activeScreen = next;
-        refresh();
+        setScreen(next);
         break;
       }
       case 'relation-filter': {
@@ -1725,11 +1859,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       }
       case 'module': {
         const nextModule = control.getAttribute('data-module') ?? '';
-        if (nextModule.length > 0 && moduleById(nextModule) !== null) {
-          moduleId = nextModule;
-          activeScreen = 'module';
-        }
+        if (moduleById(nextModule) !== null) moduleId = nextModule;
+        activeScreen = 'module';
         refresh();
+        closeNavigationOnCompact();
         break;
       }
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
@@ -1953,7 +2086,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function insidePanel(target: EventTarget | null): boolean {
-    return panel !== null && typeof Element !== 'undefined' && target instanceof Element && panel.contains(target);
+    if (typeof Element === 'undefined' || !(target instanceof Element)) return false;
+    return (panel !== null && panel.contains(target))
+      || (navigation !== null && navigation.contains(target));
   }
 
   async function copyJson(): Promise<boolean> {
@@ -2035,6 +2170,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   bind(panel, 'change', onPanelChange);
   bind(panel, 'keydown', onPanelKeyDown as unknown as Handler);
   bind(panel, 'input', onColorInput);
+  bind(navigation, 'click', onPanelClick);
+  bind(navigation, 'change', onPanelChange);
+  bind(navigation, 'keydown', onPanelKeyDown as unknown as Handler);
+  bind(navigation, 'input', onColorInput);
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as Handler, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as Handler, true);
   bind(inputTarget, 'pointerup', onPointerUp as unknown as Handler, true);
@@ -2078,6 +2217,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         help = null;
         helpReturn = null;
       }
+      if (ownsNavigation && navigation !== null) navigation.remove();
     },
   };
 }

@@ -107,15 +107,16 @@ test('кнопка только открывает модалку; перехо�
   assert.match(gate, /if \(modalGate\)[\s\S]*?openButton\.addEventListener\('click'[\s\S]*?gate\.hidden = false/);
 });
 
-test('успешная отправка включает красную тему и показывает подпись в стиле ошибки галактики', () => {
+test('успешная отправка включает Timeline-тему и зелёное заметное уведомление', () => {
   const css = read('site/shared/timeline-skin.css');
   const theme = read('site/sector/admin-edit/admin-edit.css');
   assert.match(gateSource, /const ADMIN_SUCCESS_MESSAGE = 'Доступ Администратора получен\. Права расширены\.'/);
   assert.match(gateSource, /showAdminNotice\(doc, ADMIN_SUCCESS_MESSAGE, ADMIN_ACCESS_NOTICE_CLASS\)/);
   assert.match(gateSource, /doc\.documentElement\.classList\.add\('admin-editor-authorized'\)/);
   assert.match(gateSource, /onAuthorized\(\)/);
-  assert.match(theme, /:root\.admin-editor-authorized\s*\{[\s\S]*?--white: #fff1f3/);
-  assert.match(css, /\.toast\.admin-access-notice\s*\{[\s\S]*?top: 33\.33vh[\s\S]*?rgba\(255, 70, 70, \.7\)/);
+  assert.match(theme, /:root\.admin-editor-authorized\s*\{[\s\S]*?--white: #effffd/);
+  assert.match(css, /\.toast\.admin-access-notice\s*\{[\s\S]*?top: 33\.33vh/);
+  assert.match(theme, /html\.admin-editor-authorized body\.admin-editor-authorized \.toast\.admin-access-notice\s*\{[\s\S]*?border-color: rgba\(46, 245, 230, \.72\);[\s\S]*?background: rgba\(1, 9, 8, \.9\);[\s\S]*?color: #cffffb;/);
   assert.match(css, /\.admin-editor-authorized \.toast\.admin-access-notice\.is-done \.galaxy-error-dot/);
 });
 
@@ -141,23 +142,25 @@ test('«Завершить сеанс» стоит там же, где кноп�
   assert.match(gate, /ADMIN_SESSION_END_NOTICE_CLASS = 'admin-session-end-notice'/);
 });
 
-test('красная тема разделена: шрифты, топ-панель и визуальный слой, без перекраса модулей', () => {
+test('Timeline-тема разделена: шрифты, топ-панель и визуальный слой без красной или серой замены', () => {
   const css = read('site/sector/admin-edit/admin-edit.css');
   const block = /:root\.admin-editor-authorized\s*\{([\s\S]*?)\n\}/.exec(css)[1];
-  // Переопределены только текстовые токены: окантовка, линии и панели не тронуты.
+  // Общие акценты, панели и таймлайн сайта глобально не переопределяются.
   for (const token of ['--accent', '--line-strong', '--panel', '--timeline-cyan', '--bg-2']) {
     assert.doesNotMatch(block, new RegExp(`\\${token}:`), `${token} не должен переопределяться`);
   }
-  assert.match(block, /--text: #ead7dc/);
-  assert.match(block, /--topbar-line: rgba\(212, 112, 133/);
-  assert.match(block, /--topbar-bg: rgba\(17, 9, 13/);
-  assert.match(block, /--admin-topbar-ink:/);
-  assert.match(block, /--admin-stage-core:/);
-  assert.match(block, /--admin-grid-major:/);
-  // Модули и органы управления картой остаются в обычной стилистике.
+  assert.match(block, /--text: #c8e5e2/);
+  assert.match(block, /--topbar-line: rgba\(38, 231, 218, \.38\)/);
+  assert.match(block, /--topbar-bg: rgba\(1, 8, 7, \.94\)/);
+  assert.match(block, /--admin-topbar-ink: #24eadb/);
+  assert.match(block, /--admin-stage-core: #03100f/);
+  assert.match(block, /--admin-grid-major: rgba\(27, 165, 155, \.07\)/);
+  assert.doesNotMatch(block, /#ead7dc|#fff1f3|#e4a3b0|rgba\(212, 112, 133|#e3e7e9|#41484d/i);
+  // Модули и органы управления картой не получают отдельной цветной темы.
   assert.doesNotMatch(css, /\.admin-editor-authorized \.map-control/);
   assert.doesNotMatch(css, /\.admin-editor-authorized \.panel,/);
   assert.doesNotMatch(css, /\.admin-editor-authorized \.admin-editor-panel \{ border-color/);
+  assert.doesNotMatch(css, /\.admin-editor-authorized \.topbar\s*\{[^}]*background:/);
   // Три слоя описаны явно и по отдельности.
   assert.match(css, /\/\* 3\. Визуальный слой/);
   assert.match(css, /\/\* 2\. Топ-панель/);

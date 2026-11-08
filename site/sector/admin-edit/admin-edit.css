@@ -1,14 +1,18 @@
 /* Страница-заготовка: карта и общий интерфейс остаются теми же, что в /sector/.
  * Редактор границ собран на админских токенах (--admin-*), поэтому панель,
- * её органы и свёрнутый рейл держат один красноватый цвет интерфейса. */
+ * её органы и свёрнутый рейл держат один бирюзовый цвет интерфейса. */
 
 /* ------------------------------------------------ верхний слой навигации систем */
 
-/* Жёсткий инвариант навигации: левая панель «Системы» (.left-panel) является
- * глобальным верхним слоем внутри сцены карты и остаётся кликабельной выше
- * панели редактора, инспектора (.detail-panel) и выезжающих экранов. */
-.map-stage .left-panel { z-index: 19; }
-.map-stage .left-panel:not(.collapsed) { pointer-events: auto; }
+/* Глобальная оболочка редактора: самостоятельная левая навигация, центральное
+ * полотно и одна правая рабочая панель. Обычный каталог здесь уступает место
+ * системам редактора; на публичной /sector/ эти правила не действуют. */
+.admin-editor-authorized .map-stage,
+.admin-editor-authorized .map-stage.wide { left: 0; }
+.admin-editor-authorized .left-panel,
+.admin-editor-authorized #toggleSidePanel,
+.admin-editor-authorized .map-page-intro { display: none; }
+.map-stage .admin-editor-navigation { z-index: 30; }
 .map-stage .detail-panel,
 .map-stage .travel-panel { z-index: 14; }
 
@@ -21,17 +25,11 @@
   right: 14px;
   bottom: 14px;
   box-sizing: border-box;
-  width: min(548px, 42vw, calc(100vw - 28px));
+  width: min(420px, 38vw, calc(100vw - 340px));
   padding: 16px 18px;
   overflow-x: hidden;
   overflow-y: auto;
   transition: width .22s ease, padding .22s ease, height .22s ease;
-}
-
-@media (min-width: 701px) {
-  .map-stage:has(.left-panel:not(.collapsed)) .admin-editor-panel:not(.is-collapsed) {
-    max-width: calc(100vw - 348px);
-  }
 }
 
 .admin-editor-heading {
@@ -45,22 +43,22 @@
 .admin-editor-panel h2 {
   margin: 0 0 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid rgba(212, 112, 133, .28);
+  border-bottom: 1px solid rgba(38, 231, 218, .28);
   color: var(--admin-topbar-ink);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: .12em;
   text-transform: uppercase;
 }
-.admin-editor-panel section { padding: 16px 0; border-top: 1px solid rgba(212, 112, 133, .22); }
+.admin-editor-panel section { padding: 16px 0; border-top: 1px solid rgba(38, 231, 218, .22); }
 .admin-editor-panel section:first-of-type { border-top: 0; }
 .admin-editor-panel section p { margin: 0; }
 
 .admin-editor-summary {
   margin: 10px 0 0;
   padding: 7px 9px;
-  border: 1px solid rgba(212, 112, 133, .3);
-  background: rgba(153, 52, 74, .12);
+  border: 1px solid rgba(38, 231, 218, .3);
+  background: rgba(17, 191, 180, .12);
   color: var(--admin-topbar-ink);
   font: 10px/1.5 var(--mono);
   letter-spacing: .02em;
@@ -69,8 +67,8 @@
 
 .admin-editor-notice {
   padding: 10px;
-  border: 1px solid rgba(212, 112, 133, .32);
-  background: rgba(153, 52, 74, .1);
+  border: 1px solid rgba(38, 231, 218, .32);
+  background: rgba(17, 191, 180, .1);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
@@ -88,9 +86,9 @@
   width: 100%;
   min-height: 30px;
   padding: 6px 8px;
-  border: 1px solid rgba(218, 128, 149, .38);
+  border: 1px solid rgba(49, 246, 232, .38);
   border-radius: 6px;
-  background: rgba(10, 5, 8, .55);
+  background: rgba(1, 6, 5, .55);
   color: var(--white);
   font: inherit;
 }
@@ -98,27 +96,27 @@
 .admin-editor-field input:focus-visible,
 .admin-editor-field select:focus-visible,
 .admin-editor-row button:focus-visible {
-  outline: 1px solid rgba(240, 163, 177, .7);
+  outline: 1px solid rgba(186, 255, 249, .7);
   outline-offset: 1px;
 }
 .admin-editor-field input[type="color"] {
   width: 46px;
   height: 28px;
   padding: 0;
-  border: 1px solid rgba(218, 128, 149, .38);
+  border: 1px solid rgba(49, 246, 232, .38);
   border-radius: 6px;
   background: none;
 }
-.admin-editor-field input[type="checkbox"] { width: auto; margin: 0; accent-color: #b63f59; }
+.admin-editor-field input[type="checkbox"] { width: auto; margin: 0; accent-color: #11bfb4; }
 
 .admin-editor-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .admin-editor-row button {
   flex: 1 1 auto;
   min-height: 30px;
   padding: 0 10px;
-  border: 1px solid rgba(218, 128, 149, .38);
+  border: 1px solid rgba(49, 246, 232, .38);
   border-radius: 6px;
-  background: rgba(153, 52, 74, .12);
+  background: rgba(17, 191, 180, .12);
   color: var(--admin-topbar-ink);
   font: inherit;
   font-size: 11px;
@@ -126,8 +124,8 @@
   transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
 .admin-editor-row button:hover {
-  border-color: rgba(240, 163, 177, .68);
-  background: rgba(182, 63, 89, .18);
+  border-color: rgba(186, 255, 249, .68);
+  background: rgba(17, 191, 180, .18);
   color: var(--admin-topbar-ink-strong);
   box-shadow: 0 0 14px var(--admin-topbar-glow);
 }
@@ -136,7 +134,7 @@
 .admin-editor-hint { margin: 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .admin-editor-hint kbd {
   padding: 1px 4px;
-  border: 1px solid rgba(218, 128, 149, .38);
+  border: 1px solid rgba(49, 246, 232, .38);
   border-radius: 4px;
   font-family: inherit;
   font-size: 10px;
@@ -165,22 +163,22 @@
   gap: 8px;
   width: 100%;
   padding: 6px 8px;
-  border: 1px solid rgba(212, 112, 133, .22);
+  border: 1px solid rgba(38, 231, 218, .22);
   border-radius: 6px;
-  background: rgba(21, 10, 14, .5);
+  background: rgba(4, 19, 18, .5);
   color: var(--text);
   font: inherit;
   font-size: 11px;
   text-align: left;
   cursor: pointer;
 }
-.admin-editor-module:hover { border-color: rgba(240, 163, 177, .5); background: rgba(182, 63, 89, .12); }
+.admin-editor-module:hover { border-color: rgba(186, 255, 249, .5); background: rgba(17, 191, 180, .12); }
 .admin-editor-module.is-current {
-  border-color: rgba(240, 163, 177, .68);
-  background: rgba(143, 40, 61, .26);
+  border-color: rgba(186, 255, 249, .68);
+  background: rgba(24, 224, 210, .26);
   color: var(--white);
 }
-.admin-editor-module:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
+.admin-editor-module:focus-visible { outline: 2px solid rgba(186, 255, 249, .7); outline-offset: 2px; }
 .admin-editor-module-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -204,7 +202,7 @@
   display: grid;
   gap: 5px;
   padding-bottom: 8px;
-  border-bottom: 1px solid rgba(212, 112, 133, .2);
+  border-bottom: 1px solid rgba(38, 231, 218, .2);
 }
 .admin-editor-field-label { font-size: 11px; color: var(--muted); }
 .admin-editor-tier-badge {
@@ -225,63 +223,141 @@
   justify-content: space-between;
   gap: 8px;
   padding: 8px 10px;
-  border: 1px solid rgba(212, 112, 133, .28);
+  border: 1px solid rgba(38, 231, 218, .28);
   border-radius: 6px;
-  background: rgba(21, 10, 14, .48);
+  background: rgba(4, 19, 18, .48);
 }
 .admin-editor-create-area {
   flex: 0 0 auto;
   min-height: 28px;
   padding: 0 10px;
-  border: 1px solid rgba(240, 163, 177, .48);
+  border: 1px solid rgba(186, 255, 249, .48);
   border-radius: 6px;
-  background: rgba(153, 52, 74, .2);
+  background: rgba(17, 191, 180, .2);
   color: var(--admin-topbar-ink-strong, var(--white));
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 .admin-editor-create-area:hover {
-  border-color: rgba(240, 163, 177, .74);
-  background: rgba(182, 63, 89, .28);
+  border-color: rgba(186, 255, 249, .74);
+  background: rgba(17, 191, 180, .28);
 }
 .admin-editor-create-area:focus-visible {
-  outline: 2px solid rgba(240, 163, 177, .7);
+  outline: 2px solid rgba(186, 255, 249, .7);
   outline-offset: 2px;
 }
 
-/* Каркас в духе Obsidian: постоянная навигация систем слева (верхний слой
- * внутри панели) и ровно один выбранный рабочий экран справа. */
-.admin-editor-panel[data-active-screen] > .admin-editor-body > section > h2 {
+/* Obsidian разделяет ribbon, sidebar, editor и view; Photoshop/GIMP —
+ * инструменты, центральное полотно и свойства. Здесь те же самостоятельные
+ * уровни: этот aside не является потомком правой #adminEditorPanel. */
+.admin-editor-navigation {
+  --panel: linear-gradient(180deg, rgba(2, 12, 11, .94), rgba(1, 6, 5, .96));
+  --line: rgba(38, 231, 218, .26);
+  --line-strong: rgba(49, 246, 232, .46);
+  --accent: #24eadb;
+  --accent-2: #11bfb4;
+  --accent-outline: rgba(186, 255, 249, .6);
+  position: absolute;
+  top: 86px;
+  left: 14px;
+  bottom: 14px;
   display: none;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 288px;
+  overflow: hidden;
+  pointer-events: auto;
 }
+.admin-editor-authorized .admin-editor-navigation { display: flex; }
+.admin-editor-navigation-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 14px 11px;
+  border-bottom: 1px solid rgba(38, 231, 218, .24);
+}
+.admin-editor-navigation-head p { margin: 0 0 4px; }
+.admin-editor-navigation-head h2 {
+  margin: 0;
+  color: var(--white);
+  font-size: 18px;
+  line-height: 1.1;
+}
+.admin-editor-navigation .admin-editor-navigation-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid rgba(38, 231, 218, .32);
+  color: #2ef5e6;
+}
+.admin-editor-navigation-close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.admin-editor-navigation-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: rgba(17, 191, 180, .5) transparent;
+}
+.admin-editor-navigation-rail { display: none; }
+.admin-editor-navigation.is-collapsed {
+  top: 50%;
+  bottom: auto;
+  width: 46px;
+  height: 216px;
+  padding: 10px 8px;
+  transform: translateY(-50%);
+}
+.admin-editor-navigation.is-collapsed .admin-editor-navigation-head,
+.admin-editor-navigation.is-collapsed .admin-editor-navigation-content { display: none; }
+.admin-editor-navigation.is-collapsed .admin-editor-navigation-rail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--admin-topbar-ink);
+  cursor: pointer;
+}
+.admin-editor-navigation-rail-label {
+  writing-mode: vertical-rl;
+  font: 10px/1 var(--mono);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+.admin-editor-navigation-rail:focus-visible {
+  outline: 1px solid rgba(186, 255, 249, .7);
+  outline-offset: 2px;
+}
+
+/* В правой рабочей панели остаётся ровно один активный экран. */
+.admin-editor-panel[data-active-screen] > .admin-editor-body > section > h2 { display: none; }
 .admin-editor-panel[data-active-screen="module"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="module"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(2),
-.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3) {
-  display: none;
-}
-.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
-.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body {
-  display: grid;
-  grid-template-columns: 186px minmax(0, 1fr);
-  gap: 10px 12px;
-  align-items: start;
-}
-.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > .admin-editor-notice,
-.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > .admin-editor-notice {
-  grid-column: 1 / -1;
-}
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(1),
-.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(1) {
-  grid-column: 1;
-  padding: 0;
-  border-top: 0;
-  min-width: 0;
-}
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(1),
 .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(2) {
   display: none;
 }
@@ -289,35 +365,18 @@
 .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
   position: relative;
   z-index: 1;
-  grid-column: 2;
   min-width: 0;
   padding: 10px;
-  border: 1px solid rgba(212, 112, 133, .24);
+  border: 1px solid rgba(38, 231, 218, .24);
   border-radius: 8px;
-  background: rgba(16, 8, 12, .52);
+  background: rgba(2, 18, 16, .52);
 }
-
-.admin-editor-shell {
-  display: grid;
-  grid-template-columns: 186px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-}
-.admin-editor-shell-nav-only {
-  grid-template-columns: minmax(0, 1fr);
-}
+.admin-editor-shell { display: block; }
 .admin-editor-nav {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  pointer-events: auto;
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 9px;
-  border: 1px solid rgba(218, 128, 149, .32);
-  border-radius: 8px;
-  background: rgba(19, 9, 13, .95);
+  pointer-events: auto;
 }
 .admin-editor-nav-group {
   display: grid;
@@ -354,9 +413,9 @@
   width: 100%;
   min-height: 28px;
   padding: 4px 8px;
-  border: 1px solid rgba(212, 112, 133, .24);
+  border: 1px solid rgba(38, 231, 218, .24);
   border-radius: 6px;
-  background: rgba(25, 11, 16, .58);
+  background: rgba(4, 19, 18, .72);
   color: var(--text);
   font: inherit;
   font-size: 11px;
@@ -364,16 +423,16 @@
   cursor: pointer;
 }
 .admin-editor-nav-item:hover {
-  border-color: rgba(240, 163, 177, .54);
-  background: rgba(182, 63, 89, .14);
+  border-color: rgba(186, 255, 249, .54);
+  background: rgba(17, 191, 180, .14);
 }
 .admin-editor-nav-item.is-current {
-  border-color: rgba(240, 163, 177, .72);
-  background: rgba(143, 40, 61, .3);
+  border-color: rgba(186, 255, 249, .72);
+  background: rgba(24, 224, 210, .3);
   color: var(--white);
 }
 .admin-editor-nav-item:focus-visible {
-  outline: 2px solid rgba(240, 163, 177, .7);
+  outline: 2px solid rgba(186, 255, 249, .7);
   outline-offset: 2px;
 }
 
@@ -386,9 +445,9 @@
   display: grid;
   gap: 8px;
   padding: 10px;
-  border: 1px solid rgba(212, 112, 133, .24);
+  border: 1px solid rgba(38, 231, 218, .24);
   border-radius: 8px;
-  background: rgba(16, 8, 12, .52);
+  background: rgba(2, 18, 16, .52);
 }
 .admin-editor-stage > .admin-editor-graph-pane {
   padding: 0;
@@ -405,21 +464,21 @@
 .admin-editor-graph-filters { display: flex; flex-wrap: wrap; gap: 3px; }
 .admin-editor-graph-filter {
   padding: 3px 7px;
-  border: 1px solid rgba(212, 112, 133, .24);
+  border: 1px solid rgba(38, 231, 218, .24);
   border-radius: 999px;
-  background: rgba(21, 10, 14, .55);
+  background: rgba(4, 19, 18, .55);
   color: var(--muted);
   font: inherit;
   font-size: 10px;
   cursor: pointer;
 }
-.admin-editor-graph-filter:hover { border-color: rgba(240, 163, 177, .5); color: var(--text); }
+.admin-editor-graph-filter:hover { border-color: rgba(186, 255, 249, .5); color: var(--text); }
 .admin-editor-graph-filter.is-current {
-  border-color: rgba(240, 163, 177, .68);
-  background: rgba(143, 40, 61, .28);
+  border-color: rgba(186, 255, 249, .68);
+  background: rgba(24, 224, 210, .28);
   color: var(--white);
 }
-.admin-editor-graph-filter:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 1px; }
+.admin-editor-graph-filter:focus-visible { outline: 2px solid rgba(186, 255, 249, .7); outline-offset: 1px; }
 
 .admin-editor-graph-legend {
   display: flex;
@@ -428,7 +487,7 @@
   font-size: 10px;
   color: var(--muted);
 }
-.admin-editor-graph-legend [data-kind="data"] { color: #f0a3b1; }
+.admin-editor-graph-legend [data-kind="data"] { color: #2ef5e6; }
 .admin-editor-graph-legend [data-kind="spatial"] { color: #8ad7c2; }
 .admin-editor-graph-legend [data-kind="order"] { color: #9ec5ff; }
 
@@ -436,9 +495,9 @@
   display: block;
   width: 100%;
   height: auto;
-  border: 1px solid rgba(212, 112, 133, .18);
+  border: 1px solid rgba(38, 231, 218, .18);
   border-radius: 6px;
-  background: rgba(9, 5, 8, .66);
+  background: rgba(1, 6, 5, .66);
 }
 .admin-editor-graph-edge {
   fill: none;
@@ -446,7 +505,7 @@
   opacity: .32;
   transition: opacity .15s ease, stroke-width .15s ease;
 }
-.admin-editor-graph-edge[data-kind="data"] { stroke: #f0a3b1; }
+.admin-editor-graph-edge[data-kind="data"] { stroke: #2ef5e6; }
 .admin-editor-graph-edge[data-kind="spatial"] { stroke: #8ad7c2; }
 .admin-editor-graph-edge[data-kind="order"] { stroke: #9ec5ff; }
 .admin-editor-graph-edge[data-active="true"] {
@@ -454,7 +513,7 @@
   opacity: .96;
 }
 .admin-editor-graph-divider {
-  stroke: rgba(212, 112, 133, .32);
+  stroke: rgba(38, 231, 218, .32);
   stroke-dasharray: 4 3;
   stroke-width: 1;
 }
@@ -465,8 +524,8 @@
 }
 .admin-editor-graph-node { cursor: pointer; outline: none; }
 .admin-editor-graph-node rect {
-  fill: rgba(24, 11, 16, .88);
-  stroke: rgba(212, 112, 133, .34);
+  fill: rgba(2, 12, 11, .88);
+  stroke: rgba(38, 231, 218, .34);
   stroke-width: 1;
   transition: fill .15s ease, stroke .15s ease;
 }
@@ -476,16 +535,16 @@
 .admin-editor-graph-node:hover rect,
 .admin-editor-graph-node:focus-visible rect,
 .admin-editor-graph-node.is-linked rect {
-  fill: rgba(58, 21, 33, .9);
-  stroke: rgba(240, 163, 177, .82);
+  fill: rgba(4, 49, 45, .9);
+  stroke: rgba(186, 255, 249, .82);
 }
 .admin-editor-graph-node:focus-visible rect {
-  stroke: #ffe2e7;
+  stroke: #effffd;
   stroke-width: 1.8;
 }
 .admin-editor-graph-node.is-current rect {
-  fill: rgba(132, 36, 56, .62);
-  stroke: #ffe2e7;
+  fill: rgba(17, 191, 180, .62);
+  stroke: #effffd;
   stroke-width: 1.5;
 }
 .admin-editor-graph-node text {
@@ -505,15 +564,15 @@
 }
 
 /* Входящие и исходящие подтверждённые связи в карточке узла. */
-.admin-editor-relations { display: grid; gap: 6px; padding-top: 4px; border-top: 1px solid rgba(212, 112, 133, .18); }
+.admin-editor-relations { display: grid; gap: 6px; padding-top: 4px; border-top: 1px solid rgba(38, 231, 218, .18); }
 .admin-editor-rel-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
 .admin-editor-rel-item {
   display: grid;
   gap: 3px;
   padding: 5px 7px;
-  border: 1px solid rgba(212, 112, 133, .18);
+  border: 1px solid rgba(38, 231, 218, .18);
   border-radius: 6px;
-  background: rgba(21, 10, 14, .44);
+  background: rgba(4, 19, 18, .44);
 }
 .admin-editor-rel-head {
   display: flex;
@@ -533,7 +592,7 @@
   cursor: pointer;
 }
 .admin-editor-rel-target:hover { text-decoration: underline; text-underline-offset: 2px; }
-.admin-editor-rel-target:focus-visible { outline: 1px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
+.admin-editor-rel-target:focus-visible { outline: 1px solid rgba(186, 255, 249, .7); outline-offset: 2px; }
 .admin-editor-rel-kind {
   padding: 1px 5px;
   border: 1px solid currentColor;
@@ -541,7 +600,7 @@
   font-size: 9px;
   white-space: nowrap;
 }
-.admin-editor-rel-kind[data-kind="data"] { color: #f0a3b1; }
+.admin-editor-rel-kind[data-kind="data"] { color: #2ef5e6; }
 .admin-editor-rel-kind[data-kind="spatial"] { color: #8ad7c2; }
 .admin-editor-rel-kind[data-kind="order"] { color: #9ec5ff; }
 
@@ -551,21 +610,21 @@
 .admin-editor-tool {
   flex: 1 1 auto;
   padding: 5px 8px;
-  border: 1px solid rgba(212, 112, 133, .22);
+  border: 1px solid rgba(38, 231, 218, .22);
   border-radius: 6px;
-  background: rgba(21, 10, 14, .5);
+  background: rgba(4, 19, 18, .5);
   color: var(--text);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
-.admin-editor-tool:hover { border-color: rgba(240, 163, 177, .5); background: rgba(182, 63, 89, .12); }
+.admin-editor-tool:hover { border-color: rgba(186, 255, 249, .5); background: rgba(17, 191, 180, .12); }
 .admin-editor-tool[aria-pressed="true"] {
-  border-color: rgba(240, 163, 177, .68);
-  background: rgba(143, 40, 61, .26);
+  border-color: rgba(186, 255, 249, .68);
+  background: rgba(24, 224, 210, .26);
   color: var(--white);
 }
-.admin-editor-tool:focus-visible { outline: 2px solid rgba(240, 163, 177, .7); outline-offset: 2px; }
+.admin-editor-tool:focus-visible { outline: 2px solid rgba(186, 255, 249, .7); outline-offset: 2px; }
 
 /* Образец цвета фракции: цвет приходит из данных, а не подбирается панелью. */
 .admin-editor-swatch {
@@ -589,7 +648,7 @@
 .admin-editor-table th,
 .admin-editor-table td {
   padding: 4px 6px;
-  border-bottom: 1px solid rgba(212, 112, 133, .18);
+  border-bottom: 1px solid rgba(38, 231, 218, .18);
   text-align: left;
   vertical-align: top;
 }
@@ -601,17 +660,17 @@
   display: grid;
   gap: 6px;
   padding: 8px 10px;
-  border: 1px solid rgba(212, 112, 133, .3);
+  border: 1px solid rgba(38, 231, 218, .3);
   border-left-width: 3px;
   border-radius: 6px;
-  background: rgba(21, 10, 14, .45);
+  background: rgba(4, 19, 18, .45);
 }
 .admin-editor-check[data-state="error"] { border-left-color: #d08d92; }
 .admin-editor-check[data-state="warning"] { border-left-color: #d9c79a; }
 .admin-editor-demo {
   margin: 0;
   padding: 6px 10px;
-  border: 1px dashed rgba(212, 112, 133, .44);
+  border: 1px dashed rgba(38, 231, 218, .44);
   border-radius: 6px;
   font-size: 11px;
   line-height: 1.5;
@@ -641,8 +700,8 @@
   padding: 10px 8px;
   overflow: visible;
   transform: translateY(-50%);
-  background: rgba(20, 10, 14, .92);
-  border-color: rgba(218, 128, 149, .44);
+  background: rgba(2, 12, 11, .96);
+  border-color: rgba(49, 246, 232, .44);
 }
 .admin-editor-panel.is-collapsed .admin-editor-heading,
 .admin-editor-panel.is-collapsed .admin-editor-summary,
@@ -667,7 +726,7 @@
   color: var(--admin-topbar-ink-strong);
 }
 .admin-editor-panel.is-collapsed .admin-editor-rail:focus-visible {
-  outline: 1px solid rgba(240, 163, 177, .7);
+  outline: 1px solid rgba(186, 255, 249, .7);
   outline-offset: 2px;
 }
 .admin-editor-rail-label {
@@ -731,28 +790,28 @@
 :root.admin-editor-authorized {
   color-scheme: dark;
   /* 1. Шрифты: только цвет текста. */
-  --text: #ead7dc;
-  --muted: #a9868e;
-  --muted-2: #795c65;
-  --white: #fff1f3;
+  --text: #c8e5e2;
+  --muted: #739d99;
+  --muted-2: #456d69;
+  --white: #effffd;
   /* 2. Топ-панель: переопределяются её собственные параметры. */
-  --topbar-line: rgba(212, 112, 133, .38);
-  --topbar-bg: rgba(17, 9, 13, .94);
-  --admin-topbar-ink: #e4a3b0;
-  --admin-topbar-ink-strong: #ffe2e7;
-  --admin-topbar-hover-bg: rgba(182, 63, 89, .15);
-  --admin-topbar-hover-line: rgba(240, 163, 177, .68);
-  --admin-topbar-glow: rgba(205, 82, 108, .18);
+  --topbar-line: rgba(38, 231, 218, .38);
+  --topbar-bg: rgba(1, 8, 7, .94);
+  --admin-topbar-ink: #24eadb;
+  --admin-topbar-ink-strong: #effffd;
+  --admin-topbar-hover-bg: rgba(17, 191, 180, .15);
+  --admin-topbar-hover-line: rgba(186, 255, 249, .68);
+  --admin-topbar-glow: rgba(36, 234, 219, .18);
   /* 3. Визуальный слой: фон, сетка, подсветка — не связан с модулями. */
-  --admin-stage-core: #160b10;
-  --admin-stage-mid: #0d080b;
-  --admin-stage-edge: #080608;
-  --admin-stage-halo: rgba(105, 28, 48, .19);
-  --admin-stage-tint: rgba(120, 18, 41, .14);
-  --admin-grid-major: rgba(191, 77, 101, .07);
-  --admin-grid-minor: rgba(191, 77, 101, .025);
-  --admin-glow-hard: rgba(24, 3, 10, .38);
-  --admin-glow-soft: rgba(175, 55, 81, .06);
+  --admin-stage-core: #03100f;
+  --admin-stage-mid: #010706;
+  --admin-stage-edge: #010403;
+  --admin-stage-halo: rgba(18, 93, 87, .19);
+  --admin-stage-tint: rgba(18, 93, 87, .14);
+  --admin-grid-major: rgba(27, 165, 155, .07);
+  --admin-grid-minor: rgba(27, 165, 155, .025);
+  --admin-glow-hard: rgba(1, 6, 5, .38);
+  --admin-glow-soft: rgba(36, 234, 219, .06);
 }
 
 /* 3. Визуальный слой: тот же интерфейс, иной фон, сетка и подсветка. */
@@ -789,7 +848,7 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
 .admin-editor-authorized .top-action,
 .admin-editor-authorized .galaxy-return,
 .admin-editor-authorized .admin-gate-link {
-  border-color: rgba(218, 128, 149, .44);
+  border-color: rgba(49, 246, 232, .44);
   color: var(--admin-topbar-ink);
 }
 .admin-editor-authorized .top-action:hover,
@@ -801,12 +860,12 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   color: var(--admin-topbar-ink-strong);
   box-shadow: 0 0 14px var(--admin-topbar-glow);
 }
-.admin-editor-authorized .galaxy-return { background: rgba(153, 52, 74, .12); }
-.admin-editor-authorized .status-dot { background: #df8598; box-shadow: 0 0 9px rgba(220, 120, 145, .55); }
+.admin-editor-authorized .galaxy-return { background: rgba(17, 191, 180, .12); }
+.admin-editor-authorized .status-dot { background: #24eadb; box-shadow: 0 0 9px rgba(36, 234, 219, .55); }
 
 /* 1. Шрифты: только цвет подсказок, без перекраса панелей и органов управления. */
 .admin-editor-authorized .eyebrow { color: var(--admin-topbar-ink); }
-.admin-editor-authorized .map-hint { color: rgba(220, 151, 164, .62); }
+.admin-editor-authorized .map-hint { color: rgba(115, 197, 189, .62); }
 
 /* Кнопка выхода не мигает: это действие, а не приглашение. */
 .admin-gate-link.admin-session-end { animation: none; }
@@ -818,69 +877,69 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
 
 /* ------------------------------------ левая панель каталога в админском сеансе */
 
-/* Каталог систем и мест перекрашивается в красноватую тему администратора.
+/* Каталог систем и мест перекрашивается в бирюзовую тему редактора.
  * Токены переопределены локально — на `.left-panel` и её подэлементах, — чтобы
  * карта, маркеры и подписи остались в обычной стилистике. */
 .admin-editor-authorized .left-panel {
-  --panel: linear-gradient(180deg, rgba(31, 14, 20, .94), rgba(14, 8, 11, .96));
-  --line: rgba(212, 112, 133, .26);
-  --line-strong: rgba(218, 128, 149, .46);
-  --accent: #e4a3b0;
-  --accent-2: #d4707f;
-  --accent-outline: rgba(240, 163, 177, .6);
+  --panel: linear-gradient(180deg, rgba(2, 12, 11, .94), rgba(1, 6, 5, .96));
+  --line: rgba(38, 231, 218, .26);
+  --line-strong: rgba(49, 246, 232, .46);
+  --accent: #24eadb;
+  --accent-2: #11bfb4;
+  --accent-outline: rgba(186, 255, 249, .6);
 }
 .admin-editor-authorized .left-panel .eyebrow,
 .admin-editor-authorized .left-panel .stat-label,
 .admin-editor-authorized .left-panel .list-caption,
 .admin-editor-authorized .left-panel .panel-foot,
 .admin-editor-authorized .left-panel .row-meta,
-.admin-editor-authorized .left-panel .catalog-empty { color: #a9868e; }
-.admin-editor-authorized .left-panel .eyebrow-line { background: #d4707f; box-shadow: 0 0 8px rgba(212, 112, 127, .5); }
+.admin-editor-authorized .left-panel .catalog-empty { color: #739d99; }
+.admin-editor-authorized .left-panel .eyebrow-line { background: #11bfb4; box-shadow: 0 0 8px rgba(36, 234, 219, .5); }
 .admin-editor-authorized .left-panel .panel-head h1,
 .admin-editor-authorized .left-panel .stat-value,
-.admin-editor-authorized .left-panel .row-title { color: #ffe2e7; }
+.admin-editor-authorized .left-panel .row-title { color: #effffd; }
 .admin-editor-authorized .left-panel .filter-count,
 .admin-editor-authorized .left-panel .row-count,
 .admin-editor-authorized .left-panel .filter-menu-current,
 .admin-editor-authorized .left-panel .catalog-dropdown-summary,
 .admin-editor-authorized .left-panel .catalog-list-dropdown > summary,
 .admin-editor-authorized .left-panel .filter-panel-summary,
-.admin-editor-authorized .left-panel .filter-group > summary { color: #c79aa6; }
+.admin-editor-authorized .left-panel .filter-group > summary { color: #8fc6c0; }
 .admin-editor-authorized .left-panel .catalog-dropdown-summary b,
 .admin-editor-authorized .left-panel .filter-indicator,
 .admin-editor-authorized .left-panel .sort-button:hover,
-.admin-editor-authorized .left-panel .foot-mark { color: #e4a3b0; }
+.admin-editor-authorized .left-panel .foot-mark { color: #24eadb; }
 .admin-editor-authorized .left-panel .filter-chip {
-  border-color: rgba(218, 128, 149, .24);
-  background: rgba(153, 52, 74, .08);
-  color: #c79aa6;
+  border-color: rgba(49, 246, 232, .24);
+  background: rgba(17, 191, 180, .08);
+  color: #8fc6c0;
 }
 .admin-editor-authorized .left-panel .filter-chip:hover {
-  border-color: rgba(240, 163, 177, .5);
-  color: #ffe2e7;
+  border-color: rgba(186, 255, 249, .5);
+  color: #effffd;
 }
 .admin-editor-authorized .left-panel .filter-chip.active {
-  border-color: rgba(240, 163, 177, .55);
-  background: rgba(182, 63, 89, .16);
-  color: #ffe2e7;
+  border-color: rgba(186, 255, 249, .55);
+  background: rgba(17, 191, 180, .16);
+  color: #effffd;
 }
-.admin-editor-authorized .left-panel .filter-group { border-color: rgba(218, 128, 149, .18); background: rgba(153, 52, 74, .06); }
-.admin-editor-authorized .left-panel .catalog-row:hover { background: rgba(182, 63, 89, .12); border-color: rgba(240, 163, 177, .22); }
-.admin-editor-authorized .left-panel .catalog-row.selected { background: rgba(182, 63, 89, .18); border-color: rgba(240, 163, 177, .34); }
-.admin-editor-authorized .left-panel .row-glyph { border-color: rgba(240, 163, 177, .28); color: #f0a3b1; }
+.admin-editor-authorized .left-panel .filter-group { border-color: rgba(49, 246, 232, .18); background: rgba(17, 191, 180, .06); }
+.admin-editor-authorized .left-panel .catalog-row:hover { background: rgba(17, 191, 180, .12); border-color: rgba(186, 255, 249, .22); }
+.admin-editor-authorized .left-panel .catalog-row.selected { background: rgba(17, 191, 180, .18); border-color: rgba(186, 255, 249, .34); }
+.admin-editor-authorized .left-panel .row-glyph { border-color: rgba(186, 255, 249, .28); color: #2ef5e6; }
 .admin-editor-authorized .left-panel .row-glyph::before,
-.admin-editor-authorized .left-panel .row-glyph::after { background: #d4707f; }
-.admin-editor-authorized .left-panel .row-status { background: #e4a3b0; }
-.admin-editor-authorized .left-panel .row-status.inferred { background: #8b6b74; }
-.admin-editor-authorized .left-panel .row-status.pdf-linked { background: #f0c3cb; }
-.admin-editor-authorized .left-panel .icon-button { color: #c79aa6; }
+.admin-editor-authorized .left-panel .row-glyph::after { background: #11bfb4; }
+.admin-editor-authorized .left-panel .row-status { background: #24eadb; }
+.admin-editor-authorized .left-panel .row-status.inferred { background: #456d69; }
+.admin-editor-authorized .left-panel .row-status.pdf-linked { background: #bafff9; }
+.admin-editor-authorized .left-panel .icon-button { color: #8fc6c0; }
 .admin-editor-authorized .left-panel .icon-button:hover {
-  border-color: rgba(240, 163, 177, .5);
-  background: rgba(182, 63, 89, .14);
-  color: #ffe2e7;
+  border-color: rgba(186, 255, 249, .5);
+  background: rgba(17, 191, 180, .14);
+  color: #effffd;
 }
-.admin-editor-authorized .left-panel .catalog-list { scrollbar-color: rgba(182, 63, 89, .5) transparent; }
-.admin-editor-authorized .left-panel .catalog-list::-webkit-scrollbar-thumb { background: rgba(182, 63, 89, .5); }
+.admin-editor-authorized .left-panel .catalog-list { scrollbar-color: rgba(17, 191, 180, .5) transparent; }
+.admin-editor-authorized .left-panel .catalog-list::-webkit-scrollbar-thumb { background: rgba(17, 191, 180, .5); }
 
 /* ------------------------------------------------------------- окно справки */
 
@@ -894,7 +953,7 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
-  background: rgba(4, 2, 3, .74);
+  background: rgba(1, 6, 5, .74);
   backdrop-filter: blur(3px);
 }
 .admin-editor-help-backdrop[hidden] { display: none; }
@@ -904,9 +963,9 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   flex-direction: column;
   width: min(760px, 100%);
   max-height: min(78vh, 720px);
-  border: 1px solid rgba(218, 128, 149, .46);
+  border: 1px solid rgba(49, 246, 232, .46);
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(31, 14, 20, .97), rgba(13, 8, 11, .98));
+  background: linear-gradient(180deg, rgba(2, 12, 11, .97), rgba(1, 6, 5, .98));
   box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
   color: var(--text);
 }
@@ -918,37 +977,37 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   gap: 12px;
   flex: 0 0 auto;
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(212, 112, 133, .3);
+  border-bottom: 1px solid rgba(38, 231, 218, .3);
 }
 .admin-editor-help-head h2 { margin: 0; color: var(--white); font-size: 15px; font-weight: 560; }
-.admin-editor-help-close { color: #c79aa6; }
-.admin-editor-help-close:hover { border-color: rgba(240, 163, 177, .5); background: rgba(182, 63, 89, .14); color: #ffe2e7; }
+.admin-editor-help-close { color: #8fc6c0; }
+.admin-editor-help-close:hover { border-color: rgba(186, 255, 249, .5); background: rgba(17, 191, 180, .14); color: #effffd; }
 
 .admin-editor-help-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 18px 20px; }
 .admin-editor-help-body > :first-child { margin-top: 14px; }
 .admin-editor-help-body h2 { margin: 22px 0 8px; border: 0; padding: 0; color: var(--admin-topbar-ink); font-size: 13px; letter-spacing: .06em; text-transform: none; }
-.admin-editor-help-body h3 { margin: 18px 0 8px; color: #ffe2e7; font-size: 12px; letter-spacing: .04em; }
-.admin-editor-help-body h4 { margin: 14px 0 6px; color: #f0a3b1; font-size: 11px; }
+.admin-editor-help-body h3 { margin: 18px 0 8px; color: #effffd; font-size: 12px; letter-spacing: .04em; }
+.admin-editor-help-body h4 { margin: 14px 0 6px; color: #2ef5e6; font-size: 11px; }
 .admin-editor-help-body p { margin: 0 0 10px; font-size: 12px; line-height: 1.65; color: var(--text); }
 .admin-editor-help-body ul { margin: 0 0 12px; padding-left: 18px; }
 .admin-editor-help-body li { margin-bottom: 5px; font-size: 12px; line-height: 1.6; }
-.admin-editor-help-body strong { color: #ffe2e7; font-weight: 600; }
+.admin-editor-help-body strong { color: #effffd; font-weight: 600; }
 .admin-editor-help-body code {
   padding: 1px 4px;
-  border: 1px solid rgba(218, 128, 149, .24);
+  border: 1px solid rgba(49, 246, 232, .24);
   border-radius: 4px;
-  background: rgba(153, 52, 74, .12);
+  background: rgba(17, 191, 180, .12);
   font: 11px/1.5 var(--mono);
-  color: #f0a3b1;
+  color: #2ef5e6;
 }
-.admin-editor-help-body pre { margin: 0 0 12px; padding: 10px 12px; overflow-x: auto; border: 1px solid rgba(218, 128, 149, .24); background: rgba(10, 5, 8, .6); }
-.admin-editor-help-body pre code { padding: 0; border: 0; background: none; color: #e8c3cb; }
-.admin-editor-help-body a { color: #f0a3b1; text-decoration: underline; text-underline-offset: 2px; }
+.admin-editor-help-body pre { margin: 0 0 12px; padding: 10px 12px; overflow-x: auto; border: 1px solid rgba(49, 246, 232, .24); background: rgba(1, 6, 5, .6); }
+.admin-editor-help-body pre code { padding: 0; border: 0; background: none; color: #bafff9; }
+.admin-editor-help-body a { color: #2ef5e6; text-decoration: underline; text-underline-offset: 2px; }
 .admin-editor-help-table { margin: 0 0 14px; overflow-x: auto; }
 .admin-editor-help-body table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 .admin-editor-help-body th,
-.admin-editor-help-body td { padding: 6px 9px; border: 1px solid rgba(212, 112, 133, .26); text-align: left; vertical-align: top; }
-.admin-editor-help-body th { background: rgba(153, 52, 74, .14); color: #ffe2e7; font-weight: 600; }
+.admin-editor-help-body td { padding: 6px 9px; border: 1px solid rgba(38, 231, 218, .26); text-align: left; vertical-align: top; }
+.admin-editor-help-body th { background: rgba(17, 191, 180, .14); color: #effffd; font-weight: 600; }
 
 @media (max-width: 700px) {
   .admin-editor-help-backdrop { padding: 12px 8px; }
@@ -956,64 +1015,190 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   .admin-editor-help-body { padding: 4px 14px 16px; }
 }
 
-@media (max-width: 1020px) {
+@media (max-width: 900px) {
+  /* Один экран за раз: раскрытая левая шторка закрывает рабочую панель,
+   * выбор системы сворачивает шторку. Две узкие колонки не образуются. */
+  .admin-editor-navigation {
+    top: 72px;
+    left: 8px;
+    bottom: 8px;
+    width: min(320px, calc(100vw - 64px));
+  }
+  .admin-editor-nav-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .map-stage:has(.admin-editor-navigation:not(.is-collapsed)) .admin-editor-panel {
+    visibility: hidden;
+    pointer-events: none;
+  }
   .admin-editor-panel {
-    width: min(430px, calc(100vw - 20px));
-  }
-  .admin-editor-shell,
-  .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
-  .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(2),
-  .admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
-    grid-column: 1;
-  }
-  .admin-editor-nav {
-    position: sticky;
-    top: 0;
-    z-index: 8;
-    pointer-events: auto;
-    gap: 8px;
-    padding: 8px;
-    background: rgba(19, 9, 13, .97);
-  }
-  .admin-editor-nav-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .admin-editor-nav .admin-editor-planes {
-    max-height: 148px;
-    overflow-y: auto;
-    padding-right: 2px;
+    top: 72px;
+    right: 8px;
+    bottom: 8px;
+    width: min(420px, calc(100vw - 72px));
+    max-width: calc(100vw - 72px);
+    max-height: none;
+    padding: 14px;
   }
 }
 
 @media (max-width: 700px) {
-  /* На узком viewport глобальная панель «Системы» (.left-panel) сохраняет
-   * верхний слой навигации поверх панели редактора и инспектора. */
-  .map-stage .left-panel { z-index: 19; }
-  .map-stage .admin-editor-panel { z-index: 15; }
-  .map-stage .detail-panel,
-  .map-stage .travel-panel { z-index: 14; }
   .admin-editor-gate { top: 50%; padding: 20px; }
-  .admin-editor-panel {
-    top: 72px;
-    right: 8px;
-    bottom: auto;
-    width: min(360px, calc(100vw - 16px));
-    max-width: calc(100vw - 16px);
-    max-height: min(56dvh, 440px);
-    padding: 12px;
-  }
-  .admin-editor-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .admin-editor-panel.is-collapsed {
-    top: 50%;
-    bottom: auto;
-    width: 42px;
-    height: 180px;
-    padding: 8px 6px;
-    max-height: none;
-  }
+  .admin-editor-panel { padding: 12px; }
+  .admin-editor-navigation-content { padding: 10px; }
+  .admin-editor-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------ восстановление без красной темы */
+
+/* Успешный вход — подтверждение, а не ошибка и не нейтральное серое сообщение. */
+html.admin-editor-authorized body.admin-editor-authorized .toast.admin-access-notice {
+  border-color: rgba(46, 245, 230, .72);
+  border-radius: 0;
+  background: rgba(1, 9, 8, .9);
+  color: #cffffb;
+  box-shadow: 0 0 28px rgba(46, 245, 230, .35);
+}
+
+/* Системная шторка сохраняет прежнюю компоновку; увеличивается только читаемость. */
+.admin-editor-navigation-head h2 { font-size: 22px; }
+.admin-editor-navigation .admin-editor-field,
+.admin-editor-navigation .admin-editor-nav-item { font-size: 14px; }
+.admin-editor-navigation .admin-editor-nav-title { font-size: 12px; }
+.admin-editor-navigation .admin-editor-plane-title { font-size: 12px; }
+.admin-editor-navigation .admin-editor-module { font-size: 14px; line-height: 1.35; }
+.admin-editor-navigation .admin-editor-module .admin-editor-status { font-size: 11px; }
+.admin-editor-navigation .admin-editor-isolated-tag { font-size: 11px; }
+
+/* Правый редактор: подробные блоки и крупный текст без смены прежнего layout. */
+.admin-editor-panel {
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.45;
+  scrollbar-color: #147f78 transparent;
+}
+.admin-editor-heading { padding-bottom: 12px; }
+.admin-editor-panel h1 { margin: 4px 0 0; font-size: 26px; line-height: 1.15; }
+.admin-editor-panel .eyebrow { font-size: 14px; }
+.admin-editor-heading-tools { gap: 6px; }
+.admin-editor-heading-tools .icon-button { width: 40px; min-height: 40px; }
+.admin-editor-panel .admin-editor-summary {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-color: var(--line);
+  background: rgba(4, 19, 18, .72);
+  color: var(--text);
+  font: 17px/1.5 var(--mono);
+}
+.admin-editor-panel .admin-editor-notice {
+  border-color: var(--line);
+  background: rgba(4, 19, 18, .72);
+  color: var(--text);
+  font-size: 19px;
+}
+.admin-editor-panel[data-active-screen="module"] > .admin-editor-summary,
+.admin-editor-panel[data-active-screen="module"] .admin-editor-body > .admin-editor-notice { display: none; }
+.admin-editor-panel[data-active-screen="module"] .admin-editor-heading { justify-content: flex-end; min-height: 40px; padding-bottom: 8px; }
+.admin-editor-panel[data-active-screen="module"] .admin-editor-heading > div:first-child { display: none; }
+.admin-editor-body { gap: 0; }
+.admin-editor-block { gap: 0; }
+.admin-editor-panel > .admin-editor-body > section { padding: 0; border: 0; }
+.admin-editor-panel h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--white);
+  font-size: 24px;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.admin-editor-stage,
+.admin-editor-panel[data-active-screen="properties"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="changes"] > .admin-editor-body > section:nth-of-type(3) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.admin-editor-stage { display: grid; gap: 16px; }
+.admin-editor-detail-block {
+  margin: 0;
+  padding: 18px 0 !important;
+  border-top: 1px solid var(--line) !important;
+}
+.admin-editor-detail-block:first-child { padding-top: 0 !important; border-top: 0 !important; }
+.admin-editor-detail-heading { display: grid; gap: 7px; margin-bottom: 12px; }
+.admin-editor-panel .admin-editor-detail-kicker,
+.admin-editor-panel .admin-editor-detail-kicker.admin-editor-offline {
+  margin: 0 0 6px !important;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.admin-editor-module-title-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 14px; }
+.admin-editor-module-title-row h2 { flex: 1 1 240px; font-size: 30px; }
+.admin-editor-module-title-row .admin-editor-status { margin-top: 4px; font-size: 15px; }
+.admin-editor-panel .admin-editor-module-description { margin: 14px 0 !important; color: var(--text); font-size: 22px; line-height: 1.5; }
+.admin-editor-module-facts { display: grid; gap: 8px; margin: 0; }
+.admin-editor-module-facts > div {
+  display: grid;
+  grid-template-columns: minmax(110px, .7fr) minmax(0, 1.3fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(4, 19, 18, .62);
+}
+.admin-editor-module-facts dt { color: var(--muted); font-size: 17px; }
+.admin-editor-module-facts dd { margin: 0; color: var(--text); font-size: 19px; overflow-wrap: anywhere; }
+.admin-editor-panel .admin-editor-source { display: grid; gap: 5px; margin: 12px 0 0 !important; font-size: 17px; }
+.admin-editor-source code { color: var(--timeline-ice); font: 15px/1.45 var(--mono); overflow-wrap: anywhere; }
+.admin-editor-panel .admin-editor-hint,
+.admin-editor-panel .admin-editor-meta,
+.admin-editor-panel .admin-editor-log,
+.admin-editor-panel .admin-editor-demo { font-size: 19px; line-height: 1.5; color: var(--muted); }
+.admin-editor-hint kbd { font-size: 17px; }
+.admin-editor-panel .admin-editor-field,
+.admin-editor-panel .admin-editor-field-label { font-size: 19px; }
+.admin-editor-panel button,
+.admin-editor-panel select,
+.admin-editor-panel input[type="number"] { font-size: 18px; }
+.admin-editor-panel .admin-editor-tool,
+.admin-editor-panel .admin-editor-rel-target { font-size: 18px; }
+.admin-editor-table { font-size: 19px; line-height: 1.4; }
+.admin-editor-table th,
+.admin-editor-table td { padding: 9px 8px; border-bottom-color: var(--line); }
+.admin-editor-table th { width: 46%; color: var(--muted); }
+.admin-editor-table td { color: var(--text); }
+.admin-editor-relations { display: block; padding: 0; border: 0; }
+.admin-editor-rel-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.admin-editor-rel-item {
+  padding: 11px 12px;
+  border-color: var(--line);
+  background: rgba(4, 19, 18, .62);
+}
+.admin-editor-rel-head { align-items: flex-start; gap: 8px; }
+.admin-editor-rel-target { color: var(--timeline-ice); line-height: 1.35; }
+.admin-editor-rel-kind { flex: 0 0 auto; font-size: 12px; line-height: 1.4; }
+.admin-editor-relations-footer { display: grid; gap: 12px; }
+.admin-editor-actions-block .admin-editor-row { align-items: stretch; }
+.admin-editor-graph-filter { font-size: 13px; }
+.admin-editor-graph-legend { font-size: 12px; }
+.admin-editor-graph-caption { font-size: 11px; }
+.admin-editor-graph-node text { font-size: 10px; }
+
+@media (max-width: 900px) {
+  .admin-editor-panel { font-size: 20px; }
+  .admin-editor-panel .admin-editor-module-description { font-size: 20px; }
+  .admin-editor-panel .admin-editor-hint,
+  .admin-editor-panel .admin-editor-meta,
+  .admin-editor-panel .admin-editor-log,
+  .admin-editor-panel .admin-editor-demo { font-size: 18px; }
+  .admin-editor-module-title-row h2 { font-size: 26px; }
+  .admin-editor-panel .admin-editor-field,
+  .admin-editor-panel .admin-editor-field-label { font-size: 18px; }
 }

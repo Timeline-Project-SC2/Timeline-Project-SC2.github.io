@@ -49,7 +49,10 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
         '        </button>',
         '      </aside>',
       ].join('\n'),
-      headAfterStyles: '  <link rel="stylesheet" href="../sector.css">\n  <link rel="stylesheet" href="admin-edit.css">',
+      headAfterStyles: '  <link rel="stylesheet" href="../sector.css">',
+      // Редакторская тема идёт последней: общие readability/timeline/catalog
+      // стили не должны возвращать мелкий текст или декоративный фон панели.
+      headNote: atlasVariants.sector.headNote + '\n  <link rel="stylesheet" href="admin-edit.css">',
       title: 'Timeline Project — Заготовка администратора сектора',
     }
     : atlasVariants[variantName as 'minimal' | 'sector'];
