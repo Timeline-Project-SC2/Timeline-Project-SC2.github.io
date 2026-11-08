@@ -9,6 +9,7 @@
 | [`waves/`](waves/protocol.md) | Сами разделы по волнам: `protocol`, `stage-6-dx`, `stage-8`, `sw-1`, `sw-2*`, `z-3`, `unit-*`, `f` |
 | [`pull_request_template.md`](../pull_request_template.md) | Краткое описание PR: суть, проверки, границы и следующий шаг |
 | [`worker_instruction_on_splitwork.md`](worker_instruction_on_splitwork.md) | Что делает **Воркер** в параллельной тройке: `OWNED_FILES`, самопроверка, формат отчёта |
+| [`low_data_gpt_rule.md`](low_data_gpt_rule.md) | Обязательный протокол компактной передачи: доказательства, статусы неопределённости, формат отчёта и приёмка | | Что делает **Воркер** в параллельной тройке: `OWNED_FILES`, самопроверка, формат отчёта |
 | [`external_agency_agents_audit.md`](external_agency_agents_audit.md) | Откуда взяты карточки ролей: аудит внешнего набора `agency-agents`, что взято, что отброшено и почему |
 | [`external_ci_gate_audit_2026-10-26.md`](external_ci_gate_audit_2026-10-26.md) | Внешний аудит CI-гейта: «привычно красный» `check.yml`, решения E1…E6, карточка [`CI-1`](wave_cards/CI-1.md) |
 | [`role_cards/`](role_cards/) | **Что считать готовым** в конкретной зоне: восемь режимов работы одного агента |
@@ -77,7 +78,14 @@
 | [`wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md`](wave_cards/ADM-ACCESS-A0-P-REACTIVATION.md) | Воркер 1: реактивированный `A0-P` | Выдана владельцем 02.11.2026; новая сверка PR #348, без слияния и без запуска агента |
 | [`wave_cards/ADM-ACCESS-CARDS-REDIRECT.md`](wave_cards/ADM-ACCESS-CARDS-REDIRECT.md) | Карточка-редирект активных задач для автопарсинга | В `main`; даёт прямые ссылки на ветку `arena/911dc5ef-...` и правило доставки правок |
 | [`wave_cards/ADM-EDITOR-BUBBLE-CUT.md`](wave_cards/ADM-EDITOR-BUBBLE-CUT.md) | `ED-1`: ореол выделенного маркера, архив | **Выполнена** 05.11.2026: [PR #351](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/pull/351) в `main`; ждёт подтверждения подмены цели |
-| [`wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md`](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) | `ED-2`: скан модулей редактора → имплементация → примерный конечный рабочий вид | **В работе**: готовится к выдаче; связи модулей по смыслу; проверки — критический минимум |
+| [`wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md`](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) | `ED-2`: скан модулей редактора → имплементация → примерный конечный рабочий вид | Историческая карточка; не использовать для текущей переделки панели |
+| [`wave_cards/ADM-EDITOR-PANEL-NAV.md`](wave_cards/ADM-EDITOR-PANEL-NAV.md) | `ADM-EDITOR-PANEL-NAV`: историческая карточка панели модулей | Текущая реализация визуально отвергнута; глобальную оболочку ведёт новая карточка |
+| [`wave_cards/ADM-EDITOR-GLOBAL-SHELL-REWORK.md`](wave_cards/ADM-EDITOR-GLOBAL-SHELL-REWORK.md) | `ADM-EDITOR-GLOBAL-SHELL-REWORK`: page-level панель систем, карта и активный модуль | Реализация заявлена в PR #365; визуальная приёмка HEAD `16d022d` не зафиксирована |
+| [`wave_cards/ADM-EDITOR-LATEST-RECON.md`](wave_cards/ADM-EDITOR-LATEST-RECON.md) | `ADM-EDITOR-LATEST-RECON`: read-only разведка текущего PR #365 | Завершена на `16d022d`; исходники Гайдлайнер не читал |
+| [`wave_cards/ADM-EDITOR-LATEST-RECON-REPORT.md`](wave_cards/ADM-EDITOR-LATEST-RECON-REPORT.md) | Отчёт `ADM-EDITOR-LATEST-RECON` | Получен от проверяющего; runtime на HEAD `16d022d` не проверен |
+| [`wave_cards/ADM-EDITOR-ORCHESTRATION-HANDOFF.md`](wave_cards/ADM-EDITOR-ORCHESTRATION-HANDOFF.md) | `ADM-EDITOR-ORCHESTRATION-HANDOFF`: передача текущего этапа | Обновлена по read-only отчёту; ждёт визуального решения владельца |
+| [`wave_cards/ADM-EDITOR-PANEL-NAV-QA.md`](wave_cards/ADM-EDITOR-PANEL-NAV-QA.md) | `ADM-EDITOR-PANEL-NAV-QA`: независимая проверка реализации | Первый прогон — `HOLD`; повторить после исправлений |
+| [`wave_cards/ADM-EDITOR-PANEL-NAV-FIX.md`](wave_cards/ADM-EDITOR-PANEL-NAV-FIX.md) | `ADM-EDITOR-PANEL-NAV-FIX`: два blocker-а Chromium QA | Закрыта интеграцией PR #364 в #362 на `a20400d`; текущая работа — новая page-level компоновка |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
 | [`wave_cards/ADM-ACCESS-S-REPORT.md`](wave_cards/ADM-ACCESS-S-REPORT.md) | Воркер 1: источники `A0-S`/`A0-S2`/`A0-S3` | ID и настроенные триггеры уточнены; версия сайта не доказана |
 | [`wave_cards/ADM-ACCESS-H-REPORT.md`](wave_cards/ADM-ACCESS-H-REPORT.md) | Воркер 2: GitHub `A0-H`/`A0-H2` | Строгий порядок Submit не доказан; кандидат коммита не снимает `HOLD` |
