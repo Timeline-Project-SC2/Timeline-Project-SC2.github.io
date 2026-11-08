@@ -80,6 +80,8 @@
 | [`wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md`](wave_cards/ADM-EDITOR-MODULES-WORKING-VIEW.md) | `ED-2`: скан модулей редактора → имплементация → примерный конечный рабочий вид | Историческая карточка; не использовать для текущей переделки панели |
 | [`wave_cards/ADM-EDITOR-PANEL-NAV.md`](wave_cards/ADM-EDITOR-PANEL-NAV.md) | `ADM-EDITOR-PANEL-NAV`: историческая карточка панели модулей | Текущая реализация визуально отвергнута; глобальную оболочку ведёт новая карточка |
 | [`wave_cards/ADM-EDITOR-GLOBAL-SHELL-REWORK.md`](wave_cards/ADM-EDITOR-GLOBAL-SHELL-REWORK.md) | `ADM-EDITOR-GLOBAL-SHELL-REWORK`: page-level панель систем, карта и активный модуль | Черновик готов; ждёт приложений UI-референсов владельца перед выдачей |
+| [`wave_cards/ADM-EDITOR-LATEST-RECON.md`](wave_cards/ADM-EDITOR-LATEST-RECON.md) | `ADM-EDITOR-LATEST-RECON`: read-only разведка текущего PR #365 | Готова к выдаче на точный HEAD `16d022d`; без правок |
+| [`wave_cards/ADM-EDITOR-ORCHESTRATION-HANDOFF.md`](wave_cards/ADM-EDITOR-ORCHESTRATION-HANDOFF.md) | `ADM-EDITOR-ORCHESTRATION-HANDOFF`: передача текущего этапа | Срез метаданных готов; дополнить результатом разведки |
 | [`wave_cards/ADM-EDITOR-PANEL-NAV-QA.md`](wave_cards/ADM-EDITOR-PANEL-NAV-QA.md) | `ADM-EDITOR-PANEL-NAV-QA`: независимая проверка реализации | Первый прогон — `HOLD`; повторить после исправлений |
 | [`wave_cards/ADM-EDITOR-PANEL-NAV-FIX.md`](wave_cards/ADM-EDITOR-PANEL-NAV-FIX.md) | `ADM-EDITOR-PANEL-NAV-FIX`: два blocker-а Chromium QA | Закрыта интеграцией PR #364 в #362 на `a20400d`; текущая работа — новая page-level компоновка |
 | [`wave_cards/ADM-ACCESS-REVIEW.md`](wave_cards/ADM-ACCESS-REVIEW.md) | Задание независимому критику `rc-08` | Отчёт на `b030d20` получен; вердикт — `HOLD` |
