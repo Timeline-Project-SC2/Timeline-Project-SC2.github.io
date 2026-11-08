@@ -9,7 +9,7 @@
 | Элемент | Состояние | Что известно |
 |---|---|---|
 | Закреплённая ветка сессии | `arena/60cca6c1-timeline-project-sc2-github-io`, `pr_open` | Оркестратор работает только здесь; PR #363 документальный |
-| PR #363 | OPEN → `main` | Карточки и handoff; перед последним добавлением отчёта CI был 4/4, новая ревизия требует свежего CI |
+| PR #363 | OPEN → `main`, HEAD `9b24ce13ba7de458d52a815f65c7d2c740eaf108` | Карточки, read-only отчёт и handoff; GitHub checks 4/4 pass. Не слит |
 | PR #362 | OPEN → `main`, HEAD `a20400d097341ef20126d22a0c1bf01f6a49bb96` | База P2; #364 интегрировал `dd8c000`; не слит |
 | PR #365 | OPEN → ветка PR #362 на `a20400d` | HEAD `16d022dcc3cbea225ebe69742ac78a4c9d8eb2d3`; 6 файлов; GitHub checks 4/4 pass |
 | PR #364 | MERGED в ветку PR #362 | Интегрировал исправления Enter/Space и переполнения в `a20400d` |
