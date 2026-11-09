@@ -773,12 +773,11 @@ export function commitDrag(state: ContourEditState): ContourEditState {
   const windowEnd = isEnd && index === count - 1 ? 1 : anchors[(index + 1) % count]!.s;
   const span = arcSpan(windowStart, windowEnd, length, closed);
 
-  // Окно в «развёрнутых» координатах дуги, согласованных с порядком вершин.
+  // Окно в «развёрнутых» координатах дуги: рамка отсчёта вершин — абсолютная
+  // (arcs растут монотонно от доли первой вершины, переход через шов замыкания
+  // даёт значения больше длины), поэтому доля окна переводится в дугу как есть.
   const arcs = unrolledVertexArcs(state.vertexFractions, length, closed);
-  let u0 = windowStart * length;
-  const arcFirst = arcs[0] ?? 0;
-  while (u0 < arcFirst) u0 += length;
-  while (u0 >= arcFirst + length) u0 -= length;
+  const u0 = windowStart * length;
   const u1 = u0 + span;
 
   const samples = Math.min(96, Math.max(8, Math.round(span / ANCHOR_LINE_SPACING)));
