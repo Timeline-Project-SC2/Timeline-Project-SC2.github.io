@@ -260,7 +260,9 @@
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(2),
-.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3) {
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="lines"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="lines"] > .admin-editor-body > section:nth-of-type(3) {
   display: none;
 }
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
