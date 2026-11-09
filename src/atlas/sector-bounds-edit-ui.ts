@@ -1,24 +1,36 @@
-/* UI правки линий границ сектора: панель, overlay, ввод, экспорт (этап 3 §11).
+/* UI правки линий границ сектора: панель, overlay, ввод, экспорт и импорт.
  *
  * Слой с DOM: рендерит раздел «Линии» в панели редактора, слушает стадию карты
- * и рисует предпросмотр деформации на отдельном overlay-канвасе. Модель без
- * DOM lives в `sector-bounds-edit.ts` — здесь только вызов её команд и отрисовка.
+ * и рисует предпросмотр на **отдельном overlay-канвасе** поверх карты. Модель
+ * без DOM живёт в `sector-bounds-edit.ts` — здесь только вызов её команд и
+ * отрисовка.
+ *
+ * Почему overlay не был виден (исправлено): канвас создавался без класса стилей,
+ * то есть попадал в обычный поток `.map-stage`. Соседний `#mapCanvas` —
+ * `position: absolute`, а позиционированные элементы рисуются выше элементов
+ * потока, поэтому overlay оказывался **под картой**. Теперь у класса
+ * `.admin-editor-line-preview` есть правило в `site/sector/admin-edit/admin-edit.css`
+ * (absolute, inset 0, `pointer-events: none`, z-index выше карты и ниже панелей).
+ * Правило закреплено тестом `sector-bounds-edit-ui.test.mjs`.
  *
  * Координация с редактором областей: при включении «Правки линий» рисование
- * штрихов выключается (callback `onActivate`), при выключении — включается
- * обратно (`onDeactivate`). Ctrl+Z при активной линейной правке уступает этому
- * модулю: hook `isLineMode` в редакторе областей пропускает отмену.
+ * штрихов выключается (callback `onActivate`), при выключении возвращается
+ * **прежнее** состояние инструмента (callback `onDeactivate`), а не безусловное
+ * «включено». Ctrl+Z/Ctrl+Shift+Z при активной линейной правке уступает этому
+ * модулю: hook `isLineMode` в редакторе областей пропускает обе клавиши.
  */
 
 import { escapeHtml } from './config.ts';
 import type { AtlasKernel, MapPoint } from './config.ts';
-import { canStartStroke, canContinueStroke } from './pointer-rules.ts';
+import { canStartStroke, canContinueStroke, isTextEntryTarget } from './pointer-rules.ts';
 import {
   beginBoundsEdit,
   cancelBoundsEdit,
   commitBoundsEdit,
   createBoundsEditSession,
+  importBoundsEdit,
   moveBoundsEditCore,
+  parseBoundsEdit,
   pickBoundsEdge,
   redoBoundsEdit,
   selectBoundsEdge,
@@ -26,7 +38,7 @@ import {
   undoBoundsEdit,
 } from './sector-bounds-edit.ts';
 import type { BoundsEditSession } from './sector-bounds-edit.ts';
-import type { SectorBounds } from './sector-bounds.ts';
+import type { Point, SectorBounds } from './sector-bounds.ts';
 
 /* ------------------------------------------------------------------ типы */
 
@@ -35,7 +47,7 @@ export interface SectorBoundsEditUiOptions {
   readonly panel: HTMLElement | null;
   readonly stage: HTMLElement | null;
   readonly canvas: HTMLCanvasElement | null;
-  /** Линейная правка активна — вызывается при включении. */
+  /** Линейная правка включена — вызывается при включении. */
   readonly onActivate?: () => void;
   /** Линейная правка выключена — вызывается при выключении. */
   readonly onDeactivate?: () => void;
@@ -47,17 +59,23 @@ export interface SectorBoundsEditUiApi {
   enabled(): boolean;
   refresh(): void;
   exportJson(): string;
+  /** Импорт документа из JSON-текста; `false` — данные не прошли контракт. */
+  importJson(text: string): boolean;
   destroy(): void;
 }
 
 /* --------------------------------------------------------------- константы */
 
-/** Радиус выбора сегмента в экранных пикселях. */
+/** Радиус выбора участка в экранных пикселях. */
 const PICK_PX = 25;
 /** Радиус «попа» по ядру в экранных пикселях. */
 const CORE_HIT_PX = 22;
-/** Минимальное перемещение ядра для коммита (мировые единицы). */
-const COMMIT_EPSILON = 0.5;
+/** Минимальное перемещение указателя для коммита (экранные пиксели). */
+const DRAG_COMMIT_PX = 2;
+/** Класс overlay-канваса: правило живёт в `admin-edit.css`. */
+export const OVERLAY_CLASS = 'admin-editor-line-preview';
+/** Класс курсора инструмента на канве карты. */
+const TOOL_CURSOR_CLASS = 'editor-lines';
 
 /** Пустой документ границ: парсер контракта читает пустой список контуров. */
 function emptyBounds(): SectorBounds {
@@ -68,15 +86,15 @@ function emptyBounds(): SectorBounds {
 
 export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): SectorBoundsEditUiApi {
   const { kernel, panel, stage, canvas } = options;
-  const initial = kernel.state.sectorBounds;
-  let session: BoundsEditSession = createBoundsEditSession(initial ?? emptyBounds());
+  let session: BoundsEditSession = createBoundsEditSession(kernel.state.sectorBounds ?? emptyBounds());
   let on = false;
-  /** Перетаскивание ядра: вектор в мировых единицах. */
   let dragging = false;
+  let dragStartPoint: MapPoint | null = null;
+  let dragMoved = false;
   let capturedId: number | null = null;
   let notice: string | null = null;
 
-  /* overlay-канвас: предпросмотр выбранного сегмента, якорей и ядра. */
+  /* overlay-канвас: предпросмотр участка, якорей и ядра. */
   let preview: HTMLCanvasElement | null = null;
   let previewCtx: CanvasRenderingContext2D | null = null;
   let overlayW = 1;
@@ -88,7 +106,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
 
   /* ------------------------------------------------------------- координаты */
 
-  function pointAt(event: { clientX: number; clientY: number }): { x: number; y: number } | null {
+  function pointAt(event: { clientX: number; clientY: number }): MapPoint | null {
     if (stage === null) return null;
     const rect = stage.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -98,19 +116,19 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     return kernel.renderer.toScreen(world[0], world[1]);
   }
 
-  /** Толеранс выбора сегмента в мировых единицах: 25 пикселей по масштабу. */
+  /** Толеранс выбора участка в мировых единицах: 25 пикселей по масштабу. */
   function pickTolerance(): number {
     const scale = kernel.state.view?.scale ?? 1;
     return PICK_PX / Math.max(0.0001, scale);
   }
 
   function viewKey(): string {
-    const v = kernel.state.view;
-    const vp = kernel.state.viewport;
-    return `${v?.tx ?? 0}:${v?.ty ?? 0}:${v?.scale ?? 1}:${vp?.w ?? 0}:${vp?.h ?? 0}`;
+    const view = kernel.state.view;
+    const viewport = kernel.state.viewport;
+    return `${view?.tx ?? 0}:${view?.ty ?? 0}:${view?.scale ?? 1}:${viewport?.w ?? 0}:${viewport?.h ?? 0}:${stage?.clientWidth ?? 0}:${stage?.clientHeight ?? 0}`;
   }
 
-  /* ------------------------------------------------------- применение документа */
+  /* ------------------------------------------------------- документ в ядро */
 
   function apply(): void {
     kernel.state.sectorBounds = session.doc;
@@ -129,7 +147,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     if (stage === null || typeof document === 'undefined') return null;
     if (preview === null) {
       const node = document.createElement('canvas');
-      node.className = 'admin-editor-line-preview';
+      node.className = OVERLAY_CLASS;
       node.setAttribute('aria-hidden', 'true');
       stage.appendChild(node);
       preview = node;
@@ -171,104 +189,146 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     ctx.beginPath();
     ctx.rect(0, 0, overlayW, overlayH);
     ctx.clip();
-    if (session.selection !== null) drawSelection(ctx);
     if (session.active !== null) drawActive(ctx);
+    else if (session.selection !== null) drawSelection(ctx);
     ctx.restore();
   }
 
-  /** Выбранный сегмент: толстая полупрозрачная линия. */
+  /** Ломаная по мировым точкам в экранных координатах. */
+  function tracePolyline(ctx: CanvasRenderingContext2D, points: readonly (readonly [number, number])[]): boolean {
+    let started = false;
+    for (const point of points) {
+      const screen = screenOf(point);
+      if (screen === null) continue;
+      if (!started) {
+        ctx.moveTo(screen.x, screen.y);
+        started = true;
+      } else {
+        ctx.lineTo(screen.x, screen.y);
+      }
+    }
+    return started;
+  }
+
+  /** Выбранный участок: толстая полупрозрачная подсветка вдоль видимой кривой. */
   function drawSelection(ctx: CanvasRenderingContext2D): void {
     const selection = session.selection;
     if (selection === null) return;
-    const contour = session.doc.bounds.find((item) => item.id === selection.contourId);
-    if (contour === undefined) return;
-    const a = contour.points[selection.edgeIndex];
-    const b = contour.points[selection.edgeIndex + 1];
-    if (a === undefined || b === undefined) return;
-    const sa = screenOf(a);
-    const sb = screenOf(b);
-    if (sa === null || sb === null) return;
     ctx.save();
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = 'rgba(255, 204, 0, .55)';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255, 204, 0, .45)';
+    ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(sa.x, sa.y);
-    ctx.lineTo(sb.x, sb.y);
+    if (!tracePolyline(ctx, selection.curve)) {
+      ctx.restore();
+      return;
+    }
     ctx.stroke();
     ctx.restore();
   }
 
-  /** Активная правка: 5 якорей, ядро, предпросмотр кривой. */
+  /**
+   * Вектор якоря: короткая стрелка от опоры к ядру — видно, куда тянет каждая
+   * опора. Если ядро стоит на самой опоре, рисуется нормаль к линии.
+   */
+  function anchorVector(ctx: CanvasRenderingContext2D, point: readonly [number, number], core: Point): void {
+    const screen = screenOf(point);
+    if (screen === null) return;
+    const coreScreen = screenOf(core);
+    let dx = coreScreen === null ? 0 : coreScreen.x - screen.x;
+    let dy = coreScreen === null ? 0 : coreScreen.y - screen.y;
+    let length = Math.hypot(dx, dy);
+    if (length < 1) {
+      // Ядро на опоре: показываем нормаль (направление тяги по умолчанию).
+      dx = 0;
+      dy = -1;
+      length = 1;
+    }
+    const ux = dx / length;
+    const uy = dy / length;
+    const tail = 14;
+    ctx.beginPath();
+    ctx.moveTo(screen.x + ux * 7, screen.y + uy * 7);
+    ctx.lineTo(screen.x + ux * (7 + tail), screen.y + uy * (7 + tail));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(screen.x + ux * (8 + tail), screen.y + uy * (8 + tail), 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /** Активная правка: видимая кривая, предпросмотр, 5 якорей-векторов и ядро. */
   function drawActive(ctx: CanvasRenderingContext2D): void {
     const active = session.active;
     if (active === null) return;
-    const contour = session.doc.bounds.find((item) => item.id === active.contourId);
-    if (contour === undefined) return;
-    const a = contour.points[active.edgeIndex];
-    const b = contour.points[active.edgeIndex + 1];
-    if (a === undefined || b === undefined) return;
-    const sa = screenOf(a);
-    const sb = screenOf(b);
-    if (sa === null || sb === null) return;
 
+    // Подсветка участка остаётся видимой и во время правки.
     ctx.save();
-    // Предпросмотр кривой: деформированный сегмент.
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(255, 120, 120, .9)';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255, 204, 0, .28)';
     ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    for (let i = 0; i < active.curve.length; i += 1) {
-      const sp = screenOf(active.curve[i]!);
-      if (sp === null) continue;
-      if (i === 0) ctx.moveTo(sp.x, sp.y);
-      else ctx.lineTo(sp.x, sp.y);
-    }
-    ctx.stroke();
+    if (tracePolyline(ctx, active.base)) ctx.stroke();
+    ctx.restore();
 
-    // Исходный сегмент — серая линия для контраста.
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(180, 180, 180, .5)';
-    ctx.setLineDash([4, 4]);
+    // Исходная видимая кривая участка — серая пунктирная.
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(190, 198, 210, .65)';
+    ctx.setLineDash([5, 5]);
     ctx.beginPath();
-    ctx.moveTo(sa.x, sa.y);
-    ctx.lineTo(sb.x, sb.y);
-    ctx.stroke();
+    if (tracePolyline(ctx, active.base)) ctx.stroke();
     ctx.setLineDash([]);
 
-    // 5 якорей: ромбы.
+    // Предпросмотр деформированной кривой.
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255, 120, 120, .95)';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    if (tracePolyline(ctx, active.curve)) ctx.stroke();
+
+    // 5 якорей-векторов: ромб + короткий вектор «тяги».
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(127, 212, 255, .85)';
+    ctx.fillStyle = 'rgba(127, 212, 255, .85)';
+    for (const anchor of active.anchors) anchorVector(ctx, anchor, active.core);
     for (const anchor of active.anchors) {
-      const sp = screenOf(anchor);
-      if (sp === null) continue;
-      ctx.fillStyle = '#7fd4ff';
-      ctx.strokeStyle = 'rgba(255, 255, 255, .8)';
-      ctx.lineWidth = 1.5;
+      const screen = screenOf(anchor);
+      if (screen === null) continue;
       ctx.beginPath();
       const r = 5;
-      ctx.moveTo(sp.x, sp.y - r);
-      ctx.lineTo(sp.x + r, sp.y);
-      ctx.lineTo(sp.x, sp.y + r);
-      ctx.lineTo(sp.x - r, sp.y);
+      ctx.moveTo(screen.x, screen.y - r);
+      ctx.lineTo(screen.x + r, screen.y);
+      ctx.lineTo(screen.x, screen.y + r);
+      ctx.lineTo(screen.x - r, screen.y);
       ctx.closePath();
+      ctx.fillStyle = '#7fd4ff';
+      ctx.strokeStyle = 'rgba(255, 255, 255, .85)';
+      ctx.lineWidth = 1.5;
       ctx.fill();
       ctx.stroke();
     }
 
-    // Ядро: круг,Dragable.
+    // Ядро: круг, во время перетаскивания — красный.
     const core = screenOf(active.core);
     if (core !== null) {
-      ctx.fillStyle = dragging ? '#ff6060' : '#ffcc00';
-      ctx.strokeStyle = 'rgba(255, 255, 255, .9)';
-      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(core.x, core.y, 7, 0, Math.PI * 2);
+      ctx.arc(core.x, core.y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = dragging ? '#ff6060' : '#ffcc00';
+      ctx.strokeStyle = 'rgba(255, 255, 255, .95)';
+      ctx.lineWidth = 2;
       ctx.fill();
       ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(core.x, core.y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(10, 14, 20, .85)';
+      ctx.fill();
     }
     ctx.restore();
   }
 
-  /* overlay-loop: перерисовка при смене кадра (панорама/зум). */
+  /* overlay-loop: перерисовка при смене кадра (панорама/зум/размер). */
   function overlayStep(): void {
     overlayFrame = 0;
     if (session.selection === null && session.active === null) return;
@@ -297,43 +357,56 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
 
   function linesBlockHtml(): string {
     if (panel === null) return '';
-    const bounds = session.doc;
     const hasBounds = kernel.state.sectorBounds !== null && kernel.state.sectorBounds !== undefined;
     const selection = session.selection;
     const active = session.active;
     const status = [
-      `Контуров: ${bounds.bounds.length}`,
-      selection !== null ? `сегмент ${selection.contourId} #${selection.edgeIndex}` : 'сегмент не выбран',
+      `Контуров: ${session.doc.bounds.length}`,
+      selection !== null ? `участок ${selection.contourId} #${selection.spanStart}…${selection.spanEnd}` : 'участок не выбран',
       active !== null ? 'правка активна' : '',
       `журнал: ${session.past.length}`,
     ].filter((part) => part.length > 0).join(' · ');
+    const undoDisabled = session.past.length === 0 ? ' disabled' : '';
+    const redoDisabled = session.future.length === 0 ? ' disabled' : '';
     return [
-      '<p class="admin-editor-meta"><strong>Линии</strong> · правка контуров границ',
-      '<div class="admin-editor-grid">',
+      '<p class="admin-editor-meta"><strong>Линии</strong> · правка контуров границ</p>',
+      '<div class="admin-editor-tools" role="group" aria-label="Инструмент правки линий">',
       '  <button type="button" class="admin-editor-tool' + (on ? ' is-current' : '') + '"'
         + ' data-action="line-tool"'
         + ' aria-pressed="' + (on ? 'true' : 'false') + '"'
-        + ' title="Правка линий границ сектора">Правка линий</button>',
-      '  <button type="button" data-action="line-export" title="Выгрузить границы как JSON">Выгрузить JSON</button>',
-      '  <button type="button" data-action="line-undo" title="Отменить правку (Ctrl+Z)">Отменить</button>',
-      '  <button type="button" data-action="line-redo" title="Повтор (Ctrl+Shift+Z)">Повторить</button>',
+        + ' title="Правка линий границ сектора: включить или выключить инструмент">Правка линий</button>',
       '</div>',
+      '<div class="admin-editor-tools" role="group" aria-label="История правки линий">',
+      '  <button type="button" class="admin-editor-tool" data-action="line-undo"' + undoDisabled
+        + ' title="Отменить правку (Ctrl+Z)">Отменить</button>',
+      '  <button type="button" class="admin-editor-tool" data-action="line-redo"' + redoDisabled
+        + ' title="Повторить правку (Ctrl+Shift+Z)">Повторить</button>',
+      '  <button type="button" class="admin-editor-tool" data-action="line-export" title="Выгрузить границы как JSON">Выгрузить JSON</button>',
+      '</div>',
+      '<label class="admin-editor-import" for="lineImportInput">'
+        + '<span>Загрузить выгруженный JSON</span>'
+        + '<input id="lineImportInput" type="file" accept="application/json,.json" data-action="line-import"'
+        + (hasBounds ? '' : ' disabled')
+        + ' aria-label="Загрузить выгруженный ранее JSON границ" />'
+        + '</label>',
       '<p class="admin-editor-hint">'
         + 'ЛКМ — выбрать участок линии. Двойной клик — открыть правку (ядро + 5 якорей).'
-        + ' Перетаскивание ядра деформирует границу; отпускание — применить.'
-        + ' <kbd>Esc</kbd> — отменить правку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить коммит.'
+        + ' Перетаскивание ядра деформирует участок; отпускание — применить.'
+        + ' <kbd>Esc</kbd> — отменить правку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить коммит,'
+        + ' <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> — повторить.'
         + '</p>',
       notice !== null ? `<p class="admin-editor-notice">${escapeHtml(notice)}</p>` : '',
-      `<p class="admin-editor-status-text">${escapeHtml(status)}</p>`,
+      `<p class="admin-editor-status-text" role="status" aria-live="polite">${escapeHtml(status)}</p>`,
       hasBounds ? '' : '<p class="admin-editor-notice">Границы сектора не загружены: правка линий недоступна.</p>',
       '</div>',
     ].join('');
   }
 
   function refresh(): void {
-    if (panel === null) return;
-    const block = panel.querySelector('[data-editor-block="lines"]');
-    if (block !== null) block.innerHTML = linesBlockHtml();
+    if (panel !== null) {
+      const block = panel.querySelector('[data-editor-block="lines"]');
+      if (block !== null) block.innerHTML = linesBlockHtml();
+    }
     if (session.selection !== null || session.active !== null) {
       lastViewKey = '';
       paintOverlay();
@@ -344,25 +417,33 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
   }
 
   function setEnabled(value: boolean): void {
-    const wasOn = on;
-    on = value;
-    if (!on && dragging) {
-      dragging = false;
-      capturedId = null;
-      cancelBoundsEdit(session);
+    if (value === on) {
+      refresh();
+      return;
     }
-    if (on && !wasOn) {
-      options.onActivate?.();
-      if (session.selection === null && session.active === null) {
-        lastViewKey = '';
-        paintOverlay();
-        startOverlayLoop();
+    on = value;
+    if (!on) {
+      if (dragging) {
+        dragging = false;
+        capturedId = null;
+        session = cancelBoundsEdit(session);
       }
-    } else if (!on && wasOn) {
-      options.onDeactivate?.();
+      session = selectBoundsEdge(session, null);
+      if (canvas !== null) canvas.classList.remove(TOOL_CURSOR_CLASS);
       stopOverlayLoop();
+      options.onDeactivate?.();
+      notice = 'Правка линий выключена.';
+    } else {
+      if (canvas !== null) canvas.classList.add(TOOL_CURSOR_CLASS);
+      options.onActivate?.();
+      notice = 'Правка линий включена: выберите участок на карте.';
     }
     refresh();
+    if (on && session.selection !== null) {
+      lastViewKey = '';
+      paintOverlay();
+      startOverlayLoop();
+    }
   }
 
   /* -------------------------------------------------------------- события */
@@ -408,21 +489,57 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     }
   }
 
+  /** Импорт выгруженного JSON: контракт проверяется парсером документа. */
+  function importJson(text: string): boolean {
+    // Импорт работает и при выключенном инструменте: это данные, а не жест карты.
+    let doc: SectorBounds;
+    try {
+      doc = parseBoundsEdit(text);
+    } catch (error) {
+      notice = `Импорт не выполнен: ${error instanceof Error ? error.message : 'некорректные данные.'}`;
+      refresh();
+      return false;
+    }
+    session = importBoundsEdit(doc);
+    notice = `Границы загружены: контуров ${session.doc.bounds.length}.`;
+    apply();
+    return true;
+  }
+
+  function onPanelChange(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const input = target.closest('[data-action="line-import"]');
+    if (input === null) return;
+    const files = (input as HTMLInputElement).files;
+    const file = files === null || files === undefined ? null : files[0] ?? null;
+    if (file === null) return;
+    void file.text().then((text) => {
+      importJson(text);
+      // Сброс значения: повторный выбор того же файла снова даёт событие change.
+      (input as HTMLInputElement).value = '';
+    }).catch(() => {
+      notice = 'Импорт не выполнен: файл не прочитан.';
+      refresh();
+    });
+  }
+
   function onPointerDown(event: PointerEvent): void {
     if (!on) return;
     if (!canStartStroke(event, canvas)) return;
     const point = pointAt(event);
     if (point === null) return;
     event.stopPropagation();
-    // Если правка активна и клик близок к ядру — перетаскивание.
+    // Клик рядом с ядром — начало перетаскивания.
     if (session.active !== null) {
       const coreScreen = screenOf(session.active.core);
       if (coreScreen !== null) {
-        const dx = point.x - coreScreen.x;
-        const dy = point.y - coreScreen.y;
-        if (Math.hypot(dx, dy) <= CORE_HIT_PX) {
+        const hit = Math.hypot(point.x - coreScreen.x, point.y - coreScreen.y) <= CORE_HIT_PX;
+        if (hit) {
           event.preventDefault();
           dragging = true;
+          dragMoved = false;
+          dragStartPoint = point;
           if (stage !== null) {
             try {
               stage.setPointerCapture(event.pointerId);
@@ -431,17 +548,18 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
               capturedId = null;
             }
           }
-          if (canvas !== null) canvas.classList.add('editor-drawing');
           paintOverlay();
           return;
         }
       }
     }
     event.preventDefault();
-    // Выбор сегмента по клику.
+    // Иначе — выбор участка по клику.
     const world = kernel.renderer.toWorld(point.x, point.y);
-    const picked = pickBoundsEdge(session.doc, world.x, world.y, pickTolerance());
+    const picked = pickBoundsEdge(session, world.x, world.y, pickTolerance());
     session = selectBoundsEdge(session, picked);
+    if (picked === null) notice = 'Кликнул вне линии: участок не выбран.';
+    else notice = null;
     paintOverlay();
     refresh();
   }
@@ -452,9 +570,39 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     event.stopPropagation();
     const point = pointAt(event);
     if (point === null) return;
+    if (dragStartPoint !== null
+      && Math.hypot(point.x - dragStartPoint.x, point.y - dragStartPoint.y) >= DRAG_COMMIT_PX) {
+      dragMoved = true;
+    }
     const world = kernel.renderer.toWorld(point.x, point.y);
     session = moveBoundsEditCore(session, [world.x, world.y]);
     paintOverlay();
+  }
+
+  function endDrag(commitIt: boolean): void {
+    if (!dragging) return;
+    dragging = false;
+    if (capturedId !== null && stage !== null) {
+      try { stage.releasePointerCapture(capturedId); } catch (err) { /* уже отпущено */ }
+    }
+    capturedId = null;
+    const moved = dragMoved;
+    dragMoved = false;
+    dragStartPoint = null;
+    if (!commitIt || !moved) {
+      session = cancelBoundsEdit(session);
+      notice = commitIt ? 'Ядро не перемещено: изменений нет.' : 'Правка отменена.';
+      paintOverlay();
+      refresh();
+      return;
+    }
+    const next = commitBoundsEdit(session);
+    const recorded = next.past.length > session.past.length;
+    session = next;
+    notice = recorded
+      ? 'Участок деформирован и применён (Ctrl+Z отменяет).'
+      : 'Форма не изменилась: коммит не создан.';
+    apply();
   }
 
   function onPointerUp(event: PointerEvent): void {
@@ -462,44 +610,39 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     if (event.button !== 0) return;
     event.stopPropagation();
     event.preventDefault();
-    dragging = false;
-    if (capturedId !== null && stage !== null) {
-      try { stage.releasePointerCapture(capturedId); } catch (err) { /* уже отпущено */ }
-    }
-    capturedId = null;
-    if (canvas !== null) canvas.classList.remove('editor-drawing');
-    const moved = session.active !== null
-      && Math.hypot(
-        session.active.core[0] - session.active.anchors[2]![0],
-        session.active.core[1] - session.active.anchors[2]![1],
-      ) > COMMIT_EPSILON;
-    if (moved) {
-      commit(commitBoundsEdit(session));
-      notice = 'Сегмент деформирован и применён.';
-    } else {
-      cancelBoundsEdit(session);
-    }
-    refresh();
+    endDrag(true);
+  }
+
+  function onPointerCancel(event: PointerEvent): void {
+    if (!on || !dragging) return;
+    event.stopPropagation();
+    endDrag(false);
   }
 
   function onDoubleClick(event: Event): void {
     if (!on) return;
-    if (!(event instanceof PointerEvent) && !(event instanceof MouseEvent)) return;
-    if (event.button !== undefined && event.button !== 0) return;
+    if (!(event instanceof MouseEvent)) return;
+    if (event.button !== 0) return;
     if (!canContinueStroke(event)) return;
     event.preventDefault();
     event.stopPropagation();
     const point = pointAt(event);
     if (point === null) return;
     const world = kernel.renderer.toWorld(point.x, point.y);
-    const picked = pickBoundsEdge(session.doc, world.x, world.y, pickTolerance());
+    const picked = pickBoundsEdge(session, world.x, world.y, pickTolerance());
     if (picked === null) {
-      notice = 'Кликнул вне линии: правка не открыта.';
+      notice = 'Двойной клик вне линии: правка не открыта.';
       refresh();
       return;
     }
-    session = beginBoundsEdit(session, picked.contourId, picked.edgeIndex, [world.x, world.y]);
-    notice = 'Правка открыта: перетаскивайте ядро.';
+    const next = beginBoundsEdit(session, picked.contourId, picked.edgeIndex, [world.x, world.y]);
+    if (next.active === null) {
+      session = next;
+      notice = 'Участок слишком короткий: правка не открыта.';
+    } else {
+      session = next;
+      notice = 'Правка открыта: тяните ядро, Esc — отмена.';
+    }
     paintOverlay();
     refresh();
   }
@@ -509,44 +652,44 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     if (session.active === null) return;
     event.preventDefault();
     event.stopPropagation();
-    cancelBoundsEdit(session);
-    notice = 'Правка отменена.';
+    session = cancelBoundsEdit(session);
+    notice = 'Правка отменена (правая кнопка).';
+    paintOverlay();
     refresh();
   }
 
   function onKeyDown(event: KeyboardEvent): void {
     if (!on) return;
-    const target = event.target;
-    if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;
-    if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return;
-    if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return;
-    // Escape завершает правку.
-    if (event.key === 'Escape' && session.active !== null) {
+    if (isTextEntryTarget(event.target)) return;
+    if (event.key === 'Escape') {
+      if (session.active === null) return;
       event.preventDefault();
       event.stopPropagation();
-      cancelBoundsEdit(session);
+      session = cancelBoundsEdit(session);
       notice = 'Правка отменена (Esc).';
+      paintOverlay();
       refresh();
       return;
     }
-    // Ctrl+Z / Ctrl+Shift+Z — журнал линейной правки.
     const withModifier = event.ctrlKey === true || event.metaKey === true;
     if (!withModifier) return;
-    const code = event.code;
-    if (code === 'KeyZ') {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.shiftKey) {
-        if (session.future.length > 0) {
-          commit(redoBoundsEdit(session));
-          notice = 'Правка повторена.';
-        }
-      } else if (session.past.length > 0) {
-        commit(undoBoundsEdit(session));
-        notice = 'Правка отменена.';
+    if (event.code !== 'KeyZ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.shiftKey) {
+      if (session.future.length > 0) {
+        commit(redoBoundsEdit(session));
+        notice = 'Правка повторена.';
+      } else {
+        notice = 'Нет записей для повтора.';
       }
-      refresh();
+    } else if (session.past.length > 0) {
+      commit(undoBoundsEdit(session));
+      notice = 'Правка отменена.';
+    } else {
+      notice = 'Нет записей для отмены.';
     }
+    refresh();
   }
 
   /* ------------------------------------------------------------------ wiring */
@@ -559,10 +702,11 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
 
   const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
+  bind(panel, 'change', onPanelChange);
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as (event: Event) => void, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as (event: Event) => void, true);
   bind(inputTarget, 'pointerup', onPointerUp as unknown as (event: Event) => void, true);
-  bind(inputTarget, 'pointercancel', onPointerUp as unknown as (event: Event) => void, true);
+  bind(inputTarget, 'pointercancel', onPointerCancel as unknown as (event: Event) => void, true);
   bind(inputTarget, 'contextmenu', onContextMenu, true);
   bind(inputTarget, 'dblclick', onDoubleClick as unknown as (event: Event) => void, true);
   bind(typeof window === 'undefined' ? null : window, 'keydown', onKeyDown as unknown as (event: Event) => void, true);
@@ -575,17 +719,19 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     enabled(): boolean { return on; },
     refresh,
     exportJson(): string { return serializeBoundsEdit(session.doc); },
+    importJson,
     destroy(): void {
       for (const item of listeners) item.target.removeEventListener(item.type, item.handler, item.capture);
       listeners.length = 0;
       stopOverlayLoop();
-      if (dragging) {
-        dragging = false;
-        capturedId = null;
-      }
+      dragging = false;
+      capturedId = null;
+      dragStartPoint = null;
+      if (canvas !== null) canvas.classList.remove(TOOL_CURSOR_CLASS);
       if (preview !== null && preview.parentNode !== null) preview.parentNode.removeChild(preview);
       preview = null;
       previewCtx = null;
+      if (stage !== null) stage.classList.remove(TOOL_CURSOR_CLASS);
     },
   };
 }
