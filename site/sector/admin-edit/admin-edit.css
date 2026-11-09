@@ -260,7 +260,9 @@
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(2),
-.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3) {
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="lines"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="lines"] > .admin-editor-body > section:nth-of-type(3) {
   display: none;
 }
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
@@ -629,6 +631,50 @@
   pointer-events: none;
 }
 #mapCanvas.editor-drawing { cursor: crosshair; }
+
+/* Слой правки линий: участок, 5 якорей-векторов и ядро поверх карты.
+   Без этого правила канвас попадал в обычный поток `.map-stage` и уходил ПОД
+   `#mapCanvas` (`position: absolute` рисуется выше элементов потока): ядро и
+   якоря существовали в DOM, но на полной странице их не было видно. Слой выше
+   карты и виньетки (z-index 1) и тонировки редактора (z-index 2), ниже панелей
+   (z-index 14+); мышь проходит сквозь него к карте. */
+.admin-editor-line-preview {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+#mapCanvas.editor-lines { cursor: crosshair; }
+
+/* Импорт границ: поле файла остаётся настоящим input, поэтому доступно с
+   клавиатуры и читается скринридером; выглядит как строка панели. */
+.admin-editor-import {
+  display: grid;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px dashed rgba(212, 112, 133, .38);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.admin-editor-import input[type="file"] {
+  width: 100%;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+}
+.admin-editor-import input[type="file"]:focus-visible {
+  outline: 2px solid rgba(240, 163, 177, .7);
+  outline-offset: 2px;
+}
+.admin-editor-tool:disabled {
+  opacity: .45;
+  cursor: default;
+}
+.admin-editor-tool.is-current { border-color: rgba(240, 163, 177, .68); }
 
 /* ---------------------------------------------------------- свёрнутая панелька */
 

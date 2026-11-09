@@ -93,7 +93,7 @@ import type {
 } from './sector-areas-registry.ts';
 import type { AtlasView, SystemRecord } from './config.ts';
 import { NO_FACTION_KEY } from './config.ts';
-import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule } from './pointer-rules.ts';
+import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule, isTextEntryTarget } from './pointer-rules.ts';
 import type { AtlasKernel } from './config.ts';
 
 export const DRAFT_KEY = 'timeline.sector-areas.draft.v1';
@@ -117,6 +117,17 @@ export interface SectorAreasEditorUiOptions {
   readonly helpText?: string;
   /** Хранилище черновика и состояния панели; `null` — отключены. */
   readonly storage?: Storage | null;
+  /**
+   * Линейная правка границ активна: Ctrl+Z/Ctrl+Shift+Z уступают модулю
+   * правки линий, а рисование штрихов выключено. Заглушка `() => false`.
+   */
+  readonly isLineMode?: () => boolean;
+  /**
+   * Инструмент рисования включён или выключен — в том числе программно.
+   * Правка линий по этому сигналу выключается: два обработчика указателя на
+   * одной стадии карты одновременно работать не должны.
+   */
+  readonly onEnableChange?: (on: boolean) => void;
 }
 
 export interface SectorAreasEditorDraft {
@@ -205,6 +216,15 @@ export function editorHotkey(event: {
   if (event.key === 'Enter') return 'finish';
   if (event.key === 'Escape') return 'cancel';
   return null;
+}
+
+/**
+ * Владелец `Ctrl+Z`/`Ctrl+Shift+Z` при включённой правке линий — модуль правки
+ * линий. Обе клавиши уходят ему вместе: если отдавать только отмену, одно
+ * нажатие обрабатывают два журнала, и шаг «съедается» дважды.
+ */
+export function hotkeyOwnedByLineMode(hotkey: EditorHotkey, lineMode: boolean): boolean {
+  return lineMode && (hotkey === 'undo' || hotkey === 'redo');
 }
 
 /** Строка журнала: `override · a-1 · Форс-закрашивание force-3 цветом #00ff00`. */
@@ -307,14 +327,15 @@ function escapeHtml(value: string): string {
 export type RelationFilter = 'all' | ModuleRelationKind;
 
 /** Активный рабочий экран правой панели: в каждый момент открыт ровно один. */
-export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes';
+export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes' | 'lines';
 
 export function isEditorScreen(value: string): value is EditorScreen {
   return value === 'module'
     || value === 'dependencies'
     || value === 'draw'
     || value === 'properties'
-    || value === 'changes';
+    || value === 'changes'
+    || value === 'lines';
 }
 
 interface GraphNodeBox {
@@ -919,6 +940,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const isolated = new Set(isolatedModuleIds());
     const navTabs: readonly { readonly id: Exclude<EditorScreen, 'module'>; readonly label: string }[] = [
       { id: 'draw', label: 'Инструменты карты' },
+      { id: 'lines', label: 'Линии' },
       { id: 'properties', label: 'Свойства области' },
       { id: 'changes', label: 'Журнал и выгрузка' },
       { id: 'dependencies', label: 'Зависимости' },
@@ -1017,7 +1039,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function modulesHtml(): string {
     const nav = systemsNavHtml();
-    if (activeScreen === 'properties' || activeScreen === 'changes') {
+    if (activeScreen === 'properties' || activeScreen === 'changes' || activeScreen === 'lines') {
       return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
     }
     const stageHtml = activeScreen === 'draw'
@@ -1620,9 +1642,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function setEnabled(value: boolean): void {
+    const changed = value !== on;
     on = value;
     if (!on) closeStroke();
     refresh();
+    if (changed) options.onEnableChange?.(on);
   }
 
   /* ------------------------------------------------------------------- события */
@@ -1905,11 +1929,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       event.stopPropagation();
       if (handled) return;
     }
-    // Поля ввода не отдаём редактору ни при каких условиях: иначе `Ctrl+Z`
-    // ломает правку текста в инпуте, а `F` не даёт написать слово с буквой «ф».
-    if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return;
-    if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return;
-    if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return;
+    // Поля ввода и редактируемые узлы не отдаём редактору ни при каких условиях:
+    // иначе `Ctrl+Z` ломает правку текста, а `F` не даёт написать слово с «ф».
+    // `contenteditable` добавлен вместе с правкой линий (карточка SEC-VISUAL-EDIT).
+    if (isTextEntryTarget(target)) return;
     // Разбор клавиши вынесен в чистую функцию: ею же проверяется раскладка.
     const hotkey = editorHotkey(event);
     //
@@ -1917,6 +1940,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     // работают независимо от режима рисования: выключив «Рисовать границы»,
     // нужно иметь возможность отменить только что сделанное. Решение владельца
     // по карточке P2; раньше охранник ниже глушил отмену вместе с рисованием.
+    // Линейная правка активна — уступаем обе клавиши (отмену и повтор) модулю
+    // правки линий: иначе одно нажатие обрабатывают два журнала.
+    const lineMode = options.isLineMode?.() ?? false;
+    if (hotkeyOwnedByLineMode(hotkey, lineMode)) return;
     if (hotkey === 'undo') {
       event.preventDefault();
       commit(canUndo(session) ? undo(session) : session);
