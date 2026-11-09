@@ -750,6 +750,13 @@ function withPreview(state: ContourEditState, points: readonly AreaPoint[], drag
   };
 }
 
+/** Отменяет тягу: предпросмотр сбрасывается к последнему закоммиченному. */
+export function cancelDrag(state: ContourEditState): ContourEditState {
+  if (state.preview === null) return state;
+  const next = stateOf(state.ring, state.closed, state.anchors, null);
+  return next === null ? state : next;
+}
+
 /**
  * Коммит перетаскивания: вершины кольца снимаются с деформированной кривой
  * по своим долям дуги, а **окно тяги дополнительно дочищается** — внутри окна
@@ -921,6 +928,24 @@ export function beginLineEdit(
 function lineAnchor(state: ContourEditState, arc: number): CurveAnchor {
   const s = arc / state.curve.length;
   return { s, point: curvePointAt(state.curve, s, false) };
+}
+
+/**
+ * Открывает правку открытой линии по сохранённым якорям (§7): между сессиями
+ * и после загрузки. Якоря перепривязываются к текущей линии; число якорей
+ * сохраняется — уточнения не теряются.
+ */
+export function reopenLineEdit(
+  points: readonly AreaPoint[],
+  saved: readonly CurveAnchor[],
+): { ok: true; state: ContourEditState; maxDrift: number } | { ok: false; reason: string } {
+  const state = stateOf(points, false, [], null);
+  if (state === null) return { ok: false, reason: 'Линия слишком короткая для правки якорями.' };
+  if (saved.length < 2) {
+    return { ok: false, reason: 'У линии меньше двух якорей — поставьте их заново двойным кликом.' };
+  }
+  const resnapped = resnapAnchors(state.curve, false, saved);
+  return { ok: true, state: { ...state, anchors: resnapped.anchors }, maxDrift: resnapped.maxDrift };
 }
 
 /**

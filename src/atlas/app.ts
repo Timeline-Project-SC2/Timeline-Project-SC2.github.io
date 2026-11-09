@@ -44,6 +44,7 @@ import { addressOf, formatAddress } from './sector-address.ts';
 import { bindSectorAdminGate, isAdminUiTarget } from './sector-admin-gate.ts';
 import { createSectorAreasEditorUi } from './sector-areas-editor-ui.ts';
 import { createSectorBoundsEditUi } from './sector-bounds-edit-ui.ts';
+import { createSectorAreasHierarchyUi } from './sector-areas-hierarchy-ui.ts';
 import type { SectorBoundsEditUiApi } from './sector-bounds-edit-ui.ts';
 // Единственный источник текста справки: файл руководства администратора.
 import sectorAreasHelp from '../../docs/admins/sector-areas-editor.md?raw';
@@ -569,10 +570,13 @@ function applySystemFrameRequest(): void {
  * канве, что и публичный `/sector/`. */
 let areasEditor: SectorAreasEditorUiApi | null = null;
 let lineEditor: SectorBoundsEditUiApi | null = null;
+let hierarchyEditor: ReturnType<typeof createSectorAreasHierarchyUi> | null = null;
 /** Состояние рисования до включения «Правки линий» — возвращается при выходе. */
 let areasWasEnabled = false;
 /** Признак программного переключения инструментов: защита от рекурсии. */
 let switchingTools = false;
+/** Состояние правки линий до включения иерархии. */
+let linesWasEnabled = false;
 
 function bindSectorAreasEditor(): void {
   const panel = qs<HTMLElement>('[data-admin-editor]');
@@ -609,6 +613,9 @@ function bindSectorAreasEditor(): void {
       try {
         areasWasEnabled = areasEditor !== null && areasEditor.enabled();
         areasEditor?.setEnabled(false);
+        // Иерархия и правка линий на одной стадии карты тоже не совмещаются.
+        linesWasEnabled = hierarchyEditor !== null && hierarchyEditor.enabled();
+        hierarchyEditor?.setEnabled(false);
       } finally {
         switchingTools = false;
       }
@@ -618,6 +625,50 @@ function bindSectorAreasEditor(): void {
       switchingTools = true;
       try {
         areasEditor?.setEnabled(areasWasEnabled);
+        hierarchyEditor?.setEnabled(linesWasEnabled);
+      } finally {
+        switchingTools = false;
+      }
+    },
+  });
+  // Иерархия областей: якорная правка контуров, группы и сочетания пар.
+  // Три инструмента на одной стадии карты взаимоисключающие: включение
+  // иерархии выключает рисование и правку линий, выключение возвращает
+  // их прежние состояния.
+  hierarchyEditor = createSectorAreasHierarchyUi({
+    kernel,
+    panel,
+    stage: el.mapStage,
+    canvas: el.mapCanvas,
+    areas: {
+      getSession: () => {
+        if (areasEditor === null) throw new Error('Редактор областей не инициализирован');
+        return areasEditor.session();
+      },
+      applySession: (next) => {
+        areasEditor?.applySession(next);
+        lineEditor?.refresh();
+        hierarchyEditor?.refresh();
+      },
+    },
+    onActivate: () => {
+      if (switchingTools) return;
+      switchingTools = true;
+      try {
+        areasWasEnabled = areasEditor !== null && areasEditor.enabled();
+        areasEditor?.setEnabled(false);
+        linesWasEnabled = lineEditor !== null && lineEditor.enabled();
+        lineEditor?.setEnabled(false);
+      } finally {
+        switchingTools = false;
+      }
+    },
+    onDeactivate: () => {
+      if (switchingTools) return;
+      switchingTools = true;
+      try {
+        areasEditor?.setEnabled(areasWasEnabled);
+        lineEditor?.setEnabled(linesWasEnabled);
       } finally {
         switchingTools = false;
       }
@@ -625,6 +676,7 @@ function bindSectorAreasEditor(): void {
   });
   areasEditor.refresh();
   lineEditor.refresh();
+  hierarchyEditor.refresh();
 }
 
 function boot(): void {

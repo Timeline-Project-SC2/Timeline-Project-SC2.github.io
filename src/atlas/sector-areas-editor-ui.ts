@@ -139,6 +139,12 @@ export interface SectorAreasEditorDraft {
 
 export interface SectorAreasEditorUiApi {
   session(): EditorSession;
+  /**
+   * Подменяет сессию новой (из команд иерархии: якоря, группы, сочетания).
+   * История и журнал общие: `applySession` просто кладёт сессию и применяет
+   * её документ к состоянию карты.
+   */
+  applySession(next: EditorSession): void;
   doc(): SectorAreasDoc;
   screen(): EditorScreen;
   setScreen(screen: EditorScreen): void;
@@ -2079,6 +2085,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   return {
     session(): EditorSession { return session; },
+    applySession(next: EditorSession): void {
+      session = next;
+      apply();
+    },
     doc(): SectorAreasDoc { return session.doc; },
     screen(): EditorScreen { return activeScreen; },
     setScreen,

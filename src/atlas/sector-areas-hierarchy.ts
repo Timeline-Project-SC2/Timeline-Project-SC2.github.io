@@ -24,6 +24,7 @@ import type { CurveAnchor, Ring, SectorAreasDoc } from './sector-areas-contract.
 import {
   ANCHOR_RESNAP_TOLERANCE,
   beginContourEdit,
+  cancelDrag,
   commitDrag,
   dragAnchor,
   reopenContourEdit,
@@ -257,6 +258,17 @@ function previewDropped(state: ContourEditState): { state: ContourEditState } {
 /** Завершает правку контура: состояние интерфейса сбрасывается, документ цел. */
 export function closeContourEdit(session: EditorSession): EditorSession {
   return { ...session, contourEdit: null };
+}
+
+/**
+ * Отменяет тягу якоря без записи: предпросмотр сбрасывается к последнему
+ * закоммиченному состоянию, правка остаётся открытой (Esc в середине тяги
+ * или отпускание без движения).
+ */
+export function cancelContourDrag(session: EditorSession): EditorSession {
+  const ref = session.contourEdit;
+  if (ref === undefined || ref === null) return session;
+  return { ...session, contourEdit: { ...ref, state: cancelDrag(ref.state), limited: false } };
 }
 
 /* --------------------------------------------------- группы: команды сессии */
