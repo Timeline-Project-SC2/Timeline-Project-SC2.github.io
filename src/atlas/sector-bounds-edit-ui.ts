@@ -76,6 +76,8 @@ const DRAG_COMMIT_PX = 2;
 export const OVERLAY_CLASS = 'admin-editor-line-preview';
 /** Класс курсора инструмента на канве карты. */
 const TOOL_CURSOR_CLASS = 'editor-lines';
+/** Сообщение об упоре в предел тяги: сравнивается, чтобы снять его вовремя. */
+const PULL_NOTICE = 'Тяга ограничена: дальше ядро не уводит линию (предел окна влияния).';
 
 /** Пустой документ границ: парсер контракта читает пустой список контуров. */
 function emptyBounds(): SectorBounds {
@@ -576,6 +578,16 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     }
     const world = kernel.renderer.toWorld(point.x, point.y);
     session = moveBoundsEditCore(session, [world.x, world.y]);
+    // Упор в предел тяги — видимая обратная связь, а не молчаливое расхождение
+    // курсора и ядра: дальше линия не поедет, и об этом сказано. Панель
+    // перерисовывается только когда текст сообщения действительно меняется.
+    const before = notice;
+    if (session.active !== null && session.active.limited) {
+      notice = PULL_NOTICE;
+    } else if (notice === PULL_NOTICE) {
+      notice = null;
+    }
+    if (notice !== before) refresh();
     paintOverlay();
   }
 
@@ -596,12 +608,20 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
       refresh();
       return;
     }
+    const wasLimited = session.active !== null && session.active.limited;
     const next = commitBoundsEdit(session);
     const recorded = next.past.length > session.past.length;
+    const rejected = next.rejected ?? null;
     session = next;
-    notice = recorded
-      ? 'Участок деформирован и применён (Ctrl+Z отменяет).'
-      : 'Форма не изменилась: коммит не создан.';
+    if (recorded) {
+      notice = wasLimited
+        ? 'Участок деформирован и применён с ограниченной тягой (Ctrl+Z отменяет).'
+        : 'Участок деформирован и применён (Ctrl+Z отменяет).';
+    } else if (rejected !== null) {
+      notice = `Запись не выполнена: ${rejected}.`;
+    } else {
+      notice = 'Форма не изменилась: коммит не создан.';
+    }
     apply();
   }
 

@@ -101,8 +101,12 @@ export interface BoundsEditActive {
   readonly window: readonly [number, number];
   /** Видимая кривая участка до деформации. */
   readonly base: readonly Point[];
-  /** Предпросмотр: деформированная видимая кривая участка. */
+  /** Предпросмотр: деформированная видимая кривая участка (обрезана по полю). */
   readonly curve: readonly Point[];
+  /** Срез краёв участка, выбранный под форму этого участка. */
+  readonly crop: number;
+  /** Тяга упёрлась в предел защиты от складки: ядро не идёт за курсором. */
+  readonly limited: boolean;
 }
 
 /** Снимок контура: точки и пометки «мягких» вершин (вставленных правками). */
@@ -131,6 +135,12 @@ export interface BoundsEditSession {
   readonly active: BoundsEditActive | null;
   readonly selection: EdgeSelection | null;
   readonly sequence: number;
+  /**
+   * Причина отказа последнего коммита (`null` — отказа не было). Запись,
+   * которая вывела бы контур за поле, слиплась или завязала петлю, не делается:
+   * документ остаётся прежним, а интерфейс объясняет почему.
+   */
+  readonly rejected?: string | null;
 }
 
 /** Равномерно пересэмплированная кривая: точки и накопленные длины. */
@@ -183,6 +193,18 @@ export const BOUNDS_EDIT_COMMIT_TOLERANCE = 8;
 
 /** Какая часть крайнего куска участка снимается у стыка (см. `denseSpan`). */
 export const BOUNDS_EDIT_EDGE_CROP = 0.75;
+
+/** Предел тяги ядра в долях длины окна влияния — защита от складки линии. */
+export const BOUNDS_EDIT_PULL_LIMIT = 2;
+
+/** Минимальная тяга, доступная даже на самом узком окне (единицы карты). */
+export const BOUNDS_EDIT_MIN_PULL = 8;
+
+/** Сколько структурных вершин добавляется к участку с каждой стороны. */
+export const BOUNDS_EDIT_SPAN_MARGIN = 1;
+
+/** Ближе этого расстояния точки записи считаются совпавшими и не пишутся. */
+export const BOUNDS_EDIT_MIN_STEP = 0.5;
 
 /** Эпсилон сравнения геометрии. */
 export const BOUNDS_EDIT_EPSILON = 1e-6;
@@ -364,17 +386,19 @@ function densePieces(pieces: readonly PathPiece[], firstU = 0, lastU = 1): Point
  * линии её собственные концы (`spanStart === 0`, `spanEnd === последняя
  * вершина`) остаются настоящими концами, обрезать их нечем.
  */
-function denseSpan(contour: BoundsPrimitive, spanStart: number, spanEnd: number): Point[] {
+function denseSpan(
+  contour: BoundsPrimitive,
+  spanStart: number,
+  spanEnd: number,
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
+): Point[] {
   const pieces = spanPieces(contour, spanStart, spanEnd);
   if (pieces.length === 0) return [];
   const closed = isClosedContour(contour);
   const openStart = !closed && spanStart === 0;
   const openEnd = !closed && spanEnd === contour.points.length - 1;
-  // 0,75 снимает половину соседнего куска у края, но оставляет участок
-  // заметным: у двухвершинного участка это четверть каждого из двух кусков.
-  // Чем ближе к стыку (0,5), тем больше расхождение с исходной линией на краю.
-  const firstU = openStart ? 0 : BOUNDS_EDIT_EDGE_CROP;
-  const lastU = openEnd ? 1 : 1 - BOUNDS_EDIT_EDGE_CROP;
+  const firstU = openStart ? 0 : crop;
+  const lastU = openEnd ? 1 : 1 - crop;
   if (pieces.length === 1) {
     // Один кусок на весь участок: берём его часть без выхода за пределы.
     return densePieces(pieces, Math.min(firstU, 0.5), Math.max(lastU, 0.5));
@@ -392,8 +416,13 @@ function cumulativeOf(points: readonly Point[]): number[] {
 }
 
 /** Плотная видимая кривая участка как `SampledCurve`: доли — по длине дуги. */
-export function denseCurve(contour: BoundsPrimitive, spanStart: number, spanEnd: number): SampledCurve {
-  const dense = denseSpan(contour, spanStart, spanEnd);
+export function denseCurve(
+  contour: BoundsPrimitive,
+  spanStart: number,
+  spanEnd: number,
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
+): SampledCurve {
+  const dense = denseSpan(contour, spanStart, spanEnd, crop);
   const cumulative = cumulativeOf(dense);
   const total = cumulative.at(-1) ?? 0;
   return {
@@ -474,8 +503,9 @@ export function spanCurve(
   spanEnd: number,
   count: number,
   extraFractions: readonly number[] = [],
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
 ): SampledCurve {
-  const dense = denseCurve(contour, spanStart, spanEnd);
+  const dense = denseCurve(contour, spanStart, spanEnd, crop);
   if (dense.points.length < 2 || count < 2) {
     return { points: dense.points.slice(0, 1), fractions: [0], cumulative: [0], length: 0 };
   }
@@ -508,15 +538,25 @@ export function spanCurve(
 }
 
 /** Число точек записи/предпросмотра под длину видимой кривой участка. */
-export function spanSampleCount(contour: BoundsPrimitive, spanStart: number, spanEnd: number): number {
-  const total = denseCurve(contour, spanStart, spanEnd).length;
+export function spanSampleCount(
+  contour: BoundsPrimitive,
+  spanStart: number,
+  spanEnd: number,
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
+): number {
+  const total = denseCurve(contour, spanStart, spanEnd, crop).length;
   const wanted = Math.round(total / BOUNDS_EDIT_SAMPLE_SPACING) + 1;
   return clamp(wanted, BOUNDS_EDIT_MIN_SAMPLES, BOUNDS_EDIT_MAX_SAMPLES);
 }
 
 /** Длина видимой кривой участка. */
-export function spanLength(contour: BoundsPrimitive, spanStart: number, spanEnd: number): number {
-  return denseCurve(contour, spanStart, spanEnd).length;
+export function spanLength(
+  contour: BoundsPrimitive,
+  spanStart: number,
+  spanEnd: number,
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
+): number {
+  return denseCurve(contour, spanStart, spanEnd, crop).length;
 }
 
 /** Точка на видимой кривой в доле длины дуги. */
@@ -525,8 +565,13 @@ export function pointOnSpan(curve: SampledCurve, fraction: number): Point {
 }
 
 /** 5 якорей на видимой кривой участка: точки в долях длины дуги 0,1…0,9. */
-export function anchorsForSpan(contour: BoundsPrimitive, spanStart: number, spanEnd: number): Point[] {
-  return anchorsOf(denseCurve(contour, spanStart, spanEnd));
+export function anchorsForSpan(
+  contour: BoundsPrimitive,
+  spanStart: number,
+  spanEnd: number,
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
+): Point[] {
+  return anchorsOf(denseCurve(contour, spanStart, spanEnd, crop));
 }
 
 /** Точки якорей, взятые из уже пересэмплированной кривой (доли входят в неё). */
@@ -545,8 +590,9 @@ export function anchorSpacingDeviation(
   spanStart: number,
   spanEnd: number,
   anchors?: readonly Point[],
+  crop: number = BOUNDS_EDIT_EDGE_CROP,
 ): number {
-  const dense = denseCurve(contour, spanStart, spanEnd);
+  const dense = denseCurve(contour, spanStart, spanEnd, crop);
   const list = anchors ?? anchorsOf(dense);
   if (list.length < 2) return 0;
   if (!(dense.length > BOUNDS_EDIT_EPSILON)) return 0;
@@ -733,28 +779,62 @@ export function clampToMap(point: Point): Point {
   return [clamp(point[0], 0, BOUNDS_EDIT_MAP_BOUND), clamp(point[1], 0, BOUNDS_EDIT_MAP_BOUND)] as Point;
 }
 
-/** Окно влияния и проекция ядра для активной правки. */
+/** Что можно передать в активную правку при открытии и при перетаскивании. */
+interface ActiveOptions {
+  /** Готовое окно влияния (при перетаскивании — то же, что при открытии). */
+  readonly window?: readonly [number, number];
+  /** Готовый срез краёв (при перетаскивании — тот же, что при открытии). */
+  readonly crop?: number;
+  /** Открытие правки: ядро садится на линию, тяги ещё нет. */
+  readonly snapCore?: boolean;
+}
+
+/**
+ * Окно влияния, ядро, якоря и предпросмотр для активной правки.
+ *
+ * Две защиты от порчи линии:
+ * - **поле карты**: точки предпросмотра обрезаются по `0…10000`, иначе контур
+ *   выходит за поле и выгруженный JSON перестаёт проходить собственный разбор;
+ * - **предел тяги**: ядро не уходит от пика дальше `BOUNDS_EDIT_PULL_LIMIT` длин
+ *   окна влияния. Без этого при большом перетаскивании линия складывается
+ *   иглой и разворачивается. Флаг `limited` сообщает об упоре интерфейсу.
+ */
 function activeFor(
   contour: BoundsPrimitive,
   contourIndex: number,
   spanStart: number,
   spanEnd: number,
   corePoint: Point,
-  window?: readonly [number, number],
-  snapCore = false,
+  options: ActiveOptions = {},
 ): BoundsEditActive | null {
   if (spanEnd <= spanStart || spanEnd >= contour.points.length) return null;
-  if (!(spanLength(contour, spanStart, spanEnd) >= BOUNDS_EDIT_MIN_SPAN_LENGTH)) return null;
-  const count = spanSampleCount(contour, spanStart, spanEnd);
-  const base = spanCurve(contour, spanStart, spanEnd, count, BOUNDS_EDIT_ANCHOR_FRACTIONS);
+  const crop = options.crop ?? BOUNDS_EDIT_EDGE_CROP;
+  if (!(spanLength(contour, spanStart, spanEnd, crop) >= BOUNDS_EDIT_MIN_SPAN_LENGTH)) return null;
+  const count = spanSampleCount(contour, spanStart, spanEnd, crop);
+  const base = spanCurve(contour, spanStart, spanEnd, count, BOUNDS_EDIT_ANCHOR_FRACTIONS, crop);
   const target = clampToMap(corePoint);
+  // Упор в край карты — тоже ограничение тяги, о нём надо сказать.
+  const fieldLimited = Math.hypot(target[0] - corePoint[0], target[1] - corePoint[1]) > BOUNDS_EDIT_MIN_STEP;
   const raw = projectOnPolyline(base.points, base.cumulative, target).fraction;
-  const box: readonly [number, number] = window ?? influenceWindowFor(raw);
+  const box: readonly [number, number] = options.window ?? influenceWindowFor(raw);
   const peak = peakFractionIn(box, raw);
+  const peakPoint = pointOnSpan(base, peak);
+  const windowArc = (box[1] - box[0]) * base.length;
+  const maxPull = Math.max(BOUNDS_EDIT_MIN_PULL, BOUNDS_EDIT_PULL_LIMIT * windowArc);
   // Ядро при открытии садится **на линию** в позицию пика: появление правки не
   // деформирует контур, а неподвижный коммит остаётся пустым. Отклонение от
   // точки клика — доли шага якоря, за пределы толеранса выбора не выходит.
-  const core = snapCore ? pointOnSpan(base, peak) : target;
+  let core = options.snapCore === true ? peakPoint : target;
+  let limited = fieldLimited && options.snapCore !== true;
+  if (options.snapCore !== true) {
+    const dx = core[0] - peakPoint[0];
+    const dy = core[1] - peakPoint[1];
+    const distance = Math.hypot(dx, dy);
+    if (distance > maxPull) {
+      limited = true;
+      core = [peakPoint[0] + (dx / distance) * maxPull, peakPoint[1] + (dy / distance) * maxPull] as Point;
+    }
+  }
   return {
     contourId: contour.id,
     contourIndex,
@@ -767,7 +847,9 @@ function activeFor(
     anchorFractions: [...BOUNDS_EDIT_ANCHOR_FRACTIONS],
     window: box,
     base: base.points,
-    curve: deformSpan(base, core, box, peak),
+    curve: deformSpan(base, core, box, peak).map(clampToMap),
+    crop,
+    limited,
   };
 }
 
@@ -789,7 +871,7 @@ export function beginBoundsEdit(
   const span = resolveSpan(contour.points, softIndicesOf(base, contourId), edgeIndex);
   if (span === null) return base;
   const contourIndex = base.doc.bounds.findIndex((item) => item.id === contourId);
-  const active = activeFor(contour, contourIndex, span.spanStart, span.spanEnd, point, undefined, true);
+  const active = activeFor(contour, contourIndex, span.spanStart, span.spanEnd, point, { snapCore: true });
   if (active === null) return { ...base, selection: null };
   const selection: EdgeSelection = {
     contourId,
@@ -813,10 +895,70 @@ export function moveBoundsEditCore(session: BoundsEditSession, point: Point): Bo
   if (active === null) return session;
   const contour = contourOf(session.doc, active.contourId);
   if (contour === null) return session;
-  const next = activeFor(contour, active.contourIndex, active.spanStart, active.spanEnd, point, active.window);
+  const next = activeFor(contour, active.contourIndex, active.spanStart, active.spanEnd, point, {
+    window: active.window,
+    crop: active.crop,
+  });
   if (next === null) return session;
   if (samePoint(active.core, next.core) && active.curve === next.curve) return session;
   return { ...session, active: next };
+}
+
+/* ------------------------------------------------- проверка формы записи */
+
+/** Знак векторного произведения `(b−a) × (c−a)`; 0 — точки на одной прямой. */
+function orientation(a: Point, b: Point, c: Point): number {
+  const value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const scale = Math.max(1, Math.hypot(b[0] - a[0], b[1] - a[1]) * Math.hypot(c[0] - a[0], c[1] - a[1]));
+  return value / scale;
+}
+
+/** Пересекаются ли два невырожденных отрезка (без касания концами). */
+function segmentsCross(a: Point, b: Point, c: Point, d: Point): boolean {
+  const o1 = orientation(a, b, c);
+  const o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a);
+  const o4 = orientation(c, d, b);
+  return ((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0));
+}
+
+/**
+ * Число самопересечений ломаной. Соседние сегменты (и первый с последним у
+ * замкнутой линии) не считаются: у них общий конец.
+ */
+export function selfIntersections(points: readonly Point[], closed: boolean): number {
+  const count = points.length;
+  const segments = closed ? count : count - 1;
+  let found = 0;
+  for (let i = 0; i < segments; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % count];
+    if (a === undefined || b === undefined) continue;
+    for (let j = i + 1; j < segments; j += 1) {
+      if (j === i || j === i + 1) continue;
+      if (closed && i === 0 && j === segments - 1) continue;
+      const c = points[j];
+      const d = points[(j + 1) % count];
+      if (c === undefined || d === undefined) continue;
+      if (segmentsCross(a, b, c, d)) found += 1;
+    }
+  }
+  return found;
+}
+
+/**
+ * Точки записи без слипшихся соседей. При обрезке по полю соседние вершины
+ * могут лечь в одну точку края; такая пара даёт нулевой сегмент, из-за которого
+ * скругление контура рисует иглу.
+ */
+function withoutSlivers(points: readonly Point[]): Point[] {
+  const out: Point[] = [];
+  for (const point of points) {
+    const previous = out[out.length - 1];
+    if (previous !== undefined && Math.hypot(point[0] - previous[0], point[1] - previous[1]) < BOUNDS_EDIT_MIN_STEP) continue;
+    out.push(point);
+  }
+  return out;
 }
 
 /**
@@ -847,9 +989,18 @@ export function commitBoundsEdit(session: BoundsEditSession): BoundsEditSession 
   // Внутренние точки видимой кривой между концами участка: концы не двигаются.
   // Шаг выравнивается по длине дуги, иначе у пика деформации вершины сходятся
   // почти в одну точку и скругление рисует излом.
-  const sampled = resamplePolyline(active.curve, active.curve.length);
-  const inserted: Point[] = [];
-  for (let i = 1; i < sampled.length - 1; i += 1) inserted.push(sampled[i]!);
+  const clamped = active.curve.map(clampToMap);
+  const sampled = resamplePolyline(clamped, clamped.length);
+  const interior: Point[] = [];
+  for (let i = 1; i < sampled.length - 1; i += 1) interior.push(clampToMap(sampled[i]!));
+  // Первый и последний концы участка — уже существующие вершины: они не
+  // двигаются и не обрезаются, иначе замкнутый контур потеряет совпадение
+  // начала и конца и перестанет проходить собственный разбор.
+  const startPoint = before[spanStart]!;
+  const endPoint = before[spanEnd]!;
+  const inserted = withoutSlivers(interior).filter((point) =>
+    Math.hypot(point[0] - startPoint[0], point[1] - startPoint[1]) >= BOUNDS_EDIT_MIN_STEP
+    && Math.hypot(point[0] - endPoint[0], point[1] - endPoint[1]) >= BOUNDS_EDIT_MIN_STEP);
 
   const nextPoints: Point[] = [
     ...before.slice(0, spanStart + 1),
@@ -857,7 +1008,25 @@ export function commitBoundsEdit(session: BoundsEditSession): BoundsEditSession 
     ...before.slice(spanEnd),
   ];
 
-  if (inserted.length === 0) return { ...session, active: null, selection: null };
+  if (inserted.length === 0) {
+    return { ...session, active: null, selection: null, rejected: 'за пределами поля форма не меняется' };
+  }
+
+  // Запись обязана оставаться такой же простой, какой была: не выходить за
+  // поле (обрезано выше), не слипаться (см. `withoutSlivers`) и не завязывать
+  // новых петель. Деформация внутри окна петель не создаёт, но обрезка по краю
+  // карты может сложить линию вдоль границы — такую запись не делаем.
+  const closed = isClosedContour(contour);
+  const beforeCrossings = selfIntersections(before, closed);
+  const afterCrossings = selfIntersections(nextPoints, closed);
+  if (afterCrossings > beforeCrossings) {
+    return {
+      ...session,
+      active: null,
+      selection: null,
+      rejected: 'линия у края поля сложилась бы петлёй — уменьшите тягу',
+    };
+  }
 
   const shift = inserted.length - (spanEnd - spanStart - 1);
   const contourSoft = softIndicesOf(session, active.contourId);
@@ -890,6 +1059,7 @@ export function commitBoundsEdit(session: BoundsEditSession): BoundsEditSession 
     active: null,
     selection: null,
     sequence: entry.sequence,
+    rejected: null,
   };
 }
 

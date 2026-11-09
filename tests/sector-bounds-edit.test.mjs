@@ -17,7 +17,10 @@ import {
   BOUNDS_EDIT_ARC_TOLERANCE,
   BOUNDS_EDIT_COMMIT_TOLERANCE,
   BOUNDS_EDIT_MAX_SAMPLES,
+  BOUNDS_EDIT_MIN_PULL,
   BOUNDS_EDIT_MIN_SPAN_LENGTH,
+  BOUNDS_EDIT_MIN_STEP,
+  BOUNDS_EDIT_PULL_LIMIT,
   anchorsForSpan,
   anchorSpacingDeviation,
   beginBoundsEdit,
@@ -336,12 +339,40 @@ test('moveBoundsEditCore: якоря и окно влияния не смеща�
   assert.notDeepEqual(moved.active.curve, edited.active.curve, 'предпросмотр пересчитан');
 });
 
-test('moveBoundsEditCore: ядро обрезается по границам поля', () => {
+test('moveBoundsEditCore: ядро не выходит за поле и не уходит дальше предела тяги', () => {
   const edited = beginOn(createBoundsEditSession(bounds), 'sector.outline', 10);
+  assert.ok(edited.active);
   const moved = moveBoundsEditCore(edited, [20000, 5000]);
-  assert.deepEqual(moved.active.core, [10000, 5000]);
-  const moved2 = moveBoundsEditCore(moved, [-500, 5000]);
-  assert.deepEqual(moved2.active.core, [0, 5000]);
+  assert.ok(moved.active);
+  assert.ok(moved.active.core[0] <= 10000 && moved.active.core[1] <= 10000, 'ядро внутри поля');
+  assert.equal(moved.active.limited, true, 'упор в край поля помечен');
+  // Тяга ограничена длиной окна влияния: ядро ближе к линии, чем запрошено.
+  const spanArc = spanLength(contourOf(bounds, 'sector.outline'), 10, 11);
+  const peak = pointOnSpan(
+    spanCurve(contourOf(bounds, 'sector.outline'), 10, 11, spanSampleCount(contourOf(bounds, 'sector.outline'), 10, 11)),
+    moved.active.coreFraction,
+  );
+  const pull = Math.hypot(moved.active.core[0] - peak[0], moved.active.core[1] - peak[1]);
+  assert.ok(pull <= Math.max(BOUNDS_EDIT_MIN_PULL, BOUNDS_EDIT_PULL_LIMIT * (moved.active.window[1] - moved.active.window[0]) * spanArc) + 1e-6,
+    `тяга ${pull.toFixed(2)} в пределах ${BOUNDS_EDIT_PULL_LIMIT} окон`);
+
+  const moved2 = moveBoundsEditCore(edited, [-500, 5000]);
+  assert.ok(moved2.active);
+  assert.equal(moved2.active.limited, true, 'упор в левый край поля помечен');
+  assert.ok(moved2.active.core[0] >= 0 && moved2.active.core[0] <= 10000, 'ядро не вышло за поле');
+});
+
+test('moveBoundsEditCore: в пределах предела тяги ядро встаёт ровно туда, куда тянут', () => {
+  const edited = beginOn(createBoundsEditSession(bounds), 'sector.outline', 10);
+  assert.ok(edited.active);
+  const core = edited.active.core;
+  const dx = 3;
+  const dy = 2;
+  const moved = moveBoundsEditCore(edited, [core[0] + dx, core[1] + dy]);
+  assert.ok(moved.active);
+  assert.equal(moved.active.limited, false);
+  assert.equal(moved.active.core[0], core[0] + dx);
+  assert.equal(moved.active.core[1], core[1] + dy);
 });
 
 test('beginBoundsEdit: короткий участок не открывает правку', () => {
@@ -702,6 +733,154 @@ test('round-trip после правки: выгруженный JSON читае
   // И документ остаётся редактируемым.
   const again = beginBoundsEdit(session, 'sector.outline', 12, [committed.doc.bounds[0].points[12][0], committed.doc.bounds[0].points[12][1]]);
   assert.ok(again.active, 'после импорта правка открывается');
+});
+
+/* ------------------------------------------------- B1: границы карты */
+
+/** Все рёбра всех контуров документа: пары соседних вершин. */
+function allEdges(doc) {
+  const edges = [];
+  for (const contour of doc.bounds) {
+    for (let i = 0; i < contour.points.length - 1; i += 1) edges.push({ contour, index: i });
+  }
+  return edges;
+}
+
+/** Контур после правки остаётся тем же замкнутым/открытым, что и до неё. */
+function assertContourShape(before, after, where) {
+  if (before.kind === 'halo') {
+    assert.ok(after.points.length >= 2, `${where}: у гало минимум две точки`);
+    return;
+  }
+  const first = after.points[0];
+  const last = after.points[after.points.length - 1];
+  assert.ok(after.points.length >= 4, `${where}: у замкнутого контура минимум 4 точки`);
+  assert.deepEqual(last, first, `${where}: начало и конец замкнутого контура совпадают`);
+}
+
+test('B1: выгрузка после правки у края поля проходит собственный разбор (оба направления)', () => {
+  // Воспроизведение HOLD: fog-echos #19 уводил вершины за y > 10000,
+  // lost-signals #16 — за x < 0. Теперь предпросмотр обрезается по полю.
+  const cases = [
+    { id: 'nebula.fog-echos', edge: 19, pull: [12000, 9000] },
+    { id: 'nebula.lost-signals', edge: 16, pull: [-4000, 3000] },
+  ];
+  for (const item of cases) {
+    const contour = contourOf(bounds, item.id);
+    assert.ok(contour, item.id);
+    const edited = beginBoundsEdit(createBoundsEditSession(bounds), item.id, item.edge, item.pull);
+    assert.ok(edited.active, `${item.id} #${item.edge}: правка открылась`);
+    const committed = commitBoundsEdit(moveBoundsEditCore(edited, item.pull));
+    assert.equal(committed.rejected ?? null, null, `${item.id} #${item.edge}: отказ не нужен`);
+    assert.equal(committed.past.length, 1, `${item.id} #${item.edge}: правка записана`);
+    const next = contourOf(committed.doc, item.id);
+    assert.ok(next);
+    for (const [x, y] of next.points) {
+      assert.ok(x >= 0 && x <= 10000 && y >= 0 && y <= 10000,
+        `${item.id} #${item.edge}: вершина ${x.toFixed(2)},${y.toFixed(2)} внутри поля`);
+    }
+    assertContourShape(contour, next, `${item.id} #${item.edge}`);
+    const reimported = parseBoundsEdit(serializeBoundsEdit(committed.doc));
+    assert.deepEqual(reimported, committed.doc, `${item.id} #${item.edge}: выгрузка читается обратно`);
+    assert.equal(reimported.bounds.length, 4, 'все четыре контура на месте');
+  }
+
+  // Тяга ровно за угол поля на участке, лежащем на краю: либо валидная
+  // запись, либо отказ с причиной — но не выгрузка вне диапазона.
+  const edited = beginBoundsEdit(createBoundsEditSession(bounds), 'nebula.fog-echos', 19, [12000, 12000]);
+  const corner = commitBoundsEdit(moveBoundsEditCore(edited, [12000, 12000]));
+  if (corner.rejected !== null && corner.rejected !== undefined) {
+    assert.match(corner.rejected, /петл/);
+    assert.deepEqual(corner.doc, bounds, 'отказ не меняет документ');
+  } else {
+    const next = contourOf(corner.doc, 'nebula.fog-echos');
+    for (const [x, y] of next.points) {
+      assert.ok(x >= 0 && x <= 10000 && y >= 0 && y <= 10000, 'угол поля: вершины внутри');
+    }
+  }
+});
+
+test('B1: правка на всех 76 рёбрах с тягой за поле — запись всегда валидна', () => {
+  const edges = allEdges(bounds);
+  assert.equal(edges.length, 76, 'в документе 76 рёбер');
+  let recorded = 0;
+  let rejected = 0;
+  for (const { contour, index } of edges) {
+    const edge = edgePoints(contour, index);
+    assert.ok(edge);
+    const click = [(edge[0][0] + edge[1][0]) / 2, (edge[0][1] + edge[1][1]) / 2];
+    const edited = beginBoundsEdit(createBoundsEditSession(bounds), contour.id, index, click);
+    if (!edited.active) continue;
+    for (const pull of [[20000, 20000], [-20000, 20000], [20000, -20000], [-20000, -20000]]) {
+      const committed = commitBoundsEdit(moveBoundsEditCore(edited, pull));
+      const next = contourOf(committed.doc, contour.id);
+      assert.ok(next);
+      for (const [x, y] of next.points) {
+        assert.ok(x >= 0 && x <= 10000 && y >= 0 && y <= 10000,
+          `${contour.id} #${index} (тяга ${pull}): вершина вне поля ${x},${y}`);
+      }
+      assertContourShape(contour, next, `${contour.id} #${index} (тяга ${pull})`);
+      // Выгрузка должна читаться парсером — иначе `/sector/` молча потеряет контуры.
+      const json = serializeBoundsEdit(committed.doc);
+      const reimported = parseBoundsEdit(json);
+      assert.equal(reimported.bounds.length, 4, `${contour.id} #${index}: контуров 4 после разбора`);
+      if (committed.past.length > 0) recorded += 1;
+      if (committed.rejected !== null && committed.rejected !== undefined) {
+        rejected += 1;
+        assert.deepEqual(committed.doc, bounds, `${contour.id} #${index}: отказ не меняет документ`);
+      }
+    }
+  }
+  assert.ok(recorded > 250, `правок записано ${recorded} из ${edges.length * 4}`);
+  assert.ok(rejected < 40, `отказов ${rejected} — защита от петли не срабатывает на каждой тяге`);
+});
+
+test('B1: запись, которая сложила бы контур петлёй, отклоняется с причиной', () => {
+  // Квадрат у верхнего края: тяга за край складывает обрезанную линию петлёй.
+  const square = [[0, 9900], [300, 9900], [300, 9970], [0, 9970], [0, 9900]];
+  const doc = docWith(square, 'nebula');
+  const session = createBoundsEditSession(doc);
+  const clicked = beginBoundsEdit(session, 'test.contour', 0, [150, 9900]);
+  assert.ok(clicked.active);
+  const committed = commitBoundsEdit(moveBoundsEditCore(clicked, [20000, 20000]));
+  assert.equal(committed.past.length, 0, 'запись не сделана');
+  assert.equal(typeof committed.rejected, 'string');
+  assert.match(committed.rejected, /петл/);
+  assert.deepEqual(committed.doc, doc, 'документ не тронут');
+  // Тот же участок при умеренной тяге пишется нормально.
+  const mild = commitBoundsEdit(moveBoundsEditCore(clicked, [150, 9950]));
+  assert.ok(mild.past.length === 1 || mild.rejected !== null);
+  if (mild.past.length === 1) {
+    assert.equal(parseBoundsEdit(serializeBoundsEdit(mild.doc)).bounds.length, 1);
+  }
+});
+
+test('B1: слайверы у края поля не пишутся, шаг вершин различим', () => {
+  const contour = contourOf(bounds, 'nebula.fog-echos');
+  assert.ok(contour);
+  const edited = beginBoundsEdit(createBoundsEditSession(bounds), contour.id, 19, [12000, 12000]);
+  const committed = commitBoundsEdit(moveBoundsEditCore(edited, [12000, 9000]));
+  assert.equal(committed.rejected ?? null, null, 'запись у края проходит');
+  const next = contourOf(committed.doc, contour.id);
+  assert.ok(next);
+  for (let i = 1; i < next.points.length; i += 1) {
+    const step = Math.hypot(next.points[i][0] - next.points[i - 1][0], next.points[i][1] - next.points[i - 1][1]);
+    assert.ok(step === 0 || step >= BOUNDS_EDIT_MIN_STEP,
+      `слипшихся вершин нет (шаг ${step.toFixed(3)} на ${i})`);
+  }
+});
+
+test('B1: UI-цикл выгрузка → импорт → правка на граничном случае', () => {
+  const contour = contourOf(bounds, 'nebula.fog-echos');
+  const edited = beginBoundsEdit(createBoundsEditSession(bounds), contour.id, 19, [12000, 12000]);
+  const committed = commitBoundsEdit(moveBoundsEditCore(edited, [12000, 9000]));
+  assert.equal(committed.rejected ?? null, null, 'граничный случай записывается');
+  const exported = serializeBoundsEdit(committed.doc);
+  const imported = importBoundsEdit(parseBoundsEdit(exported));
+  assert.deepEqual(imported.doc, committed.doc);
+  assert.equal(imported.past.length, 0);
+  const again = beginBoundsEdit(imported, contour.id, 5, [9000, 9500]);
+  assert.ok(again.active, 'после импорта правка на другом участке открывается');
 });
 
 test('parseBoundsEdit: некорректные данные — RangeError на русском', () => {

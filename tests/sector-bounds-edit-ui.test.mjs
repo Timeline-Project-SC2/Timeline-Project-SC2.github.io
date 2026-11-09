@@ -568,3 +568,52 @@ test('destroy: обработчики сняты, overlay удалён', () => {
   // Событие после уничтожения не падает.
   env.pointer('pointerdown', 400, 150);
 });
+
+/* ---------------------------------------- предел тяги и отказ записи */
+
+test('предел тяги: упор в окно влияния виден в панели, запись всё равно проходит', () => {
+  const env = harness(lineDoc);
+  env.ui.setEnabled(true);
+  env.pointer('pointerdown', 400, 150);
+  env.dblclick(400, 150);
+  const active = env.ui.session().active;
+  assert.ok(active);
+  env.pointer('pointerdown', active.core[0], active.core[1]);
+  env.pointer('pointermove', active.core[0] + 1000, active.core[1] + 1000);
+  assert.equal(env.ui.session().active.limited, true, 'ядро упёрлось в предел');
+  const hint = env.block.innerHTML;
+  assert.match(hint, /Тяга ограничена/u, 'пользователь видит, что тяга ограничена');
+  env.pointer('pointerup', active.core[0] + 1000, active.core[1] + 1000);
+  assert.equal(env.ui.session().past.length, 1, 'ограниченная тяга всё равно пишется');
+  assert.match(env.block.innerHTML, /ограниченной тягой/u, 'в сообщении о коммите сказано об ограничении');
+  env.ui.destroy();
+});
+
+test('отказ записи у края поля: панель объясняет причину, журнал пуст', () => {
+  // Квадрат у самого верха карты: тяга за край сложила бы линию петлёй.
+  const edgeDoc = {
+    version: 1,
+    mapSize: 10000,
+    source: 'test',
+    bounds: [{
+      id: 'test.contour',
+      kind: 'nebula',
+      label: 'у края',
+      style: { strokeWidth: 2, dash: [], color: 'nebula' },
+      points: [[0, 9900], [300, 9900], [300, 9970], [0, 9970], [0, 9900]],
+    }],
+  };
+  const env = harness(edgeDoc);
+  env.ui.setEnabled(true);
+  env.pointer('pointerdown', 150, 9900);
+  env.dblclick(150, 9900);
+  const active = env.ui.session().active;
+  assert.ok(active, 'правка у края открывается');
+  env.pointer('pointerdown', active.core[0], active.core[1]);
+  env.pointer('pointermove', 25000, 25000);
+  env.pointer('pointerup', 25000, 25000);
+  assert.equal(env.ui.session().past.length, 0, 'запись не сделана');
+  assert.match(env.block.innerHTML, /Запись не выполнена/u, 'причина отказа видна');
+  assert.match(env.block.innerHTML, /петл/u, 'сказано, что линия сложилась бы петлёй');
+  env.ui.destroy();
+});
