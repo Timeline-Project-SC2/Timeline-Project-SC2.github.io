@@ -114,6 +114,12 @@ export interface SceneArea {
   /** `true` — мазок форс-закрашивания поверх всех состояний. */
   readonly override: boolean;
   readonly rings: readonly SceneAreaRing[];
+  /** Маска разделения цветов пары (§6), экранные координаты; `null` — нет. */
+  readonly split: {
+    readonly holes: readonly { readonly points: readonly { readonly x: number; readonly y: number }[] }[];
+    readonly line: readonly { readonly x: number; readonly y: number }[];
+    readonly transitionHalfWidth: number;
+  } | null;
 }
 
 /** Линия сетки адреса (§8.1, `L0…L12`, два тира по `gridTiersFor`). */
@@ -590,6 +596,22 @@ export function areasFor(
       closed: ring.closed,
     }));
 
+    const split = paint.split === undefined || paint.split === null ? null : {
+      holes: paint.split.holes.map((hole) => ({
+        points: hole.map(([wx, wy]) => {
+          const point = worldToScreen(frame, cam, wx, wy);
+          return { x: point.x, y: point.y };
+        }),
+      })),
+      line: paint.split.line.map(([wx, wy]) => {
+        const point = worldToScreen(frame, cam, wx, wy);
+        return { x: point.x, y: point.y };
+      }),
+      // Полуширина перехода остаётся в мировых единицах: масштаб кадра известен
+      // отрисовщику, который переводит её в пиксели.
+      transitionHalfWidth: paint.split.transitionHalfWidth,
+    };
+
     return {
       kind: 'brush' as const,
       id: paint.areaId,
@@ -604,8 +626,41 @@ export function areasFor(
       alpha: paint.stroke.alpha,
       override: paint.override,
       rings,
+      split,
     };
   });
+}
+
+/**
+ * Явный порядок наложения пар в режиме overlay (§6.3 ТЗ
+ * `SEC-AREAS-HIERARCHY`): «верхняя» область пары рисуется поверх «нижней».
+ * Порядок — сохраняемый параметр пары, а не результат сортировки по `z`;
+ * при конфликте «верхняя» поднимается на минимально необходимый сдвиг.
+ */
+export function applyPairOverlayOrder(
+  paints: readonly AreaPaint[],
+  pairs: readonly { readonly mode: string; readonly areaA: string; readonly areaB: string; readonly order: string }[],
+): AreaPaint[] {
+  if (pairs.length === 0) return [...paints];
+  const next = [...paints];
+  for (const pair of pairs) {
+    if (pair.mode !== 'overlay') continue;
+    const overId = pair.order === 'b-over-a' ? pair.areaB : pair.areaA;
+    const underId = pair.order === 'b-over-a' ? pair.areaA : pair.areaB;
+    let underZ = -Infinity;
+    let overZ = -Infinity;
+    for (const paint of next) {
+      if (paint.areaId === underId) underZ = Math.max(underZ, paint.z);
+      if (paint.areaId === overId) overZ = Math.max(overZ, paint.z);
+    }
+    if (!Number.isFinite(underZ) || !Number.isFinite(overZ) || overZ > underZ) continue;
+    const shift = underZ - overZ + 1;
+    for (let index = 0; index < next.length; index += 1) {
+      const paint = next[index]!;
+      if (paint.areaId === overId) next[index] = { ...paint, z: paint.z + shift };
+    }
+  }
+  return next;
 }
 
 function cssColor(rgb: readonly [number, number, number], alpha: number): string {

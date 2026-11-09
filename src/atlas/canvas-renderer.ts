@@ -16,7 +16,9 @@ import type {
 } from './config.ts';
 import { levelForWidth, markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import { buildAreaPaints } from './sector-areas-render.ts';
-import type { AreaPaint } from './sector-areas-render.ts';
+import type { AreaPaint, AreaSplitMask } from './sector-areas-render.ts';
+import { splitRegionsForPair } from './sector-areas-pairs.ts';
+import { applyPairOverlayOrder } from './sector-scene.ts';
 import { createFactionPalette } from './sector-areas-color.ts';
 import type { FactionPalette } from './sector-areas-color.ts';
 import { createLodCache } from './sector-areas-lod.ts';
@@ -86,6 +88,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /* Кэш LOD областей и палитра фракций собираются один раз: документ областей
    * один и тот же для `/sector/` и админской копии (`data/sector-areas.json`). */
   var areaCache = createLodCache();
+  var splitCache = new WeakMap<object, Map<string, AreaSplitMask>>();
   var areaPaletteCache: FactionPalette | null = null;
 
   function areaPalette(): FactionPalette {
@@ -102,11 +105,46 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /** Области редактора границ в мировых координатах: каскад, LOD, фокус. */
+  /**
+   * Маски «разделения цветов» пар (§6): вырезы заливок считаются один раз на
+   * версию документа (сетка зоны — самая тяжёлая часть) и кэшируются по ссылке
+   * на документ: правки создают новый объект документа, кэш сбрасывается сам.
+   */
+  function splitMasks(): (areaId: string) => AreaSplitMask | null {
+    const doc = state.sectorAreas;
+    if (!doc || !doc.pairs || !doc.pairs.length) return () => null;
+    let cached = splitCache.get(doc);
+    if (cached === undefined) {
+      const byId = new Map(doc.areas.map((area) => [area.id, area]));
+      const map = new Map<string, AreaSplitMask>();
+      for (const pair of doc.pairs) {
+        const areaA = byId.get(pair.areaA);
+        const areaB = byId.get(pair.areaB);
+        if (areaA === undefined || areaB === undefined || pair.mode !== 'split') continue;
+        const regions = splitRegionsForPair(areaA, areaB, pair);
+        if (regions === null) continue;
+        const halfWidth = pair.transitionWidth === null ? 0 : pair.transitionWidth;
+        const line = pair.line !== null && pair.line.points.length >= 2 ? pair.line.points : [];
+        const forA: AreaSplitMask = { holes: regions.aHoles, line, transitionHalfWidth: halfWidth };
+        const forB: AreaSplitMask = { holes: regions.bHoles, line, transitionHalfWidth: halfWidth };
+        const prevA = map.get(pair.areaA);
+        const prevB = map.get(pair.areaB);
+        map.set(pair.areaA, prevA === undefined ? forA : { ...forA, holes: [...prevA.holes, ...forA.holes] });
+        map.set(pair.areaB, prevB === undefined ? forB : { ...forB, holes: [...prevB.holes, ...forB.holes] });
+      }
+      cached = map;
+      splitCache.set(doc, map);
+    }
+    const resolved = cached;
+    return (areaId: string): AreaSplitMask | null => resolved.get(areaId) ?? null;
+  }
+
   function sceneAreas(): readonly AreaPaint[] {
     var doc = state.sectorAreas;
     if (!doc || !doc.areas || !doc.areas.length) return [];
     var width = visibleWidth();
-    return buildAreaPaints(doc, {
+    var masks = splitMasks();
+    return applyPairOverlayOrder(buildAreaPaints(doc, {
       level: levelForWidth(width),
       visibleWidth: width,
       palette: areaPalette(),
@@ -114,7 +152,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       strokeSafe: true,
       fillAlpha: 0.16,
       strokeWidth: 1.6,
-    });
+      splitForArea: masks,
+    }), doc.pairs ?? []);
   }
 
   function fitScale(): number {
@@ -1043,13 +1082,55 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.lineWidth = Math.max(1, area.strokeWidth);
     ctx.setLineDash([...area.dash]);
 
+    const scale = Math.max(1e-6, state.viewport.w / Math.max(1, visibleWidth()));
     for (const ring of area.rings) {
       if (ring.points.length < 2) continue;
       if (area.fill !== null) {
+        // Разделение цветов пары (§6): вырезы добавляются подпутями того же
+        // пути — evenodd не рисует заливку на стороне другой области, поэтому
+        // в зоне встречи нет более светлого пятна от сложения полупрозрачных
+        // заливок. Обводки (настоящие контуры) рисуются целиком.
+        const holes = area.split === undefined || area.split === null ? [] : area.split.holes;
         ctx.beginPath();
         traceRing(ring.points, ring.closed);
+        for (const hole of holes) {
+          if (hole.points.length < 3) continue;
+          ctx.moveTo(hole.points[0]!.x, hole.points[0]!.y);
+          for (let h = 1; h < hole.points.length; h += 1) ctx.lineTo(hole.points[h]!.x, hole.points[h]!.y);
+          ctx.closePath();
+        }
         ctx.fillStyle = area.fill;
         ctx.fill('evenodd');
+        // Мягкий переход (§6.2): ступенчатая полоса возврата заливки вдоль
+        // линии раздела, зажатая в вырез (сторона другой области). N ходков
+        // с шириной 2W·k/N и альфой a/N дают линейный спад a·(1−d/W) по
+        // расстоянию d от линии — приближение градиента, задокументировано.
+        const transition = area.split === undefined || area.split === null ? null : area.split;
+        if (transition !== null && transition.transitionHalfWidth > 0 && transition.line.length >= 2) {
+          const steps = 4;
+          const worldHalf = transition.transitionHalfWidth;
+          const halfPx = Math.max(1, worldHalf * scale);
+          ctx.save();
+          ctx.beginPath();
+          for (const hole of holes) {
+            if (hole.points.length < 3) continue;
+            ctx.moveTo(hole.points[0]!.x, hole.points[0]!.y);
+            for (let h = 1; h < hole.points.length; h += 1) ctx.lineTo(hole.points[h]!.x, hole.points[h]!.y);
+            ctx.closePath();
+          }
+          ctx.clip('evenodd');
+          ctx.beginPath();
+          ctx.moveTo(transition.line[0]!.x, transition.line[0]!.y);
+          for (let l = 1; l < transition.line.length; l += 1) ctx.lineTo(transition.line[l]!.x, transition.line[l]!.y);
+          ctx.strokeStyle = area.fill;
+          for (let k = steps; k >= 1; k -= 1) {
+            ctx.lineWidth = Math.max(1, (2 * halfPx * k) / steps);
+            ctx.globalAlpha = Math.max(0, Math.min(1, area.alpha / steps));
+            ctx.stroke();
+          }
+          ctx.restore();
+          ctx.globalAlpha = 1;
+        }
       }
       if (ring.colors.length === ring.points.length && ring.colors.length > 1) {
         for (let i = 1; i < ring.points.length; i += 1) {
