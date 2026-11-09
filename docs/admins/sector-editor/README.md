@@ -35,7 +35,7 @@
 | [`sector-areas-journal`](modules/journal.md) | документ целиком | записи журнала и вес набора | рабочий |
 | [`sector-areas-render`](modules/render.md) | документ, LOD, цвета, градиент, форс | список `AreaPaint`, площадь области | рабочий |
 | [`sector-bounds`](modules/sector-bounds.md) | `data/sector-bounds.json` | полигоны уровней, сглаживание | только просмотр |
-| [`sector-bounds-edit`](modules/bounds-edit.md) | контур, сегмент, клики | сессию правки, ядро, якори, деформацию, журнал | рабочий |
+| [`sector-bounds-edit`](modules/bounds-edit.md) | контур, участок, клики | сессию правки, ядро, 5 якорей, локальную деформацию, журнал, экспорт и импорт | рабочий |
 | [`nebula-model`](modules/nebula-model.md) | контур границ, параметры пятна | модель туманности для отрисовки | только просмотр |
 | [`sector-halo-clip`](modules/halo-clip.md) | контур сектора, рамку кадра | участки `HaloRun` | только просмотр |
 | [Панель редактора](modules/panel.md) | ядро карты, документ, реестр | ввод, предпросмотр, черновик, клавиатуру | рабочий |
