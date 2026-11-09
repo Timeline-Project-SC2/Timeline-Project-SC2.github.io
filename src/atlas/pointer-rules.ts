@@ -86,3 +86,27 @@ export function canStartStroke(event: StrokePointerEvent, canvas: unknown): bool
 export function canContinueStroke(event: EventLike): boolean {
   return !isInteractiveTarget(event.target);
 }
+
+/**
+ * Цель — поле ввода текста: `input`, `select`, `textarea` или редактируемый
+ * узел (`contenteditable`, в том числе унаследованный от родителя). Горячие
+ * клавиши карты и редактора такие события не перехватывают: иначе `Ctrl+Z`
+ * ломает правку текста, а буквенные хоткеи не дают набрать слово.
+ *
+ * Проверка структурная: `closest` + `isContentEditable`, поэтому работает и без
+ * DOM (на заглушках тестов).
+ */
+export function isTextEntryTarget(target: unknown): boolean {
+  if (target === null || typeof target !== 'object') return false;
+  // Конструкторы браузерных полей: проверка `instanceof` нужна и там, где у
+  // подставного узла нет `tagName` (тестовые заглушки).
+  if (typeof HTMLInputElement !== 'undefined' && target instanceof HTMLInputElement) return true;
+  if (typeof HTMLSelectElement !== 'undefined' && target instanceof HTMLSelectElement) return true;
+  if (typeof HTMLTextAreaElement !== 'undefined' && target instanceof HTMLTextAreaElement) return true;
+  const node = target as ClosableNode & { readonly isContentEditable?: unknown; readonly tagName?: unknown };
+  if (node.isContentEditable === true) return true;
+  const tag = typeof node.tagName === 'string' ? node.tagName.toUpperCase() : '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'OPTION') return true;
+  if (typeof node.closest !== 'function') return false;
+  return node.closest('input, select, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]') !== null;
+}
