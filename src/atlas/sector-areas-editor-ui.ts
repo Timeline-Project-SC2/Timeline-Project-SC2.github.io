@@ -117,6 +117,11 @@ export interface SectorAreasEditorUiOptions {
   readonly helpText?: string;
   /** Хранилище черновика и состояния панели; `null` — отключены. */
   readonly storage?: Storage | null;
+  /**
+   * Линейная правка границ активна: Ctrl+Z/Ctrl+Shift+Z уступают модулю
+   * правки линий, а рисование штрихов выключено. Заглушка `() => false`.
+   */
+  readonly isLineMode?: () => boolean;
 }
 
 export interface SectorAreasEditorDraft {
@@ -307,14 +312,15 @@ function escapeHtml(value: string): string {
 export type RelationFilter = 'all' | ModuleRelationKind;
 
 /** Активный рабочий экран правой панели: в каждый момент открыт ровно один. */
-export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes';
+export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes' | 'lines';
 
 export function isEditorScreen(value: string): value is EditorScreen {
   return value === 'module'
     || value === 'dependencies'
     || value === 'draw'
     || value === 'properties'
-    || value === 'changes';
+    || value === 'changes'
+    || value === 'lines';
 }
 
 interface GraphNodeBox {
@@ -919,6 +925,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const isolated = new Set(isolatedModuleIds());
     const navTabs: readonly { readonly id: Exclude<EditorScreen, 'module'>; readonly label: string }[] = [
       { id: 'draw', label: 'Инструменты карты' },
+      { id: 'lines', label: 'Линии' },
       { id: 'properties', label: 'Свойства области' },
       { id: 'changes', label: 'Журнал и выгрузка' },
       { id: 'dependencies', label: 'Зависимости' },
@@ -1017,7 +1024,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function modulesHtml(): string {
     const nav = systemsNavHtml();
-    if (activeScreen === 'properties' || activeScreen === 'changes') {
+    if (activeScreen === 'properties' || activeScreen === 'changes' || activeScreen === 'lines') {
       return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
     }
     const stageHtml = activeScreen === 'draw'
@@ -1917,7 +1924,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     // работают независимо от режима рисования: выключив «Рисовать границы»,
     // нужно иметь возможность отменить только что сделанное. Решение владельца
     // по карточке P2; раньше охранник ниже глушил отмену вместе с рисованием.
+    // Линейная правка активна — уступаем Ctrl+Z модулю правки линий.
+    const lineMode = options.isLineMode?.() ?? false;
     if (hotkey === 'undo') {
+      if (lineMode) return;
       event.preventDefault();
       commit(canUndo(session) ? undo(session) : session);
       return;
