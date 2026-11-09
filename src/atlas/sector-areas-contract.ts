@@ -203,6 +203,11 @@ export interface Area {
   /** Полоса пограничного мира; связана с полосами `BorderWorld`. */
   readonly band: string | null;
   readonly events: readonly AreaEvent[];
+  /**
+   * Якоря иерархической правки замкнутых контуров (§4 ТЗ), по одному элементу
+   * на кольцо. Необязательное поле: области без якорей правятся как прежде.
+   */
+  readonly contourAnchors?: readonly ContourAnchors[];
 }
 
 /* ---------------------------------------------------------- форс-закрашивание */
@@ -222,6 +227,96 @@ export interface AreaOverride {
 /** Приоритет мазка форс-закрашивания: рисуется последним, поверх всего. */
 export const OVERRIDE_Z = 1000;
 
+/* --------------------------------------------- группы и сочетания (иерархия) */
+
+/**
+ * Именованная группа областей (§5 ТЗ `SEC-AREAS-HIERARCHY`).
+ *
+ * Технический ключ — устойчивый `id`; имя можно менять свободно. Одна область
+ * может входить в несколько групп (членство не эксклюзивно). Группа — это
+ * только организация: удаление группы не трогает области, их контуры и парные
+ * сочетания.
+ */
+export interface AreaGroup {
+  readonly id: string;
+  readonly name: string;
+  readonly areaIds: readonly string[];
+}
+
+/** Якорь на видимой кривой: доля длины дуги и точная точка (мировые координаты). */
+export interface CurveAnchor {
+  /** Доля длины дуги кривой на момент записи: `0…1` (для замкнутых — `0…1`). */
+  readonly s: number;
+  /** Точная точка на видимой линии, а не на хорде или исходной вершине. */
+  readonly point: AreaPoint;
+}
+
+/** Якоря одного замкнутого контура области (§4 ТЗ). */
+export interface ContourAnchors {
+  /** Индекс кольца области, к которому привязаны якоря. */
+  readonly ringIndex: number;
+  /** Якоря по возрастанию `s`. */
+  readonly anchors: readonly CurveAnchor[];
+}
+
+/** Режим отображения пары областей (§6 ТЗ). */
+export type PairMode = 'split' | 'overlay';
+export const PAIR_MODES: readonly PairMode[] = Object.freeze(['split', 'overlay']);
+
+/**
+ * Явный порядок наложения для режима `overlay`: какая область рисуется поверх.
+ * Порядок — параметр пары, а не «как повезёт» при сортировке.
+ */
+export type PairOrder = 'a-over-b' | 'b-over-a';
+export const PAIR_ORDERS: readonly PairOrder[] = Object.freeze(['a-over-b', 'b-over-a']);
+
+/**
+ * Линия раздела пары: открытая ломаная видимой линии с якорями.
+ *
+ * `manual: false` — линия построена автоматически (равноудалённое разделение
+ * зоны взаимодействия) и пересчитывается при изменении геометрии; `true` —
+ * линия правилась вручную и при изменении геометрии сохраняется, а пара при
+ * необходимости помечается `needsReview` (§8 ТЗ).
+ */
+export interface PairLine {
+  readonly manual: boolean;
+  /** Плотная ломаная линии в мировых координатах (открытая). */
+  readonly points: readonly AreaPoint[];
+  /** Якоря на линии по возрастанию `s` (концы включены). */
+  readonly anchors: readonly CurveAnchor[];
+}
+
+/**
+ * Слой сочетания двух областей (§6 ТЗ): отдельные настройки конкретной пары,
+ * ссылающиеся на устойчивые ID обеих областей. Пара А+Б независима от А+В.
+ * Правка сочетания не переписывает исходные контуры и стили областей.
+ */
+export interface AreaPair {
+  readonly id: string;
+  /** Устойчивый ID первой области. */
+  readonly areaA: string;
+  /** Устойчивый ID второй области; должен различаться с `areaA`. */
+  readonly areaB: string;
+  readonly mode: PairMode;
+  /** Явный порядок наложения для `overlay`. */
+  readonly order: PairOrder;
+  /** Правило «пересечение запрещено» (§6.4 ТЗ): отдельно от визуальных режимов. */
+  readonly forbidCrossing: boolean;
+  /**
+   * Ширина мягкого перехода в единицах карты; `0` или `null` — резкое
+   * разделение по линии. Число — полуширина градиентной полосы вокруг линии.
+   */
+  readonly transitionWidth: number | null;
+  /** Линия раздела; `null` — автолиния строится при показе. */
+  readonly line: PairLine | null;
+  /**
+   * Ручная правка требует пересмотра: исходная геометрия изменилась так, что
+   * линию нельзя надёжно применить. Данные линии при этом не удаляются (§8).
+   */
+  readonly needsReview: boolean;
+  readonly note: string | null;
+}
+
 /* -------------------------------------------------------------------- документ */
 
 export interface SectorAreasDoc {
@@ -232,6 +327,13 @@ export interface SectorAreasDoc {
   readonly areas: readonly Area[];
   readonly overrides: readonly AreaOverride[];
   readonly events: readonly AreaEvent[];
+  /**
+   * Именованные группы областей (§5 ТЗ). Обратно совместимое расширение схемы
+   * v1: прежние читатели поля игнорируют, отсутствующие поля читаются пустыми.
+   */
+  readonly groups?: readonly AreaGroup[];
+  /** Слои сочетания пар областей (§6 ТЗ); расширение схемы v1, см. `groups`. */
+  readonly pairs?: readonly AreaPair[];
 }
 
 export function emptySectorAreasDoc(): SectorAreasDoc {
@@ -243,6 +345,8 @@ export function emptySectorAreasDoc(): SectorAreasDoc {
     areas: [],
     overrides: [],
     events: [],
+    groups: [],
+    pairs: [],
   };
 }
 
@@ -445,6 +549,77 @@ function parseArea(value: unknown, message: string): Area {
     distance: raw.distance === undefined || raw.distance === null ? null : requireNumber(raw.distance, `${message}: расстояние области`),
     band: requireNullableString(raw.band, `${message}: полоса области`),
     events,
+    contourAnchors: parseContourAnchors(raw.contourAnchors, `${message}: якоря контура`),
+  };
+}
+
+function parseCurveAnchor(value: unknown, message: string): CurveAnchor {
+  const raw = asRecord(value, message);
+  const s = requireNumber(raw.s, `${message}: доля дуги якоря`);
+  if (s < 0 || s > 1) return invalid(`${message}: доля дуги якоря вне диапазона 0…1`);
+  return { s, point: parsePoint(raw.point, `${message}: точка якоря`) };
+}
+
+function parseContourAnchors(value: unknown, message: string): readonly ContourAnchors[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return invalid(`${message}: якоря контура должны быть массивом`);
+  return value.map((entry: unknown) => {
+    const raw = asRecord(entry, message);
+    const ringIndex = requireInteger(raw.ringIndex, `${message}: индекс кольца`);
+    if (ringIndex < 0) return invalid(`${message}: индекс кольца отрицателен`);
+    const anchors = Array.isArray(raw.anchors)
+      ? raw.anchors.map((anchor: unknown) => parseCurveAnchor(anchor, `${message}: якорь`))
+      : invalid(`${message}: якоря должны быть массивом`);
+    return { ringIndex, anchors };
+  });
+}
+
+function parseGroup(value: unknown, message: string): AreaGroup {
+  const raw = asRecord(value, message);
+  const areaIds = Array.isArray(raw.areaIds)
+    ? raw.areaIds.map((entry: unknown) => requireString(entry, `${message}: идентификатор области в группе`))
+    : invalid(`${message}: состав группы должен быть массивом`);
+  return {
+    id: requireString(raw.id, `${message}: идентификатор группы`),
+    name: requireString(raw.name, `${message}: имя группы`),
+    areaIds,
+  };
+}
+
+function parsePairLine(value: unknown, message: string): PairLine {
+  const raw = asRecord(value, message);
+  const points = Array.isArray(raw.points)
+    ? raw.points.map((point: unknown) => parsePoint(point, `${message}: точка линии`))
+    : invalid(`${message}: точки линии должны быть массивом`);
+  if (points.length < 2) return invalid(`${message}: линия раздела должна иметь минимум 2 точки`);
+  const anchors = Array.isArray(raw.anchors)
+    ? raw.anchors.map((anchor: unknown) => parseCurveAnchor(anchor, `${message}: якорь линии`))
+    : invalid(`${message}: якоря линии должны быть массивом`);
+  return {
+    manual: raw.manual === undefined ? false : requireBoolean(raw.manual, `${message}: признак ручной правки`),
+    points,
+    anchors,
+  };
+}
+
+function parsePair(value: unknown, message: string): AreaPair {
+  const raw = asRecord(value, message);
+  const transition = raw.transitionWidth === undefined || raw.transitionWidth === null
+    ? null
+    : requireNumber(raw.transitionWidth, `${message}: ширина перехода`);
+  if (transition !== null && transition < 0) return invalid(`${message}: ширина перехода отрицательна`);
+  const line = raw.line === undefined || raw.line === null ? null : parsePairLine(raw.line, `${message}: линия раздела`);
+  return {
+    id: requireString(raw.id, `${message}: идентификатор сочетания`),
+    areaA: requireString(raw.areaA, `${message}: первая область сочетания`),
+    areaB: requireString(raw.areaB, `${message}: вторая область сочетания`),
+    mode: requireOneOf(raw.mode ?? 'split', PAIR_MODES, `${message}: режим сочетания`),
+    order: requireOneOf(raw.order ?? 'a-over-b', PAIR_ORDERS, `${message}: порядок наложения`),
+    forbidCrossing: raw.forbidCrossing === undefined ? false : requireBoolean(raw.forbidCrossing, `${message}: запрет пересечения`),
+    transitionWidth: transition,
+    line,
+    needsReview: raw.needsReview === undefined ? false : requireBoolean(raw.needsReview, `${message}: признак пересмотра`),
+    note: requireNullableString(raw.note, `${message}: примечание сочетания`),
   };
 }
 
@@ -499,6 +674,16 @@ export function parseSectorAreas(json: unknown): SectorAreasDoc {
     areas: root.areas.map((entry: unknown) => parseArea(entry, 'область')),
     overrides: root.overrides.map((entry: unknown) => parseOverride(entry, 'переопределение')),
     events: root.events.map((entry: unknown) => parseEvent(entry, 'событие')),
+    groups: root.groups === undefined || root.groups === null
+      ? []
+      : (Array.isArray(root.groups)
+        ? root.groups.map((entry: unknown) => parseGroup(entry, 'группа'))
+        : invalid('список групп должен быть массивом.')),
+    pairs: root.pairs === undefined || root.pairs === null
+      ? []
+      : (Array.isArray(root.pairs)
+        ? root.pairs.map((entry: unknown) => parsePair(entry, 'сочетание'))
+        : invalid('список сочетаний должен быть массивом.')),
   };
 }
 
@@ -607,10 +792,29 @@ export function validateSectorAreas(doc: SectorAreasDoc, context?: ValidationCon
       }
     }
 
+    for (const contour of area.contourAnchors ?? []) {
+      if (contour.ringIndex >= area.rings.length) {
+        errors.push(`Область ${area.id}: якоря ссылаются на кольцо ${contour.ringIndex}, которого нет.`);
+        continue;
+      }
+      if (contour.anchors.length < 2) {
+        errors.push(`Область ${area.id}: на кольце ${contour.ringIndex} меньше двух якорей.`);
+      }
+      let previousAnchor = -Infinity;
+      contour.anchors.forEach((anchor, index) => {
+        if (anchor.s < 0 || anchor.s >= 1) {
+          errors.push(`Область ${area.id}: якорь ${index} кольца ${contour.ringIndex} — доля дуги вне 0…1.`);
+        }
+        if (anchor.s < previousAnchor) {
+          errors.push(`Область ${area.id}: якоря кольца ${contour.ringIndex} должны идти по возрастанию доли дуги.`);
+        }
+        previousAnchor = anchor.s;
+      });
+    }
+
     if (area.scopeId !== null && context?.scopeIds !== undefined && !context.scopeIds.has(area.scopeId)) {
       errors.push(`Область ${area.id}: область действия ${area.scopeId} не найдена.`);
-    }
-    if (area.detail !== null && context?.detailIds !== undefined && !context.detailIds.has(area.detail)) {
+    }    if (area.detail !== null && context?.detailIds !== undefined && !context.detailIds.has(area.detail)) {
       errors.push(`Область ${area.id}: детализация «${area.detail}» не входит в набор.`);
     }
     if (area.band !== null && context?.bandIds !== undefined && !context.bandIds.has(area.band)) {
@@ -688,7 +892,81 @@ export function validateSectorAreas(doc: SectorAreasDoc, context?: ValidationCon
     }
   }
 
+  validateGroups(doc, areaIds, errors, warnings);
+  validatePairs(doc, areaIds, errors, warnings);
+
   return { errors, warnings, ok: errors.length === 0 };
+}
+
+/** Проверяет группы: уникальность ID, имена и ссылки на существующие области. */
+function validateGroups(
+  doc: SectorAreasDoc,
+  areaIds: ReadonlySet<string>,
+  errors: string[],
+  warnings: string[],
+): void {
+  const groupIds = new Set<string>();
+  for (const group of doc.groups ?? []) {
+    if (groupIds.has(group.id)) errors.push(`Группа ${group.id}: идентификатор повторяется.`);
+    groupIds.add(group.id);
+    const seen = new Set<string>();
+    for (const areaId of group.areaIds) {
+      if (!areaIds.has(areaId)) {
+        errors.push(`Группа ${group.id}: область ${areaId} не найдена.`);
+      }
+      if (seen.has(areaId)) {
+        warnings.push(`Группа ${group.id}: область ${areaId} перечислена в составе дважды.`);
+      }
+      seen.add(areaId);
+    }
+  }
+  const byName = new Map<string, number>();
+  for (const group of doc.groups ?? []) {
+    byName.set(group.name, (byName.get(group.name) ?? 0) + 1);
+  }
+  for (const [name, count] of byName) {
+    if (count > 1) {
+      warnings.push(`Имя группы «${name}» повторяется: технический ключ — ID, а не имя.`);
+    }
+  }
+}
+
+/** Проверяет сочетания пар: ссылки, дубли и целостность линий раздела. */
+function validatePairs(
+  doc: SectorAreasDoc,
+  areaIds: ReadonlySet<string>,
+  errors: string[],
+  warnings: string[],
+): void {
+  const pairIds = new Set<string>();
+  const unordered = new Map<string, string>();
+  for (const pair of doc.pairs ?? []) {
+    if (pairIds.has(pair.id)) errors.push(`Сочетание ${pair.id}: идентификатор повторяется.`);
+    pairIds.add(pair.id);
+    if (pair.areaA === pair.areaB) {
+      errors.push(`Сочетание ${pair.id}: область не может сочетаться сама с собой.`);
+    }
+    if (!areaIds.has(pair.areaA)) errors.push(`Сочетание ${pair.id}: область ${pair.areaA} не найдена.`);
+    if (!areaIds.has(pair.areaB)) errors.push(`Сочетание ${pair.id}: область ${pair.areaB} не найдена.`);
+    const key = [pair.areaA, pair.areaB].sort().join('\u0000');
+    const existing = unordered.get(key);
+    if (existing === undefined) {
+      unordered.set(key, pair.id);
+    } else {
+      warnings.push(`Сочетания ${existing} и ${pair.id}: одна и та же пара областей (порядок А+Б и Б+А учтён в поле order).`);
+    }
+    const line = pair.line;
+    if (line !== null) {
+      if (line.points.length < 2) errors.push(`Сочетание ${pair.id}: линия раздела короче двух точек.`);
+      let previous = -Infinity;
+      line.anchors.forEach((anchor, index) => {
+        if (anchor.s < previous) {
+          errors.push(`Сочетание ${pair.id}: якорь ${index} линии — доли дуги должны идти по возрастанию.`);
+        }
+        previous = anchor.s;
+      });
+    }
+  }
 }
 
 function validateGradient(
