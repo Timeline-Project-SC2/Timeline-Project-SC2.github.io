@@ -569,6 +569,10 @@ function applySystemFrameRequest(): void {
  * канве, что и публичный `/sector/`. */
 let areasEditor: SectorAreasEditorUiApi | null = null;
 let lineEditor: SectorBoundsEditUiApi | null = null;
+/** Состояние рисования до включения «Правки линий» — возвращается при выходе. */
+let areasWasEnabled = false;
+/** Признак программного переключения инструментов: защита от рекурсии. */
+let switchingTools = false;
 
 function bindSectorAreasEditor(): void {
   const panel = qs<HTMLElement>('[data-admin-editor]');
@@ -581,18 +585,43 @@ function bindSectorAreasEditor(): void {
     stage: el.mapStage,
     canvas: el.mapCanvas,
     helpText: sectorAreasHelp,
-    // Линейная правка активна — Ctrl+Z уступает модулю правки линий.
+    // Линейная правка активна — Ctrl+Z и Ctrl+Shift+Z уступают модулю линий.
     isLineMode: () => lineEditor !== null && lineEditor.enabled(),
+    // Ручное включение рисования выключает правку линий: два инструмента на
+    // одной стадии карты одновременно не работают.
+    onEnableChange: (enabled) => {
+      if (!enabled || switchingTools) return;
+      if (lineEditor !== null && lineEditor.enabled()) lineEditor.setEnabled(false);
+    },
   });
-  // Правка линий: отдельный модуль в своей секции панели. При включении
-  // рисование штрихов выключается, при выключении — включается обратно.
+  // Правка линий: отдельный модуль в своей секции панели. Инструменты взаимо-
+  // исключающие, но состояние рисования возвращается **прежним**, а не
+  // принудительно включённым: выключив «Правку линий», пользователь должен
+  // получить тот инструмент, который у него был до включения.
   lineEditor = createSectorBoundsEditUi({
     kernel,
     panel,
     stage: el.mapStage,
     canvas: el.mapCanvas,
-    onActivate: () => { if (areasEditor !== null) areasEditor.setEnabled(false); },
-    onDeactivate: () => { if (areasEditor !== null) areasEditor.setEnabled(true); },
+    onActivate: () => {
+      if (switchingTools) return;
+      switchingTools = true;
+      try {
+        areasWasEnabled = areasEditor !== null && areasEditor.enabled();
+        areasEditor?.setEnabled(false);
+      } finally {
+        switchingTools = false;
+      }
+    },
+    onDeactivate: () => {
+      if (switchingTools) return;
+      switchingTools = true;
+      try {
+        areasEditor?.setEnabled(areasWasEnabled);
+      } finally {
+        switchingTools = false;
+      }
+    },
   });
   areasEditor.refresh();
   lineEditor.refresh();
