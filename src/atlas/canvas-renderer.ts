@@ -998,10 +998,11 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /* ---------------------------------------------------- сборка слоёв сцены */
 
   function renderScene(scene: SectorScene, nowMs: number): void {
-    // Гало сохранено в сцене и данных для редактора, но временно не рисуется.
+    // Гало: код и данные сохранены (временно скрыт с 28.10.2026); механизм
+    // обрезки кривой (clipHalo) и пунктир рисуются как раньше.
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
-      if (primitive.kind === 'bounds' && primitive.boundsKind !== 'halo') drawBounds(primitive);
+      if (primitive.kind === 'bounds') drawBounds(primitive);
     }
     // Смена тира гасит/проявляет линии 160 мс (§17.3 п. 9); порядок проходов тот же.
     updateGridFade(scene, nowMs);
