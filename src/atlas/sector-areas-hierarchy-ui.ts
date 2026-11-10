@@ -38,7 +38,7 @@ import {
   subdivideSegment,
 } from './sector-areas-anchors.ts';
 import type { ContourEditState } from './sector-areas-anchors.ts';
-import { pointHitsArea } from './sector-areas-geometry.ts';
+import { pointHitsArea, primaryContourRing } from './sector-areas-geometry.ts';
 import { computeZoneGrid } from './sector-areas-pairs.ts';
 import {
   addAreaToGroupCmd,
@@ -121,6 +121,21 @@ const COLOR_PREVIEW = '#ffd27a';
 
 export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOptions): SectorAreasHierarchyUiApi {
   const { kernel, panel, stage, canvas } = options;
+
+  /**
+   * Допуски в мировых единицах считаются из экранных пикселей и масштаба кадра
+   * (S2 ревью): на обзорном масштабе допуск клика не сжимается до пары
+   * пикселей, на глубоком зуме минимальный зазор якорей не растёт в сотни px.
+   */
+  const CLICK_TOLERANCE_PX = 24;
+  const MIN_GAP_PX = 6;
+  const worldPerPx = (): number => {
+    const view: { readonly scale?: number } | undefined = kernel.state.view;
+    const scale = view === undefined ? undefined : view.scale;
+    return scale !== undefined && Number.isFinite(scale) && scale > 0 ? 1 / scale : 1;
+  };
+  const clickToleranceWorld = (): number => CLICK_TOLERANCE_PX * worldPerPx();
+  const minGapWorld = (): number => Math.max(0.5, MIN_GAP_PX * worldPerPx());
 
   let on = false;
   /** Что сейчас редактируется: контур области или линия сочетания пары (§7). */
@@ -252,8 +267,8 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     if (mode === 'contour') {
       const area = areaById(selectedAreaId);
       if (area === null) return;
-      const ring = area.rings[0];
-      if (ring === undefined) return;
+      const ring = primaryContourRing(area);
+      if (ring === null || ring.length < 3) return;
       const curve = sampleRing(ring);
       if (curve === null) return;
       const ringScreen = curve.points
@@ -935,27 +950,46 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     event.stopPropagation();
 
     if (mode === 'contour') {
-      const hitArea = doc().areas.find((area) => pointHitsArea(area, world.x, world.y)) ?? null;
-      let target = hitArea;
+      // Продолжение правки важнее выбора чужой области: точный клик по границе
+      // правимого контура не является строгой внутренностью ни одной области,
+      // поэтому сначала проверяем кривую активной правки с допуском клика.
+      const active = session().contourEdit ?? null;
+      let target: ReturnType<typeof areaById> = null;
+      if (active !== null) {
+        const refArea = areaById(active.areaId);
+        if (refArea !== null) {
+          const near = projectOnCurve(active.state.activeCurve, [world.x, world.y], active.state.closed);
+          if (near.distance <= clickToleranceWorld() || pointHitsArea(refArea, world.x, world.y)) {
+            target = refArea;
+          }
+        }
+      }
+      if (target === null) {
+        const hitArea = doc().areas.find((area) => pointHitsArea(area, world.x, world.y)) ?? null;
+        target = hitArea;
+      }
       if (target === null && selectedAreaId !== null) target = areaById(selectedAreaId);
       if (target === null) {
         setNotice('Двойной клик мимо областей: правка не открыта.');
         return;
       }
       selectedAreaId = target.id;
-      if (target.rings.length === 0) {
-        setNotice('У области нет контура: править нечего.');
+      const ring = primaryContourRing(target);
+      if (ring === null) {
+        setNotice(target.closed === false
+          ? 'Это открытая линия (граница без заливки): якоря применимы к замкнутым областям.'
+          : 'У области нет замкнутого контура: править нечего.');
         return;
       }
       const ref = session().contourEdit ?? null;
       if (ref !== null && ref.areaId === target.id) {
-        const result = subdivideContourSegment(session(), [world.x, world.y]);
+        const result = subdivideContourSegment(session(), [world.x, world.y], clickToleranceWorld(), { minGap: minGapWorld() });
         if (result.session !== session()) apply(result.session);
         setNotice(result.message);
         paintOverlay();
         return;
       }
-      const opened = openContourEdit(session(), target.id, [world.x, world.y]);
+      const opened = openContourEdit(session(), target.id, [world.x, world.y], 0, clickToleranceWorld());
       if (opened.session !== session()) apply(opened.session);
       setNotice(opened.message);
       paintOverlay();
@@ -968,7 +1002,7 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
         setNotice('Двойной клик мимо линии раздела.');
         return;
       }
-      const refined = subdivideSegment(lineEdit.state, [hit.point[0], hit.point[1]]);
+      const refined = subdivideSegment(lineEdit.state, [hit.point[0], hit.point[1]], clickToleranceWorld(), { minGap: minGapWorld() });
       if (!refined.ok) {
         setNotice(refined.reason);
         return;

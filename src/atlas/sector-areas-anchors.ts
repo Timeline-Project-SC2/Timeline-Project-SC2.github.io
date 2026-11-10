@@ -69,7 +69,6 @@
  * и переживают циклический сдвиг начала).
  */
 
-import { smoothPolyline } from './sector-bounds.ts';
 import type { AreaPoint, CurveAnchor, Ring } from './sector-areas-contract.ts';
 /* --------------------------------------------------------------- константы */
 
@@ -123,50 +122,10 @@ export interface SampledCurve {
   readonly length: number;
 }
 
-/** Кусок видимой кривой: квадратичный (control задан) или прямой стык. */
-interface QuadraticPiece {
-  readonly from: AreaPoint;
-  readonly control: AreaPoint | null;
-  readonly to: AreaPoint;
-}
 
-function piecePoint(piece: QuadraticPiece, u: number): AreaPoint {
-  if (piece.control === null) {
-    return [
-      piece.from[0] + (piece.to[0] - piece.from[0]) * u,
-      piece.from[1] + (piece.to[1] - piece.from[1]) * u,
-    ];
-  }
-  const v = 1 - u;
-  return [
-    v * v * piece.from[0] + 2 * v * u * piece.control[0] + u * u * piece.to[0],
-    v * v * piece.from[1] + 2 * v * u * piece.control[1] + u * u * piece.to[1],
-  ];
-}
 
-/**
- * Куски видимой кривой — из `smoothPolyline` рендерера (тот же файл
- * `sector-bounds.ts`, та же геометрия на карте): якоря стоят на нарисованной
- * линии. У открытой линии добавляется прямой хвостовой кусок до её конца.
- */
-function piecesOf(line: readonly AreaPoint[], closed: boolean): { pieces: readonly QuadraticPiece[]; start: AreaPoint } | null {
-  const smoothed = smoothPolyline(line, closed);
-  if (smoothed.closed && smoothed.curves.length === 0) return null;
-  if (!smoothed.closed && smoothed.curves.length === 0) {
-    if (smoothed.tail === null) return null;
-    return { pieces: [{ from: smoothed.start, control: null, to: smoothed.tail }], start: smoothed.start };
-  }
-  const pieces: QuadraticPiece[] = [];
-  let previousEnd = smoothed.start;
-  for (const curve of smoothed.curves) {
-    pieces.push({ from: previousEnd, control: curve.control, to: curve.end });
-    previousEnd = curve.end;
-  }
-  if (!smoothed.closed && smoothed.tail !== null) {
-    pieces.push({ from: previousEnd, control: null, to: smoothed.tail });
-  }
-  return { pieces, start: smoothed.start };
-}
+
+
 
 function cumulativeOf(points: readonly AreaPoint[]): { cumulative: readonly number[]; length: number } {
   const cumulative: number[] = [0];
@@ -195,13 +154,20 @@ export function sampleLine(points: readonly AreaPoint[]): SampledCurve | null {
 }
 
 function samplePolyline(line: readonly AreaPoint[], closed: boolean): SampledCurve | null {
-  const assembled = piecesOf(line, closed);
-  if (assembled === null) return null;
-  const { pieces, start } = assembled;
-  const dense: AreaPoint[] = [start];
-  for (const piece of pieces) {
-    for (let step = 1; step <= ANCHOR_ARC_STEPS; step += 1) {
-      dense.push(piecePoint(piece, step / ANCHOR_ARC_STEPS));
+  const vertices = dedupClosingPoint(line, closed);
+  const minimum = closed ? 3 : 2;
+  if (vertices.length < minimum) return null;
+  // Плотная выборка **прямыми** отрезками той же ломаной, которую рисует карта
+  // (`traceRing` в `canvas-renderer` идёт lineTo по точкам LOD): якоря и
+  // допуск клика совпадают с видимой линией, а не со сглаженной хордой.
+  const dense: AreaPoint[] = [];
+  const segments = closed ? vertices.length : vertices.length - 1;
+  for (let index = 0; index < segments; index += 1) {
+    const from = vertices[index]!;
+    const to = vertices[(index + 1) % vertices.length]!;
+    for (let step = index === 0 ? 0 : 1; step <= ANCHOR_ARC_STEPS; step += 1) {
+      const u = step / ANCHOR_ARC_STEPS;
+      dense.push([from[0] + (to[0] - from[0]) * u, from[1] + (to[1] - from[1]) * u]);
     }
   }
   const { cumulative, length } = cumulativeOf(dense);
@@ -337,6 +303,7 @@ function localIntersectionIncrease(
   base: readonly AreaPoint[],
   next: readonly AreaPoint[],
   weights: Float64Array,
+  closed: boolean,
 ): boolean {
   const count = next.length;
   let firstActive = -1;
@@ -349,10 +316,14 @@ function localIntersectionIncrease(
   }
   if (firstActive < 0) return false;
   const margin = 8;
-  const i0 = ((firstActive - margin) % count + count) % count;
-  const i1 = (lastActive + margin) % count;
+  // Окно анализа: у замкнутой кривой — с циклическим запасом; у открытой —
+  // зажато в диапазон точек (циклический перенос соединял начало и конец
+  // линии в одну «цепочку» и давал ложные пересечения с фантомным
+  // замыкающим сегментом).
+  const i0 = closed ? ((firstActive - margin) % count + count) % count : Math.max(0, firstActive - margin);
+  const i1 = closed ? (lastActive + margin) % count : Math.min(count - 1, lastActive + margin);
   const windowIndices: number[] = [];
-  for (let step = i0; ; step = (step + 1) % count) {
+  for (let step = i0; ; step = closed ? (step + 1) % count : step + 1) {
     windowIndices.push(step);
     if (step === i1) break;
   }
@@ -365,7 +336,8 @@ function localIntersectionIncrease(
   const chainBox = bboxOf(chain);
   const inWindow = new Set(windowIndices);
   const nearby: Array<readonly [AreaPoint, AreaPoint]> = [];
-  for (let index = 0; index < count; index += 1) {
+  const segments = closed ? count : count - 1;
+  for (let index = 0; index < segments; index += 1) {
     if (inWindow.has(index) || inWindow.has((index + 1) % count)) continue;
     const a = base[index]!;
     const b = base[(index + 1) % count]!;
@@ -422,29 +394,24 @@ export interface ContourEditState {
   readonly draggedIndex: number | null;
 }
 
-/** Доли вершин кольца на кривой: вершина стоит в середине своего куска. */
+/**
+ * Доли вершин кольца на кривой. Кривая — плотная выборка той же ломаной, поэтому
+ * доля вершины — её накопленная длина, делённая на длину кривой (точно, без
+ * проекций). Используется коммитом: вершины вне окна остаются на своих долях.
+ */
 function vertexFractionsOf(ring: Ring, closed: boolean, curve: SampledCurve): readonly number[] {
-  const assembled = piecesOf(ring, closed);
-  if (assembled === null || assembled.pieces.length === 0) {
-    return ring.map((_, index) => (ring.length === 0 ? 0 : index / ring.length));
+  const vertices = dedupClosingPoint(ring, closed);
+  const minimum = closed ? 3 : 2;
+  if (vertices.length < minimum) return ring.map((_, index) => (ring.length === 0 ? 0 : index / ring.length));
+  const { cumulative, length } = cumulativeOf(vertices);
+  if (length <= 0) return vertices.map((_, index) => (vertices.length === 0 ? 0 : index / vertices.length));
+  const fractions = vertices.map((_, index) => (cumulative[index] ?? 0) / length);
+  if (!closed) {
+    // Концы открытой линии — ровно 0 и 1.
+    fractions[0] = 0;
+    fractions[fractions.length - 1] = 1;
   }
-  const fractions: number[] = [];
-  const pieces = assembled.pieces;
-  if (closed) {
-    for (let index = 0; index < ring.length; index += 1) {
-      const piece = pieces[index % pieces.length]!;
-      const mid = piecePoint(piece, 0.5);
-      fractions.push(projectOnCurve(curve, mid, true).s);
-    }
-  } else {
-    fractions.push(0);
-    for (let index = 1; index < ring.length - 1; index += 1) {
-      const piece = pieces[(index - 1) % pieces.length]!;
-      const mid = piecePoint(piece, 0.5);
-      fractions.push(projectOnCurve(curve, mid, false).s);
-    }
-    fractions.push(1);
-  }
+  void curve;
   return fractions;
 }
 
@@ -538,10 +505,17 @@ export function resnapAnchors(
  * в клике); другие сегменты и якоря не меняются. Клик ближе `ANCHOR_MIN_GAP`
  * к существующему якорю отклоняется с сообщением.
  */
+/** Дополнительные допуски геометрии (S2): масштаб задают в экранных пикселях. */
+export interface AnchorToleranceOptions {
+  /** Минимальное расстояние между якорями (единицы карты; по умолчанию константа). */
+  readonly minGap?: number;
+}
+
 export function subdivideSegment(
   state: ContourEditState,
   click: AreaPoint,
   tolerance: number = ANCHOR_CLICK_TOLERANCE,
+  options: AnchorToleranceOptions = {},
 ): { ok: true; state: ContourEditState } | { ok: false; reason: string } {
   const curve = state.activeCurve;
   const closed = state.closed;
@@ -572,7 +546,8 @@ export function subdivideSegment(
   const second = anchors[(segmentIndex + 1) % anchors.length]!;
   const segLength = arcSpan(first.s, second.s, length, closed);
   const clickOffset = arcSpan(first.s, hit.s, length, closed);
-  if (Math.min(clickOffset, segLength - clickOffset) < ANCHOR_MIN_GAP) {
+  const minGap = options.minGap ?? ANCHOR_MIN_GAP;
+  if (Math.min(clickOffset, segLength - clickOffset) < minGap) {
     return { ok: false, reason: 'Точка клика слишком близка к существующему якорю: совпадающие якоря не создаются.' };
   }
   // Береговое правило: длинный берег — 3 части, короткий — 2; равенство — левому 3.
@@ -626,6 +601,7 @@ export function dragAnchor(
   index: number,
   target: AreaPoint,
   clampRegion?: Ring,
+  options: AnchorToleranceOptions = {},
 ): { ok: true; state: ContourEditState; limited: boolean } | { ok: false; reason: string } {
   const anchor = state.anchors[index];
   if (anchor === undefined) return { ok: false, reason: 'Якорь не найден.' };
@@ -646,7 +622,7 @@ export function dragAnchor(
   if (windowSpan <= 1e-9) return { ok: false, reason: 'Сегмент слишком короткий для перетаскивания.' };
 
   let goal: AreaPoint = [Math.min(ANCHOR_MAP_BOUND, Math.max(0, target[0])), Math.min(ANCHOR_MAP_BOUND, Math.max(0, target[1]))];
-  let limited = false;
+  let limited = goal[0] !== target[0] || goal[1] !== target[1];
   if (isEnd && clampRegion !== undefined && clampRegion.length >= 3) {
     const inside = pointInClampRegion(goal, clampRegion);
     if (!inside) {
@@ -705,40 +681,50 @@ export function dragAnchor(
       const [x, y] = points[pointIndex]!;
       if (x < 0 || x > ANCHOR_MAP_BOUND || y < 0 || y > ANCHOR_MAP_BOUND) return false;
     }
-    if (localIntersectionIncrease(basePoints, points, weights)) return false;
+    if (localIntersectionIncrease(basePoints, points, weights, closed)) return false;
     // Порядок якорей: соседние должны остаться на расстоянии не меньше MIN_GAP.
     const projected = anchors.map((entry, entryIndex) => entryIndex === index
       ? { s: entry.s, point: goal as AreaPoint }
       : entry);
+    const minGap = options.minGap ?? ANCHOR_MIN_GAP;
     for (let entryIndex = 0; entryIndex < projected.length; entryIndex += 1) {
       const a = projected[entryIndex]!;
       const b = projected[(entryIndex + 1) % projected.length]!;
       if (!closed && entryIndex === projected.length - 1) continue;
-      if (Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1]) < ANCHOR_MIN_GAP) return false;
+      if (Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1]) < minGap) return false;
     }
     return true;
   };
 
+  let factor = 1;
   if (!valid(attempt(1))) {
+    // Бинарный поиск максимальной доли сдвига, при которой правка допустима:
+    // валидный кандидат поднимает нижнюю границу, невалидный — опускает
+    // верхнюю. Инверсия веток здесь давала всегда-нулевой фактор и отказ
+    // вместо плавного зажима (дефект B3).
     let low = 0;
     let high = 1;
-    for (let step = 0; step < 14; step += 1) {
+    for (let step = 0; step < 18; step += 1) {
       const mid = (low + high) / 2;
-      if (valid(attempt(mid))) high = mid;
-      else low = mid;
+      if (valid(attempt(mid))) low = mid;
+      else high = mid;
     }
-    if (high < ANCHOR_MIN_TRACTION) {
+    if (low < ANCHOR_MIN_TRACTION) {
       return { ok: false, reason: 'Действие отклонено: такая тяга ломает форму (петля, край карты или слипание якорей).' };
     }
     limited = true;
-    const points = attempt(high);
-    return { ok: true, state: withPreview(state, points, index, goal), limited };
+    factor = low;
   }
-  return { ok: true, state: withPreview(state, attempt(1), index, goal), limited };
+  const points = attempt(factor);
+  // Якорь стоит там, куда фактически дотащила кривая (при ограниченной тяге —
+  // не в цели): точка предпросмотра на дуге якоря.
+  const draggedArc = anchor.s * length;
+  const anchorPoint = pointAtIndex(points, draggedArc, curve.cumulative);
+  return { ok: true, state: withPreview(state, points, index, anchorPoint), limited };
 }
 
-function withPreview(state: ContourEditState, points: readonly AreaPoint[], draggedIndex: number, goal: AreaPoint): ContourEditState {
-  const anchors = state.anchors.map((anchor, index) => (index === draggedIndex ? { s: anchor.s, point: goal } : anchor));
+function withPreview(state: ContourEditState, points: readonly AreaPoint[], draggedIndex: number, anchorPoint: AreaPoint): ContourEditState {
+  const anchors = state.anchors.map((anchor, index) => (index === draggedIndex ? { s: anchor.s, point: anchorPoint } : anchor));
   const cumulative = state.curve.cumulative;
   const length = state.curve.length;
   return {
@@ -787,20 +773,30 @@ export function commitDrag(state: ContourEditState): ContourEditState {
   const u0 = windowStart * length;
   const u1 = u0 + span;
 
+  // Окно в развёрнутых координатах может переходить через шов замыкания
+  // (u1 > length). Вершина с дугой arc < u0 тогда лежит в окне, если её дуга
+  // плюс длина кривой попадает в [u0, u1]; без нормализации хвост окна не
+  // находил своих вершин и контур «откатывался» при коммите (дефект B3).
+  const windowArcOf = (arc: number): number | null => {
+    if (arc > u0 && arc < u1) return arc;
+    if (closed && arc + length > u0 && arc + length < u1) return arc + length;
+    return null;
+  };
+
   const samples = Math.min(96, Math.max(8, Math.round(span / ANCHOR_LINE_SPACING)));
   const ringPoints: AreaPoint[] = [];
   let inserted = false;
   for (let j = 0; j < arcs.length; j += 1) {
-    const arc = arcs[j]!;
-    if (arc <= u0 || arc >= u1) {
+    const arc = windowArcOf(arcs[j]!);
+    if (arc === null) {
       ringPoints.push(state.ring[j]!);
       continue;
     }
     if (!inserted) {
       inserted = true;
       for (let k = 0; k <= samples; k += 1) {
-        const arc = u0 + (span * k) / samples;
-        const point = pointAtIndex(state.preview, ((arc % length) + length) % length, base.cumulative);
+        const sampleArc = u0 + (span * k) / samples;
+        const point = pointAtIndex(state.preview, ((sampleArc % length) + length) % length, base.cumulative);
         ringPoints.push([
           Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[0])),
           Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[1])),
@@ -893,6 +889,7 @@ export function beginLineEdit(
   points: readonly AreaPoint[],
   click: AreaPoint,
   tolerance: number = ANCHOR_CLICK_TOLERANCE,
+  options: AnchorToleranceOptions = {},
 ): { ok: true; state: ContourEditState } | { ok: false; reason: string } {
   const state = stateOf(points, false, [], null);
   if (state === null) return { ok: false, reason: 'Линия слишком короткая для правки якорями.' };
@@ -900,7 +897,7 @@ export function beginLineEdit(
   if (hit.distance > tolerance) {
     return { ok: false, reason: `Клик в ${Math.round(hit.distance)} от линии — якоря ставятся только на линии.` };
   }
-  if (Math.min(hit.s, 1 - hit.s) * state.curve.length < ANCHOR_MIN_GAP) {
+  if (Math.min(hit.s, 1 - hit.s) * state.curve.length < (options.minGap ?? ANCHOR_MIN_GAP)) {
     return { ok: false, reason: 'Точка клика слишком близка к концу линии: совпадающие якоря не создаются.' };
   }
   const anchors: CurveAnchor[] = [

@@ -353,3 +353,73 @@ test('минимальный зазор между якорями соблюдё
   const distance = Math.hypot(first.point[0] - second.point[0], first.point[1] - second.point[1]);
   assert.ok(distance >= ANCHOR_MIN_GAP - 1e-6, `якоря слиплись: ${distance}`);
 });
+
+/* ---------------------------------------------------------- регрессии B3/S2 */
+
+function octagon() {
+  // Восьмиугольник с центром (5000, 5000), первая вершина — шов замыкания.
+  const points = [];
+  for (let index = 0; index < 8; index += 1) {
+    const angle = (index / 8) * Math.PI * 2;
+    points.push([5000 + 2500 * Math.cos(angle), 5000 + 2500 * Math.sin(angle)]);
+  }
+  return [...points, points[0]];
+}
+
+test('B3: коммит тяги якоря через шов замыкания сохраняет перенос, а не откатывает', () => {
+  const ring = octagon();
+  const opened = beginContourEdit(ring, [7500, 5000]);
+  assert.ok(opened.ok);
+  const state = opened.ok ? opened.state : null;
+  // Якорь 0 стоит на шве: его окно тянется назад через s = 1 в начало списка.
+  const before = state.anchors[0].point;
+  const target = [before[0] - 150, before[1] + 350];
+  const dragged = dragAnchor(state, 0, target);
+  assert.ok(dragged.ok, dragged.ok ? '' : dragged.reason);
+  const baked = commitDrag(dragged.state);
+  // Перенос не теряется: ближайшая точка записанного кольца — у цели.
+  const bakedCurve = sampleRing(baked.ring);
+  assert.ok(bakedCurve !== null);
+  const hit = projectOnCurve(bakedCurve, target, true);
+  const moved = Math.hypot(before[0] - target[0], before[1] - target[1]);
+  assert.ok(hit.distance <= moved * 0.15 + 2,
+    `перенос потерян при коммите: ${hit.distance.toFixed(1)} из ${moved.toFixed(1)}`);
+  // Якоря не задвоены и остались на кривой.
+  assert.equal(baked.anchors.length, state.anchors.length);
+  for (const anchor of baked.anchors) {
+    const back = projectOnCurve(bakedCurve, anchor.point, true);
+    assert.ok(back.distance <= ANCHOR_COMMIT_TOLERANCE, 'якорь отошёл от записанной кривой');
+  }
+});
+
+test('B3: тяга с самопересечением зажимается бинарным поиском, а не отклоняется', () => {
+  const ring = [[200, 1000], [1500, 1000], [1500, 2500], [200, 2500], [200, 1000]];
+  const opened = beginContourEdit(ring, [200, 1750]);
+  assert.ok(opened.ok);
+  const state = opened.ok ? opened.state : null;
+  const before = state.anchors[0].point;
+  const drag = dragAnchor(state, 0, [2000, 1750]);
+  assert.ok(drag.ok, `плавный зажим обязан работать: ${drag.ok ? '' : drag.reason}`);
+  if (!drag.ok) return;
+  assert.equal(drag.limited, true, 'ограниченная тяга помечается limited');
+  const dragged = drag.state.anchors[0].point;
+  const full = Math.hypot(2000 - before[0], 1750 - before[1]);
+  const achieved = Math.hypot(dragged[0] - before[0], dragged[1] - before[1]);
+  assert.ok(achieved > full * 0.1, `зажим слишком сильный: ${achieved.toFixed(1)} из ${full.toFixed(1)}`);
+  assert.ok(achieved < full * 0.98, 'зажим должен остановить тягу до полной петли');
+  assert.equal(chainIntersections(drag.state.preview ?? [], true), 0, 'предпросмотр без самопересечений');
+});
+
+test('S2: minGap из опций масштабирует запрет слишком близкого клика', () => {
+  const ring = octagon();
+  const opened = beginContourEdit(ring, [7500, 5000]);
+  assert.ok(opened.ok);
+  const state = opened.ok ? opened.state : null;
+  const curve = state.activeCurve;
+  // Точка на расстоянии трёх единиц дуги от якоря 1.
+  const near = curvePointAt(curve, state.anchors[1].s + 3 / curve.length, true);
+  const rejected = subdivideSegment(state, near, Number.POSITIVE_INFINITY);
+  assert.equal(rejected.ok, false, 'без опций клик у якоря отклоняется');
+  const allowed = subdivideSegment(state, near, Number.POSITIVE_INFINITY, { minGap: 1 });
+  assert.equal(allowed.ok, true, 'с уменьшенным minGap уточнение проходит');
+});

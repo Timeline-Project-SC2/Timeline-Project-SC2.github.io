@@ -30,6 +30,7 @@ import {
   reopenContourEdit,
   subdivideSegment,
 } from './sector-areas-anchors.ts';
+import type { AnchorToleranceOptions } from './sector-areas-anchors.ts';
 import type { ContourEditState } from './sector-areas-anchors.ts';
 import {
   addAreaToGroup,
@@ -153,12 +154,13 @@ export function subdivideContourSegment(
   session: EditorSession,
   click: readonly [number, number],
   tolerance?: number,
+  options: AnchorToleranceOptions = {},
 ): HierarchyResult {
   const ref = session.contourEdit;
   if (ref === undefined || ref === null) {
     return { session, message: 'Сначала откройте правку контура двойным кликом по линии.' };
   }
-  const result = subdivideSegment(ref.state, [click[0], click[1]], tolerance);
+  const result = subdivideSegment(ref.state, [click[0], click[1]], tolerance, options);
   if (!result.ok) return { session, message: result.reason };
   const nextSession = saveAnchors(
     session,
