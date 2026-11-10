@@ -279,7 +279,39 @@ export async function importProblems(files, buildFn) {
  * @returns {string}
  */
 export function normalizePath(file) {
-  return String(file).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/');
+  const unified = String(file).replace(/\\/g, '/');
+  const absolute = unified.startsWith('/') ? unified : `/${unified}`;
+  const parts = [];
+  let aboveRoot = false;
+  for (const segment of absolute.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      // Выход выше корня не нормализуется молча: помечаем и режем позже проверкой зоны.
+      if (parts.length === 0) aboveRoot = true;
+      else parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  if (aboveRoot) parts.unshift('..');
+  const relative = parts.join('/');
+  return path.isAbsolute(unified) ? `/${relative}` : relative;
+}
+
+/**
+ * Проверяет, что путь пробы остаётся внутри репозитория после канонизации.
+ * `../secret.ts` и абсолютный путь вне корня — отказ, а не «файл не найден».
+ * @param {string} file канонизированный путь
+ * @returns {{ok: true, path: string} | {ok: false, reason: string}}
+ */
+export function resolveProbePath(file) {
+  const raw = String(file);
+  const absolute = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(ROOT, raw);
+  const relative = path.relative(ROOT, absolute);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return { ok: false, reason: `путь выходит за пределы репозитория: ${file}` };
+  }
+  return { ok: true, path: relative.split(path.sep).join('/') };
 }
 
 /**
@@ -444,7 +476,9 @@ export async function main(argv, deps = {}) {
   let outside = [];
   let scope = '';
   if (parsed.mode === 'probe') {
-    const file = normalizePath(parsed.probe);
+    const resolved = resolveProbePath(parsed.probe);
+    if (!resolved.ok) return fail(`СТОП: ${resolved.reason}`);
+    const file = resolved.path;
     if (!existsSync(path.join(ROOT, file))) return fail(`СТОП: файл пробы не найден: ${file}`);
     if (isAssemblyScript(file)) {
       return fail(`СТОП: ${file} — AssemblyScript (декораторы @inline/@fastMath); esbuild его не парсит. `
@@ -512,12 +546,19 @@ export async function main(argv, deps = {}) {
     log(`стык импортов: ок (${targets.length} файл(ов)); node:* и динамические импорты не проверяются`);
   }
 
+  // Типы проекта проверяются всегда, когда в наборе есть хотя бы один покрытый файл:
+  // непокрытые соседи (tests/**, *.mjs) не должны отменять `tsc --noEmit`.
+  const coveredTypes = targets.filter((file) => coveredByProjectTypes(file));
   const uncoveredTypes = targets.filter((file) => !coveredByProjectTypes(file));
   const uncoveredLint = targets
     .map((file) => ({ file, ...coveredByLint(file) }))
     .filter((item) => !item.covered);
   const checks = ['стык импортов'];
-  if (uncoveredTypes.length === 0) {
+  if (uncoveredTypes.length > 0) {
+    log(`типы: не покрыты проверкой типов (${uncoveredTypes.length}) — вне include tsconfig.json `
+      + `(tests/**, *.mjs, src|site/**/*.js при allowJs:false): ${brief(uncoveredTypes)}`);
+  }
+  if (coveredTypes.length > 0) {
     const types = runBin('tsc', ['--noEmit']);
     if (types.missing) return fail(`СТОП: ${types.output}`);
     if (types.code !== 0) {
@@ -525,11 +566,10 @@ export async function main(argv, deps = {}) {
       log(`ТИПЫ: ошибки tsc --noEmit\n${types.output}`);
     } else {
       checks.push('типы проекта (tsc --noEmit)');
-      log('типы: ок (tsc --noEmit)');
+      log(`типы: ок (tsc --noEmit, покрыто файлов: ${coveredTypes.length})`);
     }
   } else {
-    log(`типы: НЕ ПРОВЕРЯЛОСЬ для ${uncoveredTypes.length} файл(ов) — вне include tsconfig.json `
-      + `(tests/**, *.mjs, src|site/**/*.js при allowJs:false): ${brief(uncoveredTypes)}`);
+    log('типы: НЕ ПРОВЕРЯЛОСЬ — в наборе нет файлов, попадающих в include tsconfig.json');
   }
 
   const lint = runBin('eslint', targets);

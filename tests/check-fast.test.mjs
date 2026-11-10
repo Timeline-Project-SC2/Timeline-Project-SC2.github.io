@@ -38,6 +38,7 @@ import {
   planTargets,
   probeFilesFromPackage,
   resolveBase,
+  resolveProbePath,
   selectChanged,
 } from '../tools/check_fast.mjs';
 
@@ -206,11 +207,28 @@ test('покрытие линтом повторяет блоки eslint.config.
   assert.equal(coveredByLint('x.cjs').covered, false);
 });
 
-test('нормализация пути: приставка ./ не обходит проверки контура', () => {
-  assert.equal(normalizePath('./src/planet/assembly/kernels.ts'), 'src/planet/assembly/kernels.ts');
-  assert.equal(normalizePath('.\\src\\a.ts'), 'src/a.ts');
-  assert.equal(normalizePath('src//a.ts'), 'src/a.ts');
-  assert.equal(isAssemblyScript(normalizePath('./src/planet/assembly/kernels.ts')), true);
+test('канонизация пути: ./ .. // и обратные слэши обрабатываются одинаково', () => {
+  const expected = 'src/planet/assembly/kernels.ts';
+  for (const raw of [
+    'src/planet/assembly/kernels.ts',
+    './src/planet/assembly/kernels.ts',
+    '././src/planet/assembly/kernels.ts',
+    'src//planet//assembly/kernels.ts',
+    'src/./planet/assembly/kernels.ts',
+    'tests/../src/planet/assembly/kernels.ts',
+    '.\\src\\planet\\assembly\\kernels.ts',
+  ]) {
+    assert.equal(normalizePath(raw), expected, raw);
+    assert.equal(isAssemblyScript(normalizePath(raw)), true, raw);
+  }
+});
+
+test('путь пробы вне репозитория отклоняется, а не превращается в «файл не найден»', () => {
+  assert.equal(resolveProbePath('../outside.ts').ok, false);
+  assert.equal(resolveProbePath('../../x.ts').ok, false);
+  assert.equal(resolveProbePath('/etc/passwd').ok, false);
+  assert.deepEqual(resolveProbePath('./src/a.ts'), { ok: true, path: 'src/a.ts' });
+  assert.equal(resolveProbePath('tests/../src/a.ts').ok, true);
 });
 
 test('стык импортов: несуществующий экспорт — проблема без запуска кода', async () => {
@@ -354,7 +372,7 @@ test('CLI: --probe для src/*.ts выполняет tsc и линт', async ()
   try {
     const result = await gateIn(dir, ['--probe', 'src/one.ts']);
     assert.equal(result.code, 0, result.text);
-    assert.match(result.text, /типы: ок \(tsc --noEmit\)/);
+    assert.match(result.text, /типы: ок \(tsc --noEmit, покрыто файлов: 1\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -408,6 +426,96 @@ test('CLI: ./ перед путём AssemblyScript не обходит отка�
     assert.equal(plain.code, 2, plain.text);
     assert.equal(dotted.code, 2, dotted.text);
     assert.match(dotted.text, /AssemblyScript/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('CLI: смешанный набор — непокрытый тест не отменяет tsc для src/*.ts', async () => {
+  const dir = await makeRepo({
+    'src/bad.ts': 'export const bad: number = "строка";\n',
+    'tests/a.test.mjs': 'console.log(1);\n',
+  });
+  try {
+    const result = await gateIn(dir, ['--probe', 'src/bad.ts']);
+    assert.equal(result.code, 1, result.text);
+    assert.match(result.text, /ТИПЫ: ошибки tsc/);
+    assert.match(result.text, /TS2322/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: в наборе только tests/** — tsc честно НЕ ПРОВЕРЯЛОСЬ, ошибок нет', async () => {
+  const dir = await makeRepo();
+  try {
+    const result = await gateIn(dir, ['--probe', 'tests/a.test.mjs']);
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.text, /типы: НЕ ПРОВЕРЯЛОСЬ — в наборе нет файлов, попадающих в include/);
+    assert.match(result.text, /не покрыты проверкой типов/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: изменённые src/*.ts и tests/*.mjs вместе — tsc выполняется', async () => {
+  const dir = await makeRepo({
+    'src/bad.ts': 'export const ok: number = 1;\n',
+    'tests/a.test.mjs': 'console.log(1);\n',
+  });
+  try {
+    writeFileSync(path.join(dir, 'src/bad.ts'), 'export const bad: number = "строка";\n');
+    writeFileSync(path.join(dir, 'tests/a.test.mjs'), 'console.log(2);\n');
+    const result = await gateIn(dir, []);
+    assert.equal(result.code, 1, result.text);
+    assert.match(result.text, /ТИПЫ: ошибки tsc/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: регресс прежних ложных пропусков на новом HEAD', async () => {
+  const dir = await makeRepo({
+    'tests/a.test.mjs': 'console.log(1);\n',
+    'src/one.ts': 'export const one = 1;\n',
+  });
+  try {
+    // 1) первая строка git status
+    writeFileSync(path.join(dir, 'tests/a.test.mjs'), 'console.log(2);\n');
+    const first = await gateIn(dir, []);
+    assert.match(first.text, /Область: изменённые файлы/);
+
+    // 2) staged + untracked + кириллица + пробел
+    writeFileSync(path.join(dir, 'src/one.ts'), 'export const one = 2;\n');
+    await run('git', ['add', 'src/one.ts'], { cwd: dir });
+    mkdirSync(path.join(dir, 'tests', 'кириллица'), { recursive: true });
+    writeFileSync(path.join(dir, 'tests', 'кириллица', 'проба.test.mjs'), 'console.log(3);\n');
+    writeFileSync(path.join(dir, 'tests', 'with space.test.mjs'), 'console.log(4);\n');
+    const mixed = await gateIn(dir, []);
+    assert.equal(mixed.code, 0, mixed.text);
+    assert.match(mixed.text, /стык импортов: ок/);
+    assert.doesNotMatch(mixed.text, /изменений нет/);
+
+    // 3) --probe без аргумента
+    const noValue = await gateIn(dir, ['--probe']);
+    assert.equal(noValue.code, 2, noValue.text);
+
+    // 4) ошибка git: PATH без git. Без git база не разрешается, и это exit 2 с причиной,
+    //    а не «изменений нет» (проверка именно на отсутствие ложного зелёного).
+    const env = { ...process.env, PATH: '/nonexistent' };
+    let code = null;
+    let text = '';
+    try {
+      const out = await run(process.execPath, [path.join(dir, 'tools', 'check_fast.mjs')], { cwd: dir, env });
+      text = `${out.stdout}${out.stderr}`;
+    } catch (error) {
+      code = error.code;
+      text = `${error.stdout}${error.stderr}`;
+    }
+    assert.equal(code, 2, `ожидался exit 2, получено ${code}; вывод: ${text}`);
+    assert.match(text, /СТОП/);
+    assert.doesNotMatch(text, /изменений нет/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
