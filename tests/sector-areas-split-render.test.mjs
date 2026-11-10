@@ -53,14 +53,14 @@ test('маска раздела прикрепляется к заливке с�
     line: [[3250, 2500], [3250, 4000]],
     transitionHalfWidth: 0,
   };
-  const masks = new Map([['area-1', maskA]]);
-  const paints = buildAreaPaints(doc, { level: 5, splitForArea: (id) => masks.get(id) ?? null });
+  const masks = new Map([['area-1', [maskA]]]);
+  const paints = buildAreaPaints(doc, { level: 5, splitForArea: (id) => masks.get(id) ?? [] });
   assert.ok(paints.length >= 2);
   const forA = paints.filter((paint) => paint.areaId === 'area-1');
   const forB = paints.filter((paint) => paint.areaId === 'area-2');
   assert.ok(forA.length > 0);
-  assert.ok(forA.every((paint) => paint.split !== null && paint.split.holes.length === 1), 'маска у области А');
-  assert.ok(forB.every((paint) => paint.split === undefined || paint.split === null), 'у Б маски нет');
+  assert.ok(forA.every((paint) => paint.splits.length === 1 && paint.splits[0].holes.length === 1), 'маска у области А');
+  assert.ok(forB.every((paint) => paint.splits.length === 0), 'у Б маски нет');
   // Обводка не прячется: check — у слоев есть stroke с теми же кольцами.
   assert.ok(forA[0].rings.length > 0);
 });
@@ -73,12 +73,12 @@ test('маска не прикрепляется к открытой облас�
       ? { ...area, closed: false, rings: [[[1000, 1000], [4000, 1000], [4000, 4000]]] }
       : area)),
   };
-  const paints = buildAreaPaints(openDoc, { level: 5, splitForArea: () => ({ holes: [], line: [], transitionHalfWidth: 0 }) });
+  const paints = buildAreaPaints(openDoc, { level: 5, splitForArea: () => [{ holes: [], line: [], transitionHalfWidth: 0 }] });
   const forOpen = paints.filter((paint) => paint.areaId === 'area-1');
-  assert.ok(forOpen.every((paint) => paint.split === null || paint.split === undefined),
+  assert.ok(forOpen.every((paint) => paint.splits.length === 0),
     'открытая область не получает вырезов заливки');
   const plain = buildAreaPaints(doc, { level: 5 });
-  assert.ok(plain.every((paint) => paint.split === undefined || paint.split === null));
+  assert.ok(plain.every((paint) => paint.splits.length === 0));
 });
 
 test('сцена проецирует вырезы и линию раздела в экранные координаты', () => {
@@ -88,11 +88,11 @@ test('сцена проецирует вырезы и линию раздела 
     line: [[3250, 2500], [3250, 3500]],
     transitionHalfWidth: 120,
   };
-  const paints = buildAreaPaints(doc, { level: 5, splitForArea: (id) => (id === 'area-1' ? maskA : null) });
+  const paints = buildAreaPaints(doc, { level: 5, splitForArea: (id) => (id === 'area-1' ? [maskA] : []) });
   const scene = areasFor(paints, VIEWPORT, CAMERA);
-  const withSplit = scene.filter((area) => area.split !== null);
+  const withSplit = scene.filter((area) => area.splits.length > 0);
   assert.ok(withSplit.length > 0);
-  const split = withSplit[0].split;
+  const split = withSplit[0].splits[0];
   assert.equal(split.holes.length, 1);
   // Мир 3000..4000 при видимой ширине 10000 и кадре 1000 px (0,1 px/ед.,
   // центр 5000): экран 300..400.
@@ -111,9 +111,14 @@ test('порядок наложения overlay: b-over-a поднимает Б 
   const ordered = applyPairOverlayOrder(paints, pairs);
   const maxZ = (id) => Math.max(...ordered.filter((paint) => paint.areaId === id).map((paint) => paint.z));
   assert.ok(maxZ('area-2') > maxZ('area-1'), 'Б поверх А при b-over-a');
+  // B2: фактический порядок отрисовки тоже меняется — отрисовка идёт по
+  // порядку массива, а не по полю z.
+  const firstIndex = (list, id) => list.findIndex((paint) => paint.areaId === id);
+  assert.ok(firstIndex(ordered, 'area-2') > firstIndex(ordered, 'area-1'), 'Б рисуется после А');
   const flipped = applyPairOverlayOrder(paints, [{ mode: 'overlay', areaA: 'area-1', areaB: 'area-2', order: 'a-over-b' }]);
   const maxZ2 = (id) => Math.max(...flipped.filter((paint) => paint.areaId === id).map((paint) => paint.z));
   assert.ok(maxZ2('area-1') > maxZ2('area-2'), 'А поверх Б при a-over-b');
+  assert.ok(firstIndex(flipped, 'area-1') > firstIndex(flipped, 'area-2'), 'А рисуется после Б');
   // Split-пары порядок отрисовки не меняют.
   const untouched = applyPairOverlayOrder(paints, [{ mode: 'split', areaA: 'area-1', areaB: 'area-2', order: 'b-over-a' }]);
   assert.deepEqual(untouched.map((paint) => paint.z), paints.map((paint) => paint.z));
@@ -125,14 +130,18 @@ test('порядок наложения overlay: b-over-a поднимает Б 
   assert.deepEqual(paints.map((paint) => paint.z), buildAreaPaints(doc, { level: 5 }).map((paint) => paint.z));
 });
 
-test('маски двух пар на одну область складываются в один список вырезов', () => {
+test('маски двух пар на одну область приходят отдельными масками со своими линиями', () => {
   const doc = docWithState();
   doc.areas.push(createArea({ id: 'area-3', name: 'Гамма', rings: [square(1500, 1500, 3500, 3500)] }));
   const mask1 = { holes: [square(3000, 2500, 4000, 3500)], line: [[3250, 2500], [3250, 3500]], transitionHalfWidth: 0 };
   const mask2 = { holes: [square(1500, 1500, 2200, 2200)], line: [[1800, 1500], [1800, 2200]], transitionHalfWidth: 0 };
-  // Рендер складывает маски разных пар до передачи в buildAreaPaints — эмулируем.
-  const masks = new Map([['area-1', { holes: [...mask1.holes, ...mask2.holes], line: mask2.line, transitionHalfWidth: 0 }]]);
-  const paints = buildAreaPaints(doc, { level: 5, splitForArea: (id) => masks.get(id) ?? null });
+  // Каждая пара даёт свою маску: у области список масок, а не одна слитая —
+  // линии раздела и полосы перехода остаются раздельными (B4.4).
+  const masks = new Map([['area-1', [mask1, mask2]]]);
+  const paints = buildAreaPaints(doc, { level: 5, splitForArea: (id) => masks.get(id) ?? [] });
   const forA = paints.filter((paint) => paint.areaId === 'area-1');
-  assert.equal(forA[0].split.holes.length, 2, 'оба выреза в одной маске');
+  assert.equal(forA[0].splits.length, 2, 'обе маски в списке');
+  assert.equal(forA[0].splits[0].holes.length, 1, 'первая маска со своим вырезом');
+  assert.equal(forA[0].splits[1].holes.length, 1, 'вторая маска со своим вырезом');
+  assert.deepEqual(forA[0].splits[1].line, mask2.line, 'у каждой маски своя линия раздела');
 });

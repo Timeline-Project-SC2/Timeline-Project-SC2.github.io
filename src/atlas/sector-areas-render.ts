@@ -52,10 +52,10 @@ export interface AreaPaintOptions {
   /** Толщина обводки в пикселях. */
   readonly strokeWidth?: number;
   /**
-   * Маски «разделения цветов» пар по ID области (§6): вырезы заливки и линия
-   * раздела. `undefined` — парный слой не используется.
+   * Маски «разделения цветов» пар по ID области (§6): вырезы заливки и линии
+   * раздела всех пар области. `undefined` — парный слой не используется.
    */
-  readonly splitForArea?: (areaId: string) => AreaSplitMask | null;
+  readonly splitForArea?: (areaId: string) => readonly AreaSplitMask[];
 }
 
 export interface PaintedRing {
@@ -92,8 +92,12 @@ export interface AreaPaint {
   /** `true` — мазок форс-закрашивания: цвет перебит, состояния сохранены. */
   readonly override: boolean;
   readonly label: string | null;
-  /** Маска разделения цветов пары; `null` — обычная заливка без вырезов. */
-  readonly split?: AreaSplitMask | null;
+  /**
+   * Маски разделения цветов всех пар с участием области (§6): массив, потому
+   * что область может состоять в нескольких парах, и у каждой — своя линия
+   * и своя полоса перехода. Пустой массив — обычная заливка без вырезов.
+   */
+  readonly splits?: readonly AreaSplitMask[];
 }
 
 /**
@@ -180,8 +184,12 @@ function overridePaints(
   const label = `${area.name} · override`;
   const result: AreaPaint[] = [];
 
+  const strokes = area.strokes ?? [];
+  const closedStrokes = strokes.filter((item) => item.closed);
+  const openStrokes = strokes.filter((item) => !item.closed);
+  const splitsOf = (): readonly AreaSplitMask[] => (options.splitForArea !== undefined && area.closed ? options.splitForArea(area.id) ?? [] : []);
+
   if (area.rings.length > 0) {
-    const split = options.splitForArea !== undefined && area.closed ? options.splitForArea(area.id) ?? null : null;
     result.push({
       areaId: area.id,
       stateId: null,
@@ -195,13 +203,9 @@ function overridePaints(
       rings: ringsFor(area, level, 0, 1, options),
       override: true,
       label,
-      split,
+      splits: splitsOf(),
     });
   }
-
-  const strokes = area.strokes ?? [];
-  const closedStrokes = strokes.filter((item) => item.closed);
-  const openStrokes = strokes.filter((item) => !item.closed);
 
   if (closedStrokes.length > 0) {
     result.push({
@@ -218,6 +222,9 @@ function overridePaints(
       strokeIds: closedStrokes.map((item) => item.id),
       override: true,
       label,
+      // Область с первичной геометрией-штрихом: маски вырезов вешаются на
+      // штриховый слой (дефект B1 ревью — раньше split получали только кольца).
+      splits: area.rings.length === 0 ? splitsOf() : [],
     });
   }
   if (openStrokes.length > 0) {
@@ -294,10 +301,13 @@ function statePaints(
   };
   const label = state.label ?? area.name;
   const result: AreaPaint[] = [];
+  const strokes = area.strokes ?? [];
+  const closedStrokes = strokes.filter((item) => item.closed);
+  const openStrokes = strokes.filter((item) => !item.closed);
+  const splitsOf = (): readonly AreaSplitMask[] => (options.splitForArea !== undefined && area.closed ? options.splitForArea(area.id) ?? [] : []);
 
   if (area.rings.length > 0) {
     const rawRings = ringsFor(area, level, state.lodBias, state.rounding, options);
-    const split = options.splitForArea !== undefined && area.closed ? options.splitForArea(area.id) ?? null : null;
     result.push({
       areaId: area.id,
       stateId: state.id,
@@ -311,13 +321,9 @@ function statePaints(
       rings: paintRingsWithGradient(rawRings, state, area.closed, style.accent, options),
       override: false,
       label,
-      split,
+      splits: splitsOf(),
     });
   }
-
-  const strokes = area.strokes ?? [];
-  const closedStrokes = strokes.filter((item) => item.closed);
-  const openStrokes = strokes.filter((item) => !item.closed);
 
   if (closedStrokes.length > 0) {
     const rawClosed = strokesFor(closedStrokes, level, state.lodBias, state.rounding);
@@ -335,6 +341,8 @@ function statePaints(
       strokeIds: closedStrokes.map((item) => item.id),
       override: false,
       label,
+      // См. overridePaints: split для областей, чья геометрия — штрих (B1).
+      splits: area.rings.length === 0 ? splitsOf() : [],
     });
   }
 

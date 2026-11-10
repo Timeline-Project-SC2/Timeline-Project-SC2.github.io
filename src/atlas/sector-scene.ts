@@ -114,12 +114,12 @@ export interface SceneArea {
   /** `true` — мазок форс-закрашивания поверх всех состояний. */
   readonly override: boolean;
   readonly rings: readonly SceneAreaRing[];
-  /** Маска разделения цветов пары (§6), экранные координаты; `null` — нет. */
-  readonly split: {
+  /** Маски разделения цветов всех пар области (§6), экранные координаты. */
+  readonly splits: readonly {
     readonly holes: readonly { readonly points: readonly { readonly x: number; readonly y: number }[] }[];
     readonly line: readonly { readonly x: number; readonly y: number }[];
     readonly transitionHalfWidth: number;
-  } | null;
+  }[];
 }
 
 /** Линия сетки адреса (§8.1, `L0…L12`, два тира по `gridTiersFor`). */
@@ -596,21 +596,21 @@ export function areasFor(
       closed: ring.closed,
     }));
 
-    const split = paint.split === undefined || paint.split === null ? null : {
-      holes: paint.split.holes.map((hole) => ({
+    const splits = (paint.splits ?? []).map((mask) => ({
+      holes: mask.holes.map((hole) => ({
         points: hole.map(([wx, wy]) => {
           const point = worldToScreen(frame, cam, wx, wy);
           return { x: point.x, y: point.y };
         }),
       })),
-      line: paint.split.line.map(([wx, wy]) => {
+      line: mask.line.map(([wx, wy]) => {
         const point = worldToScreen(frame, cam, wx, wy);
         return { x: point.x, y: point.y };
       }),
       // Полуширина перехода остаётся в мировых единицах: масштаб кадра известен
       // отрисовщику, который переводит её в пиксели.
-      transitionHalfWidth: paint.split.transitionHalfWidth,
-    };
+      transitionHalfWidth: mask.transitionHalfWidth,
+    }));
 
     return {
       kind: 'brush' as const,
@@ -626,7 +626,7 @@ export function areasFor(
       alpha: paint.stroke.alpha,
       override: paint.override,
       rings,
-      split,
+      splits,
     };
   });
 }
@@ -660,7 +660,13 @@ export function applyPairOverlayOrder(
       if (paint.areaId === overId) next[index] = { ...paint, z: paint.z + shift };
     }
   }
-  return next;
+  // Отрисовка идёт по порядку массива, поэтому после подъёма z массив
+  // пересортируется тем же ключом, что и `buildAreaPaints`; иначе поле z
+  // меняется, а фактический порядок рисования — нет (дефект B2 ревью).
+  const modeOrder = (mode: string): number => (mode === 'political' ? 0 : mode === 'influence' ? 1 : 2);
+  return next.sort((a, b) => a.z - b.z
+    || modeOrder(a.mode) - modeOrder(b.mode)
+    || (a.areaId < b.areaId ? -1 : a.areaId > b.areaId ? 1 : 0));
 }
 
 function cssColor(rgb: readonly [number, number, number], alpha: number): string {
