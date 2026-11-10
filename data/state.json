@@ -1,0 +1,40 @@
+{
+  "context_version": 1,
+  "head_sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f",
+  "base_sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f",
+  "active_task": {
+    "id": "PR-2",
+    "goal_visible_to_user": "Компактный контекст, реестр решений и передача состояния без нового мета-слоя.",
+    "allowed_scope": [
+      "data/state.json",
+      "data/decisions.json",
+      "tools/context.mjs",
+      "tests/context.test.mjs",
+      "package.json",
+      "CONTEXT.md",
+      "AGENTS.md",
+      "docs/handoff/",
+      "docs/archive/",
+      "docs/agents_task_orchestration/shift_handoff.md",
+      "docs/agents_task_orchestration/low_data_gpt_rule.md",
+      "tools/check_fast.mjs",
+      "docs/agents_task_orchestration/waves/protocol.md",
+      "docs/agents_task_orchestration/role_cards/rc-07-wave-orchestrator.md"
+    ],
+    "out_of_scope": [
+      "Продуктовый код и данные атласа",
+      "Новые навыки, карточки и процессные проверки",
+      "Публикация и живой sync"
+    ],
+    "verify_cmd": "npm run context && python3 tools/check_docs.py && npm run test:fast && npm test && npm run build"
+  },
+  "hold_list": [
+    "NOT_CHECKED: прежние HOLD редактора и живого применения описаны в истории; их снятие не проверялось."
+  ],
+  "parking": [],
+  "last_handoff_summary": [
+    "FACT: PR-1 #375 слит; исходная пара PR-2 — merge commit 3773780 / 3773780.",
+    "FACT: восемь тестов пропущены с ссылкой на issue #374; CI PR-1 зелёный при последовательном запуске.",
+    "NOT_CHECKED: визуальная и runtime-приёмка сайта в PR-2 не проводилась."
+  ]
+}
