@@ -15,9 +15,10 @@ import { addressOf, formatAddress, prefixOf, rectOf } from './sector-address.ts'
 import type { AddressLetters } from './sector-address.ts';
 import { createArea, emptySectorAreasDoc, parseSectorAreas } from './sector-areas-contract.ts';
 import { createOverrideStroke } from './sector-areas-force.ts';
-import { ringCentroid } from './sector-areas-geometry.ts';
+import { contourUnitsOf, ringCentroid } from './sector-areas-geometry.ts';
 import { classifyArea, classifyLocation } from './sector-areas-scope.ts';
 import type { ClassifyOptions, Scope } from './sector-areas-scope.ts';
+import { reopenContourEdit } from './sector-areas-anchors.ts';
 import { crossingViolation, reviewPairsAfterGeometryChange } from './sector-areas-pairs.ts';
 import { snapStrokeToDisplayedGrid } from './sector-areas-snap.ts';
 import type { FrameViewport, SceneCamera } from './sector-scene.ts';
@@ -167,7 +168,7 @@ export function undo(session: EditorSession): EditorSession {
     future: [session.doc, ...session.future],
     futureSelections: [session.selection, ...(session.futureSelections ?? [])],
     selection: restoredSelection,
-    contourEdit: null,
+    contourEdit: contourEditStillValid(previous, session.contourEdit ?? null),
   };
 }
 
@@ -187,8 +188,33 @@ export function redo(session: EditorSession): EditorSession {
     future: session.future.slice(1),
     futureSelections: hasTrackedSelection ? futureSelections.slice(1) : futureSelections,
     selection: restoredSelection,
-    contourEdit: null,
+    contourEdit: contourEditStillValid(next, session.contourEdit ?? null),
   };
+}
+
+/**
+ * Правка контура переживает undo/redo, если правимая единица (кольцо или
+ * замкнутый штрих) в новом документе существует: якоря перепривяжутся при
+ * следующем действии (S4 ревью — раньше undo выбрасывало пользователя из
+ * режима правки без причины). Единица исчезла — правка закрывается.
+ */
+function contourEditStillValid(
+  doc: SectorAreasDoc,
+  edit: EditorSession['contourEdit'],
+): NonNullable<EditorSession['contourEdit']> | null {
+  if (edit === null || edit === undefined) return null;
+  const area = doc.areas.find((entry) => entry.id === edit.areaId);
+  if (area === undefined) return null;
+  const unit = contourUnitsOf(area)[edit.ringIndex];
+  if (unit === undefined || unit.ring.length < 3) return null;
+  // Состояние следует за документом: якоря пересобираются из записанных,
+  // предпросмотр сбрасывается (число якорей после undo — целое).
+  const saved = area.contourAnchors?.find((contour) => contour.ringIndex === edit.ringIndex)?.anchors;
+  if (saved !== undefined && saved.length >= 2) {
+    const reopened = reopenContourEdit(unit.ring, saved);
+    if (reopened.ok) return { ...edit, state: reopened.state };
+  }
+  return { ...edit, state: { ...edit.state, preview: null, draggedIndex: null } };
 }
 
 /* -------------------------------------------------------------- настройки */

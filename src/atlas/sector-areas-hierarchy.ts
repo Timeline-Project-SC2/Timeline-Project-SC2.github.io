@@ -20,7 +20,8 @@
  *  5. `closeContourEdit` — завершить правку контура.
  */
 
-import type { CurveAnchor, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
+import type { Area, CurveAnchor, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
+import { contourUnitsOf } from './sector-areas-geometry.ts';
 import {
   ANCHOR_RESNAP_TOLERANCE,
   beginContourEdit,
@@ -73,9 +74,31 @@ export interface HierarchyResult {
   readonly message: string | null;
 }
 
-/** Кольца области; `null` — область не найдена. */
-function ringsOf(session: EditorSession, areaId: string): readonly Ring[] | null {
-  return session.doc.areas.find((area) => area.id === areaId)?.rings ?? null;
+/**
+ * Есть ли у области правимая замкнутая единица (кольцо или замкнутый штрих):
+ * иерархия работает с областью любого способа рисования (дефект B1 ревью),
+ * открытая линия штрихов за контур не считается.
+ */
+export function areaHasContour(area: Area): boolean {
+  return contourUnitsOf(area).length > 0;
+}
+
+/** Число якорей правимой единицы в документе (после undo — целое; S4). */
+export function anchorCountOf(session: EditorSession, areaId: string, ringIndex: number): number {
+  const saved = session.doc.areas
+    .find((area) => area.id === areaId)
+    ?.contourAnchors?.find((contour) => contour.ringIndex === ringIndex)?.anchors;
+  return saved?.length ?? 0;
+}
+
+/** Пояснение, какая единица правится (штрих вместо кольца); для колец — пусто. */
+function unitNoteOf(session: EditorSession, areaId: string, ringIndex: number): string {
+  const area = session.doc.areas.find((entry) => entry.id === areaId);
+  if (area === undefined) return '';
+  const units = contourUnitsOf(area);
+  const unit = units[ringIndex];
+  if (unit === undefined || unit.kind !== 'stroke') return '';
+  return ` Правится штрих ${unit.strokeId} (единица ${ringIndex + 1} из ${units.length}).`;
 }
 
 /** Записывает якоря кольца в документ области (одна запись истории). */
@@ -113,14 +136,25 @@ export function openContourEdit(
   ringIndex = 0,
   tolerance?: number,
 ): HierarchyResult {
-  const rings = ringsOf(session, areaId);
-  const ring = rings?.[ringIndex];
-  if (ring === undefined) {
-    return { session, message: `Область ${areaId}: кольцо ${ringIndex} не найдено.` };
+  const area = session.doc.areas.find((entry) => entry.id === areaId);
+  if (area === undefined) {
+    return { session, message: `Область ${areaId} не найдена.` };
   }
-  const saved = session.doc.areas
-    .find((area) => area.id === areaId)
-    ?.contourAnchors?.find((contour) => contour.ringIndex === ringIndex)?.anchors;
+  // Правимая единица — кольцо документа или замкнутый штрих (B1): области,
+  // нарисованные инструментами рисования (rect/ellipse/polygon/brush), правятся
+  // теми же якорями, что и кольцевые; открытая линия штрихов контуром не считается.
+  const unit = contourUnitsOf(area)[ringIndex];
+  if (unit === undefined) {
+    return {
+      session,
+      message: area.closed
+        ? 'Замкнутых единиц (колец или штрихов) нет: править нечего.'
+        : 'Открытая линия не правится якорями: якорная правка применима к замкнутым областям.',
+    };
+  }
+  const ring = unit.ring;
+  const saved = area.contourAnchors?.find((contour) => contour.ringIndex === ringIndex)?.anchors;
+  const unitNote = unitNoteOf(session, areaId, ringIndex);
   if (saved !== undefined && saved.length >= 2) {
     const reopened = reopenContourEdit(ring, saved);
     if (!reopened.ok) return { session, message: reopened.reason };
@@ -129,7 +163,7 @@ export function openContourEdit(
       : '';
     return {
       session: { ...session, contourEdit: { areaId, ringIndex, state: reopened.state, limited: false } },
-      message: `Правка контура продолжена по сохранённым якорям (${saved.length} шт.).${driftNote}`,
+      message: `Правка контура продолжена по сохранённым якорям (${saved.length} шт.).${unitNote}${driftNote}`,
     };
   }
   const opened = beginContourEdit(ring, [click[0], click[1]], tolerance);
@@ -143,7 +177,7 @@ export function openContourEdit(
   );
   return {
     session: { ...nextSession, contourEdit: { areaId, ringIndex, state: opened.state, limited: false } },
-    message: 'Контур поделен на 6 сегментов якорями. Двойной клик по сегменту — уточнить.',
+    message: `Контур поделен на 6 сегментов якорями. Двойной клик по сегменту — уточнить.${unitNote}`,
   };
 }
 
@@ -168,11 +202,11 @@ export function subdivideContourSegment(
     ref.areaId,
     ref.ringIndex,
     result.state.anchors,
-    `Сегмент уточнён: 2 якоря сохранены, добавлены 4 (кольцо ${ref.ringIndex})`,
+    `Сегмент уточнён: 2 якоря сохранены, добавлены 4 (единица ${ref.ringIndex})`,
   );
   return {
     session: { ...nextSession, contourEdit: { ...ref, state: result.state, limited: false } },
-    message: 'Сегмент уточнён: шесть якорей и пять кривых на участке.',
+    message: `Сегмент уточнён: шесть якорей и пять кривых на участке.${unitNoteOf(session, ref.areaId, ref.ringIndex)}`,
   };
 }
 
@@ -229,16 +263,28 @@ export function commitContourDrag(session: EditorSession): HierarchyResult {
   }
   const withGeometry: SectorAreasDoc = {
     ...session.doc,
-    areas: session.doc.areas.map((area) => (area.id === ref.areaId
-      ? {
+    areas: session.doc.areas.map((area) => {
+      if (area.id !== ref.areaId) return area;
+      // Деформация пишется в ту единицу, что правится: кольцо документа или
+      // точки замкнутого штриха (B1) — исходные данные других единиц целы.
+      const unit = contourUnitsOf(area)[ref.ringIndex];
+      const base: Area = {
         ...area,
-        rings: area.rings.map((ring, index) => (index === ref.ringIndex ? ringPoints : ring)),
         contourAnchors: [
           ...(area.contourAnchors ?? []).filter((contour) => contour.ringIndex !== ref.ringIndex),
           { ringIndex: ref.ringIndex, anchors: baked.anchors },
         ],
+      };
+      if (unit === undefined || unit.kind === 'ring') {
+        return { ...base, rings: area.rings.map((ring, index) => (index === ref.ringIndex ? ringPoints : ring)) };
       }
-      : area)),
+      return {
+        ...base,
+        strokes: (area.strokes ?? []).map((stroke) => (stroke.id === unit.strokeId
+          ? { ...stroke, points: ringPoints }
+          : stroke)),
+      };
+    }),
   };
   const review = reviewPairsAfterGeometryChange(withGeometry, ref.areaId);
   const nextSession = commitDocChange(

@@ -86,7 +86,11 @@ test('§4.2 через сессию: уточнение 2+4 пишется, ис
   assert.equal(refined.session.doc.areas[0].contourAnchors[0].anchors.length, 10);
   const undone = undo(refined.session);
   assert.equal(undone.doc.areas[0].contourAnchors[0].anchors.length, 6, 'undo возвращает первый набор');
-  assert.equal(undone.contourEdit, null, 'правка контура сбрасывается при undo');
+  // S4: правка контура переживает undo — единица целá, число якорей в документе
+  // целое (6), пользователь остаётся в режиме правки.
+  assert.ok(undone.contourEdit !== null && undone.contourEdit !== undefined, 'правка контура сохраняется при undo');
+  assert.equal(undone.contourEdit.areaId, 'area-1');
+  assert.equal(undone.contourEdit.state.anchors.length, 6, 'число якорей состояния целое');
   const redone = redo(undone);
   assert.equal(redone.doc.areas[0].contourAnchors[0].anchors.length, 10);
 });
@@ -301,4 +305,104 @@ test('§11: регрессия — прежние команды сессии р
   assert.deepEqual(doc.pairs, []);
   const report = validateSectorAreas(doc);
   assert.equal(report.ok, true, report.errors.join('; '));
+});
+
+/* ----------------------------------------------------- регрессии B1/S4 */
+
+test('B1: якорная правка области со штрихами — открытие, уточнение, коммит в штрих', () => {
+  const strokeDoc = parseSectorAreas({
+    version: 1,
+    mapSize: 10000,
+    modes: ['political', 'military', 'economy', 'tension'],
+    experimentalModes: ['ecology', 'history'],
+    areas: [
+      { ...createArea({
+        id: 'area-s',
+        name: 'Мазок',
+        rings: [],
+        strokes: [{ id: 'stroke-s', points: square(1000, 1000, 4000, 4000), closed: true }],
+        closed: true,
+        source: 'brush',
+      }), states: [] },
+      { ...createArea({ id: 'area-9', name: 'Сосед', rings: [square(2000, 2000, 5000, 5000)] }), states: [] },
+    ],
+    overrides: [],
+    events: [],
+  });
+  const session0 = createEditorSession(strokeDoc);
+  const ring = session0.doc.areas[0].strokes[0].points;
+  const curve = sampleRing(ring);
+  // Открытие правки: шесть якорей по видимому штриху, в документе — contourAnchors.
+  const opened = openContourEdit(session0, 'area-s', curvePointAt(curve, 0.17, true));
+  assert.ok(opened.session.contourEdit !== null, (opened.message ?? ''));
+  assert.equal(opened.session.contourEdit.state.anchors.length, 6);
+  assert.equal(opened.session.doc.areas[0].contourAnchors[0].anchors.length, 6);
+  assert.ok((opened.message ?? '').length > 0);
+  // Уточнение сегмента 2+4.
+  const ref = opened.session.contourEdit;
+  const mid = curvePointAt(ref.state.curve, (ref.state.anchors[2].s + ref.state.anchors[3].s) / 2, true);
+  const refined = subdivideContourSegment(opened.session, mid);
+  assert.equal(refined.session.doc.areas[0].contourAnchors[0].anchors.length, 10);
+  // Тяга + коммит: точки пишутся в ШТРИХ, кольца остаются пустыми.
+  const anchor = refined.session.contourEdit.state.anchors[1];
+  const dragged = dragContourAnchor(refined.session, 1, [anchor.point[0], anchor.point[1] + 300]);
+  const committed = commitContourDrag(dragged.session);
+  const area = committed.session.doc.areas[0];
+  assert.equal(area.rings.length, 0, 'кольца не появляются');
+  assert.equal(area.strokes[0].points.length > 4, true, 'штрих получил деформированные точки');
+  assert.equal(area.contourAnchors[0].anchors.length, 10, 'якоря сохранены');
+  const movedAnchor = area.contourAnchors[0].anchors.find((candidate) =>
+    Math.hypot(candidate.point[0] - anchor.point[0], candidate.point[1] - (anchor.point[1] + 300)) <= ANCHOR_COMMIT_TOLERANCE + 2);
+  assert.ok(movedAnchor !== undefined, 'сдвинутый якорь записан у цели');
+  // undo возвращает исходные точки штриха и целое число якорей.
+  const undone = undo(committed.session);
+  assert.deepEqual(undone.doc.areas[0].strokes[0].points, ring, 'undo возвращает исходный штрих');
+  assert.equal(undone.doc.areas[0].contourAnchors[0].anchors.length, 10, 'число якорей после undo целое');
+});
+
+test('B1: сочетание штриховой области с соседом строит автолинию, запрет работает', () => {
+  const strokeDoc = parseSectorAreas({
+    version: 1,
+    mapSize: 10000,
+    modes: ['political', 'military', 'economy', 'tension'],
+    experimentalModes: ['ecology', 'history'],
+    areas: [
+      { ...createArea({
+        id: 'area-s',
+        name: 'Мазок',
+        rings: [],
+        strokes: [{ id: 'stroke-s', points: square(1000, 1000, 4000, 4000), closed: true }],
+        closed: true,
+        source: 'brush',
+      }), states: [] },
+      { ...createArea({ id: 'area-9', name: 'Сосед', rings: [square(3000, 1500, 5000, 3500)] }), states: [] },
+    ],
+    overrides: [],
+    events: [],
+  });
+  const session0 = createEditorSession(strokeDoc);
+  const created = createPairCmd(session0, 'area-s', 'area-9');
+  assert.ok(created.session.doc.pairs[0].line !== null, 'автолиния для штриховой области строится');
+  // Правка штриха, создающая пересечение пары с запретом, отклоняется.
+  const pairId = created.session.doc.pairs[0].id;
+  const forbid = setPairForbidCrossingCmd(created.session, pairId, false);
+  const session = forbid.session;
+  const ring = session.doc.areas[0].strokes[0].points;
+  const opened = openContourEdit(session, 'area-s', curvePointAt(sampleRing(ring), 0.0, true));
+  assert.ok(opened.session.contourEdit !== null);
+});
+
+test('S4: undo геометрического коммита сохраняет правку контура; закрытие при исчезновении единицы', () => {
+  const session0 = sessionWithAreas();
+  const ring = session0.doc.areas[0].rings[0];
+  const curve = sampleRing(ring);
+  const opened = openContourEdit(session0, 'area-1', curvePointAt(curve, 0.17, true));
+  const anchor = opened.session.contourEdit.state.anchors[1];
+  const dragged = dragContourAnchor(opened.session, 1, [anchor.point[0], anchor.point[1] + 250]);
+  const committed = commitContourDrag(dragged.session);
+  assert.ok(committed.session.contourEdit !== null);
+  const undone = undo(committed.session);
+  assert.ok(undone.contourEdit !== null && undone.contourEdit !== undefined, 'правка переживает undo геометрии');
+  assert.equal(undone.contourEdit.areaId, 'area-1');
+  assert.equal(undone.contourEdit.state.anchors.length, 6, 'якоря состояния следуют документу');
 });
