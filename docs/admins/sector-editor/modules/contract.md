@@ -13,6 +13,12 @@
 - версию схемы `v1`, размер карты `10 000`, глубины `MIN_LEVEL`…`MAX_LEVEL`;
 - типы `SectorAreasDoc`, `Area`, `Ring`, `AreaState`, `AreaOverride`, `AreaEvent`,
   `GradientSpec`, `AreaLocation`;
+- иерархию (ТЗ `SEC-AREAS-HIERARCHY`): `AreaGroup` (именованные группы,
+  устойчивый ID), `AreaPair` (слой сочетания пары: режим, порядок наложения,
+  запрет пересечения, ширина перехода, линия раздела, `needsReview`),
+  `PairLine`/`CurveAnchor` (якоря на видимой кривой: доля дуги + точная точка),
+  `ContourAnchors` (якоря кольца области); поля `groups`, `pairs`,
+  `contourAnchors` — необязательные расширения схемы v1 (обратно совместимы);
 - фабрики `emptySectorAreasDoc`, `createArea`;
 - проверку `validateSectorAreas` → `ValidationReport` и поиск петель `findParentCycles`.
 

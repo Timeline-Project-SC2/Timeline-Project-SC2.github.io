@@ -463,7 +463,7 @@ test('вдали от туманностей остаётся только сп�
   }
 });
 
-test('гало остаётся в данных сцены, но временно не рисуется', () => {
+test('гало рисуется пунктиром через механизм обрезки кривой', () => {
   const h = createRendererHarness({ w: 300, h: 200 });
   try {
     const halo = {
@@ -475,7 +475,7 @@ test('гало остаётся в данных сцены, но временн�
     h.renderer.requestRender();
     h.flushAnimationFrame(performance.now() + 1000);
     assert.equal(h.state.sectorBounds.bounds[0], halo);
-    assert.ok(!h.calls.some(([name, dash]) => name === 'setLineDash' && dash.length > 0), 'пунктир гало не должен рисоваться');
+    assert.ok(h.calls.some(([name, dash]) => name === 'setLineDash' && dash.length > 0), 'пунктир гало рисуется');
   } finally {
     h.restoreGlobals();
   }

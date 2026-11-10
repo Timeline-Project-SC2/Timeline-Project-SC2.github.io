@@ -43,6 +43,9 @@ import { createSectorArrows } from './sector-arrows.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
 import { bindSectorAdminGate, isAdminUiTarget } from './sector-admin-gate.ts';
 import { createSectorAreasEditorUi } from './sector-areas-editor-ui.ts';
+import { createSectorBoundsEditUi } from './sector-bounds-edit-ui.ts';
+import { createSectorAreasHierarchyUi } from './sector-areas-hierarchy-ui.ts';
+import type { SectorBoundsEditUiApi } from './sector-bounds-edit-ui.ts';
 // Единственный источник текста справки: файл руководства администратора.
 import sectorAreasHelp from '../../docs/admins/sector-areas-editor.md?raw';
 import type { SectorAreasEditorUiApi } from './sector-areas-editor-ui.ts';
@@ -566,10 +569,62 @@ function applySystemFrameRequest(): void {
  * состояния карты, поэтому правки видны сразу — тем же рендером и на той же
  * канве, что и публичный `/sector/`. */
 let areasEditor: SectorAreasEditorUiApi | null = null;
+let lineEditor: SectorBoundsEditUiApi | null = null;
+let hierarchyEditor: ReturnType<typeof createSectorAreasHierarchyUi> | null = null;
+/**
+ * Снимок состояний инструментов до включения очередного: выключение возвращает
+ * ровно его, без перекрёстного восстановления (общие флаги «что было до меня»
+ * в каждом модуле зацикливали включение/выключение — дефект B5.1 ревью).
+ */
+let savedTools = { areas: false, lines: false };
+/** Признак программного переключения инструментов: защита от рекурсии. */
+let switchingTools = false;
+
+function snapshotTools(): void {
+  savedTools = {
+    areas: areasEditor !== null && areasEditor.enabled(),
+    lines: lineEditor !== null && lineEditor.enabled(),
+  };
+}
+
+function disableOtherTools(except: 'lines' | 'hierarchy'): void {
+  switchingTools = true;
+  try {
+    if (areasEditor !== null && areasEditor.enabled()) areasEditor.setEnabled(false);
+    if (except !== 'lines' && lineEditor !== null && lineEditor.enabled()) lineEditor.setEnabled(false);
+    if (except !== 'hierarchy' && hierarchyEditor !== null && hierarchyEditor.enabled()) hierarchyEditor.setEnabled(false);
+  } finally {
+    switchingTools = false;
+  }
+}
+
+function restoreSnapshot(): void {
+  switchingTools = true;
+  try {
+    areasEditor?.setEnabled(savedTools.areas);
+    lineEditor?.setEnabled(savedTools.lines);
+    if (!savedTools.lines && hierarchyEditor !== null && hierarchyEditor.enabled()) hierarchyEditor.setEnabled(false);
+    if (!savedTools.areas && hierarchyEditor === null) areasEditor?.setEnabled(false);
+  } finally {
+    switchingTools = false;
+  }
+}
 
 function bindSectorAreasEditor(): void {
   const panel = qs<HTMLElement>('[data-admin-editor]');
   if (panel === null) return;
+  // Служба приёмки: только на демо-странице редактора (за публичным барьером) —
+  // чтение экранных/мировых координат для автоматизированных браузерных проверок.
+  // Управления нет: только проекции и рамка канвы.
+  if (typeof window !== 'undefined') {
+    (window as unknown as Record<string, unknown>).__sectorEditorDebug = {
+      toScreen: (x: number, y: number) => kernel.renderer.toScreen(x, y),
+      toWorld: (x: number, y: number) => kernel.renderer.toWorld(x, y),
+      canvasRect: () => el.mapCanvas?.getBoundingClientRect() ?? null,
+      // Только чтение текущего документа областей (для сверки конвейера масок).
+      areasDoc: () => state.sectorAreas,
+    };
+  }
   areasEditor = createSectorAreasEditorUi({
     kernel,
     panel,
@@ -578,8 +633,67 @@ function bindSectorAreasEditor(): void {
     stage: el.mapStage,
     canvas: el.mapCanvas,
     helpText: sectorAreasHelp,
+    // Линейная правка активна — Ctrl+Z и Ctrl+Shift+Z уступают модулю линий.
+    isLineMode: () => lineEditor !== null && lineEditor.enabled(),
+    // Ручное включение рисования выключает остальные инструменты стадии карты:
+    // одновременно работает ровно один (включение — через общий переключатель).
+    onEnableChange: (enabled) => {
+      if (!enabled || switchingTools) return;
+      disableOtherTools('lines');
+    },
+  });
+  // Правка линий: отдельный модуль в своей секции панели. Инструменты взаимо-
+  // исключающие, но состояние рисования возвращается **прежним**, а не
+  // принудительно включённым: выключив «Правку линий», пользователь должен
+  // получить тот инструмент, который у него был до включения.
+  lineEditor = createSectorBoundsEditUi({
+    kernel,
+    panel,
+    stage: el.mapStage,
+    canvas: el.mapCanvas,
+    onActivate: () => {
+      if (switchingTools) return;
+      snapshotTools();
+      disableOtherTools('lines');
+    },
+    onDeactivate: () => {
+      if (switchingTools) return;
+      restoreSnapshot();
+    },
+  });
+  // Иерархия областей: якорная правка контуров, группы и сочетания пар.
+  // Три инструмента на одной стадии карты взаимоисключающие: включение
+  // иерархии выключает рисование и правку линий, выключение возвращает
+  // их прежние состояния.
+  hierarchyEditor = createSectorAreasHierarchyUi({
+    kernel,
+    panel,
+    stage: el.mapStage,
+    canvas: el.mapCanvas,
+    areas: {
+      getSession: () => {
+        if (areasEditor === null) throw new Error('Редактор областей не инициализирован');
+        return areasEditor.session();
+      },
+      applySession: (next) => {
+        areasEditor?.applySession(next);
+        lineEditor?.refresh();
+        hierarchyEditor?.refresh();
+      },
+    },
+    onActivate: () => {
+      if (switchingTools) return;
+      snapshotTools();
+      disableOtherTools('hierarchy');
+    },
+    onDeactivate: () => {
+      if (switchingTools) return;
+      restoreSnapshot();
+    },
   });
   areasEditor.refresh();
+  lineEditor.refresh();
+  hierarchyEditor.refresh();
 }
 
 function boot(): void {

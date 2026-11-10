@@ -16,7 +16,9 @@ import type {
 } from './config.ts';
 import { levelForWidth, markerDiameter, maxScaleForTargetWidth } from './level-ladder.ts';
 import { buildAreaPaints } from './sector-areas-render.ts';
-import type { AreaPaint } from './sector-areas-render.ts';
+import type { AreaPaint, AreaSplitMask } from './sector-areas-render.ts';
+import { splitRegionsForPair } from './sector-areas-pairs.ts';
+import { applyPairOverlayOrder } from './sector-scene.ts';
 import { createFactionPalette } from './sector-areas-color.ts';
 import type { FactionPalette } from './sector-areas-color.ts';
 import { createLodCache } from './sector-areas-lod.ts';
@@ -37,6 +39,7 @@ import type {
   SceneSystemInput,
   SectorScene,
   SceneArea,
+  SceneAreaRing,
 } from './sector-scene.ts';
 import {
   LOUPE_LABEL_PAD_PX,
@@ -86,6 +89,7 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /* Кэш LOD областей и палитра фракций собираются один раз: документ областей
    * один и тот же для `/sector/` и админской копии (`data/sector-areas.json`). */
   var areaCache = createLodCache();
+  var splitCache = new WeakMap<object, Map<string, AreaSplitMask[]>>();
   var areaPaletteCache: FactionPalette | null = null;
 
   function areaPalette(): FactionPalette {
@@ -102,11 +106,51 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /** Области редактора границ в мировых координатах: каскад, LOD, фокус. */
+  /**
+   * Маски «разделения цветов» пар (§6): вырезы заливок считаются один раз на
+   * версию документа (сетка зоны — самая тяжёлая часть) и кэшируются по ссылке
+   * на документ: правки создают новый объект документа, кэш сбрасывается сам.
+   */
+  /**
+   * Маски «разделения цветов» всех пар по области (§6). Список, а не одна
+   * маска: область может состоять в нескольких парах, у каждой своя линия
+   * и своя полоса перехода; вырезы объединяются offscreen-слоем (дефект B4.4).
+   */
+  function splitMasks(): (areaId: string) => AreaSplitMask[] {
+    const doc = state.sectorAreas;
+    if (!doc || !doc.pairs || !doc.pairs.length) return function () { return []; };
+    let cached = splitCache.get(doc);
+    if (cached === undefined) {
+      const byId = new Map(doc.areas.map((area) => [area.id, area]));
+      const map = new Map<string, AreaSplitMask[]>();
+      for (const pair of doc.pairs) {
+        const areaA = byId.get(pair.areaA);
+        const areaB = byId.get(pair.areaB);
+        if (areaA === undefined || areaB === undefined || pair.mode !== 'split') continue;
+        const regions = splitRegionsForPair(areaA, areaB, pair);
+        if (regions === null) continue;
+        const halfWidth = pair.transitionWidth === null ? 0 : pair.transitionWidth;
+        const line = pair.line !== null && pair.line.points.length >= 2 ? pair.line.points : [];
+        const forA: AreaSplitMask = { holes: regions.aHoles, line, transitionHalfWidth: halfWidth };
+        const forB: AreaSplitMask = { holes: regions.bHoles, line, transitionHalfWidth: halfWidth };
+        const prevA = map.get(pair.areaA);
+        const prevB = map.get(pair.areaB);
+        map.set(pair.areaA, prevA === undefined ? [forA] : [...prevA, forA]);
+        map.set(pair.areaB, prevB === undefined ? [forB] : [...prevB, forB]);
+      }
+      cached = map;
+      splitCache.set(doc, map);
+    }
+    const resolved = cached;
+    return (areaId: string): AreaSplitMask[] => resolved.get(areaId) ?? [];
+  }
+
   function sceneAreas(): readonly AreaPaint[] {
     var doc = state.sectorAreas;
     if (!doc || !doc.areas || !doc.areas.length) return [];
     var width = visibleWidth();
-    return buildAreaPaints(doc, {
+    var masks = splitMasks();
+    return applyPairOverlayOrder(buildAreaPaints(doc, {
       level: levelForWidth(width),
       visibleWidth: width,
       palette: areaPalette(),
@@ -114,7 +158,8 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
       strokeSafe: true,
       fillAlpha: 0.16,
       strokeWidth: 1.6,
-    });
+      splitForArea: masks,
+    }), doc.pairs ?? []);
   }
 
   function fitScale(): number {
@@ -998,10 +1043,11 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   /* ---------------------------------------------------- сборка слоёв сцены */
 
   function renderScene(scene: SectorScene, nowMs: number): void {
-    // Гало сохранено в сцене и данных для редактора, но временно не рисуется.
+    // Гало: код и данные сохранены (временно скрыт с 28.10.2026); механизм
+    // обрезки кривой (clipHalo) и пунктир рисуются как раньше.
     for (var index = 0; index < scene.primitives.length; index += 1) {
       var primitive = scene.primitives[index]!;
-      if (primitive.kind === 'bounds' && primitive.boundsKind !== 'halo') drawBounds(primitive);
+      if (primitive.kind === 'bounds') drawBounds(primitive);
     }
     // Смена тира гасит/проявляет линии 160 мс (§17.3 п. 9); порядок проходов тот же.
     updateGridFade(scene, nowMs);
@@ -1024,13 +1070,32 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
   }
 
   /**
-   * Область редактора границ (`kind: 'brush'`): заливка внешнего кольца с
-   * дырками по правилу «чётность», затем обводка. Если градиент дал цвета
-   * вершин, обводка идёт по сегментам — так градиент не зависит от LOD.
+   * Область редактора границ (`kind: 'brush'`): заливка колец с вычетом масок
+   * «разделения цветов» (§6), затем обводка. Если градиент дал цвета вершин,
+   * обводка идёт по сегментам — так градиент не зависит от LOD.
+   *
+   * Вырезы: единственный — даже-нечётом прямо на месте; несколько (область в
+   * нескольких парах) — настоящим объединением на временном слое: сплошная
+   * заливка, затем `destination-out` по каждому вырезу. Перекрывающиеся вырезы
+   * на слое вычитаются насквозь, чётность не инвертируется (дефект B4.4 ревью:
+   * конкатенация дырок трёх пар в один evenodd-путь возвращала заливку в тройном
+   * пересечении). Обводки (настоящие контуры) рисуются целиком.
    */
   function drawArea(area: SceneArea): void {
     if (area.rings.length === 0) return;
     const ctx = kernel.ctx!;
+    const splits = area.splits ?? [];
+    const hasSplit = splits.length > 0;
+    let layer: CanvasRenderingContext2D | null = null;
+    let layerCanvas: HTMLCanvasElement | null = null;
+    if (hasSplit && splits.length > 1 && typeof document !== 'undefined') {
+      layerCanvas = document.createElement('canvas');
+      layerCanvas.width = Math.max(1, state.viewport.w);
+      layerCanvas.height = Math.max(1, state.viewport.h);
+      const layerCtx = layerCanvas.getContext('2d');
+      if (layerCtx !== null) layer = layerCtx;
+      else layerCanvas = null;
+    }
     ctx.save();
     if (typeof ctx.rect === 'function' && typeof ctx.clip === 'function') {
       ctx.beginPath();
@@ -1042,41 +1107,130 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.lineWidth = Math.max(1, area.strokeWidth);
     ctx.setLineDash([...area.dash]);
 
-    for (const ring of area.rings) {
-      if (ring.points.length < 2) continue;
-      if (area.fill !== null) {
-        ctx.beginPath();
-        traceRing(ring.points, ring.closed);
-        ctx.fillStyle = area.fill;
-        ctx.fill('evenodd');
+    const scale = Math.max(1e-6, state.viewport.w / Math.max(1, visibleWidth()));
+    const target = layer !== null ? layer : ctx;
+    if (layer !== null) {
+      layer.lineJoin = 'round';
+      layer.lineCap = 'round';
+    }
+
+    if (area.fill !== null) {
+      target.beginPath();
+      for (const ring of area.rings) {
+        if (ring.points.length < 2) continue;
+        traceRingOn(target, ring.points, ring.closed);
       }
+      if (hasSplit) {
+        for (const mask of splits) {
+          for (const hole of mask.holes) {
+            if (hole.points.length < 3) continue;
+            traceRingOn(target, hole.points, true);
+          }
+        }
+      }
+      target.fillStyle = area.fill;
+      if (layer !== null) {
+        // Слой: сплошная заливка, затем каждый вырез вычитается насквозь.
+        target.fill();
+        target.globalCompositeOperation = 'destination-out';
+        for (const mask of splits) {
+          target.beginPath();
+          for (const hole of mask.holes) {
+            if (hole.points.length < 3) continue;
+            traceRingOn(target, hole.points, true);
+          }
+          target.fill();
+        }
+        target.globalCompositeOperation = 'source-over';
+      } else {
+        // Один вырез или ни одного — прямо на основной канве.
+        target.fill(hasSplit ? 'evenodd' : 'nonzero');
+      }
+      // Мягкий переход (§6.2) — по каждой паре отдельно, зажат в вырезы своей
+      // маски: N ходков с шириной 2W·k/N и альфой a/N дают линейный спад
+      // a·(1−d/W) по расстоянию d от линии — приближение градиента.
+      for (const mask of splits) {
+        if (mask.transitionHalfWidth <= 0 || mask.line.length < 2) continue;
+        const halfPx = Math.max(1, mask.transitionHalfWidth * scale);
+        target.save();
+        target.beginPath();
+        for (const hole of mask.holes) {
+          if (hole.points.length < 3) continue;
+          traceRingOn(target, hole.points, true);
+        }
+        target.clip('evenodd');
+        target.beginPath();
+        target.moveTo(mask.line[0]!.x, mask.line[0]!.y);
+        for (let l = 1; l < mask.line.length; l += 1) target.lineTo(mask.line[l]!.x, mask.line[l]!.y);
+        target.strokeStyle = area.fill;
+        const steps = 4;
+        for (let k = steps; k >= 1; k -= 1) {
+          target.lineWidth = Math.max(1, (2 * halfPx * k) / steps);
+          target.globalAlpha = Math.max(0, Math.min(1, area.alpha / steps));
+          target.stroke();
+        }
+        target.restore();
+        target.globalAlpha = 1;
+      }
+    }
+
+    const strokeOneRing = (t: CanvasRenderingContext2D, ring: SceneAreaRing): void => {
       if (ring.colors.length === ring.points.length && ring.colors.length > 1) {
         for (let i = 1; i < ring.points.length; i += 1) {
           const a = ring.points[i - 1]!;
           const b = ring.points[i]!;
-          ctx.strokeStyle = ring.colors[i]!;
-          ctx.globalAlpha = Math.max(0, Math.min(1, ring.alphas[i] ?? 1)) * Math.max(0, Math.min(1, area.alpha));
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
+          t.strokeStyle = ring.colors[i]!;
+          t.globalAlpha = Math.max(0, Math.min(1, ring.alphas[i] ?? 1)) * Math.max(0, Math.min(1, area.alpha));
+          t.beginPath();
+          t.moveTo(a.x, a.y);
+          t.lineTo(b.x, b.y);
+          t.stroke();
         }
         if (ring.closed) {
           const first = ring.points[0]!;
           const last = ring.points[ring.points.length - 1]!;
-          ctx.strokeStyle = ring.colors[0]!;
-          ctx.globalAlpha = area.alpha;
-          ctx.beginPath();
-          ctx.moveTo(last.x, last.y);
-          ctx.lineTo(first.x, first.y);
-          ctx.stroke();
+          t.strokeStyle = ring.colors[0]!;
+          t.globalAlpha = area.alpha;
+          t.beginPath();
+          t.moveTo(last.x, last.y);
+          t.lineTo(first.x, first.y);
+          t.stroke();
         }
       } else {
-        ctx.strokeStyle = area.stroke;
-        ctx.globalAlpha = Math.max(0, Math.min(1, area.alpha));
-        ctx.beginPath();
-        traceRing(ring.points, ring.closed);
-        ctx.stroke();
+        t.strokeStyle = area.stroke;
+        t.globalAlpha = Math.max(0, Math.min(1, area.alpha));
+        t.beginPath();
+        traceRingOn(t, ring.points, ring.closed);
+        t.stroke();
+      }
+    };
+
+    if (layer !== null && layerCanvas !== null) {
+      // Обводки на слое поверх вычетов: в вырезах (стороны других областей)
+      // слой прозрачен — внутренние обводки не проходят сквозь чужую половину
+      // (S5 ревью, как на зарисовке владельца: сквозных линий в зоне нет).
+      for (const ring of area.rings) {
+        if (ring.points.length < 2) continue;
+        strokeOneRing(layer, ring);
+      }
+      ctx.drawImage(layerCanvas, 0, 0, state.viewport.w, state.viewport.h);
+    } else {
+      // Без слоя: единственный вырез отсекает обводку даже-нечётом по кольцу.
+      const clipHoles = hasSplit ? splits[0]!.holes : null;
+      for (const ring of area.rings) {
+        if (ring.points.length < 2) continue;
+        ctx.save();
+        if (clipHoles !== null && clipHoles.length > 0 && typeof ctx.clip === 'function') {
+          ctx.beginPath();
+          traceRingOn(ctx, ring.points, ring.closed);
+          for (const hole of clipHoles) {
+            if (hole.points.length < 3) continue;
+            traceRingOn(ctx, hole.points, true);
+          }
+          ctx.clip('evenodd');
+        }
+        strokeOneRing(ctx, ring);
+        ctx.restore();
       }
     }
 
@@ -1085,11 +1239,14 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     ctx.restore();
   }
 
-  function traceRing(points: readonly { readonly x: number; readonly y: number }[], closed: boolean): void {
-    const ctx = kernel.ctx!;
-    ctx.moveTo(points[0]!.x, points[0]!.y);
-    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i]!.x, points[i]!.y);
-    if (closed) ctx.closePath();
+  function traceRingOn(
+    target: CanvasRenderingContext2D,
+    points: readonly { readonly x: number; readonly y: number }[],
+    closed: boolean,
+  ): void {
+    target.moveTo(points[0]!.x, points[0]!.y);
+    for (let i = 1; i < points.length; i += 1) target.lineTo(points[i]!.x, points[i]!.y);
+    if (closed) target.closePath();
   }
 
   /**

@@ -354,6 +354,48 @@ export function closedStrokeRing(stroke: AreaStroke): Ring {
   return [...vertices, [first[0], first[1]]];
 }
 
+/**
+ * Замкнутые геометрические единицы области для иерархии (дефект B1 ревью):
+ * кольца документа, затем замкнутые штрихи. Открытые штрихи единицами не
+ * являются — открытая линия не выдаётся за замкнутую область. `ringIndex`
+ * якорей (`contourAnchors`) нумерует именно эти единицы: у областей с кольцами
+ * нумерация совпадает со прежней (индекс кольца).
+ */
+export interface ContourUnit {
+  readonly ringIndex: number;
+  readonly kind: 'ring' | 'stroke';
+  /** Идентификатор штриха; для колец — `null`. */
+  readonly strokeId: string | null;
+  /** Видимое замкнутое кольцо единицы (штрих разворачивается в кольцо). */
+  readonly ring: Ring;
+}
+
+export function contourUnitsOf(area: Area): readonly ContourUnit[] {
+  const units: ContourUnit[] = area.rings.map((ring, index) => ({
+    ringIndex: index,
+    kind: 'ring' as const,
+    strokeId: null,
+    ring,
+  }));
+  if (area.closed) {
+    for (const stroke of area.strokes ?? []) {
+      if (!stroke.closed) continue;
+      units.push({
+        ringIndex: units.length,
+        kind: 'stroke',
+        strokeId: stroke.id,
+        ring: closedStrokeRing(stroke),
+      });
+    }
+  }
+  return units;
+}
+
+/** Первая замкнутая единица области (кольцо или замкнутый штрих); `null` — нет. */
+export function primaryContourRing(area: Area): Ring | null {
+  return contourUnitsOf(area)[0]?.ring ?? null;
+}
+
 /** Длина отдельного штриха в мировых единицах. */
 export function strokeLength(stroke: AreaStroke): number {
   return ringLength(stroke.points, stroke.closed);

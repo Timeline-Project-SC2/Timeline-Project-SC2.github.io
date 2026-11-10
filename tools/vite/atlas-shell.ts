@@ -42,6 +42,8 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
         '          <section><h2>Модули</h2><div class="admin-editor-block" data-editor-block="modules"></div></section>',
         '          <section><h2>Свойства</h2><div class="admin-editor-block" data-editor-block="properties"></div></section>',
         '          <section><h2>Изменения</h2><div class="admin-editor-block" data-editor-block="changes"></div></section>',
+        '          <section><h2>Линии</h2><div class="admin-editor-block" data-editor-block="lines"></div></section>',
+        '          <section><h2>Иерархия</h2><div class="admin-editor-block" data-editor-block="hierarchy"></div></section>',
         '        </div>',
         '        <button class="admin-editor-rail" id="adminEditorRail" type="button" data-action="expand" aria-expanded="false" aria-controls="adminEditorBody" title="Развернуть редактор" aria-label="Развернуть редактор">',
         '          <span class="admin-editor-rail-arrows" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>',
