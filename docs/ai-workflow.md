@@ -94,7 +94,7 @@ PR; этапная — `docs/stages/*/plan.md` + запись в `docs/registers
 
 | Что меняем | Тест/гейт, который пишем или запускаем первым |
 |---|---|
-| Чистая логика TS (`src/atlas/*`, `src/local-map/*`) | `tests/<имя>.test.mjs` (`node --test`) и сразу строка в `npm test` в `package.json`; стык импортов — `npm run check:fast -- --probe tests/<имя>.test.mjs` (секунды, см. [паттерн проверок](verification-pattern.md)) |
+| Чистая логика TS (`src/atlas/*`, `src/local-map/*`) | `tests/<имя>.test.mjs` (`node --test`) и сразу строка в `npm test` в `package.json`; стык импортов и линт — `npm run check:fast -- --probe tests/<имя>.test.mjs` (типы для `tests/**` не проверяются, см. [паттерн проверок](verification-pattern.md)) |
 | Контракт планет, Wasm-ядро | `npm run verify:contract`, `npm run check:planet-core`, `npm run verify:hashes` |
 | Сектор: адрес, ядро, отказ от растра | `npm run verify:address`, `verify:sector-core`, `verify:no-raster` |
 | Данные и синхронизация | `python3 tools/sync.py --strict`, `planet_generation.py validate`, `npm run test:py` |
