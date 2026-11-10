@@ -71,6 +71,8 @@ npm run dev                                     # сборка + serve одни�
 npm run assets:build                            # картинки assets/*.webp (нужен Pillow): сборка их не делает
 
 # Статический анализ типов, линтер и компиляция Wasm
+npm run check:fast                              # быстрый локальный гейт: стык импортов (esbuild), типы, линт, ~4 с
+npm run check:fast -- --probe tests/x.test.mjs  # то же для одной пробы/теста; --run добавит прогон
 npm run typecheck                               # строгая проверка типов TypeScript (tsc --noEmit)
 npm run lint                                    # проверка ESLint по директориям site/ и src/
 npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
@@ -140,6 +142,11 @@ git diff --check                                # проверка отсутс�
 - **Шаг 0 (проверка контура сохранения):** в начале задачи проверьте текущую рабочую ветку
   и выполните первый содержательный коммит с немедленным `git push -u origin HEAD`. Убедитесь,
   что `git rev-parse HEAD` совпадает с `origin/<ветка>`, а `git status --short` чист.
+- **Локальный цикл — от дешёвого к дорогому:** проба пишется файлом `tests/<имя>.test.mjs`
+  (не inline-heredoc), затем `npm run check:fast -- --probe <файл>` (секунды: стык импортов,
+  типы, линт), затем `node --test <файл>`, и только в конце полный `npm test` (страж, ~135 с)
+  и `npm run build`. Почему такой порядок и какая проверка чего не видит — в
+  [`docs/verification-pattern.md`](docs/verification-pattern.md).
 - **Коммит и пуш после каждого завершённого шага:** песочница и `/tmp` эфемерны и не сохраняются
   между сессиями (см. казус CR-01 PR 4 в [`docs/handoff/infra-pitfalls.md`](docs/handoff/infra-pitfalls.md)). Коммитьте и пушьте после каждого
   логического шага, не откладывая сохранение на конец задачи.
