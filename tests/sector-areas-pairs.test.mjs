@@ -426,3 +426,134 @@ test('buildInitialPairLine: якоря автолинии стоят на лин
   assert.ok(line.anchors[0].s <= 0.01 && line.anchors[line.anchors.length - 1].s >= 0.99,
     'концы линии — крайние якоря');
 });
+
+/* ------------------------------------------------------- регрессии B4/S3/S4 */
+
+const rect = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+
+test('B4.1: полоса двойного наложения вдоль шва исчезает — все ячейки зоны разделены', () => {
+  const grid = computeZoneGrid(rect(1000, 1000, 4000, 6000), rect(2500, 3000, 9000, 5000));
+  assert.ok(grid !== null);
+  const line = [[3250, 2900], [3250, 5100]];
+  const masks = sideMasks(grid, line);
+  let unassigned = 0;
+  for (let index = 0; index < grid.zone.length; index += 1) {
+    if (grid.zone[index] === 1 && masks.aSide[index] !== 1 && masks.bSide[index] !== 1) unassigned += 1;
+  }
+  assert.equal(unassigned, 0, 'каждая ячейка зоны относится к стороне А или Б');
+});
+
+test('B4.2: конец ручной линии внутри зоны не даёт утечки BFS — обе стороны существуют', () => {
+  const grid = computeZoneGrid(rect(1000, 1000, 4000, 6000), rect(2500, 3000, 9000, 5000));
+  assert.ok(grid !== null);
+  // Верхний конец линии намеренно внесён внутрь линзы (500 единиц от края).
+  const line = [[3250, 3500], [3250, 5100]];
+  const masks = sideMasks(grid, line);
+  let aCells = 0;
+  let bCells = 0;
+  for (let index = 0; index < grid.zone.length; index += 1) {
+    if (grid.zone[index] !== 1) continue;
+    if (masks.aSide[index] === 1) aCells += 1;
+    if (masks.bSide[index] === 1) bCells += 1;
+  }
+  assert.ok(aCells > 0, 'сторона А существует');
+  assert.ok(bCells > 0, 'сторона Б не съедена утечкой вокруг конца линии');
+});
+
+test('B4.3: вторая раздельная часть зоны делится автоматически, а не отдаётся одной стороне', () => {
+  // U-область (одинокое кольцо с выемкой) и прямоугольник поверх обеих ног:
+  // две раздельные линзы — левая и правая ноги U.
+  const uShape = [
+    [3000, 2000], [7000, 2000], [7000, 8000], [5500, 8000], [5500, 4000],
+    [4500, 4000], [4500, 8000], [3000, 8000], [3000, 2000],
+  ];
+  const bar = rect(2000, 4500, 8000, 7000);
+  const grid = computeZoneGrid(uShape, bar);
+  assert.ok(grid !== null, 'зона U-области с прямоугольником строится');
+  // Ручная линия только в левой ноге.
+  const line = [[3750, 4400], [3750, 7100]];
+  const masks = sideMasks(grid, line);
+  let leftA = 0;
+  let leftB = 0;
+  let rightA = 0;
+  let rightB = 0;
+  for (let j = 0; j < grid.h; j += 1) {
+    for (let i = 0; i < grid.w; i += 1) {
+      const index = j * grid.w + i;
+      if (grid.zone[index] !== 1) continue;
+      const x = grid.x0 + (i + 0.5) * grid.cell;
+      const isLeft = x >= 3000 && x <= 4500;
+      const isRight = x >= 5500 && x <= 7000;
+      if (!isLeft && !isRight) continue;
+      if (masks.aSide[index] === 1) { if (isLeft) leftA += 1; else rightA += 1; }
+      if (masks.bSide[index] === 1) { if (isLeft) leftB += 1; else rightB += 1; }
+    }
+  }
+  assert.ok(leftA > 0 && leftB > 0, 'левая нога разделена линией на обе стороны');
+  assert.ok(rightA > 0 && rightB > 0, 'правая нога без линии поделена автоправилом на обе стороны');
+});
+
+test('S3: перестановка А/Б даёт зеркальные маски (плато коллинеарных границ не перевешивает)', () => {
+  const ringA = rect(1000, 3000, 9000, 5000);
+  const ringB = rect(3000, 1000, 7000, 9000);
+  const gridAB = computeZoneGrid(ringA, ringB);
+  const gridBA = computeZoneGrid(ringB, ringA);
+  assert.ok(gridAB !== null && gridBA !== null);
+  const line = [[4970, 900], [5030, 9100]];
+  const ab = sideMasks(gridAB, line);
+  const ba = sideMasks(gridBA, line);
+  let mismatch = 0;
+  let total = 0;
+  for (let index = 0; index < gridAB.zone.length; index += 1) {
+    if (gridAB.zone[index] !== 1) continue;
+    total += 1;
+    const aOfAB = ab.aSide[index] === 1;
+    const bOfBA = ba.bSide[index] === 1;
+    if (aOfAB !== bOfBA) mismatch += 1;
+  }
+  assert.ok(total > 100, 'зона достаточно велика для сравнения');
+  assert.ok(mismatch / total <= 0.02,
+    `перестановка пары перевешивает разделение: ${mismatch} из ${total}`);
+});
+
+test('B1: сочетание областей со штрихами вместо колец строит автолинию и вырезы', () => {
+  const strokeArea = (id, name, x0) => createArea({
+    id,
+    name,
+    rings: [],
+    strokes: [{ id: `stroke-${id}`, points: rect(x0, 1000, x0 + 3000, 4000), closed: true }],
+    closed: true,
+    source: 'brush',
+  });
+  const doc = {
+    ...emptySectorAreasDoc(),
+    areas: [strokeArea('area-1', 'Альфа', 1000), strokeArea('area-2', 'Бета', 2500)],
+  };
+  const { pair } = createPair(doc, 'area-1', 'area-2');
+  assert.ok(pair.line !== null, 'автолиния для штриховых областей строится');
+  const areaA = doc.areas[0];
+  const areaB = doc.areas[1];
+  const regions = splitRegionsForPair(areaA, areaB, pair);
+  assert.ok(regions !== null, 'вырезы разделения для штриховых областей строятся');
+  assert.ok(regions.aHoles.length > 0 && regions.bHoles.length > 0);
+});
+
+test('S4: needsReview снимается, когда ручная линия снова в зоне; снятие чистит заметку', () => {
+  const base = docWithPair(false);
+  const doc = base.doc;
+  const pairId = base.pair.id;
+  const flagged = markPairNeedsReview(doc, pairId, true, 'Контур изменился: линия вне зоны.');
+  const afterFlag = pairsOf(flagged).find((entry) => entry.id === pairId);
+  assert.equal(afterFlag.needsReview, true);
+  const lineAfter = afterFlag.line;
+  const cleared = markPairNeedsReview(flagged, pairId, false);
+  const afterClear = pairsOf(cleared).find((entry) => entry.id === pairId);
+  assert.equal(afterClear.needsReview, false);
+  assert.equal(afterClear.note, null, 'снятие пометки убирает устаревшую заметку');
+  // Геометрия не менялась: пересмотр возвращает линию в зону и чистит флаг.
+  const reviewed = reviewPairsAfterGeometryChange(flagged, 'area-1');
+  const afterReview = pairsOf(reviewed.doc).find((entry) => entry.id === pairId);
+  assert.equal(afterReview.needsReview, false, 'линия в зоне — пометка снята');
+  assert.equal(afterReview.note, null);
+  assert.equal(lineAfter !== null, true);
+});

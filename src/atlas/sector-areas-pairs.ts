@@ -51,7 +51,7 @@
  */
 
 import type { Area, AreaPair, AreaPoint, PairLine, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
-import { bboxOf, pointInRing } from './sector-areas-geometry.ts';
+import { bboxOf, pointInRing, primaryContourRing } from './sector-areas-geometry.ts';
 import { beginLineEdit, curvePointAt, sampleLine } from './sector-areas-anchors.ts';
 
 /* --------------------------------------------------------------- константы */
@@ -129,7 +129,16 @@ export function createPair(
   }
   const area = byId.get(areaA);
   const other = byId.get(areaB);
-  const line = area !== undefined && other !== undefined ? buildInitialPairLine(area, other) : null;
+  const info = area !== undefined && other !== undefined ? buildInitialPairLineInfo(area, other) : null;
+  const line = info === null ? null : info.line;
+  let note: string | null = null;
+  if (info !== null && info.components > 1) {
+    note = `Зона взаимодействия состоит из ${info.components} частей: линия правит крупнейшую, остальные делятся автоматически по равноудалённому правилу.`;
+  }
+  // Включение запрета на уже пересекающейся паре отклоняется в
+  // `setPairForbidCrossing`; при создании пара лишь фиксирует текущее состояние
+  // (пересечение могло возникнуть позже включения или из импортированного файла),
+  // а правило «запрещены новые пересечения» старое не разрывает.
   const pair: AreaPair = {
     id,
     areaA,
@@ -140,7 +149,7 @@ export function createPair(
     transitionWidth: null,
     line,
     needsReview: false,
-    note: null,
+    note,
   };
   return { doc: withPairs(doc, [...pairsOf(doc), pair]), pair };
 }
@@ -176,6 +185,17 @@ export function setPairForbidCrossing(doc: SectorAreasDoc, pairId: string, value
   return updatePair(doc, pairId, (pair) => ({ ...pair, forbidCrossing: value }));
 }
 
+/** Пересекаются ли области пары прямо сейчас (для честного сообщения при включении запрета). */
+export function pairCurrentlyIntersects(doc: SectorAreasDoc, pairId: string): boolean {
+  const pair = pairsOf(doc).find((entry) => entry.id === pairId);
+  if (pair === undefined) return false;
+  const areaA = doc.areas.find((entry) => entry.id === pair.areaA);
+  const areaB = doc.areas.find((entry) => entry.id === pair.areaB);
+  const ringA = areaA === undefined ? null : primaryContourRing(areaA);
+  const ringB = areaB === undefined ? null : primaryContourRing(areaB);
+  return ringA !== null && ringB !== null && ringsIntersect(ringA, ringB);
+}
+
 /** Ширина мягкого перехода (полуширина полосы, единицы карты); `null` — резко. */
 export function setPairTransition(doc: SectorAreasDoc, pairId: string, width: number | null): SectorAreasDoc {
   if (width !== null && (!Number.isFinite(width) || width < 0)) {
@@ -186,7 +206,7 @@ export function setPairTransition(doc: SectorAreasDoc, pairId: string, width: nu
 
 /** Сохраняет линию раздела: `manual` — ручная правка якорями (§7). */
 export function setPairLine(doc: SectorAreasDoc, pairId: string, line: PairLine, manual: boolean): SectorAreasDoc {
-  return updatePair(doc, pairId, (pair) => ({ ...pair, line: { ...line, manual }, needsReview: false }));
+  return updatePair(doc, pairId, (pair) => ({ ...pair, line: { ...line, manual }, needsReview: false, note: null }));
 }
 
 /** Сбрасывает линию на автолинию по текущей геометрии; `null`, если зоны нет. */
@@ -199,9 +219,13 @@ export function resetPairLineToAuto(doc: SectorAreasDoc, pairId: string): Sector
   return updatePair(doc, pairId, (entry) => ({ ...entry, line, needsReview: false, note: null }));
 }
 
-/** Помечает (снимает пометку) «требует пересмотра» (§8). */
+/** Помечает (снимает пометку) «требует пересмотра» (§8); снятие чистит заметку. */
 export function markPairNeedsReview(doc: SectorAreasDoc, pairId: string, value: boolean, note?: string): SectorAreasDoc {
-  return updatePair(doc, pairId, (pair) => ({ ...pair, needsReview: value, note: note ?? pair.note }));
+  return updatePair(doc, pairId, (pair) => ({
+    ...pair,
+    needsReview: value,
+    note: value ? (note ?? pair.note) : (note ?? null),
+  }));
 }
 
 /* -------------------------------------------------------- зона взаимодействия */
@@ -221,6 +245,13 @@ export interface ZoneGrid {
   /** Расстояние (в единицах карты) до ближайшей ячейки вне области А / Б. */
   readonly distA: Float64Array;
   readonly distB: Float64Array;
+  /**
+   * `distA − distB` с точным дожимом: на квантованных плато (`f === 0` полосами,
+   * например при коллинеарных границах) значение пересчитывается по точным
+   * расстояниям центров ячеек до границ колец. Точные расстояния антисимметричны
+   * при перестановке А и Б — автолиния перестановку пары не «перевешивает» (S3).
+   */
+  readonly diffField: Float64Array;
   /** Число ячеек зоны. */
   readonly zoneCells: number;
 }
@@ -230,15 +261,23 @@ export function computeZoneGrid(ringA: Ring, ringB: Ring, maxCells: number = PAI
   if (ringA.length < 3 || ringB.length < 3) return null;
   const a = bboxOf(ringA);
   const b = bboxOf(ringB);
-  const x0 = Math.min(a.minX, b.minX) - 1;
-  const y0 = Math.min(a.minY, b.minY) - 1;
-  const x1 = Math.max(a.maxX, b.maxX) + 1;
-  const y1 = Math.max(a.maxY, b.maxY) + 1;
-  const span = Math.max(x1 - x0, y1 - y0);
+  // Сетка накрывает только пересечение габаритов (линзу) с запасом: ячейки вне
+  // зоны не нужны маскам, а разрешение внутри линзы растёт (S3 ревью: раньше
+  // шаг сетки задавала крупная область-сосед).
+  const overlapSpanX = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+  const overlapSpanY = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+  // Пересечения габаритов нет хотя бы по одной оси — зоны взаимодействия нет.
+  if (overlapSpanX <= 0 || overlapSpanY <= 0) return null;
+  const span = Math.max(overlapSpanX, overlapSpanY);
   if (!Number.isFinite(span) || span <= 0) return null;
   const cell = span / maxCells;
-  const w = Math.min(maxCells + 2, Math.ceil((x1 - x0) / cell) + 1);
-  const h = Math.min(maxCells + 2, Math.ceil((y1 - y0) / cell) + 1);
+  const pad = cell * 2 + 1;
+  const x0 = Math.max(a.minX, b.minX) - pad;
+  const y0 = Math.max(a.minY, b.minY) - pad;
+  const x1 = Math.min(a.maxX, b.maxX) + pad;
+  const y1 = Math.min(a.maxY, b.maxY) + pad;
+  const w = Math.min(maxCells + 4, Math.ceil((x1 - x0) / cell) + 1);
+  const h = Math.min(maxCells + 4, Math.ceil((y1 - y0) / cell) + 1);
   const size = w * h;
   const inA = new Uint8Array(size);
   const inB = new Uint8Array(size);
@@ -259,9 +298,22 @@ export function computeZoneGrid(ringA: Ring, ringB: Ring, maxCells: number = PAI
       }
     }
   }
+  if (zoneCells < PAIR_MIN_ZONE_CELLS) return null;
   const distA = distanceField(inA, w, h, cell);
   const distB = distanceField(inB, w, h, cell);
-  return { x0, y0, cell, w, h, inA, inB, zone, distA, distB, zoneCells };
+  const diffField = new Float64Array(size);
+  for (let index = 0; index < size; index += 1) {
+    const raw = distA[index]! - distB[index]!;
+    if (raw !== 0 || inA[index] !== 1 || inB[index] !== 1) {
+      diffField[index] = raw;
+      continue;
+    }
+    // Плато на квантованных расстояниях: точные расстояния до границ колец.
+    const x = x0 + ((index % w) + 0.5) * cell;
+    const y = y0 + (Math.floor(index / w) + 0.5) * cell;
+    diffField[index] = distanceToPolyline(ringA, x, y) - distanceToPolyline(ringB, x, y);
+  }
+  return { x0, y0, cell, w, h, inA, inB, zone, distA, distB, diffField, zoneCells };
 }
 
 /**
@@ -319,8 +371,8 @@ export interface AutoLineResult {
  */
 export function autoDivideLine(grid: ZoneGrid): AutoLineResult | null {
   if (grid.zoneCells < PAIR_MIN_ZONE_CELLS) return null;
-  const { w, h, zone, distA, distB } = grid;
-  const field = (i: number, j: number): number => distA[j * w + i]! - distB[j * w + i]!;
+  const { w, h, zone, diffField } = grid;
+  const field = (i: number, j: number): number => diffField[j * w + i]!;
   const inZone = (i: number, j: number): boolean => i >= 0 && j >= 0 && i < w && j < h && zone[j * w + i] === 1;
   // Точки пересечения нулевого уровня на горизонтальных и вертикальных рёбрах.
   // Ключ — уникальная точка (координаты с округлением): соседние блоки,
@@ -407,14 +459,17 @@ export function autoDivideLine(grid: ZoneGrid): AutoLineResult | null {
   // Связные ломаные: идём от точек с одной смежностью (концы) или от любых.
   const visited = new Set<number>();
   const polylines: AreaPoint[][] = [];
-  for (const startId of adjacency.keys()) {
-    if (visited.has(startId)) continue;
-    const line: AreaPoint[] = [];
-    let current: number | null = startId;
-    let previous: number | null = null;
+  // Обход связной ломаной из точек-пересечений. Старт может попасть в середину
+  // цепи, поэтому идём в **обе** стороны: сначала против выбранного соседа
+  // (в обратную сторону), затем вперёд — иначе цепь крошится на двухточечные
+  // обрывки, а «самой длинной частью» становится случайный обрывок у границы.
+  const walkChain = (from: number, incoming: number | null): number[] => {
+    const out: number[] = [];
+    let current: number | null = from;
+    let previous: number | null = incoming;
     while (current !== null && !visited.has(current)) {
       visited.add(current);
-      line.push(pointsById[current]!);
+      out.push(current);
       const candidates: readonly number[] = adjacency.get(current) ?? [];
       const next: number | null = candidates.find((candidate) => candidate !== previous && !visited.has(candidate))
         ?? candidates.find((candidate) => !visited.has(candidate))
@@ -422,7 +477,16 @@ export function autoDivideLine(grid: ZoneGrid): AutoLineResult | null {
       previous = current;
       current = next;
     }
-    if (line.length >= 2) polylines.push(line);
+    return out;
+  };
+  for (const startId of adjacency.keys()) {
+    if (visited.has(startId)) continue;
+    const neighbours = adjacency.get(startId) ?? [];
+    const backNeighbour = neighbours.find((candidate) => !visited.has(candidate));
+    const prefix = backNeighbour === undefined ? [] : walkChain(backNeighbour, startId).reverse();
+    visited.add(startId);
+    const chain = [...prefix, startId, ...walkChain(startId, backNeighbour ?? null)];
+    if (chain.length >= 2) polylines.push(chain.map((pointId) => pointsById[pointId]!));
   }
   if (polylines.length === 0) return null;
   polylines.sort((a, b) => polylineLength(b) - polylineLength(a));
@@ -477,9 +541,14 @@ export function simplifyPolyline(points: readonly AreaPoint[], epsilon: number):
 
 /** Автолиния пары по текущим кольцам: `null` — зоны взаимодействия нет. */
 export function buildInitialPairLine(areaA: Area, areaB: Area): PairLine | null {
-  const ringA = areaA.rings[0];
-  const ringB = areaB.rings[0];
-  if (ringA === undefined || ringB === undefined) return null;
+  return buildInitialPairLineInfo(areaA, areaB)?.line ?? null;
+}
+
+/** Автолиния плюс число связных частей зоны (для честной заметки в UI). */
+export function buildInitialPairLineInfo(areaA: Area, areaB: Area): { line: PairLine; components: number } | null {
+  const ringA = primaryContourRing(areaA);
+  const ringB = primaryContourRing(areaB);
+  if (ringA === null || ringB === null) return null;
   const grid = computeZoneGrid(ringA, ringB);
   if (grid === null) return null;
   const auto = autoDivideLine(grid);
@@ -489,10 +558,14 @@ export function buildInitialPairLine(areaA: Area, areaB: Area): PairLine | null 
   // линии). Клик — точка на кривой, а не средняя вершина: у двухточечной
   // ломаной средняя вершина — это конец линии.
   const curve = sampleLine(auto.points);
-  if (curve === null) return { manual: false, points: auto.points, anchors: [] };
-  const mid = curvePointAt(curve, 0.5, false);
-  const opened = beginLineEdit(auto.points, mid, Number.POSITIVE_INFINITY);
-  return { manual: false, points: auto.points, anchors: opened.ok ? opened.state.anchors : [] };
+  const line: PairLine = curve === null
+    ? { manual: false, points: auto.points, anchors: [] }
+    : (() => {
+      const mid = curvePointAt(curve, 0.5, false);
+      const opened = beginLineEdit(auto.points, mid, Number.POSITIVE_INFINITY);
+      return { manual: false as const, points: auto.points, anchors: opened.ok ? opened.state.anchors : [] };
+    })();
+  return { line, components: auto.components };
 }
 
 /* --------------------------------------------------------- стороны раздела */
@@ -505,19 +578,31 @@ export interface SideMasks {
 }
 
 /**
- * Делит зону линией на связные части и относит их к А или Б по среднему
+ * Делит зону линией на связные части и относит их к А или Б по знаку
  * `distA − distB` (линия может быть ручной и не совпадать с хребтом).
+ *
+ * Дефекты ревью B4.1–B4.3 закрыты:
+ *  - полоса двойного наложения: ячейки барьера вокруг линии **не остаются**
+ *    неразделёнными — после раздела частей они раздаются ближайшей стороне
+ *    (двухисточникный поиск в ширину, ничья — по знаку поля);
+ *  - утечка вокруг конца ручной линии: свободный конец, внесённый внутрь
+ *    зоны, запечатывается путём до границы зоны (кратчайший поиск в ширину),
+ *    поэтому обхода «вокруг конца» не существует;
+ *  - несколько раздельных частей зоны: часть, не накрытая линией (другая
+ *    «линза» пары), делится автоматическим правилом знака поля, а не целиком
+ *    отдаётся одной стороне.
  */
 export function sideMasks(grid: ZoneGrid, linePoints: readonly AreaPoint[]): SideMasks {
-  const { w, h, zone } = grid;
+  const { w, h, zone, diffField } = grid;
   const size = w * h;
   const aSide = new Uint8Array(size);
   const bSide = new Uint8Array(size);
+  const signToA = (index: number): boolean => diffField[index]! >= 0;
   if (linePoints.length < 2) {
     // Линии нет: вся зона делится по знаку расстояний (автоправило).
     for (let index = 0; index < size; index += 1) {
       if (zone[index] !== 1) continue;
-      if (grid.distA[index]! >= grid.distB[index]!) aSide[index] = 1;
+      if (signToA(index)) aSide[index] = 1;
       else bSide[index] = 1;
     }
     return { aSide, bSide };
@@ -533,19 +618,68 @@ export function sideMasks(grid: ZoneGrid, linePoints: readonly AreaPoint[]): Sid
       if (distanceToPolyline(linePoints, x, y) <= reach) blocked[index] = 1;
     }
   }
-  const component = new Int32Array(size).fill(-1);
+  const cellIndexAt = (x: number, y: number): number => {
+    const i = Math.round((x - grid.x0) / grid.cell - 0.5);
+    const j = Math.round((y - grid.y0) / grid.cell - 0.5);
+    if (i < 0 || j < 0 || i >= w || j >= h) return -1;
+    return j * w + i;
+  };
+  // Свободные концы линии внутри зоны запечатываются путём до границы зоны:
+  // ячейки пути добавляются в барьер, обход «вокруг конца» становится невозможен.
   const queue = new Int32Array(size);
-  const diff = (index: number): number => grid.distA[index]! - grid.distB[index]!;
+  for (const endPoint of [linePoints[0]!, linePoints[linePoints.length - 1]!]) {
+    const startCell = cellIndexAt(endPoint[0], endPoint[1]);
+    if (startCell < 0 || zone[startCell] !== 1) continue;
+    const parent = new Int32Array(size).fill(-2);
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = startCell;
+    parent[startCell] = -1;
+    let boundaryCell = -1;
+    while (head < tail && boundaryCell < 0) {
+      const cellIndex = queue[head++]!;
+      const i = cellIndex % w;
+      const j = (cellIndex - i) / w;
+      const neighbours = [
+        i > 0 ? cellIndex - 1 : -1,
+        i + 1 < w ? cellIndex + 1 : -1,
+        j > 0 ? cellIndex - w : -1,
+        j + 1 < h ? cellIndex + w : -1,
+      ];
+      for (const neighbour of neighbours) {
+        if (neighbour < 0) continue;
+        if (zone[neighbour] !== 1 || parent[neighbour] !== -2) continue;
+        const ni = neighbour % w;
+        const nj = (neighbour - ni) / w;
+        const onBoundary = ni === 0 || nj === 0 || ni === w - 1 || nj === h - 1
+          || (ni > 0 && zone[neighbour - 1] !== 1)
+          || (ni + 1 < w && zone[neighbour + 1] !== 1)
+          || (nj > 0 && zone[neighbour - w] !== 1)
+          || (nj + 1 < h && zone[neighbour + w] !== 1);
+        parent[neighbour] = cellIndex;
+        queue[tail++] = neighbour;
+        if (onBoundary) {
+          boundaryCell = neighbour;
+          break;
+        }
+      }
+    }
+    if (boundaryCell < 0) continue;
+    for (let walk = boundaryCell; walk >= 0; walk = parent[walk]!) blocked[walk] = 1;
+  }
+  // Связные части зоны (барьер игнорируется): управляемая — с линией,
+  // остальные делятся автоправилом.
+  const component = new Int32Array(size).fill(-1);
+  const diff = (index: number): number => diffField[index]!;
   let componentIndex = 0;
   for (let start = 0; start < size; start += 1) {
-    if (zone[start] !== 1 || blocked[start] === 1 || component[start] !== -1) continue;
-    // Поиск в ширину по 4-связности: одна связная часть зоны без ячеек линии.
+    if (zone[start] !== 1 || component[start] !== -1) continue;
     let head = 0;
     let tail = 0;
     queue[tail++] = start;
     component[start] = componentIndex;
-    let sum = diff(start);
-    let count = 1;
+    const members: number[] = [start];
+    let hasLine = blocked[start] === 1;
     while (head < tail) {
       const cellIndex = queue[head++]!;
       const i = cellIndex % w;
@@ -558,21 +692,104 @@ export function sideMasks(grid: ZoneGrid, linePoints: readonly AreaPoint[]): Sid
       ];
       for (const neighbour of neighbours) {
         if (neighbour < 0) continue;
-        if (zone[neighbour] !== 1 || blocked[neighbour] === 1 || component[neighbour] !== -1) continue;
+        if (zone[neighbour] !== 1 || component[neighbour] !== -1) continue;
         component[neighbour] = componentIndex;
         queue[tail++] = neighbour;
-        sum += diff(neighbour);
-        count += 1;
+        members.push(neighbour);
+        if (blocked[neighbour] === 1) hasLine = true;
       }
     }
-    const toA = sum >= 0;
-    for (let index = 0; index < size; index += 1) {
-      if (component[index] === componentIndex) {
-        if (toA) aSide[index] = 1;
-        else bSide[index] = 1;
+    if (!hasLine) {
+      // Часть зоны без линии (вторая линза пары): честный автосplit по знаку
+      // поля вместо отдачи всей части одной области (дефект B4.3).
+      for (const member of members) {
+        if (signToA(member)) aSide[member] = 1;
+        else bSide[member] = 1;
+      }
+    } else {
+      // Управляемая часть: барьер — стена, связные остатки относятся по
+      // среднему знаку поля каждой части.
+      const partAssigned = new Uint8Array(size);
+      for (const member of members) {
+        if (blocked[member] === 1 || partAssigned[member] === 1) continue;
+        let head2 = 0;
+        let tail2 = 0;
+        queue[tail2++] = member;
+        partAssigned[member] = 1;
+        const part: number[] = [member];
+        let sum = diff(member);
+        while (head2 < tail2) {
+          const cellIndex = queue[head2++]!;
+          const i = cellIndex % w;
+          const j = (cellIndex - i) / w;
+          const neighbours = [
+            i > 0 ? cellIndex - 1 : -1,
+            i + 1 < w ? cellIndex + 1 : -1,
+            j > 0 ? cellIndex - w : -1,
+            j + 1 < h ? cellIndex + w : -1,
+          ];
+          for (const neighbour of neighbours) {
+            if (neighbour < 0) continue;
+            if (component[neighbour] !== componentIndex) continue;
+            if (blocked[neighbour] === 1 || partAssigned[neighbour] === 1) continue;
+            partAssigned[neighbour] = 1;
+            queue[tail2++] = neighbour;
+            part.push(neighbour);
+            sum += diff(neighbour);
+          }
+        }
+        const toA = sum >= 0;
+        for (const memberIndex of part) {
+          if (toA) aSide[memberIndex] = 1;
+          else bSide[memberIndex] = 1;
+        }
       }
     }
     componentIndex += 1;
+  }
+  // Полоса барьера раздаётся ближайшей стороне: два встречных поиска в ширину
+  // от уже назначенных ячеек; ничья — по знаку поля (дефект B4.1).
+  const distToA = new Int32Array(size).fill(-1);
+  const distToB = new Int32Array(size).fill(-1);
+  const bfsFrom = (seeds: Uint8Array, target: Int32Array): void => {
+    let head = 0;
+    let tail = 0;
+    for (let index = 0; index < size; index += 1) {
+      if (seeds[index] === 1) {
+        target[index] = 0;
+        queue[tail++] = index;
+      }
+    }
+    while (head < tail) {
+      const cellIndex = queue[head++]!;
+      const i = cellIndex % w;
+      const j = (cellIndex - i) / w;
+      const neighbours = [
+        i > 0 ? cellIndex - 1 : -1,
+        i + 1 < w ? cellIndex + 1 : -1,
+        j > 0 ? cellIndex - w : -1,
+        j + 1 < h ? cellIndex + w : -1,
+      ];
+      for (const neighbour of neighbours) {
+        if (neighbour < 0) continue;
+        if (zone[neighbour] !== 1 || target[neighbour] !== -1) continue;
+        target[neighbour] = target[cellIndex]! + 1;
+        queue[tail++] = neighbour;
+      }
+    }
+  };
+  bfsFrom(aSide, distToA);
+  bfsFrom(bSide, distToB);
+  for (let index = 0; index < size; index += 1) {
+    if (zone[index] !== 1) continue;
+    if (aSide[index] === 1 || bSide[index] === 1) continue;
+    const da = distToA[index]!;
+    const db = distToB[index]!;
+    let toA: boolean;
+    if (da >= 0 && db >= 0 && da !== db) toA = da < db;
+    else toA = signToA(index);
+    if (toA) aSide[index] = 1;
+    else bSide[index] = 1;
   }
   return { aSide, bSide };
 }
@@ -692,10 +909,12 @@ function segmentsCross(a0: AreaPoint, a1: AreaPoint, b0: AreaPoint, b1: AreaPoin
   return t >= -1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9;
 }
 
-/** Кольца всех областей по ID; `null` — область не найдена. */
+/** Первичная замкнутая единица области по ID; `null` — не найдена или нет единиц. */
 function ringsOfArea(doc: SectorAreasDoc, areaId: string): readonly Ring[] | null {
   const area = doc.areas.find((entry) => entry.id === areaId);
-  return area === undefined ? null : area.rings;
+  if (area === undefined) return null;
+  const ring = primaryContourRing(area);
+  return ring === null ? null : [ring];
 }
 
 /**
@@ -749,9 +968,9 @@ export function reviewPairsAfterGeometryChange(
     const areaA = doc.areas.find((entry) => entry.id === pair.areaA);
     const areaB = doc.areas.find((entry) => entry.id === pair.areaB);
     if (areaA === undefined || areaB === undefined) return pair;
-    const ringA = areaA.rings[0];
-    const ringB = areaB.rings[0];
-    if (ringA === undefined || ringB === undefined) return pair;
+    const ringA = primaryContourRing(areaA);
+    const ringB = primaryContourRing(areaB);
+    if (ringA === null || ringB === null) return pair;
     const grid = computeZoneGrid(ringA, ringB);
     if (grid === null || grid.zoneCells < PAIR_MIN_ZONE_CELLS) {
       changed.push(pair.id);
@@ -795,6 +1014,12 @@ export function reviewPairsAfterGeometryChange(
       changed.push(pair.id);
       return { ...pair, needsReview: true, note: 'Контур области изменился: ручная линия сохранена, но вышла из зоны взаимодействия.' };
     }
+    // Линия снова в зоне: пометка «требует пересмотра» снимается вместе с
+    // устаревшей заметкой (жизненный цикл needsReview, S4 ревью).
+    if (pair.needsReview || pair.note !== null) {
+      changed.push(pair.id);
+      return { ...pair, needsReview: false, note: null };
+    }
     return pair;
   });
   return { doc: { ...doc, pairs }, changed };
@@ -816,9 +1041,9 @@ export interface PairSplitRegions {
  */
 export function splitRegionsForPair(areaA: Area, areaB: Area, pair: AreaPair): PairSplitRegions | null {
   if (pair.mode !== 'split') return null;
-  const ringA = areaA.rings[0];
-  const ringB = areaB.rings[0];
-  if (ringA === undefined || ringB === undefined) return null;
+  const ringA = primaryContourRing(areaA);
+  const ringB = primaryContourRing(areaB);
+  if (ringA === null || ringB === null) return null;
   const grid = computeZoneGrid(ringA, ringB);
   if (grid === null || grid.zoneCells < PAIR_MIN_ZONE_CELLS) return null;
   const linePoints = pair.line !== null && pair.line.points.length >= 2

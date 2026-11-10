@@ -44,6 +44,7 @@ import {
   crossingViolation,
   createPair,
   markPairNeedsReview,
+  pairCurrentlyIntersects,
   removePair,
   resetPairLineToAuto,
   reviewPairsAfterGeometryChange,
@@ -375,12 +376,15 @@ export function setPairOrderCmd(session: EditorSession, pairId: string, order: '
 }
 
 export function setPairForbidCrossingCmd(session: EditorSession, pairId: string, value: boolean): HierarchyResult {
+  const intersectsNow = value && pairCurrentlyIntersects(session.doc, pairId);
   const doc = setPairForbidCrossing(session.doc, pairId, value);
   return {
     session: commitDocChange(session, doc, { kind: 'pair', areaId: null, mode: null, note: `Запрет пересечения ${pairId}: ${value ? 'включён' : 'выключен'}` }),
-    message: value
-      ? 'Пересечение запрещено: новые пересечения контуров пары будут отклоняться.'
-      : 'Запрет пересечения выключен.',
+    message: !value
+      ? 'Запрет пересечения выключен.'
+      : intersectsNow
+        ? 'Пересечение запрещено для НОВЫХ пересечений; области пары уже пересекаются — существующее правило не разрывает, правки контуров остаются доступны.'
+        : 'Пересечение запрещено: новые пересечения контуров пары будут отклоняться.',
   };
 }
 
