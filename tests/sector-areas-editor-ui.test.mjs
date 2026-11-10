@@ -1089,10 +1089,49 @@ test('жёсткий инвариант верхнего слоя навигац
   assert.match(css, /\.admin-editor-panel\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?overflow-x:\s*hidden;/);
   assert.match(css, /@media \(max-width: 1020px\)[\s\S]*?\.admin-editor-nav\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?z-index:\s*8;/);
   assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.map-stage \.left-panel\s*\{\s*z-index:\s*19;\s*\}/);
-  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?max-height:\s*min\(56dvh,\s*440px\)/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.admin-editor-panel:not\(\.is-collapsed\)\s*\{[\s\S]*?bottom:\s*8px;[\s\S]*?max-height:\s*min\(44dvh,\s*340px\)/);
 
   const guide = read('docs/admins/sector-areas-editor.md');
   assert.match(guide, /Панель и навигация «Системы»/);
   assert.match(guide, /глобальный верхний слой навигации/);
   assert.match(guide, /Экран «Зависимости»/);
+});
+
+test('onSessionChange срабатывает при импорте и правках; window.__sectorEditorDebug удалён из app.ts', async () => {
+  const appSource = read('src/atlas/app.ts');
+  assert.doesNotMatch(appSource, /__sectorEditorDebug/, 'отладочный глобал не утекает на window');
+  assert.match(appSource, /isEditorToolActive/, 'клик-полёт по системе заблокирован при активном инструменте редактора');
+
+  const panel = fakePanel();
+  const kernel = fakeKernel(emptySectorAreasDoc());
+  let sessionChanges = 0;
+  const ui = createSectorAreasEditorUi({
+    kernel,
+    panel,
+    stage: new FakeElement(),
+    canvas: null,
+    onSessionChange: () => { sessionChanges += 1; },
+  });
+  ui.applySession(addAreaFromStroke(ui.session(), {
+    id: 's-new',
+    name: 'Тест штриха',
+    points: [[1000, 1000], [2000, 1000], [2000, 2000], [1000, 2000]],
+    closed: true,
+  }));
+  assert.ok(sessionChanges >= 1, 'изменение сессии уведомляет смежные панели');
+
+  // Импорт JSON обновляет kernel.state.sectorAreas и вызывает onSessionChange.
+  const importedDoc = parseSectorAreas({
+    ...emptySectorAreasDoc(),
+    areas: [createArea({ id: 'imp-1', name: 'Импортированная', rings: [[[500, 500], [1500, 500], [1500, 1500], [500, 1500], [500, 500]]] })],
+  });
+  const changesBefore = sessionChanges;
+  const fileInput = new FakeElement({ 'data-action': 'areas-import' });
+  fileInput.files = [{ text: async () => JSON.stringify(importedDoc) }];
+  panel.handlers.get('change')({ target: fileInput });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(kernel.state.sectorAreas.areas.length, 1);
+  assert.equal(kernel.state.sectorAreas.areas[0].id, 'imp-1');
+  assert.ok(sessionChanges > changesBefore, 'areas-import синхронизирует рендер и смежные панели');
+  ui.destroy();
 });

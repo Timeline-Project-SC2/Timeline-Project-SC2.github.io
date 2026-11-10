@@ -260,7 +260,9 @@
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(2),
 .admin-editor-panel[data-active-screen="dependencies"] > .admin-editor-body > section:nth-of-type(3),
 .admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(2),
-.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3) {
+.admin-editor-panel[data-active-screen="draw"] > .admin-editor-body > section:nth-of-type(3),
+.admin-editor-panel[data-active-screen="lines"] > .admin-editor-body > section:nth-of-type(2),
+.admin-editor-panel[data-active-screen="lines"] > .admin-editor-body > section:nth-of-type(3) {
   display: none;
 }
 .admin-editor-panel[data-active-screen="properties"] > .admin-editor-body,
@@ -630,6 +632,102 @@
 }
 #mapCanvas.editor-drawing { cursor: crosshair; }
 
+/* Слой правки линий: участок, 5 якорей-векторов и ядро поверх карты.
+   Без этого правила канвас попадал в обычный поток `.map-stage` и уходил ПОД
+   `#mapCanvas` (`position: absolute` рисуется выше элементов потока): ядро и
+   якоря существовали в DOM, но на полной странице их не было видно. Слой выше
+   карты и виньетки (z-index 1) и тонировки редактора (z-index 2), ниже панелей
+   (z-index 14+); мышь проходит сквозь него к карте. */
+.admin-editor-line-preview {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+#mapCanvas.editor-lines { cursor: crosshair; }
+
+/* Overlay иерархии областей: якоря, контур под правкой и линия раздела пары.
+   Тот же слой, что у правки линий: выше карты, ниже панелей, события ввода
+   не перехватывает. */
+.admin-editor-hierarchy-preview {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Строки групп и сочетаний: компактная карточка внутри раздела. */
+.admin-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(212, 112, 133, .14);
+}
+.admin-row-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.admin-meta-id {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+.admin-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-chip {
+  padding: 2px 8px;
+  border: 1px solid rgba(212, 112, 133, .35);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--white);
+}
+.admin-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  border: 1px solid;
+}
+.admin-badge-warn {
+  color: #ffd27a;
+  border-color: rgba(255, 210, 122, .55);
+  background: rgba(255, 210, 122, .12);
+}
+.admin-editor-panel details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0;
+}
+.admin-editor-panel details[open] summary { margin-bottom: 10px; }
+
+/* Импорт границ: поле файла остаётся настоящим input, поэтому доступно с
+   клавиатуры и читается скринридером; выглядит как строка панели. */
+.admin-editor-import {
+  display: grid;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px dashed rgba(212, 112, 133, .38);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.admin-editor-import input[type="file"] {
+  width: 100%;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+}
+.admin-editor-import input[type="file"]:focus-visible {
+  outline: 2px solid rgba(240, 163, 177, .7);
+  outline-offset: 2px;
+}
+.admin-editor-tool:disabled {
+  opacity: .45;
+  cursor: default;
+}
+.admin-editor-tool.is-current { border-color: rgba(240, 163, 177, .68); }
+
 /* ---------------------------------------------------------- свёрнутая панелька */
 
 /* Свёрнутое состояние: узкая длинная панелька по правому краю. */
@@ -996,13 +1094,14 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   .map-stage .detail-panel,
   .map-stage .travel-panel { z-index: 14; }
   .admin-editor-gate { top: 50%; padding: 20px; }
-  .admin-editor-panel {
-    top: 72px;
+  .admin-editor-panel:not(.is-collapsed) {
+    top: auto;
     right: 8px;
-    bottom: auto;
-    width: min(360px, calc(100vw - 16px));
-    max-width: calc(100vw - 16px);
-    max-height: min(56dvh, 440px);
+    bottom: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
+    max-height: min(44dvh, 340px);
     padding: 12px;
   }
   .admin-editor-grid {
@@ -1010,6 +1109,8 @@ body.admin-editor-authorized { background: var(--admin-stage-edge); }
   }
   .admin-editor-panel.is-collapsed {
     top: 50%;
+    right: 8px;
+    left: auto;
     bottom: auto;
     width: 42px;
     height: 180px;

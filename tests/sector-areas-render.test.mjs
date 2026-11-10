@@ -263,3 +263,47 @@ test('отдельные штрихи области отрисовываютс�
   const projected = areasFor(paints, { w: 1000, h: 800 }, { centerX: 5000, centerY: 5000, visibleWidth: 10000 });
   assert.equal(projected.length, 3);
 });
+
+test('форс-закрашивание учитывает фокус, rounding/lodBias состояния, а split прикрепляется и к замкнутым штрихам', () => {
+  const closedStroke = { id: 's-closed', points: [[7000, 7000], [8000, 7000], [8000, 8000], [7000, 8000]], closed: true };
+  const area = {
+    ...createArea({
+      id: 'a-override',
+      name: 'С мазком',
+      rings: [SQUARE],
+      strokes: [closedStroke],
+    }),
+    states: [state({ mode: 'political', rounding: 2, lodBias: 1 })],
+  };
+  const stroke = createOverrideStroke({
+    id: 'ov-1',
+    areaId: 'a-override',
+    mode: 'political',
+    rings: [LINE],
+    color: '#ff0055',
+    alpha: 0.8,
+  });
+  const doc = commitOverride(docWith([area]), stroke);
+  const splitMask = { holes: [SECOND], line: [[5000, 5000], [6000, 6000]], transitionHalfWidth: 0 };
+
+  const visibleFocus = buildAreaPaints(doc, {
+    level: 5,
+    palette,
+    focusMode: 'military',
+    focus: { behavior: 'dim', dimAlpha: 0.25 },
+    splitForArea: () => [splitMask],
+  });
+  const overridePaint = visibleFocus.find((item) => item.override);
+  const closedStrokePaint = visibleFocus.find((item) => item.strokeIds?.[0] === 's-closed');
+  assert.ok(overridePaint !== undefined);
+  assert.ok(overridePaint.stroke.alpha <= 0.8 * 0.25 + 1e-6, 'override приглушается в неактивном фокус-режиме');
+  assert.equal(closedStrokePaint.splits.length, 1, 'split прикреплён к замкнутому штриху даже при непустых rings');
+
+  const hiddenFocus = buildAreaPaints(doc, {
+    level: 5,
+    palette,
+    focusMode: 'military',
+    focus: { behavior: 'hide', dimAlpha: 0.25 },
+  });
+  assert.equal(hiddenFocus.some((item) => item.override), false, 'hide скрывает override чужого режима');
+});

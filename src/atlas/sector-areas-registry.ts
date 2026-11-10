@@ -212,7 +212,7 @@ export function documentReport(doc: SectorAreasDoc, options: { readonly bounds?:
 export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
   {
     id: 'sector-areas-contract',
-    label: 'Документ областей, схема v1',
+    label: 'Документ областей, схема v2',
     plane: 'data',
     status: 'working',
     source: 'src/atlas/sector-areas-contract.ts',

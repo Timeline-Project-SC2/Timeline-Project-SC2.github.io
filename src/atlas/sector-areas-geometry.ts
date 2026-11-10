@@ -354,6 +354,133 @@ export function closedStrokeRing(stroke: AreaStroke): Ring {
   return [...vertices, [first[0], first[1]]];
 }
 
+/**
+ * Замкнутые геометрические единицы области для иерархии (дефект B1 ревью):
+ * кольца документа, затем замкнутые штрихи. Открытые штрихи единицами не
+ * являются — открытая линия не выдаётся за замкнутую область. `ringIndex`
+ * якорей (`contourAnchors`) нумерует именно эти единицы: у областей с кольцами
+ * нумерация совпадает со прежней (индекс кольца).
+ */
+export interface ContourUnit {
+  readonly ringIndex: number;
+  readonly kind: 'ring' | 'stroke';
+  /** Идентификатор штриха; для колец — `null`. */
+  readonly strokeId: string | null;
+  /** Видимое замкнутое кольцо единицы (штрих разворачивается в кольцо). */
+  readonly ring: Ring;
+}
+
+export function contourUnitsOf(area: Area): readonly ContourUnit[] {
+  const units: ContourUnit[] = area.rings.map((ring, index) => ({
+    ringIndex: index,
+    kind: 'ring' as const,
+    strokeId: null,
+    ring,
+  }));
+  if (area.closed) {
+    for (const stroke of area.strokes ?? []) {
+      if (!stroke.closed) continue;
+      units.push({
+        ringIndex: units.length,
+        kind: 'stroke',
+        strokeId: stroke.id,
+        ring: closedStrokeRing(stroke),
+      });
+    }
+  }
+  return units;
+}
+
+/** Первая замкнутая единица области (кольцо или крупнейший замкнутый штрих); `null` — нет. */
+export function primaryContourRing(area: Area): Ring | null {
+  const units = contourUnitsOf(area);
+  if (units.length === 0) return null;
+  if (area.rings.length > 0 && area.closed) return units[0]!.ring;
+  let best = units[0]!;
+  let bestArea = ringArea(best.ring, true);
+  for (let i = 1; i < units.length; i += 1) {
+    const candidate = units[i]!;
+    const areaValue = ringArea(candidate.ring, true);
+    if (areaValue > bestArea) {
+      best = candidate;
+      bestArea = areaValue;
+    }
+  }
+  return best.ring;
+}
+
+/**
+ * Все положительные замкнутые контуры области (внешнее кольцо `rings[0]`
+ * без дырок `rings[1..]` плюс каждый замкнутый штрих `Area.strokes`).
+ */
+export function positiveContourRingsOf(area: Area): readonly Ring[] {
+  if (area.closed === false) return [];
+  const out: Ring[] = [];
+  const outer = area.rings[0];
+  if (outer !== undefined && outer.length >= 3) out.push(outer);
+  for (const stroke of area.strokes ?? []) {
+    if (!stroke.closed || stroke.points.length < 3) continue;
+    out.push(closedStrokeRing(stroke));
+  }
+  return out;
+}
+
+/**
+ * Принадлежность точки залитой геометрии области: учитывает внешнее кольцо
+ * минус дырки `rings[1..]` И все замкнутые штрихи `Area.strokes`.
+ */
+export function pointInAreaFill(area: Area, x: number, y: number): boolean {
+  if (area.closed === false) return false;
+  if (pointInArea(area, x, y)) return true;
+  for (const stroke of area.strokes ?? []) {
+    if (!stroke.closed || stroke.points.length < 3) continue;
+    if (pointInRing(stroke.points, x, y)) return true;
+  }
+  return false;
+}
+
+/** Охватывающий прямоугольник всей залитой геометрии области (`rings` и замкнутых `strokes`). */
+export function areaFillBBox(area: Area): BBox | null {
+  if (area.closed === false) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let count = 0;
+  const absorb = (points: readonly AreaPoint[]): void => {
+    for (const point of points) {
+      minX = Math.min(minX, point[0]);
+      minY = Math.min(minY, point[1]);
+      maxX = Math.max(maxX, point[0]);
+      maxY = Math.max(maxY, point[1]);
+      count += 1;
+    }
+  };
+  const outer = area.rings[0];
+  if (outer !== undefined && outer.length >= 3) absorb(outer);
+  for (const stroke of area.strokes ?? []) {
+    if (!stroke.closed || stroke.points.length < 3) continue;
+    absorb(stroke.points);
+  }
+  if (count === 0) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+/** Расстояние до ближайшего контура залитой геометрии области (кольца, дырки и замкнутые штрихи). */
+export function distanceToAreaFillBoundary(area: Area, x: number, y: number): number {
+  if (area.closed === false) return Infinity;
+  let best = Infinity;
+  for (const ring of area.rings) {
+    if (ring.length >= 3) best = Math.min(best, distanceToRing(ring, x, y, true));
+  }
+  for (const stroke of area.strokes ?? []) {
+    if (stroke.closed && stroke.points.length >= 3) {
+      best = Math.min(best, distanceToRing(stroke.points, x, y, true));
+    }
+  }
+  return best;
+}
+
 /** Длина отдельного штриха в мировых единицах. */
 export function strokeLength(stroke: AreaStroke): number {
   return ringLength(stroke.points, stroke.closed);

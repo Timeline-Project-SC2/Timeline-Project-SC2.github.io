@@ -126,7 +126,7 @@ test('scripts["test:raw"] разбирается как есть: TAP-репор
 
   const scriptFiles = pkg.scripts[RAW_SCRIPT].trim().split(/\s+/).filter((arg) => /\.test\./.test(arg));
   assert.deepEqual(testFiles(args), scriptFiles, 'список файлов — ровно из test:raw');
-  assert.equal(scriptFiles.length, 48, 'в списке 48 тест-файлов, включая модель туманности и правила ввода карты');
+  assert.equal(scriptFiles.length, 56, 'в списке 56 тест-файлов, включая модель туманности, правила ввода карты и иерархию областей');
   assert.ok(scriptFiles.includes('tests/nebula-model.test.mjs'), 'модель туманности входит в полный прогон');
   assert.ok(scriptFiles.includes('tests/check-test-baseline.test.mjs'), 'self-test входит в полный прогон');
 });
