@@ -405,13 +405,18 @@ function vertexFractionsOf(ring: Ring, closed: boolean, curve: SampledCurve): re
   if (vertices.length < minimum) return ring.map((_, index) => (ring.length === 0 ? 0 : index / ring.length));
   const { cumulative, length } = cumulativeOf(vertices);
   if (length <= 0) return vertices.map((_, index) => (vertices.length === 0 ? 0 : index / vertices.length));
-  const fractions = vertices.map((_, index) => (cumulative[index] ?? 0) / length);
+  // Доли вершин живут в системе координат ВИДИМОЙ КРИВОЙ: для замкнутого
+  // контура её длина включает замыкающее ребро (дефект B1-ревью: деление на
+  // незамкнутый периметр сдвигало все вершины, окна тяги коммита не совпадали
+  // с якорями — контур при коммите терял и дублировал участки).
+  const total = closed ? curve.length : length;
+  if (!(total > 0)) return vertices.map((_, index) => (vertices.length === 0 ? 0 : index / vertices.length));
+  const fractions = vertices.map((_, index) => (cumulative[index] ?? 0) / total);
   if (!closed) {
     // Концы открытой линии — ровно 0 и 1.
     fractions[0] = 0;
     fractions[fractions.length - 1] = 1;
   }
-  void curve;
   return fractions;
 }
 
@@ -784,45 +789,34 @@ export function commitDrag(state: ContourEditState): ContourEditState {
   };
 
   const samples = Math.min(96, Math.max(8, Math.round(span / ANCHOR_LINE_SPACING)));
-  const ringPoints: AreaPoint[] = [];
-  let inserted = false;
+  const sampleBlock: AreaPoint[] = [];
+  for (let k = 0; k <= samples; k += 1) {
+    const sampleArc = u0 + (span * k) / samples;
+    const point = pointAtIndex(state.preview, ((sampleArc % length) + length) % length, base.cumulative);
+    sampleBlock.push([
+      Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[0])),
+      Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[1])),
+    ]);
+  }
+
+  // Сборка кольца по «ключам» в развёрнутой системе окна (дефект B1-ревью:
+  // прежняя линейная сборка с флагом первой вставки при окне, переходящем
+  // через шов замыкания (u1 > length), теряла и дублировала часть контура —
+  // штрих становился самопересечённым, зоны пар вырождались). Вершины вне
+  // окна делятся на «до» и «после» по ключу; окно через шов требует поворота:
+  // вывод начинается с вершин после окна, блок снятой кривой замыкает круг.
+  const crossesSeam = closed && u1 > length;
+  const before: AreaPoint[] = [];
+  const after: AreaPoint[] = [];
   for (let j = 0; j < arcs.length; j += 1) {
-    const arc = windowArcOf(arcs[j]!);
-    if (arc === null) {
-      ringPoints.push(state.ring[j]!);
-      continue;
-    }
-    if (!inserted) {
-      inserted = true;
-      for (let k = 0; k <= samples; k += 1) {
-        const sampleArc = u0 + (span * k) / samples;
-        const point = pointAtIndex(state.preview, ((sampleArc % length) + length) % length, base.cumulative);
-        ringPoints.push([
-          Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[0])),
-          Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[1])),
-        ]);
-      }
-    }
-    // Вершины внутри окна заменяются точками снятой кривой.
+    if (windowArcOf(arcs[j]!) !== null) continue;
+    const key = crossesSeam ? arcs[j]! + length : arcs[j]!;
+    if (key >= u1) after.push(state.ring[j]!);
+    else before.push(state.ring[j]!);
   }
-  if (!inserted) {
-    // Окно между двумя соседними вершинами: вставляем точки, ничего не заменяя.
-    for (let j = 0; j < arcs.length; j += 1) {
-      ringPoints.push(state.ring[j]!);
-      const arc = arcs[j]!;
-      const next = arcs[j + 1];
-      if (next !== undefined && arc < u0 && next > u1) {
-        for (let k = 0; k <= samples; k += 1) {
-          const a = u0 + (span * k) / samples;
-          const point = pointAtIndex(state.preview, ((a % length) + length) % length, base.cumulative);
-          ringPoints.push([
-            Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[0])),
-            Math.min(ANCHOR_MAP_BOUND, Math.max(0, point[1])),
-          ]);
-        }
-      }
-    }
-  }
+  const ringPoints: AreaPoint[] = crossesSeam
+    ? [...after, ...before, ...sampleBlock]
+    : [...before, ...sampleBlock, ...after];
   const cleaned = dropClosePoints(ringPoints);
   const next = stateOf(cleaned, closed, state.anchors, null);
   if (next === null) return state;

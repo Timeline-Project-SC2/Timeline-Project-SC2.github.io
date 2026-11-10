@@ -360,6 +360,66 @@ test('B1: якорная правка области со штрихами — �
   assert.equal(undone.doc.areas[0].contourAnchors[0].anchors.length, 10, 'число якорей после undo целое');
 });
 
+test('B1: тяга якоря с окном через шов замыкания сохраняет контур (регресс самопересечения)', () => {
+  // Реальный сценарий приёмки: клик-открытие правки около середины верхней
+  // грани квадрата, тяга первого якоря — окно деформации переходит через шов
+  // замыкания (s-компонента предыдущего якоря больше следующего). Прежняя
+  // сборка коммита теряла и дублировала вершины: штрих становился
+  // самопересечённым, зоны сочетаний вырождались.
+  const strokeDoc = parseSectorAreas({
+    version: 1,
+    mapSize: 10000,
+    modes: ['political', 'military', 'economy', 'tension'],
+    experimentalModes: ['ecology', 'history'],
+    areas: [
+      { ...createArea({
+        id: 'area-s',
+        name: 'Мазок',
+        rings: [],
+        strokes: [{ id: 'stroke-s', points: square(1500, 2000, 4500, 5000), closed: true }],
+        closed: true,
+        source: 'brush',
+      }), states: [] },
+    ],
+    overrides: [],
+    events: [],
+  });
+  const session0 = createEditorSession(strokeDoc);
+  const ring = session0.doc.areas[0].strokes[0].points;
+  const curve = sampleRing(ring);
+  const opened = openContourEdit(session0, 'area-s', curvePointAt(curve, 0.058, true));
+  assert.ok(opened.session.contourEdit !== null, (opened.message ?? ''));
+  // Первый якорь тянут вниз-вправо: его окно (между соседними якорями)
+  // переходит через шов замыкания кольца.
+  const dragged = dragContourAnchor(opened.session, 0, [2940, 2490]);
+  assert.ok(dragged.session.contourEdit !== null, (dragged.message ?? ''));
+  const committed = commitContourDrag(dragged.session);
+  const points = committed.session.doc.areas[0].strokes[0].points;
+  // Все вершины вне окна деформации остаются в штрихе.
+  const has = (x, y) => points.some((p) => Math.hypot(p[0] - x, p[1] - y) <= 1);
+  assert.equal(has(4500, 5000), true, 'угол (4500,5000) сохранён');
+  assert.equal(has(1500, 5000), true, 'угол (1500,5000) сохранён');
+  assert.equal(has(4500, 2000), true, 'угол (4500,2000) сохранён');
+  // Контур прост: рёбра не пересекаются (кроме соседних в общей вершине).
+  const seg = (a, b, c, d) => {
+    const d1 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const d2 = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+    const d3 = (d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0]);
+    const d4 = (d[0] - c[0]) * (b[1] - c[1]) - (d[1] - c[1]) * (b[0] - c[0]);
+    return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+  };
+  let crossings = 0;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    for (let j = i + 2; j < points.length - 1; j += 1) {
+      if (i === 0 && j === points.length - 2) continue;
+      if (seg(points[i], points[i + 1], points[j], points[j + 1])) crossings += 1;
+    }
+  }
+  assert.equal(crossings, 0, `самопересечений нет (найдено ${crossings})`);
+  // Замыкание: первая и последняя точки совпадают (контракт штрихов).
+  assert.deepEqual(points[0], points[points.length - 1], 'штрих замкнут (первая == последняя)');
+});
+
 test('B1: сочетание штриховой области с соседом строит автолинию, запрет работает', () => {
   const strokeDoc = parseSectorAreas({
     version: 1,

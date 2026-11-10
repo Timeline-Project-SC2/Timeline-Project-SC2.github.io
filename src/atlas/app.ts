@@ -613,6 +613,18 @@ function restoreSnapshot(): void {
 function bindSectorAreasEditor(): void {
   const panel = qs<HTMLElement>('[data-admin-editor]');
   if (panel === null) return;
+  // Служба приёмки: только на демо-странице редактора (за публичным барьером) —
+  // чтение экранных/мировых координат для автоматизированных браузерных проверок.
+  // Управления нет: только проекции и рамка канвы.
+  if (typeof window !== 'undefined') {
+    (window as unknown as Record<string, unknown>).__sectorEditorDebug = {
+      toScreen: (x: number, y: number) => kernel.renderer.toScreen(x, y),
+      toWorld: (x: number, y: number) => kernel.renderer.toWorld(x, y),
+      canvasRect: () => el.mapCanvas?.getBoundingClientRect() ?? null,
+      // Только чтение текущего документа областей (для сверки конвейера масок).
+      areasDoc: () => state.sectorAreas,
+    };
+  }
   areasEditor = createSectorAreasEditorUi({
     kernel,
     panel,
