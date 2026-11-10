@@ -26,7 +26,10 @@ import { promisify } from 'node:util';
 import {
   ROOT,
   collectChanged,
+  coveredByLint,
   coveredByProjectTypes,
+  isAssemblyScript,
+  normalizePath,
   importProblems,
   isProbeFile,
   parseArgs,
@@ -180,12 +183,34 @@ test('аргументы: --probe без значения и неизвестн�
   assert.deepEqual(parseArgs([]), { ok: true, mode: 'git', probe: null, run: false, base: null });
 });
 
-test('покрытие типами проекта: src/site/tools .ts — да, tests/** и .mjs — нет', () => {
+test('покрытие типами проекта: только .ts из src/site/tools, allowJs:false отсекает JS', () => {
   assert.equal(coveredByProjectTypes('src/atlas/x.ts'), true);
+  assert.equal(coveredByProjectTypes('site/shared/x.ts'), true);
+  assert.equal(coveredByProjectTypes('tools/x.ts'), true);
   assert.equal(coveredByProjectTypes('tools/vite/x.ts'), false, 'include tsconfig — только tools/*.ts');
   assert.equal(coveredByProjectTypes('tools/check_fast.mjs'), false);
   assert.equal(coveredByProjectTypes('tests/x.test.mjs'), false);
-  assert.equal(coveredByProjectTypes('site/shared/x.ts'), true);
+  assert.equal(coveredByProjectTypes('src/review-probe.js'), false, 'allowJs:false — JS не типизируется');
+  assert.equal(coveredByProjectTypes('site/x.js'), false);
+});
+
+test('покрытие линтом повторяет блоки eslint.config.mjs, а не каталог целиком', () => {
+  assert.equal(coveredByLint('src/a.ts').covered, true);
+  assert.equal(coveredByLint('site/a.js').covered, true);
+  assert.equal(coveredByLint('site/a.ts').covered, true);
+  assert.equal(coveredByLint('tests/a.test.mjs').covered, true);
+  assert.equal(coveredByLint('tests/a.test.js').covered, true);
+  assert.equal(coveredByLint('tools/x.mjs').covered, true);
+  assert.equal(coveredByLint('src/a.js').covered, false, 'правил для src/**/*.js нет');
+  assert.equal(coveredByLint('tools/x.ts').covered, false, 'правил для tools/**/*.ts нет');
+  assert.equal(coveredByLint('x.cjs').covered, false);
+});
+
+test('нормализация пути: приставка ./ не обходит проверки контура', () => {
+  assert.equal(normalizePath('./src/planet/assembly/kernels.ts'), 'src/planet/assembly/kernels.ts');
+  assert.equal(normalizePath('.\\src\\a.ts'), 'src/a.ts');
+  assert.equal(normalizePath('src//a.ts'), 'src/a.ts');
+  assert.equal(isAssemblyScript(normalizePath('./src/planet/assembly/kernels.ts')), true);
 });
 
 test('стык импортов: несуществующий экспорт — проблема без запуска кода', async () => {
@@ -351,7 +376,38 @@ test('CLI: зелёный отчёт перечисляет, что именно
   try {
     writeFileSync(path.join(dir, 'tests/a.test.mjs'), 'console.log(6);\n');
     const result = await gateIn(dir, []);
-    assert.match(result.text, /Проверено: стык импортов, типы проекта \(tsc --noEmit\), линт \(eslint, no-undef\)/);
+    // Файл в наборе — `tests/*.mjs`: типы для него не проверяются (вне include tsconfig),
+    // и гейт обязан сказать это, а не выдать «Проверено: типы».
+    assert.match(result.text, /типы: НЕ ПРОВЕРЯЛОСЬ/);
+    assert.match(result.text, /Проверено: стык импортов, линт \(eslint, no-undef\)\./);
+    assert.doesNotMatch(result.text, /Проверено: [^.]*типы/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: JS в src/ не выдаётся за проверенный типами и линтом', async () => {
+  const dir = await makeRepo({ 'src/review-probe.js': 'export const x = undeclaredVar;\n' });
+  try {
+    const result = await gateIn(dir, ['--probe', 'src/review-probe.js']);
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.text, /типы: НЕ ПРОВЕРЯЛОСЬ/);
+    assert.match(result.text, /линт: без правил/);
+    assert.doesNotMatch(result.text, /типы: ок/);
+    assert.match(result.text, /Проверено: стык импортов\./, 'в списке проверенного нет типов и линта');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: ./ перед путём AssemblyScript не обходит отказ', async () => {
+  const dir = await makeRepo({ 'src/planet/assembly/kernels.ts': 'export function f(): i32 { return 1; }\n' });
+  try {
+    const plain = await gateIn(dir, ['--probe', 'src/planet/assembly/kernels.ts']);
+    const dotted = await gateIn(dir, ['--probe', './src/planet/assembly/kernels.ts']);
+    assert.equal(plain.code, 2, plain.text);
+    assert.equal(dotted.code, 2, dotted.text);
+    assert.match(dotted.text, /AssemblyScript/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

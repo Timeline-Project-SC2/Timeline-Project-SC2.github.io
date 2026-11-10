@@ -271,12 +271,57 @@ export async function importProblems(files, buildFn) {
   return problems;
 }
 
-/** Попадает ли файл под `include` корневого `tsconfig.json` (типы проекта). */
+/**
+ * Нормализует путь пробы: `./src/x.ts`, `src//x.ts` → `src/x.ts`.
+ * Без этого проверки контура (AssemblyScript, зона, покрытие правилами) обходились
+ * приставкой `./` в аргументе.
+ * @param {string} file путь как ввёл пользователь
+ * @returns {string}
+ */
+export function normalizePath(file) {
+  return String(file).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/');
+}
+
+/**
+ * Покрыт ли файл проверкой типов по корневому `tsconfig.json` (правило, а не догадка):
+ * `include` — `src/**\/*.ts`, `site/**\/*.ts`, `tools/*.ts`, `vite.config.mts`;
+ * `allowJs: false` — значит `.js`, `.mjs`, `.cjs` не типизируются вообще.
+ * @param {string} file нормализованный путь
+ * @returns {boolean}
+ */
 export function coveredByProjectTypes(file) {
   if (file === 'vite.config.mts') return true;
-  if (file.startsWith('src/') || file.startsWith('site/')) return CODE_EXT.test(file);
-  if (/^tools\/[^/]+\.ts$/.test(file)) return true;
-  return false;
+  if (!/\.ts$/.test(file) || /\.d\.ts$/.test(file)) return false;
+  if (file.startsWith('src/') || file.startsWith('site/')) return true;
+  return /^tools\/[^/]+\.ts$/.test(file);
+}
+
+/**
+ * Покрыт ли файл правилом ESLint с реальной конфигурацией.
+ * В корневом `eslint.config.mjs` правила заданы для: `site/**\/*.js`, `site/**\/*.ts`,
+ * `src/**\/*.ts`, `tools/**\/*.mjs`, `tests/**\/*.mjs`, `tools/bench_planet_baseline.mjs`,
+ * `tests/**\/*.js`, `tools/bench_planet_baseline.mjs`. Прочие файлы ESLint молча
+ * пропускает: `eslint` на файле без подходящего блока возвращает `0` и ничего не проверяет.
+ * @param {string} file нормализованный путь
+ * @returns {{covered: boolean, note: string}}
+ */
+export function coveredByLint(file) {
+  // Точное соответствие блокам `eslint.config.mjs`: site — js и ts, src — только ts,
+  // tools и tests — mjs, tests — ещё js. Всё остальное (.cjs, .mts, src/**/*.js) не покрыто.
+  const covered = /^site\/.*\.(?:js|ts)$/.test(file)
+    || /^src\/.*\.ts$/.test(file)
+    || /^tools\/.*\.mjs$/.test(file)
+    || /^tests\/.*\.(?:mjs|js)$/.test(file);
+  if (covered) return { covered: true, note: '' };
+  return {
+    covered: false,
+    note: 'нет блока eslint.config.mjs с правилами для этого пути (.cjs/.mts и src|site/**/*.js не покрыты)',
+  };
+}
+
+/** Файл AssemblyScript: свой компилятор, декораторы `@inline`/`@fastMath`. */
+export function isAssemblyScript(file) {
+  return file.startsWith(ASSEMBLY_DIR);
 }
 
 /** Запуск бинаря из `node_modules/.bin` с отличением «нет бинаря» от «упал». */
@@ -345,6 +390,12 @@ export function parseArgs(argv) {
   return { ok: true, ...options };
 }
 
+/** Короткий перечень путей: длинные наборы не печатаем целиком. */
+export function brief(files, limit = 3) {
+  if (files.length <= limit) return files.join(', ');
+  return `${files.slice(0, limit).join(', ')}, … ещё ${files.length - limit}`;
+}
+
 /** Печатает справку. */
 function usage() {
   console.log([
@@ -393,11 +444,11 @@ export async function main(argv, deps = {}) {
   let outside = [];
   let scope = '';
   if (parsed.mode === 'probe') {
-    const file = parsed.probe;
+    const file = normalizePath(parsed.probe);
     if (!existsSync(path.join(ROOT, file))) return fail(`СТОП: файл пробы не найден: ${file}`);
-    if (file.startsWith(ASSEMBLY_DIR)) {
+    if (isAssemblyScript(file)) {
       return fail(`СТОП: ${file} — AssemblyScript (декораторы @inline/@fastMath); esbuild его не парсит. `
-        + 'Гейт для этого контура не применим');
+        + 'Гейт для этого контура не применим (его проверяет npm run check:planet-core)');
     }
     targets = [file];
     scope = 'одна проба';
@@ -413,6 +464,9 @@ export async function main(argv, deps = {}) {
     targets = [...targets, 'tools/check_fast.mjs'];
     outside = notInRaw;
     scope = `scripts["${RAW_SCRIPT}"]: ${known.size} тест-файлов + tools/check_fast.mjs`;
+    log(`область: ${scope}`);
+    log('  это не «все тесты репозитория»: известный файл вне test:raw — '
+      + `${notInRaw.length > 0 ? notInRaw.join(', ') : 'нет'}; полный перечень вне списка гейт не сканирует`);
   } else {
     const base = resolveBase(io, parsed.base);
     if (!base.ok) return fail(`СТОП: ${base.reason}`);
@@ -438,6 +492,11 @@ export async function main(argv, deps = {}) {
 
   // --- проверки -----------------------------------------------------------------
   let failed = false;
+  const assembly = targets.filter(isAssemblyScript);
+  if (assembly.length > 0) {
+    return fail(`СТОП: в наборе есть AssemblyScript (${assembly.join(', ')}): декораторы @inline/@fastMath `
+      + 'esbuild не парсит. Уберите эти файлы из набора или проверьте контур через npm run check:planet-core');
+  }
   if (deleted.length > 0) log(`удалено (не проверяется): ${deleted.length} — ${deleted.join(', ')}`);
   if (outside.length > 0) log(`вне зоны гейта: ${outside.length} — ${outside.join(', ')}`);
 
@@ -453,9 +512,12 @@ export async function main(argv, deps = {}) {
     log(`стык импортов: ок (${targets.length} файл(ов)); node:* и динамические импорты не проверяются`);
   }
 
-  const needTypes = parsed.mode === 'probe' ? targets.every(coveredByProjectTypes) : true;
+  const uncoveredTypes = targets.filter((file) => !coveredByProjectTypes(file));
+  const uncoveredLint = targets
+    .map((file) => ({ file, ...coveredByLint(file) }))
+    .filter((item) => !item.covered);
   const checks = ['стык импортов'];
-  if (needTypes) {
+  if (uncoveredTypes.length === 0) {
     const types = runBin('tsc', ['--noEmit']);
     if (types.missing) return fail(`СТОП: ${types.output}`);
     if (types.code !== 0) {
@@ -466,8 +528,8 @@ export async function main(argv, deps = {}) {
       log('типы: ок (tsc --noEmit)');
     }
   } else {
-    log('типы: НЕ ПРОВЕРЯЛОСЬ — файл вне include tsconfig.json (tests/** и *.mjs не типизируются; '
-      + 'см. docs/verification-pattern.md §5)');
+    log(`типы: НЕ ПРОВЕРЯЛОСЬ для ${uncoveredTypes.length} файл(ов) — вне include tsconfig.json `
+      + `(tests/**, *.mjs, src|site/**/*.js при allowJs:false): ${brief(uncoveredTypes)}`);
   }
 
   const lint = runBin('eslint', targets);
@@ -475,6 +537,9 @@ export async function main(argv, deps = {}) {
   if (lint.code !== 0) {
     failed = true;
     log(`ЛИНТ: ошибки eslint\n${lint.output}`);
+  } else if (uncoveredLint.length > 0) {
+    log(`линт: без правил для ${uncoveredLint.length} файл(ов) — eslint их молча пропускает: `
+      + brief(uncoveredLint.map((item) => item.file)));
   } else {
     checks.push('линт (eslint, no-undef)');
     log(`линт: ок (${targets.length} файл(ов))`);

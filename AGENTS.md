@@ -74,6 +74,8 @@ npm run assets:build                            # картинки assets/*.webp
 npm run check:fast                              # локальный гейт: стык импортов (esbuild) + типы + линт, ~3 с
 npm run check:fast -- --probe tests/x.test.mjs  # одна проба: стык + линт; типы для tests/** НЕ проверяются
 npm run check:fast -- --all                     # 49 файлов из scripts["test:raw"] + сам гейт (не весь набор)
+# в отчёте гейт перечисляет только фактически проверенное: типы для tests/** и *.mjs,
+# а также линт для путей без блока eslint.config.mjs он печатает как «НЕ ПРОВЕРЯЛОСЬ»
 npm run typecheck                               # строгая проверка типов TypeScript (tsc --noEmit)
 npm run lint                                    # проверка ESLint по директориям site/ и src/
 npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
