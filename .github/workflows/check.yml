@@ -97,7 +97,7 @@ jobs:
       - name: "Верификатор: ноль растра"
         run: npm run verify:no-raster
       - name: Тесты node:test
-        run: npm test
+        run: node --test --test-concurrency=1 tests/*.test.mjs tests/*.test.js
       # Wasm-ядра planet-core (CR-01 PR 4): закоммиченные байты в
       # src/planet/planet-core-bytes.ts обязаны совпадать с пересборкой
       # AssemblyScript-исходников, иначе ускорение молча расходится с кодом.
