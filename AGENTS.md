@@ -73,7 +73,7 @@ npm run assets:build                            # картинки assets/*.webp
 # Статический анализ типов, линтер и компиляция Wasm (для исполнителя и rc-04; О-5 не меняет)
 npm run check:fast                              # локальный гейт: стык импортов (esbuild) + типы + линт, ~3 с
 npm run check:fast -- --probe tests/x.test.mjs  # одна проба: стык + линт; типы для tests/** НЕ проверяются
-npm run check:fast -- --all                     # 49 файлов из scripts["test:raw"] + сам гейт (не весь набор)
+npm run check:fast -- --all                     # тест-файлы из tests/ + сам гейт
 # в отчёте гейт перечисляет только фактически проверенное: типы для tests/** и *.mjs,
 # а также линт для путей без блока eslint.config.mjs он печатает как «НЕ ПРОВЕРЯЛОСЬ»
 npm run typecheck                               # строгая проверка типов TypeScript (tsc --noEmit)
@@ -81,7 +81,8 @@ npm run lint                                    # проверка ESLint по �
 npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
 
 # Модульные и интеграционные тесты (Node.js и Python)
-npm test                                        # явный прогон всех 35 тестовых файлов Node (--test, последовательно: --test-concurrency=1)
+npm test                                        # автопоиск и параллельный прогон тестов Node
+npm run test:fast                               # изменённые тесты и tsc (база main/origin/main)
 npm run test:py                                 # прогон Python-тестов (unittest discover -s tests -p 'test_*.py')
 
 # Верификация публикации, контракта планет и синхронизации данных

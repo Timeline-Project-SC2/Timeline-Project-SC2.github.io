@@ -5,7 +5,7 @@
  * Зачем: `tsconfig.json` не включает `tests/`, а ESLint проверяет там только `no-undef`.
  * Поэтому выдуманное имя экспорта проходит `npm run typecheck` и `npm run lint` зелёным
  * и падает только запуском теста — самой дорогой командой репозитория (`node --test` по
- * списку `test:raw` ≈ 71 с, страж карантина ≈ 135 с). Дешёвый ответ на вопрос
+ * всем тестовым файлам). Дешёвый ответ на вопрос
  * «сходится ли стык» даёт сборка `esbuild` без исполнения кода.
  *
  * Принцип: гейт **либо проверяет заявленный набор, либо явно говорит, что не смог**.
@@ -18,18 +18,11 @@
  * Режимы:
  *   node tools/check_fast.mjs [--base <ref>]        изменённые файлы: рабочее дерево + diff базы
  *   node tools/check_fast.mjs --probe <файл>        одна проба/тест/исходник
- *   node tools/check_fast.mjs --all                 N тест-файлов из scripts["test:raw"] + сам гейт
+ *   node tools/check_fast.mjs --all                 тест-файлы из tests/ + сам гейт
  *   node tools/check_fast.mjs ... --run             дополнительно запустить выбранные тесты
  *
- * Область `--all` (точная): список `test:raw` из `package.json` плюс `tools/check_fast.mjs`.
- * Это **не** все тесты репозитория: файлы `tests/*.test.*`, которых нет в `test:raw`
- * (например `tests/sector-admin-edit.test.mjs`, он же `npm run test:sector-admin-edit`),
- * в `--all` не входят — гейт не ведёт свой список тестов (правило карточки `CI-2`).
- *
- * `--run` запускает выбранные файлы напрямую, **без карантинного стража**
- * (`tools/check_test_baseline.mjs`): восемь известных падений этапа 8 остаются падениями,
- * прогон идёт с `--test-concurrency=1` для детерминизма. Зелёный `--run` не равен
- * зелёному `npm test` и не заменяет проверку поведения для всего набора.
+ * Область `--all`: тест-файлы из tests/ плюс `tools/check_fast.mjs`.
+ * `--run` запускает выбранные тесты параллельно; это не полный `npm test`.
  *
  * Пределы проверки стыка (важно): `esbuild` резолвит только статические импорты
  * выбранных entry points при сборке под Node.
@@ -50,15 +43,13 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** Корень репозитория: от него считаются пути в отчётах. */
 export const ROOT = path.resolve(HERE, '..');
-/** Скрипт-источник списка тестов (правило `CI-2`: свой список не ведём). */
-export const RAW_SCRIPT = 'test:raw';
 /** Коды возврата: различие «не чисто» и «не смог проверить» обязательно. */
 export const EXIT = Object.freeze({ OK: 0, FAIL: 1, ENV: 2 });
 /** Порядок поиска базы для diff, если не задан `--base`. */
@@ -81,17 +72,12 @@ export function isProbeFile(file) {
   return PROBE_RE.test(file);
 }
 
-/**
- * Достаёт список тест-файлов из `scripts["test:raw"]` — без собственного перечня.
- * @param {{scripts?: Record<string, string>}} packageJson
- * @returns {string[]}
- */
-export function probeFilesFromPackage(packageJson) {
-  const script = packageJson?.scripts?.[RAW_SCRIPT];
-  if (typeof script !== 'string' || !script.trim()) {
-    throw new Error(`в package.json нет scripts["${RAW_SCRIPT}"] — список тестов брать неоткуда`);
-  }
-  return script.trim().split(/\s+/).filter((arg) => PROBE_RE.test(arg));
+/** Возвращает тест-файлы из tests/ по правилам npm test. */
+export function discoverTests(root = ROOT) {
+  return readdirSync(path.join(root, 'tests'), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.test\.(?:mjs|js)$/.test(entry.name))
+    .map((entry) => `tests/${entry.name}`)
+    .sort();
 }
 
 /**
@@ -463,13 +449,6 @@ export async function main(argv, deps = {}) {
     return EXIT.ENV;
   };
 
-  let packageJson;
-  try {
-    packageJson = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  } catch (error) {
-    return fail(`СТОП: не читается package.json (${error.message}) — запускать из корня репозитория`);
-  }
-
   // --- выбор набора -------------------------------------------------------------
   let targets = [];
   let deleted = [];
@@ -487,20 +466,15 @@ export async function main(argv, deps = {}) {
     targets = [file];
     scope = 'одна проба';
   } else if (parsed.mode === 'all') {
-    targets = probeFilesFromPackage(packageJson);
-    const missing = targets.filter((file) => !existsSync(path.join(ROOT, file)));
-    if (missing.length > 0) {
-      return fail(`СТОП: scripts["${RAW_SCRIPT}"] ссылается на отсутствующие файлы: ${missing.join(', ')}`);
+    try {
+      targets = discoverTests();
+    } catch (error) {
+      return fail(`СТОП: не удалось найти тесты — ${error.message}`);
     }
-    const known = new Set(targets);
-    const adminEdit = 'tests/sector-admin-edit.test.mjs';
-    const notInRaw = existsSync(path.join(ROOT, adminEdit)) && !known.has(adminEdit) ? [adminEdit] : [];
-    targets = [...targets, 'tools/check_fast.mjs'];
-    outside = notInRaw;
-    scope = `scripts["${RAW_SCRIPT}"]: ${known.size} тест-файлов + tools/check_fast.mjs`;
+    const count = targets.length;
+    targets.push('tools/check_fast.mjs');
+    scope = `tests/: ${count} тест-файлов + tools/check_fast.mjs`;
     log(`область: ${scope}`);
-    log('  это не «все тесты репозитория»: известный файл вне test:raw — '
-      + `${notInRaw.length > 0 ? notInRaw.join(', ') : 'нет'}; полный перечень вне списка гейт не сканирует`);
   } else {
     const base = resolveBase(io, parsed.base);
     if (!base.ok) return fail(`СТОП: ${base.reason}`);
@@ -593,14 +567,13 @@ export async function main(argv, deps = {}) {
       if (probes.length === 0) {
         log('тесты: нечего запускать — среди выбранных файлов нет тестов');
       } else {
-        log(`тесты: прогон ${probes.length} файл(ов) БЕЗ карантинного стража `
-          + '(8 известных падений этапа 8 ожидаемы; это не npm test)');
-        const tests = runRaw(process.execPath, ['--test', '--test-concurrency=1', ...probes]);
+        log(`тесты: прогон ${probes.length} файл(ов) (это не полный npm test)`);
+        const tests = runRaw(process.execPath, ['--test', ...probes]);
         if (tests.code !== 0) {
           failed = true;
           log(`ТЕСТЫ: красный прогон\n${tests.output}`);
         } else {
-          checks.push('прогон тестов (без стража)');
+          checks.push('прогон тестов');
           log(`тесты: ок (${probes.length} файл(ов))`);
         }
       }

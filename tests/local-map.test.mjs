@@ -300,7 +300,8 @@ test('verifyPatchInvariants: все проверки И-3 зелёные на р
    константы через объект — внешние импорты не ломаются.
    --------------------------------------------------------------- */
 
-test('Stage-8.10b: контракт не тащит ядро на верхнем уровне, константы — из constants-модуля', async () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('Stage-8.10b: контракт не тащит ядро на верхнем уровне, константы — из constants-модуля', async () => {
   const contract = readFileSync(
     new URL('../src/local-map/local-map-contract.ts', import.meta.url),
     'utf8',

@@ -36,14 +36,13 @@ import {
   parseNameStatusZ,
   parsePorcelainZ,
   planTargets,
-  probeFilesFromPackage,
+  discoverTests,
   resolveBase,
   resolveProbePath,
   selectChanged,
 } from '../tools/check_fast.mjs';
 
 const run = promisify(execFile);
-const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const GATE = path.join(ROOT, 'tools', 'check_fast.mjs');
 
 /** Запускает гейт в указанной папке и отдаёт код возврата и текст вывода. */
@@ -114,15 +113,12 @@ async function gateIn(dir, args) {
 
 /* ------------------------------------------- А. чистые функции */
 
-test('список тестов берётся из scripts["test:raw"], а не из своего перечня', () => {
-  const probes = probeFilesFromPackage(pkg);
-  assert.ok(probes.length > 0);
-  assert.ok(probes.includes('tests/check-fast.test.mjs'), 'этот файл тоже в списке test:raw');
+test('автопоиск тестов включает этот файл и оба расширения', () => {
+  const probes = discoverTests();
+  assert.ok(probes.includes('tests/check-fast.test.mjs'));
+  assert.ok(probes.includes('tests/travel-planner.test.js'));
+  assert.ok(probes.includes('tests/sector-admin-edit.test.mjs'));
   assert.ok(probes.every((file) => isProbeFile(file)));
-});
-
-test('без scripts["test:raw"] гейт не выдумывает список', () => {
-  assert.throws(() => probeFilesFromPackage({ scripts: {} }), /test:raw/);
 });
 
 test('NUL-разбор porcelain: первая строка, пробелы, не-ASCII, переименование', () => {
@@ -383,7 +379,7 @@ test('CLI: --all перечисляет фактическую область и
   try {
     const result = await gateIn(dir, ['--all']);
     assert.equal(result.code, 0, result.text);
-    assert.match(result.text, /scripts\["test:raw"\]: 1 тест-файлов \+ tools\/check_fast\.mjs/);
+    assert.match(result.text, /tests\/: 1 тест-файлов \+ tools\/check_fast\.mjs/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
