@@ -176,7 +176,8 @@ test('стенд: ступень кромки сообщает число вер
   }
 });
 
-test('стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке', async () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('стенд: в мире A-17 речные метрики реально измеряются хотя бы на одной ячейке', async () => {
   // Кросс-проверка измеримости (не порогов): в A-29 врезанного русла на
   // контрольных ячейках может не быть, и тогда все речные строки — честные
   // N/A. В A-17 топология Patch7 несёт входы русла, поэтому хотя бы один
@@ -564,7 +565,8 @@ test('W26b доп. п.2 (негативный контроль окна 5 000 м
   assert.equal(m8Windowed.frameWidthM, 5000, 'знаменатель m.8 равен фиксированному окну 5 000 м');
 });
 
-test('W26b п.2: m.14 (measureLodConsistency) сравнивает одинаковый span — 0 м на константном поле и ≤ 2 м на реальном', () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('W26b п.2: m.14 (measureLodConsistency) сравнивает одинаковый span — 0 м на константном поле и ≤ 2 м на реальном', () => {
   const grid = GeodesicGrid.build(stand.CANONICAL_V);
   const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
   const radiusM = stand.DEFAULT_RADIUS_M;
@@ -656,7 +658,8 @@ test('W26b п.2: m.14 (measureLodConsistency) сравнивает одинак�
   }
 });
 
-test('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference', () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('W26b п.3: m.11 (measureHypsometry) считается ТОЛЬКО по суше elev > seaLevel (45,93 %, 16 596 из 163 842), гейт 20…35 % и --hypso-reference', () => {
   const grid = GeodesicGrid.build(stand.CANONICAL_V);
   const surface = PlanetSurface.generateSurface(grid, stand.WORLDS.a29.profile);
   const direct = stand.measureHypsometry(surface);

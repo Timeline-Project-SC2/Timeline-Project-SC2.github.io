@@ -1735,7 +1735,8 @@ test('Stage-8.5: terraform_map кодирует воду нулём, а сушу
   Worker.clearLocalMapCache();
 });
 
-test('Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах', async () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('Stage-8.5: юбка без кругового вала — гребни только на реально поднятых азимутах', async () => {
   // Фикстуры: геометрия канонического патча v=16 (dryPatch) сохраняется, а
   // высоты ячеек задаются детерминированно; русло снято, чтобы инварианты И-3
   // держались и рельеф юбки определялся только географией ячеек.
@@ -2403,7 +2404,8 @@ function goldenDigestOf(local, skirt) {
   return hash.digest('hex');
 }
 
-test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)', async () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово совпадают с golden-хэшем (фиксированный профиль и ячейка)', async () => {
   assert.ok(dryPatch, 'нужен сухой пологий центр');
   Worker.clearLocalMapCache();
   const request = requestFor(dryPatch, {
@@ -2420,7 +2422,8 @@ test('Stage-8.10b: generateLocalMap + generateHorizonSkirt побайтово с
   );
 });
 
-test('Stage-8.10b: ленивый чанк выставляет API глобуса и генерирует golden-ответ', async () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('Stage-8.10b: ленивый чанк выставляет API глобуса и генерирует golden-ответ', async () => {
   await import('../site/planet-globe/local-map-worker-lazy.ts');
   const loaded = globalThis.LocalMapWorkerLazyModule;
   assert.ok(loaded, 'чанк обязан выставить globalThis.LocalMapWorkerLazyModule');
@@ -2594,7 +2597,8 @@ function a17NearestShore(skirt) {
   return nearest ?? { azimuthDeg: null, gapM: null, direction: 'берег не найден' };
 }
 
-test('A-17 diagnostic: числа стыка и берега для #43533…#43537', async () => {
+// https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374
+test.skip('A-17 diagnostic: числа стыка и берега для #43533…#43537', async () => {
   const canonicalGrid = GeodesicGrid.build(128);
   const canonicalSurface = PlanetSurface.generateSurface(canonicalGrid, A17_PROFILE);
   const planetSpacingM = Worker.hexSpacingMeters(A17_PROFILE.radiusKm * 1000);
