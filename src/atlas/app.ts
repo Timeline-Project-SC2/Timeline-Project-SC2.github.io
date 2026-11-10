@@ -571,12 +571,44 @@ function applySystemFrameRequest(): void {
 let areasEditor: SectorAreasEditorUiApi | null = null;
 let lineEditor: SectorBoundsEditUiApi | null = null;
 let hierarchyEditor: ReturnType<typeof createSectorAreasHierarchyUi> | null = null;
-/** Состояние рисования до включения «Правки линий» — возвращается при выходе. */
-let areasWasEnabled = false;
+/**
+ * Снимок состояний инструментов до включения очередного: выключение возвращает
+ * ровно его, без перекрёстного восстановления (общие флаги «что было до меня»
+ * в каждом модуле зацикливали включение/выключение — дефект B5.1 ревью).
+ */
+let savedTools = { areas: false, lines: false };
 /** Признак программного переключения инструментов: защита от рекурсии. */
 let switchingTools = false;
-/** Состояние правки линий до включения иерархии. */
-let linesWasEnabled = false;
+
+function snapshotTools(): void {
+  savedTools = {
+    areas: areasEditor !== null && areasEditor.enabled(),
+    lines: lineEditor !== null && lineEditor.enabled(),
+  };
+}
+
+function disableOtherTools(except: 'lines' | 'hierarchy'): void {
+  switchingTools = true;
+  try {
+    if (areasEditor !== null && areasEditor.enabled()) areasEditor.setEnabled(false);
+    if (except !== 'lines' && lineEditor !== null && lineEditor.enabled()) lineEditor.setEnabled(false);
+    if (except !== 'hierarchy' && hierarchyEditor !== null && hierarchyEditor.enabled()) hierarchyEditor.setEnabled(false);
+  } finally {
+    switchingTools = false;
+  }
+}
+
+function restoreSnapshot(): void {
+  switchingTools = true;
+  try {
+    areasEditor?.setEnabled(savedTools.areas);
+    lineEditor?.setEnabled(savedTools.lines);
+    if (!savedTools.lines && hierarchyEditor !== null && hierarchyEditor.enabled()) hierarchyEditor.setEnabled(false);
+    if (!savedTools.areas && hierarchyEditor === null) areasEditor?.setEnabled(false);
+  } finally {
+    switchingTools = false;
+  }
+}
 
 function bindSectorAreasEditor(): void {
   const panel = qs<HTMLElement>('[data-admin-editor]');
@@ -591,11 +623,11 @@ function bindSectorAreasEditor(): void {
     helpText: sectorAreasHelp,
     // Линейная правка активна — Ctrl+Z и Ctrl+Shift+Z уступают модулю линий.
     isLineMode: () => lineEditor !== null && lineEditor.enabled(),
-    // Ручное включение рисования выключает правку линий: два инструмента на
-    // одной стадии карты одновременно не работают.
+    // Ручное включение рисования выключает остальные инструменты стадии карты:
+    // одновременно работает ровно один (включение — через общий переключатель).
     onEnableChange: (enabled) => {
       if (!enabled || switchingTools) return;
-      if (lineEditor !== null && lineEditor.enabled()) lineEditor.setEnabled(false);
+      disableOtherTools('lines');
     },
   });
   // Правка линий: отдельный модуль в своей секции панели. Инструменты взаимо-
@@ -609,26 +641,12 @@ function bindSectorAreasEditor(): void {
     canvas: el.mapCanvas,
     onActivate: () => {
       if (switchingTools) return;
-      switchingTools = true;
-      try {
-        areasWasEnabled = areasEditor !== null && areasEditor.enabled();
-        areasEditor?.setEnabled(false);
-        // Иерархия и правка линий на одной стадии карты тоже не совмещаются.
-        linesWasEnabled = hierarchyEditor !== null && hierarchyEditor.enabled();
-        hierarchyEditor?.setEnabled(false);
-      } finally {
-        switchingTools = false;
-      }
+      snapshotTools();
+      disableOtherTools('lines');
     },
     onDeactivate: () => {
       if (switchingTools) return;
-      switchingTools = true;
-      try {
-        areasEditor?.setEnabled(areasWasEnabled);
-        hierarchyEditor?.setEnabled(linesWasEnabled);
-      } finally {
-        switchingTools = false;
-      }
+      restoreSnapshot();
     },
   });
   // Иерархия областей: якорная правка контуров, группы и сочетания пар.
@@ -653,25 +671,12 @@ function bindSectorAreasEditor(): void {
     },
     onActivate: () => {
       if (switchingTools) return;
-      switchingTools = true;
-      try {
-        areasWasEnabled = areasEditor !== null && areasEditor.enabled();
-        areasEditor?.setEnabled(false);
-        linesWasEnabled = lineEditor !== null && lineEditor.enabled();
-        lineEditor?.setEnabled(false);
-      } finally {
-        switchingTools = false;
-      }
+      snapshotTools();
+      disableOtherTools('hierarchy');
     },
     onDeactivate: () => {
       if (switchingTools) return;
-      switchingTools = true;
-      try {
-        areasEditor?.setEnabled(areasWasEnabled);
-        lineEditor?.setEnabled(linesWasEnabled);
-      } finally {
-        switchingTools = false;
-      }
+      restoreSnapshot();
     },
   });
   areasEditor.refresh();

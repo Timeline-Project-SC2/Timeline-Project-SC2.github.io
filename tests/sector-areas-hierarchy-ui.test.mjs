@@ -21,7 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { createSectorAreasHierarchyUi, HIERARCHY_OVERLAY_CLASS } from '../src/atlas/sector-areas-hierarchy-ui.ts';
 import { createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
 import { createArea, parseSectorAreas } from '../src/atlas/sector-areas-contract.ts';
-import { createPairCmd } from '../src/atlas/sector-areas-hierarchy.ts';
+import { createGroupCmd, createPairCmd } from '../src/atlas/sector-areas-hierarchy.ts';
 import { sampleRing, curvePointAt } from '../src/atlas/sector-areas-anchors.ts';
 
 const css = await readFile(new URL('../site/sector/admin-edit/admin-edit.css', import.meta.url), 'utf8');
@@ -267,6 +267,8 @@ function harness(initialSession) {
     ui, kernel, stage, canvas, panel, block, tool, counts,
     applied,
     session: () => current,
+    /** Внешняя смена сессии (как из «Свойств») с обновлением блока. */
+    applyExternal(next) { current = next; kernel.state.sectorAreas = next.doc; ui.refresh(); },
     clickTool() { return panel.dispatch('click', { target: tool }); },
     click(button) { return panel.dispatch('click', { target: button }); },
     pointer(type, x, y, extra = {}) {
@@ -342,7 +344,10 @@ test('двойной клик по линии открывает 6 якорей 
   assert.equal(h.ui.contourEditAreaId(), 'area-1');
   const anchors = h.session().doc.areas[0].contourAnchors;
   assert.ok(anchors !== undefined && anchors[0].anchors.length === 6, 'шесть якорей в документе');
-  assert.equal(h.applied.length, 1, 'первый набор — запись истории');
+  // Применения сессии этим модулем: выбор области (синхронизация со
+  // «Свойствами») + первый набор якорей.
+  assert.equal(h.applied.length, 2, 'выбор области и первый набор применяются отдельно');
+  assert.match(String(h.session().doc.events.at(-1)?.note ?? ''), /Первый набор якорей/, 'последняя запись истории — первый набор');
   assert.match(h.status(), /контур области «Альфа»/);
 });
 
@@ -566,4 +571,77 @@ test('Esc в полях панели не завершает правку (те�
   input.tagName = 'INPUT';
   globalThis.window.dispatch('keydown', { key: 'Escape', target: input });
   assert.ok(h.ui.contourEditAreaId() !== null, 'Esc из поля ввода не должен ронять правку контура');
+});
+
+/* --------------------------------------------- регрессии B5/N1/S4 (UI) */
+
+test('B5.2: «Править линию» при выключенном инструменте включает его и правка жива', () => {
+  const h = harness(docWithPairAndLine());
+  // Инструмент выключен: нажатие [Править линию] само включает его.
+  const pairId = h.session().doc.pairs[0].id;
+  const button = new FakeNode('button');
+  button.setAttribute('data-pair-edit', pairId);
+  h.click(button);
+  assert.equal(h.ui.enabled(), true, 'инструмент включён кнопкой правки линии');
+  assert.equal(h.ui.pairLinePairId(), pairId);
+  // Ввод жив: двойной клик в середину СЕГМЕНТА (не на существующий якорь)
+  // уточняет его и пишет в документ.
+  const anchors = h.session().doc.pairs[0].line.anchors;
+  const a2 = anchors[2].point;
+  const a3 = anchors[3].point;
+  const before = anchors.length;
+  h.dblclick((a2[0] + a3[0]) / 2, (a2[1] + a3[1]) / 2);
+  const after = h.session().doc.pairs[0].line.anchors.length;
+  assert.equal(after, before + 4, 'уточнение 2+4 записано в документ сразу');
+  // Esc завершает правку целиком; записанная линия остаётся.
+  h.escape();
+  assert.equal(h.ui.pairLinePairId(), null);
+  assert.equal(h.session().doc.pairs[0].line.manual, true);
+});
+
+test('B5.4: ширина перехода применяется на change; input больше не перерисовывает панель', () => {
+  const h = harness(docWithPairAndLine());
+  const pairId = h.session().doc.pairs[0].id;
+  const input = new FakeNode('input');
+  input.setAttribute('data-pair-transition', pairId);
+  input.value = '160';
+  h.panel.dispatch('input', { target: input });
+  assert.equal(h.session().doc.pairs[0].transitionWidth, null, 'посимвольный ввод ничего не применяет');
+  h.panel.dispatch('change', { target: input });
+  assert.equal(h.session().doc.pairs[0].transitionWidth, 160, 'значение применено на change');
+});
+
+test('N1: выбор области в списке «Свойства» синхронизируется с блоком «Иерархия»', () => {
+  const h = harness(docWithPairAndLine());
+  h.clickTool();
+  // Сессия обновлена извне (выбор в «Свойствах»): блок иерархии следует за ней.
+  const withSelection = { ...h.session(), selection: 'area-2' };
+  h.ui.refresh();
+  // refresh читает сессию через getSession — подменяем через применение.
+  h.applied.length = 0;
+  const statusBefore = h.status();
+  void statusBefore;
+  // Применяем сессию с выбором так же, как это делает редактор областей.
+  h.applyExternal(withSelection);
+  assert.match(h.status(), /контур области «Бета»/);
+});
+
+test('S4: область убирается из группы кнопкой на чипе; пометка пересмотра переключается', () => {
+  let session = docWithPairAndLine();
+  const grouped = createGroupCmd(session, 'Зона', ['area-1', 'area-2']);
+  session = grouped.session;
+  const h = harness(session);
+  const groupId = h.session().doc.groups[0].id;
+  const remove = new FakeNode('button');
+  remove.setAttribute('data-group-remove', groupId);
+  remove.setAttribute('data-area', 'area-2');
+  h.click(remove);
+  assert.deepEqual(h.session().doc.groups[0].areaIds, ['area-1'], 'область убрана, группа целá');
+  const pairId = h.session().doc.pairs[0].id;
+  const review = new FakeNode('button');
+  review.setAttribute('data-pair-review', pairId);
+  h.click(review);
+  assert.equal(h.session().doc.pairs[0].needsReview, true, 'пометка включена кнопкой');
+  h.click(review);
+  assert.equal(h.session().doc.pairs[0].needsReview, false, 'пометка снята кнопкой');
 });

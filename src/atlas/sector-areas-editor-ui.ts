@@ -1290,6 +1290,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<button type="button" data-action="copy">Скопировать</button>',
       '<button type="button" data-action="request">Материал заявки</button>',
       '</div>',
+      '<label class="admin-editor-import" for="areasImportInput">',
+      '<span>Загрузить выгруженный JSON областей</span>',
+      '<input id="areasImportInput" type="file" accept="application/json,.json" data-action="areas-import"',
+      ' aria-label="Загрузить выгруженный ранее JSON областей" />',
+      '</label>',
       notice === null ? '' : '<p class="admin-editor-hint">' + escapeHtml(notice) + '</p>',
     ].join('');
   }
@@ -1694,6 +1699,29 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (control === null) return;
     const action = control.getAttribute('data-action');
     if (action === null) return;
+    // Импорт выгруженного файла областей (дефект B6 ревью): полный цикл
+    // «экспорт в файл → импорт через UI → правка» без записи в репозиторий.
+    if (action === 'areas-import') {
+      const input = control as HTMLInputElement;
+      const files = input.files;
+      const file = files === null || files === undefined ? null : files[0] ?? null;
+      if (file === null) return;
+      void file.text().then((text) => {
+        try {
+          session = importDoc(text);
+          notice = `Области загружены: ${session.doc.areas.length} шт.; история очищена.`;
+        } catch (error) {
+          notice = `Импорт не выполнен: ${error instanceof Error ? error.message : 'некорректные данные.'}`;
+        }
+        // Сброс значения: повторный выбор того же файла снова даёт change.
+        input.value = '';
+        refresh();
+      }).catch(() => {
+        notice = 'Импорт не выполнен: файл не прочитан.';
+        refresh();
+      });
+      return;
+    }
     applyValueAction(action, control as HTMLInputElement);
   }
 

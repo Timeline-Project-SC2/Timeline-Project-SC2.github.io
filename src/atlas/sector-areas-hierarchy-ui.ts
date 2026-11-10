@@ -49,7 +49,9 @@ import {
   createPairCmd,
   deleteGroupCmd,
   dragContourAnchor,
+  markPairNeedsReviewCmd,
   openContourEdit,
+  removeAreaFromGroupCmd,
   removePairCmd,
   renameGroupCmd,
   resetPairLineCmd,
@@ -61,7 +63,7 @@ import {
   subdivideContourSegment,
 } from './sector-areas-hierarchy.ts';
 import type { EditorSession } from './sector-areas-editor.ts';
-import { redo, undo } from './sector-areas-editor.ts';
+import { redo, selectArea, undo } from './sector-areas-editor.ts';
 import type { AreaPair, SectorAreasDoc } from './sector-areas-contract.ts';
 
 /* ------------------------------------------------------------------ типы */
@@ -136,6 +138,13 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
   };
   const clickToleranceWorld = (): number => CLICK_TOLERANCE_PX * worldPerPx();
   const minGapWorld = (): number => Math.max(0.5, MIN_GAP_PX * worldPerPx());
+  /** Отменяет отложенный выбор системы (карточка + автозум), если чтение доступно. */
+  const cancelPendingTravelTap = (): void => {
+    const coords = (kernel as { coords?: { cancelPendingTravelTap?: () => void } }).coords;
+    if (coords !== undefined && typeof coords.cancelPendingTravelTap === 'function') {
+      coords.cancelPendingTravelTap();
+    }
+  };
 
   let on = false;
   /** Что сейчас редактируется: контур области или линия сочетания пары (§7). */
@@ -150,6 +159,8 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
   let capturedId: number | null = null;
   let dragMoved = false;
   let dragStart: MapPoint | null = null;
+  /** Выбор в общей сессии, который уже отражён в этом модуле (N1). */
+  let lastSeenSelection: string | null | undefined = undefined;
 
   const listeners: Array<{ target: EventTarget | null; type: string; handler: (event: Event) => void; capture: boolean }> = [];
   let preview: HTMLCanvasElement | null = null;
@@ -370,7 +381,10 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     const members = group.areaIds
       .map((areaId) => areaById(areaId))
       .filter((area): area is NonNullable<typeof area> => area !== null)
-      .map((area) => `<span class="admin-chip">${escapeHtml(area.name)}</span>`)
+      .map((area) => `<span class="admin-chip">${escapeHtml(area.name)}`
+        + `<button type="button" class="admin-chip-remove" data-group-remove="${escapeHtml(group.id)}"`
+        + ` data-area="${escapeHtml(area.id)}" title="Убрать «${escapeHtml(area.name)}» из группы (область сохраняется)"`
+        + ` aria-label="Убрать область «${escapeHtml(area.name)}» из группы «${escapeHtml(group.name)}»">×</button></span>`)
       .join(' ');
     const candidates = doc().areas
       .filter((area) => !group.areaIds.includes(area.id))
@@ -394,7 +408,9 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
   }
 
   function pairRowHtml(pair: AreaPair): string {
-    const review = pair.needsReview ? '<span class="admin-badge admin-badge-warn">требует пересмотра</span>' : '';
+    const review = pair.needsReview
+      ? '<span class="admin-badge admin-badge-warn">требует пересмотра</span>'
+      : '';
     const lineState = pair.line === null
       ? 'автолинии нет (области не пересекаются)'
       : pair.line.manual ? 'линия отредактирована вручную' : 'автолиния';
@@ -418,6 +434,7 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
       '</div>',
       '<div class="admin-editor-grid">',
       `<button type="button" class="admin-editor-tool" data-pair-edit="${escapeHtml(pair.id)}" title="Редактировать линию раздела якорями; контуры областей не меняются">Править линию</button>`,
+      `<button type="button" class="admin-editor-tool" data-pair-review="${escapeHtml(pair.id)}" title="${pair.needsReview ? 'Снять пометку «требует пересмотра»' : 'Пометить «требует пересмотра» вручную'}">${pair.needsReview ? 'Снять пересмотр' : 'Пометить пересмотр'}</button>`,
       `<button type="button" class="admin-editor-tool" data-pair-reset="${escapeHtml(pair.id)}" title="Пересчитать линию автоматически; ручная правка будет заменена">Сбросить на авто</button>`,
       `<button type="button" class="admin-editor-tool" data-pair-delete="${escapeHtml(pair.id)}" title="Удалить сочетание; области и контуры сохранятся">Удалить</button>`,
       '</div>',
@@ -480,6 +497,13 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
   }
 
   function refresh(): void {
+    // Выбор области в выпадающем списке «Свойства» синхронизируется с блоком
+    // «Иерархия» (N1 ревью): сессия — источник истины.
+    const selection = session().selection;
+    if (selection !== lastSeenSelection) {
+      lastSeenSelection = selection;
+      if (mode === 'contour' && selection !== null) selectedAreaId = selection;
+    }
     if (panel !== null) {
       const block = panel.querySelector('[data-editor-block="hierarchy"]');
       if (block !== null) block.innerHTML = blockHtml();
@@ -567,7 +591,7 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     // инструменте: они не трогают ввод на карте.
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const control = target.closest('[data-action],[data-group-delete],[data-group-rename],[data-pair-delete],[data-pair-edit],[data-pair-reset]');
+    const control = target.closest('[data-action],[data-group-delete],[data-group-remove],[data-group-rename],[data-pair-delete],[data-pair-edit],[data-pair-reset],[data-pair-review]');
     if (control === null) return;
     const action = control.getAttribute('data-action');
     if (action === 'hierarchy-tool') {
@@ -595,6 +619,34 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     }
     if (action === 'hierarchy-pair-create') {
       onPairCreate();
+      return;
+    }
+    const removeGroup = control.getAttribute('data-group-remove');
+    const removeAreaId = control.getAttribute('data-area');
+    if (removeGroup !== null && removeAreaId !== null) {
+      try {
+        const result = removeAreaFromGroupCmd(session(), removeGroup, removeAreaId);
+        apply(result.session);
+        setNotice(result.message);
+      } catch (error) {
+        setNotice(error instanceof RangeError ? error.message : 'Убрать из группы не удалось.');
+      }
+      return;
+    }
+    const reviewPairId = control.getAttribute('data-pair-review');
+    if (reviewPairId !== null) {
+      const pair = pairById(reviewPairId);
+      if (pair === null) {
+        setNotice('Сочетание не найдено.');
+        return;
+      }
+      try {
+        const result = markPairNeedsReviewCmd(session(), reviewPairId, !pair.needsReview);
+        apply(result.session);
+        setNotice(result.message);
+      } catch (error) {
+        setNotice(error instanceof RangeError ? error.message : 'Пометку сохранить не удалось.');
+      }
       return;
     }
     const groupId = control.getAttribute('data-group-delete');
@@ -659,6 +711,9 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
 
   /** Открывает правку линии пары по сохранённым якорям (число якорей цело). */
   function beginPairLineEditing(pairId: string): void {
+    // Правка линии доступна и при выключенном инструменте: кнопка панели сама
+    // включает «Правку якорями» (иначе линия рисуется, но ввод мёртв — B5.2).
+    if (!on) setEnabled(true);
     const pair = pairById(pairId);
     if (pair === null) {
       setNotice('Сочетание не найдено.');
@@ -704,6 +759,12 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     const pairMode = target.getAttribute('data-pair-mode');
     if (pairMode !== null) {
       const result = setPairModeCmd(session(), pairMode, stringValue(target) === 'overlay' ? 'overlay' : 'split');
+      // Режим «наложение» прячет линию раздела — открытая правка этой линии
+      // закрывается, чтобы янтарный оверлей не висел поверх карты (N1 ревью).
+      if (stringValue(target) === 'overlay' && lineEdit !== null && lineEdit.pairId === pairMode) {
+        lineEdit = null;
+        mode = 'contour';
+      }
       apply(result.session);
       setNotice(result.message);
       return;
@@ -721,23 +782,32 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
       const result = setPairForbidCrossingCmd(session(), pairForbid, checked);
       apply(result.session);
       setNotice(result.message);
+      return;
+    }
+    if (target.getAttribute('data-pair-transition') !== null) {
+      onTransitionChange(target);
     }
   }
 
-  function onPanelInput(event: Event): void {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
+  /**
+   * Ширина перехода применяется на `change` (уход из поля/Enter), а не на
+   * каждый символ: посимвольная перерисовка панели уничтожала поле ввода
+   * и сбрасывала фокус на BODY (дефект B5.4 ревью).
+   */
+  function onTransitionChange(target: Element): void {
     const transition = target.getAttribute('data-pair-transition');
-    if (transition !== null) {
-      const value = Number(stringValue(target));
-      const width = Number.isFinite(value) && value > 0 ? value : null;
-      try {
-        const result = setPairTransitionCmd(session(), transition, width);
-        apply(result.session);
-        setNotice(result.message);
-      } catch (error) {
-        setNotice(error instanceof RangeError ? error.message : 'Ширину перехода сохранить не удалось.');
-      }
+    if (transition === null) return;
+    const raw = stringValue(target).trim();
+    if (raw.length === 0) return;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    const width = value > 0 ? value : null;
+    try {
+      const result = setPairTransitionCmd(session(), transition, width);
+      apply(result.session);
+      setNotice(result.message);
+    } catch (error) {
+      setNotice(error instanceof RangeError ? error.message : 'Ширину перехода сохранить не удалось.');
     }
   }
 
@@ -781,6 +851,9 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
       if (hit !== null) {
         event.stopPropagation();
         event.preventDefault();
+        // Отложенный выбор системы (карточка + автозум) под кликом отменяется:
+        // тянем якорь, а не открываем систему (B5.3).
+        cancelPendingTravelTap();
         lineEdit = { ...lineEdit, dragging: hit.index, moved: false };
         dragStart = point;
         dragMoved = false;
@@ -797,6 +870,7 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
         if (hit !== null) {
           event.stopPropagation();
           event.preventDefault();
+          cancelPendingTravelTap();
           contourDragIndex = hit.index;
           dragStart = point;
           dragMoved = false;
@@ -807,6 +881,9 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
       // Выбор области одним кликом (правая кнопка и текстовые поля отсечены).
       const hitArea = doc().areas.find((area) => pointHitsArea(area, world.x, world.y)) ?? null;
       selectedAreaId = hitArea === null ? null : hitArea.id;
+      lastSeenSelection = hitArea?.id ?? null;
+      // Выбор виден и в списке «Свойства»: сессия — общий источник истины.
+      apply(selectArea(session(), selectedAreaId));
       notice = hitArea === null
         ? 'Клик мимо областей: контур не выбран.'
         : `Выбран контур области «${hitArea.name}»: двойной клик по линии ставит якоря.`;
@@ -946,8 +1023,16 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     const point = pointAt(event);
     const world = worldAt(event);
     if (point === null || world === null) return;
-    event.preventDefault();
-    event.stopPropagation();
+
+    // Событие гасится только когда двойной клик действительно открывает правку
+    // или уточняет сегмент: иначе dblclick доходит до карты (в том числе
+    // отменяет отложенный выбор системы) — «мимо» не должно ломать карту,
+    // а действие рядом со звездой обязано отменить карточку и автозум (B5.3).
+    const swallow = (): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelPendingTravelTap();
+    };
 
     if (mode === 'contour') {
       // Продолжение правки важнее выбора чужой области: точный клик по границе
@@ -973,6 +1058,8 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
         setNotice('Двойной клик мимо областей: правка не открыта.');
         return;
       }
+      swallow();
+      lastSeenSelection = target.id;
       selectedAreaId = target.id;
       const ring = primaryContourRing(target);
       if (ring === null) {
@@ -1002,12 +1089,27 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
         setNotice('Двойной клик мимо линии раздела.');
         return;
       }
+      swallow();
       const refined = subdivideSegment(lineEdit.state, [hit.point[0], hit.point[1]], clickToleranceWorld(), { minGap: minGapWorld() });
       if (!refined.ok) {
         setNotice(refined.reason);
         return;
       }
       lineEdit = { ...lineEdit, state: refined.state };
+      // Уточнение линии пишется в документ сразу (setPairLineCmd): иначе оно
+      // жило только в состоянии и пропадало при Esc (дефект B5.2 ревью).
+      const baked = commitLineDrag(lineEdit.state);
+      const saved = setPairLineCmd(session(), lineEdit.pairId, {
+        manual: true,
+        points: baked.points,
+        anchors: baked.anchors,
+      });
+      apply(saved.session);
+      const pair = pairById(lineEdit.pairId);
+      if (pair !== null && pair.line !== null) {
+        const reopened = reopenLineEdit(pair.line.points, pair.line.anchors);
+        if (reopened.ok) lineEdit = { ...lineEdit, state: reopened.state };
+      }
       setNotice('Сегмент линии уточнён: 2 крайних якоря сохранены, добавлены 4.');
       paintOverlay();
     }
@@ -1057,7 +1159,6 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
   const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
   bind(panel, 'change', onPanelChange);
-  bind(panel, 'input', onPanelInput);
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as (event: Event) => void, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as (event: Event) => void, true);
   bind(inputTarget, 'pointerup', onPointerUp as unknown as (event: Event) => void, true);
