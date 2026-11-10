@@ -11,7 +11,7 @@
  */
 
 import { MODES } from './sector-areas-contract.ts';
-import type { Area, AreaPoint, AreaState, AreaStroke, Mode, SectorAreasDoc } from './sector-areas-contract.ts';
+import type { Area, AreaPoint, AreaState, AreaStroke, Mode, Ring, SectorAreasDoc } from './sector-areas-contract.ts';
 import { focusAppearance, stateStyle, toCss } from './sector-areas-color.ts';
 import type { FactionPalette, FocusSettings, Rgb } from './sector-areas-color.ts';
 import { paintRing, resolveGradient } from './sector-areas-gradient.ts';
@@ -20,6 +20,22 @@ import { computeLod, effectiveLevel, lodEpsilon, roundingIterations } from './se
 import type { LodCache } from './sector-areas-lod.ts';
 import { overridesFor } from './sector-areas-force.ts';
 import { ringArea, simplifyStroke, strokesArea } from './sector-areas-geometry.ts';
+
+/**
+ * Маска режима «разделение цветов» пары (§6 ТЗ `SEC-AREAS-HIERARCHY`):
+ * заливка области не рисуется в полигонах `holes` (сторона другой области),
+ * а при `transitionHalfWidth > 0` вдоль `line` рисуется полоса возврата
+ * заливки — ступенчатый мягкий переход.
+ */
+export interface AreaSplitMask {
+  readonly holes: readonly Ring[];
+  /** Линия раздела пары: авто или ручная (мировые координаты). */
+  readonly line: readonly AreaPoint[];
+  /** Дополнительные линии многосвязной зоны пары. */
+  readonly extraLines?: readonly (readonly AreaPoint[])[];
+  /** Полуширина мягкого перехода в единицах карты; `0` — резкое разделение. */
+  readonly transitionHalfWidth: number;
+}
 
 export interface AreaPaintOptions {
   /** Уровень кадра `L0…L12`: отсекает состояния вне диапазона и задаёт LOD. */
@@ -37,6 +53,11 @@ export interface AreaPaintOptions {
   readonly fillAlpha?: number;
   /** Толщина обводки в пикселях. */
   readonly strokeWidth?: number;
+  /**
+   * Маски «разделения цветов» пар по ID области (§6): вырезы заливки и линии
+   * раздела всех пар области. `undefined` — парный слой не используется.
+   */
+  readonly splitForArea?: (areaId: string) => readonly AreaSplitMask[];
 }
 
 export interface PaintedRing {
@@ -73,6 +94,12 @@ export interface AreaPaint {
   /** `true` — мазок форс-закрашивания: цвет перебит, состояния сохранены. */
   readonly override: boolean;
   readonly label: string | null;
+  /**
+   * Маски разделения цветов всех пар с участием области (§6): массив, потому
+   * что область может состоять в нескольких парах, и у каждой — своя линия
+   * и своя полоса перехода. Пустой массив — обычная заливка без вырезов.
+   */
+  readonly splits?: readonly AreaSplitMask[];
 }
 
 /**
@@ -88,7 +115,12 @@ export function buildAreaPaints(doc: SectorAreasDoc, options: AreaPaintOptions):
   for (const area of doc.areas) {
     const override = overridesFor(doc, area.id).at(-1) ?? null;
     if (override !== null) {
-      paints.push(...overridePaints(area, override.color, override.alpha, override.z, level, options));
+      const mode = override.mode ?? focusMode ?? (MODES[0] ?? 'political');
+      const appearance = override.mode === null
+        ? { visible: true, alpha: 1, emphasis: true }
+        : focusAppearance(mode, focusMode, focus);
+      if (!appearance.visible) continue;
+      paints.push(...overridePaints(area, override.color, override.alpha * appearance.alpha, override.z, mode, level, options));
       continue;
     }
 
@@ -150,14 +182,22 @@ function overridePaints(
   color: string,
   alpha: number,
   z: number,
+  mode: Mode,
   level: number,
   options: AreaPaintOptions,
 ): readonly AreaPaint[] {
   const rgb = hexToRgb(color);
-  const mode = options.focusMode ?? (MODES[0] ?? 'political');
   const strokeStyle = { rgb, alpha, width: options.strokeWidth ?? 2, dash: [] as const };
   const label = `${area.name} · override`;
   const result: AreaPaint[] = [];
+  const baseState = area.states.find((item) => item.mode === mode) ?? area.states[0];
+  const bias = baseState?.lodBias ?? 0;
+  const rounding = baseState?.rounding ?? 1;
+
+  const strokes = area.strokes ?? [];
+  const closedStrokes = strokes.filter((item) => item.closed);
+  const openStrokes = strokes.filter((item) => !item.closed);
+  const splitsOf = (): readonly AreaSplitMask[] => (options.splitForArea !== undefined && area.closed ? options.splitForArea(area.id) ?? [] : []);
 
   if (area.rings.length > 0) {
     result.push({
@@ -170,15 +210,12 @@ function overridePaints(
       visible: true,
       fill: area.closed ? { rgb, alpha: alpha * 0.35 } : null,
       stroke: strokeStyle,
-      rings: ringsFor(area, level, 0, 1, options),
+      rings: ringsFor(area, level, bias, rounding, options),
       override: true,
       label,
+      splits: splitsOf(),
     });
   }
-
-  const strokes = area.strokes ?? [];
-  const closedStrokes = strokes.filter((item) => item.closed);
-  const openStrokes = strokes.filter((item) => !item.closed);
 
   if (closedStrokes.length > 0) {
     result.push({
@@ -191,10 +228,12 @@ function overridePaints(
       visible: true,
       fill: { rgb, alpha: alpha * 0.35 },
       stroke: strokeStyle,
-      rings: strokesFor(closedStrokes, level, 0, 1),
+      rings: strokesFor(closedStrokes, level, bias, rounding),
       strokeIds: closedStrokes.map((item) => item.id),
       override: true,
       label,
+      // Маски вырезов прикладываются ко всем замкнутым штрихам области.
+      splits: splitsOf(),
     });
   }
   if (openStrokes.length > 0) {
@@ -208,7 +247,7 @@ function overridePaints(
       visible: true,
       fill: null,
       stroke: strokeStyle,
-      rings: strokesFor(openStrokes, level, 0, 1),
+      rings: strokesFor(openStrokes, level, bias, rounding),
       strokeIds: openStrokes.map((item) => item.id),
       override: true,
       label,
@@ -271,6 +310,10 @@ function statePaints(
   };
   const label = state.label ?? area.name;
   const result: AreaPaint[] = [];
+  const strokes = area.strokes ?? [];
+  const closedStrokes = strokes.filter((item) => item.closed);
+  const openStrokes = strokes.filter((item) => !item.closed);
+  const splitsOf = (): readonly AreaSplitMask[] => (options.splitForArea !== undefined && area.closed ? options.splitForArea(area.id) ?? [] : []);
 
   if (area.rings.length > 0) {
     const rawRings = ringsFor(area, level, state.lodBias, state.rounding, options);
@@ -287,12 +330,9 @@ function statePaints(
       rings: paintRingsWithGradient(rawRings, state, area.closed, style.accent, options),
       override: false,
       label,
+      splits: splitsOf(),
     });
   }
-
-  const strokes = area.strokes ?? [];
-  const closedStrokes = strokes.filter((item) => item.closed);
-  const openStrokes = strokes.filter((item) => !item.closed);
 
   if (closedStrokes.length > 0) {
     const rawClosed = strokesFor(closedStrokes, level, state.lodBias, state.rounding);
@@ -310,6 +350,8 @@ function statePaints(
       strokeIds: closedStrokes.map((item) => item.id),
       override: false,
       label,
+      // Маски вырезов прикладываются ко всем замкнутым штрихам области.
+      splits: area.closed ? splitsOf() : [],
     });
   }
 

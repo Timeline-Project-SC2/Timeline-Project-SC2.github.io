@@ -43,6 +43,9 @@ import { createSectorArrows } from './sector-arrows.ts';
 import { addressOf, formatAddress } from './sector-address.ts';
 import { bindSectorAdminGate, isAdminUiTarget } from './sector-admin-gate.ts';
 import { createSectorAreasEditorUi } from './sector-areas-editor-ui.ts';
+import { createSectorBoundsEditUi } from './sector-bounds-edit-ui.ts';
+import { createSectorAreasHierarchyUi } from './sector-areas-hierarchy-ui.ts';
+import type { SectorBoundsEditUiApi } from './sector-bounds-edit-ui.ts';
 // Единственный источник текста справки: файл руководства администратора.
 import sectorAreasHelp from '../../docs/admins/sector-areas-editor.md?raw';
 import type { SectorAreasEditorUiApi } from './sector-areas-editor-ui.ts';
@@ -367,7 +370,9 @@ function bindEvents(): void {
   }, true);
   el.mapStage.addEventListener('wheel', function (): void { if (flight.active) flight.cancel(); }, true);
   el.mapCanvas.addEventListener('click', function (event): void {
+    if (isEditorToolActive()) return;
     window.setTimeout(function (): void {
+      if (isEditorToolActive()) return;
       const rect = el.mapCanvas.getBoundingClientRect();
       const sx = event.clientX - rect.left;
       const sy = event.clientY - rect.top;
@@ -566,6 +571,54 @@ function applySystemFrameRequest(): void {
  * состояния карты, поэтому правки видны сразу — тем же рендером и на той же
  * канве, что и публичный `/sector/`. */
 let areasEditor: SectorAreasEditorUiApi | null = null;
+let lineEditor: SectorBoundsEditUiApi | null = null;
+let hierarchyEditor: ReturnType<typeof createSectorAreasHierarchyUi> | null = null;
+/**
+ * Снимок состояний инструментов до включения очередного: выключение возвращает
+ * ровно его, без перекрёстного восстановления (общие флаги «что было до меня»
+ * в каждом модуле зацикливали включение/выключение — дефект B5.1 ревью).
+ */
+let savedTools = { areas: false, lines: false, hierarchy: false };
+/** Признак программного переключения инструментов: защита от рекурсии. */
+let switchingTools = false;
+
+function isEditorToolActive(): boolean {
+  return (areasEditor !== null && areasEditor.enabled())
+    || (lineEditor !== null && lineEditor.enabled())
+    || (hierarchyEditor !== null && hierarchyEditor.enabled());
+}
+
+function snapshotTools(activating: 'areas' | 'lines' | 'hierarchy'): void {
+  savedTools = {
+    areas: activating !== 'areas' && areasEditor !== null && areasEditor.enabled(),
+    lines: activating !== 'lines' && lineEditor !== null && lineEditor.enabled(),
+    hierarchy: activating !== 'hierarchy' && hierarchyEditor !== null && hierarchyEditor.enabled(),
+  };
+}
+
+function disableOtherTools(except: 'areas' | 'lines' | 'hierarchy'): void {
+  switchingTools = true;
+  try {
+    if (except !== 'areas' && areasEditor !== null && areasEditor.enabled()) areasEditor.setEnabled(false);
+    if (except !== 'lines' && lineEditor !== null && lineEditor.enabled()) lineEditor.setEnabled(false);
+    if (except !== 'hierarchy' && hierarchyEditor !== null && hierarchyEditor.enabled()) hierarchyEditor.setEnabled(false);
+  } finally {
+    switchingTools = false;
+  }
+}
+
+function restoreSnapshot(deactivated: 'areas' | 'lines' | 'hierarchy'): void {
+  const next = savedTools;
+  savedTools = { areas: false, lines: false, hierarchy: false };
+  switchingTools = true;
+  try {
+    if (deactivated !== 'areas' && next.areas) areasEditor?.setEnabled(true);
+    if (deactivated !== 'lines' && next.lines) lineEditor?.setEnabled(true);
+    if (deactivated !== 'hierarchy' && next.hierarchy) hierarchyEditor?.setEnabled(true);
+  } finally {
+    switchingTools = false;
+  }
+}
 
 function bindSectorAreasEditor(): void {
   const panel = qs<HTMLElement>('[data-admin-editor]');
@@ -578,8 +631,74 @@ function bindSectorAreasEditor(): void {
     stage: el.mapStage,
     canvas: el.mapCanvas,
     helpText: sectorAreasHelp,
+    // Линейная правка активна — Ctrl+Z и Ctrl+Shift+Z уступают модулю линий.
+    isLineMode: () => lineEditor !== null && lineEditor.enabled(),
+    // Ручное включение рисования выключает остальные инструменты стадии карты:
+    // одновременно работает ровно один (включение — через общий переключатель).
+    onEnableChange: (enabled) => {
+      if (switchingTools) return;
+      if (enabled) {
+        savedTools = { areas: false, lines: false, hierarchy: false };
+        disableOtherTools('areas');
+      }
+    },
+    onSessionChange: () => {
+      lineEditor?.refresh();
+      hierarchyEditor?.refresh();
+    },
+  });
+  // Правка линий: отдельный модуль в своей секции панели. Инструменты взаимо-
+  // исключающие, но состояние рисования возвращается **прежним**, а не
+  // принудительно включённым: выключив «Правку линий», пользователь должен
+  // получить тот инструмент, который у него был до включения.
+  lineEditor = createSectorBoundsEditUi({
+    kernel,
+    panel,
+    stage: el.mapStage,
+    canvas: el.mapCanvas,
+    onActivate: () => {
+      if (switchingTools) return;
+      snapshotTools('lines');
+      disableOtherTools('lines');
+    },
+    onDeactivate: () => {
+      if (switchingTools) return;
+      restoreSnapshot('lines');
+    },
+  });
+  // Иерархия областей: якорная правка контуров, группы и сочетания пар.
+  // Три инструмента на одной стадии карты взаимоисключающие: включение
+  // иерархии выключает рисование и правку линий, выключение возвращает
+  // их прежние состояния.
+  hierarchyEditor = createSectorAreasHierarchyUi({
+    kernel,
+    panel,
+    stage: el.mapStage,
+    canvas: el.mapCanvas,
+    areas: {
+      getSession: () => {
+        if (areasEditor === null) throw new Error('Редактор областей не инициализирован');
+        return areasEditor.session();
+      },
+      applySession: (next) => {
+        areasEditor?.applySession(next);
+        lineEditor?.refresh();
+        hierarchyEditor?.refresh();
+      },
+    },
+    onActivate: () => {
+      if (switchingTools) return;
+      snapshotTools('hierarchy');
+      disableOtherTools('hierarchy');
+    },
+    onDeactivate: () => {
+      if (switchingTools) return;
+      restoreSnapshot('hierarchy');
+    },
   });
   areasEditor.refresh();
+  lineEditor.refresh();
+  hierarchyEditor.refresh();
 }
 
 function boot(): void {

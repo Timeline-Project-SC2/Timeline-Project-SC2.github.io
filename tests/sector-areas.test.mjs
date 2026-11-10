@@ -18,14 +18,18 @@ import {
   validateSectorAreas,
 } from '../src/atlas/sector-areas-contract.ts';
 import {
+  areaFillBBox,
+  distanceToAreaFillBoundary,
   distanceToRing,
   distanceToStroke,
   parametrize,
   pointAt,
   pointHitsArea,
   pointInArea,
+  pointInAreaFill,
   pointInRing,
   pointInStroke,
+  positiveContourRingsOf,
   ringArea,
   ringCentroid,
   ringContainsRing,
@@ -119,7 +123,7 @@ function docWith(areas, extras = {}) {
 test('каркас data/sector-areas.json разбирается и проходит валидацию', async () => {
   const raw = await readFile(new URL('../data/sector-areas.json', import.meta.url), 'utf8');
   const doc = parseSectorAreas(raw);
-  assert.equal(doc.version, 1);
+  assert.equal(doc.version, 2);
   assert.equal(doc.mapSize, 10000);
   assert.deepEqual(doc.areas, []);
   assert.deepEqual(doc.modes, ['political', 'military', 'economy', 'tension']);
@@ -887,7 +891,7 @@ test('старый документ без strokes читается с пуст�
     events: [],
   });
   const parsedLegacy = parseSectorAreas(legacyRaw);
-  assert.equal(parsedLegacy.version, 1);
+  assert.equal(parsedLegacy.version, 2, 'документ v1 автоматически мигрирует в актуальную схему v2');
   assert.deepEqual(parsedLegacy.areas[0].strokes, []);
   // Смысл rings и отверстий сохранён: внутри дырки SMALL точка не принадлежит кольцам.
   assert.equal(pointInArea(parsedLegacy.areas[0], 1750, 1750), false);
@@ -962,4 +966,58 @@ test('граф модулей содержит только подтверждё
   const borderRel = relationsForModule('sector-areas-border-world');
   assert.equal(borderRel.incoming.length, 0);
   assert.equal(borderRel.outgoing.length, 0);
+});
+
+test('схема v2 и геометрия заливки: миграция v1 -> v2, дырки, замкнутые и открытые штрихи', () => {
+  const migrated = parseSectorAreas({
+    version: 1,
+    mapSize: 10000,
+    modes: ['political', 'military', 'economy', 'tension'],
+    experimentalModes: ['ecology', 'history'],
+    areas: [
+      createArea({
+        id: 'a-v1',
+        name: 'Смешанная',
+        rings: [BIG, [[1800, 1800], [2400, 1800], [2400, 2400], [1800, 2400], [1800, 1800]]],
+        strokes: [
+          { id: 'st-closed', points: [[5000, 1000], [6000, 1000], [6000, 2000], [5000, 2000]], closed: true },
+          { id: 'st-open', points: [[7000, 7000], [8000, 7000]], closed: false },
+        ],
+      }),
+    ],
+    overrides: [],
+    events: [],
+    pairs: [{
+      id: 'p-1',
+      areaA: 'a-v1',
+      areaB: 'a-v1',
+      mode: 'split',
+      order: 'a-over-b',
+      forbidCrossing: false,
+      transitionWidth: null,
+      line: null,
+      extraLines: [{
+        manual: true,
+        points: [[5100, 1100], [5900, 1900]],
+        anchors: [{ s: 0, point: [5100, 1100] }, { s: 1, point: [5900, 1900] }],
+      }],
+      needsReview: false,
+      note: null,
+    }],
+  });
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.pairs[0].extraLines.length, 1);
+  const roundTrip = parseSectorAreas(JSON.stringify(migrated));
+  assert.equal(roundTrip.version, 2);
+  assert.equal(roundTrip.pairs[0].extraLines[0].points.length, 2);
+
+  const area = migrated.areas[0];
+  assert.equal(positiveContourRingsOf(area).length, 2, 'учитываются внешнее кольцо и замкнутый штрих');
+  assert.equal(pointInAreaFill(area, 1300, 1300), true);
+  assert.equal(pointInAreaFill(area, 2000, 2000), false, 'дырка исключена из заливки');
+  assert.equal(pointInAreaFill(area, 5500, 1500), true, 'замкнутый штрих входит в заливку');
+  assert.equal(pointInAreaFill(area, 7500, 7000), false, 'открытый штрих не входит в заливку');
+  const fillBox = areaFillBBox(area);
+  assert.deepEqual(fillBox, { minX: 1000, minY: 1000, maxX: 6000, maxY: 4000 });
+  assert.equal(distanceToAreaFillBoundary(area, 5500, 1500), 500);
 });

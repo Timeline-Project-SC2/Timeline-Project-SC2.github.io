@@ -1,4 +1,6 @@
 import type { AreaPaint } from './sector-areas-render.ts';
+import { MODES } from './sector-areas-contract.ts';
+import type { Mode } from './sector-areas-contract.ts';
 /* Модель сцены сектора: примитивы для отрисовки без DOM и без canvas.
  *
  * Модуль ничего не рисует и ни к чему не подключён: на вход идут данные систем,
@@ -114,6 +116,13 @@ export interface SceneArea {
   /** `true` — мазок форс-закрашивания поверх всех состояний. */
   readonly override: boolean;
   readonly rings: readonly SceneAreaRing[];
+  /** Маски разделения цветов всех пар области (§6), экранные координаты. */
+  readonly splits: readonly {
+    readonly holes: readonly { readonly points: readonly { readonly x: number; readonly y: number }[] }[];
+    readonly line: readonly { readonly x: number; readonly y: number }[];
+    readonly extraLines?: readonly (readonly { readonly x: number; readonly y: number }[])[];
+    readonly transitionHalfWidth: number;
+  }[];
 }
 
 /** Линия сетки адреса (§8.1, `L0…L12`, два тира по `gridTiersFor`). */
@@ -590,6 +599,30 @@ export function areasFor(
       closed: ring.closed,
     }));
 
+    const splits = (paint.splits ?? []).map((mask) => ({
+      holes: mask.holes.map((hole) => ({
+        points: hole.map(([wx, wy]) => {
+          const point = worldToScreen(frame, cam, wx, wy);
+          return { x: point.x, y: point.y };
+        }),
+      })),
+      line: mask.line.map(([wx, wy]) => {
+        const point = worldToScreen(frame, cam, wx, wy);
+        return { x: point.x, y: point.y };
+      }),
+      ...(mask.extraLines && mask.extraLines.length > 0
+        ? {
+          extraLines: mask.extraLines.map((extra) => extra.map(([wx, wy]) => {
+            const point = worldToScreen(frame, cam, wx, wy);
+            return { x: point.x, y: point.y };
+          })),
+        }
+        : {}),
+      // Полуширина перехода остаётся в мировых единицах: масштаб кадра известен
+      // отрисовщику, который переводит её в пиксели.
+      transitionHalfWidth: mask.transitionHalfWidth,
+    }));
+
     return {
       kind: 'brush' as const,
       id: paint.areaId,
@@ -604,8 +637,53 @@ export function areasFor(
       alpha: paint.stroke.alpha,
       override: paint.override,
       rings,
+      splits,
     };
   });
+}
+
+/**
+ * Явный порядок наложения пар в режиме overlay (§6.3 ТЗ
+ * `SEC-AREAS-HIERARCHY`): «верхняя» область пары рисуется поверх «нижней».
+ * Порядок — сохраняемый параметр пары, а не результат сортировки по `z`;
+ * при конфликте «верхняя» поднимается на минимально необходимый сдвиг.
+ */
+export function applyPairOverlayOrder(
+  paints: readonly AreaPaint[],
+  pairs: readonly { readonly mode: string; readonly areaA: string; readonly areaB: string; readonly order: string }[],
+): AreaPaint[] {
+  const overlayPairs = pairs.filter((pair) => pair.mode === 'overlay');
+  if (overlayPairs.length === 0) return [...paints];
+  const next = [...paints];
+  const maxPasses = Math.max(1, overlayPairs.length * 2);
+  let changed = true;
+  for (let pass = 0; pass < maxPasses && changed; pass += 1) {
+    changed = false;
+    for (const pair of overlayPairs) {
+      const overId = pair.order === 'b-over-a' ? pair.areaB : pair.areaA;
+      const underId = pair.order === 'b-over-a' ? pair.areaA : pair.areaB;
+      let underZ = -Infinity;
+      let overZ = -Infinity;
+      for (const paint of next) {
+        if (paint.areaId === underId) underZ = Math.max(underZ, paint.z);
+        if (paint.areaId === overId) overZ = Math.max(overZ, paint.z);
+      }
+      if (!Number.isFinite(underZ) || !Number.isFinite(overZ) || overZ > underZ) continue;
+      const shift = underZ - overZ + 1;
+      for (let index = 0; index < next.length; index += 1) {
+        const paint = next[index]!;
+        if (paint.areaId === overId) next[index] = { ...paint, z: paint.z + shift };
+      }
+      changed = true;
+    }
+  }
+  const modeOrder = (mode: Mode): number => {
+    const idx = MODES.indexOf(mode);
+    return idx >= 0 ? idx : MODES.length;
+  };
+  return next.sort((a, b) => a.z - b.z
+    || modeOrder(a.mode) - modeOrder(b.mode)
+    || (a.areaId < b.areaId ? -1 : a.areaId > b.areaId ? 1 : 0));
 }
 
 function cssColor(rgb: readonly [number, number, number], alpha: number): string {

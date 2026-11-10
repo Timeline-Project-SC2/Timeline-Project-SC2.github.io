@@ -26,7 +26,8 @@
     "assets:check": "python3 tools/build_assets.py --check",
     "assets:sync-only": "python3 tools/build_assets.py --sync-only",
     "test:fast": "node tools/test_fast.mjs",
-    "context": "node tools/context.mjs"
+    "context": "node tools/context.mjs",
+    "audit:bounds-edit": "node tools/audit_bounds_edit.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

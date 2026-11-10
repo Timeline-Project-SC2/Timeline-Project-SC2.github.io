@@ -15,9 +15,11 @@ import { addressOf, formatAddress, prefixOf, rectOf } from './sector-address.ts'
 import type { AddressLetters } from './sector-address.ts';
 import { createArea, emptySectorAreasDoc, parseSectorAreas } from './sector-areas-contract.ts';
 import { createOverrideStroke } from './sector-areas-force.ts';
-import { ringCentroid } from './sector-areas-geometry.ts';
+import { contourUnitsOf, positiveContourRingsOf, ringCentroid } from './sector-areas-geometry.ts';
 import { classifyArea, classifyLocation } from './sector-areas-scope.ts';
 import type { ClassifyOptions, Scope } from './sector-areas-scope.ts';
+import { reopenContourEdit } from './sector-areas-anchors.ts';
+import { crossingViolation, reviewPairsAfterGeometryChange } from './sector-areas-pairs.ts';
 import { snapStrokeToDisplayedGrid } from './sector-areas-snap.ts';
 import type { FrameViewport, SceneCamera } from './sector-scene.ts';
 import type {
@@ -52,6 +54,13 @@ export interface EditorSession {
   readonly brushWidthPx: number;
   readonly selection: string | null;
   readonly sequence: number;
+  /**
+   * Активная иерархическая правка якорями (§4 ТЗ `SEC-AREAS-HIERARCHY`) —
+   * состояние интерфейса, а не документа: в историю отмен не входит и при
+   * `undo`/`redo` сбрасывается. Коммиты тяги попадают в историю как обычные
+   * записи; см. `sector-areas-hierarchy.ts`.
+   */
+  readonly contourEdit?: import('./sector-areas-hierarchy.ts').ContourEditRef | null;
 }
 
 /**
@@ -97,7 +106,7 @@ export function createEditorSession(doc?: SectorAreasDoc): EditorSession {
 
 /* ------------------------------------------------------------------ история */
 
-function commit(
+export function commitDocChange(
   session: EditorSession,
   doc: SectorAreasDoc,
   event: { kind: string; areaId: string | null; mode: Mode | null; note: string },
@@ -119,6 +128,16 @@ function commit(
     selection: nextSelection === undefined ? session.selection : nextSelection,
     sequence: Math.max(session.sequence + 1, nextSequence(committedDoc)),
   };
+}
+
+/** Внутренний алиас: прежние команды сессии пользуются тем же коммитом. */
+function commit(
+  session: EditorSession,
+  doc: SectorAreasDoc,
+  event: { kind: string; areaId: string | null; mode: Mode | null; note: string },
+  nextSelection?: string | null,
+): EditorSession {
+  return commitDocChange(session, doc, event, nextSelection);
 }
 
 export function canUndo(session: EditorSession): boolean {
@@ -149,6 +168,7 @@ export function undo(session: EditorSession): EditorSession {
     future: [session.doc, ...session.future],
     futureSelections: [session.selection, ...(session.futureSelections ?? [])],
     selection: restoredSelection,
+    contourEdit: contourEditStillValid(previous, session.contourEdit ?? null),
   };
 }
 
@@ -168,7 +188,33 @@ export function redo(session: EditorSession): EditorSession {
     future: session.future.slice(1),
     futureSelections: hasTrackedSelection ? futureSelections.slice(1) : futureSelections,
     selection: restoredSelection,
+    contourEdit: contourEditStillValid(next, session.contourEdit ?? null),
   };
+}
+
+/**
+ * Правка контура переживает undo/redo, если правимая единица (кольцо или
+ * замкнутый штрих) в новом документе существует: якоря перепривяжутся при
+ * следующем действии (S4 ревью — раньше undo выбрасывало пользователя из
+ * режима правки без причины). Единица исчезла — правка закрывается.
+ */
+function contourEditStillValid(
+  doc: SectorAreasDoc,
+  edit: EditorSession['contourEdit'],
+): NonNullable<EditorSession['contourEdit']> | null {
+  if (edit === null || edit === undefined) return null;
+  const area = doc.areas.find((entry) => entry.id === edit.areaId);
+  if (area === undefined) return null;
+  const unit = contourUnitsOf(area)[edit.ringIndex];
+  if (unit === undefined || unit.ring.length < 3) return null;
+  // Состояние следует за документом: якоря пересобираются из записанных,
+  // предпросмотр сбрасывается (число якорей после undo — целое).
+  const saved = area.contourAnchors?.find((contour) => contour.ringIndex === edit.ringIndex)?.anchors;
+  if (saved !== undefined && saved.length >= 2) {
+    const reopened = reopenContourEdit(unit.ring, saved);
+    if (reopened.ok) return { ...edit, state: reopened.state };
+  }
+  return { ...edit, state: { ...edit.state, preview: null, draggedIndex: null } };
 }
 
 /* -------------------------------------------------------------- настройки */
@@ -477,8 +523,15 @@ export function addStrokeToArea(session: EditorSession, input: AddStrokeInput): 
       location: nextLocation,
     };
   });
-
-  const doc: SectorAreasDoc = { ...session.doc, areas: nextAreas };
+  const nextTarget = nextAreas.find((area) => area.id === input.areaId);
+  if (normalized.closed && nextTarget !== undefined) {
+    const violation = crossingViolation(session.doc, input.areaId, positiveContourRingsOf(nextTarget));
+    if (violation !== null) throw new RangeError(violation);
+  }
+  const withGeometry: SectorAreasDoc = { ...session.doc, areas: nextAreas };
+  const doc = normalized.closed
+    ? reviewPairsAfterGeometryChange(withGeometry, input.areaId).doc
+    : withGeometry;
   return commit(
     session,
     doc,
@@ -621,6 +674,34 @@ function updateArea(
   return commit(session, doc, { kind, areaId, mode: session.mode, note });
 }
 
+/**
+ * Коммит правки геометрии контура (§6.4 и §8 ТЗ): перед записью проверяется
+ * правило «пересечение запрещено» у пар с участием области — нарушающее
+ * действие отклоняется с понятным сообщением, документ не меняется. После
+ * записи ручные линии сочетаний не удаляются: сочетания пар пересматриваются
+ * (`reviewPairsAfterGeometryChange`), спорные помечаются `needsReview`.
+ * Всё попадает в историю одной записью.
+ */
+function commitGeometryChange(
+  session: EditorSession,
+  areaId: string,
+  update: (area: Area) => Area,
+  note: string,
+  kind = 'edit',
+): EditorSession {
+  const target = session.doc.areas.find((area) => area.id === areaId);
+  if (target === undefined) throw new RangeError(`Область ${areaId} не найдена`);
+  const next = update(target);
+  const violation = crossingViolation(session.doc, areaId, positiveContourRingsOf(next));
+  if (violation !== null) throw new RangeError(violation);
+  const withGeometry: SectorAreasDoc = {
+    ...session.doc,
+    areas: session.doc.areas.map((area) => (area.id === areaId ? next : area)),
+  };
+  const review = reviewPairsAfterGeometryChange(withGeometry, areaId);
+  return commit(session, review.doc, { kind, areaId, mode: session.mode, note });
+}
+
 export function moveVertex(
   session: EditorSession,
   areaId: string,
@@ -628,7 +709,7 @@ export function moveVertex(
   vertexIndex: number,
   position: AreaPoint,
 ): EditorSession {
-  return updateArea(session, areaId, (area) => {
+  return commitGeometryChange(session, areaId, (area) => {
     const ring = area.rings[ringIndex];
     if (ring === undefined) throw new RangeError(`Кольцо ${ringIndex} не найдено`);
     const base = openRing(ring, area.closed);
@@ -646,7 +727,7 @@ export function insertVertex(
   after: number,
   position: AreaPoint,
 ): EditorSession {
-  return updateArea(session, areaId, (area) => {
+  return commitGeometryChange(session, areaId, (area) => {
     const ring = area.rings[ringIndex];
     if (ring === undefined) throw new RangeError(`Кольцо ${ringIndex} не найдено`);
     const base = openRing(ring, area.closed);
@@ -663,7 +744,7 @@ export function removeVertex(
   ringIndex: number,
   vertexIndex: number,
 ): EditorSession {
-  return updateArea(session, areaId, (area) => {
+  return commitGeometryChange(session, areaId, (area) => {
     const ring = area.rings[ringIndex];
     if (ring === undefined) throw new RangeError(`Кольцо ${ringIndex} не найдено`);
     const base = openRing(ring, area.closed);
@@ -687,17 +768,29 @@ export function setParent(session: EditorSession, areaId: string, parentId: stri
 
 export function removeArea(session: EditorSession, areaId: string): EditorSession {
   if (!session.doc.areas.some((area) => area.id === areaId)) throw new RangeError(`Область ${areaId} не найдена`);
+  // Сочетания удалённой области не остаются «висячими»: пары с её участием
+  // удаляются вместе с ней, состав групп чистится. Это не молчаливая потеря:
+  // запись журнала перечисляет удалённые сочетания (§8 ТЗ).
+  const removedPairs = (session.doc.pairs ?? [])
+    .filter((pair) => pair.areaA === areaId || pair.areaB === areaId)
+    .map((pair) => pair.id);
   const doc: SectorAreasDoc = {
     ...session.doc,
     areas: session.doc.areas
       .filter((area) => area.id !== areaId)
       .map((area) => (area.parentId === areaId ? { ...area, parentId: null } : area)),
     overrides: session.doc.overrides.filter((override) => override.areaId !== areaId),
+    groups: (session.doc.groups ?? []).map((group) => ({
+      ...group,
+      areaIds: group.areaIds.filter((member) => member !== areaId),
+    })),
+    pairs: (session.doc.pairs ?? []).filter((pair) => pair.areaA !== areaId && pair.areaB !== areaId),
   };
+  const suffix = removedPairs.length > 0 ? ` Удалены сочетания: ${removedPairs.join(', ')}.` : '';
   return commit(
     session,
     doc,
-    { kind: 'remove', areaId, mode: session.mode, note: `Область ${areaId} удалена` },
+    { kind: 'remove', areaId, mode: session.mode, note: `Область ${areaId} удалена.${suffix}` },
     session.selection === areaId ? null : session.selection,
   );
 }
