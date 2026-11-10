@@ -17,6 +17,7 @@
 | [`shift_handoff.md`](shift_handoff.md) | **Передача смены Гайдлайнера**: где мы стоим, что читать, что делать первым, чего не повторять |
 | [`wave_cards/SEC-VISUAL-EDIT-REPORT.md`](wave_cards/SEC-VISUAL-EDIT-REPORT.md) | **Отчёт карточки SEC-VISUAL-EDIT**: правка линий границ сектора — что сделано, чем проверено и какие вопросы остались у владельца |
 | [`wave_cards/SEC-AREAS-HIERARCHY-REPORT.md`](wave_cards/SEC-AREAS-HIERARCHY-REPORT.md) | **Отчёт карточки SEC-AREAS-HIERARCHY**: иерархия областей — якоря, группы, сочетания и линия раздела; перенос #370, проверки, вопросы владельцу |
+| [`wave_cards/SEC-AREAS-HIERARCHY-REPORT-ROUND2.md`](wave_cards/SEC-AREAS-HIERARCHY-REPORT-ROUND2.md) | **Отчёт раунда 2 (HOLD-доработка)**: B1–B6/S1–S5, браузерная приёмка 12/12, совместимость формата, интеграция с #365/#370, вопросы владельцу |
 
 ## Карточки ролей
 
