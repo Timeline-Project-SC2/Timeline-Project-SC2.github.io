@@ -1,0 +1,47 @@
+[
+  {
+    "id": "process-freeze",
+    "date": "2026-11-10",
+    "scope": "процесс",
+    "decision": "Мораторий на новый мета-слой: не создавать скиллы, карточки и процессные проверки.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f"
+  },
+  {
+    "id": "revision-limit",
+    "date": "2026-11-10",
+    "scope": "задача",
+    "decision": "Не более двух раундов правок на задачу.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f"
+  },
+  {
+    "id": "critic-objective",
+    "date": "2026-11-10",
+    "scope": "приёмка кода",
+    "decision": "Критик отклоняет код только при падении verify_cmd или нарушении active decision, не по вкусу.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f"
+  },
+  {
+    "id": "o5-zero-contact",
+    "date": "2026-10-26",
+    "scope": "оркестрация",
+    "decision": "О-5: оркестратор не читает и не исполняет код.",
+    "status": "superseded",
+    "supersedes": null,
+    "sha": "ed462e81bb6510d3c7e6ce7b87ad528b7d12c11f"
+  },
+  {
+    "id": "single-agent-topology",
+    "date": "2026-11-10",
+    "scope": "оркестрация",
+    "decision": "О-5 отменено: 1 задача = 1 агент с прямым доступом к репозиторию = 1 PR. Несколько воркеров — только для доказанно независимых каталогов без общих файлов.",
+    "status": "active",
+    "supersedes": "o5-zero-contact",
+    "sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f"
+  }
+]

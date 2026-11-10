@@ -1,187 +1,31 @@
-# Инструкции для ИИ-агентов (Root Single Source of Truth)
+# Инструкции для агентов
 
-Этот файл — **корневой источник истины (SSoT)** по общим правилам репозитория
-`Timeline-Project-SC2.github.io`. Перед началом работы прочитайте этот документ,
-актуальный срез состояния в [`docs/handoff/status-and-state.md`](docs/handoff/status-and-state.md) (хаб — [`docs/HANDOFF.md`](docs/HANDOFF.md)) и доменный `AGENTS.md`
-той директории, в которой вы вносите изменения. Если исторические заметки противоречат
-текущему коду в `main`, приоритет у кода в `main` и явных указаний пользователя;
-после завершения работы обновите документацию согласно регламенту режима.
+- Точка входа для любого агента — [CONTEXT.md](CONTEXT.md); архив не читается вне `allowed_scope`.
+- Архитектуру не менять без записи в [decisions.json](data/decisions.json) с `supersedes` и пересборки `npm run context`.
+- **Process freeze:** создавать новый скилл, карточку или процессную проверку запрещено.
+- Прямые указания владельца, безопасность и ограничения платформы имеют приоритет; решения в `data/decisions.json` действуют в указанной области.
 
----
+## Проект и границы
 
-## 1. Назначение проекта и общая архитектура публикации
+Интерактивный атлас StarCraft II: данные `data/`, браузерный код `site/`, канонические модули
+`src/`, инструменты `tools/`. Доменные инварианты: [site](site/AGENTS.md), [src](src/AGENTS.md),
+[tools](tools/AGENTS.md). Читать их, когда соответствующие пути входят в область задачи.
+Исторические правила и карточки ролей — [архив](docs/archive/agents-pre-pr2.md), не действующий регламент.
 
-Репозиторий содержит интерактивный веб-атлас и 3D-планетарий вселенной StarCraft II:
-- Карта галактики (`/`), интерактивный атлас сектора Копрулу (`/sector/`, `/minimal/`)
-  и процедурный WebGL2-глобус планет на геодезической сетке Голдберга
-  (`/planet-globe/`, `/planet-test/`), а также изолированные стенды (`/spiral-test/`, `/cursor-test/`).
-- Сайт собирается через **TypeScript + Vite** (`vite.config.mts` и модули `tools/vite/*`)
-  в статическую директорию `.publish/` и публикуется на **GitHub Pages** через
-  `.github/workflows/pages.yml` (источник публикации в настройках репозитория — GitHub Actions).
-- Все JS, CSS и WebWorker-бандлы в `.publish/` получают автоматические контент-хэши
-  в именах файлов и фиксируются в `.publish/build-manifest.json`. Добавлять или обновлять
-  ручные `?v=` в исходных HTML/TS-файлах категорически запрещено.
-- Табличные данные (`data/*.csv`, `data/meta.json`) синхронизируются из опубликованной книги
-  Google Sheets скриптом `tools/sync.py` (включая строгий режим `--strict`), а растровые
-  WebP-тайлы и ресайзы карт строятся из исходников `assets/src/` скриптом `tools/build_assets.py`.
-- Контракт профилей планет (`src/contracts/planet-generation-contract.json`) проверяется
-  кросс-верификатором `tools/verify_planet_contract_cross.mjs` между Python и TypeScript,
-  а полнота статической сборки `.publish/` — верификатором `tools/verify_feature_parity.mjs`.
-- Полная матрица тестовых и сборочных проверок выполняется в `.github/workflows/check.yml`
-  на каждый Pull Request и должна оставаться зелёной перед слиянием в `main`.
+## Инварианты
 
----
+- Строгий TypeScript; не возвращать параллельные JS-монолиты. Не править `site/assets/vendor/`.
+- Шаблон сектора — `templates/atlas-shell.html`; хэши JS/CSS/worker создаёт сборка, ручные `?v=` запрещены.
+- Производные `.publish/`, WebP и тайлы не коммитить; исходные изображения — `assets/src/`.
+- Синхронизация данных атомарна; контракт планет и Wasm проверяются соответствующими верификаторами.
+- Финальная визуальная приёмка — за владельцем; CI не заменяет runtime или визуальную проверку.
 
-## 2. Карта маршрутов, директорий и доменных `AGENTS.md` (SSoT)
+## Проверки и работа
 
-Чтобы исключить дублирование и рассинхронизацию правил (принцип **Single Source of Truth**),
-узкоспециализированные детали рантайма страниц, шейдеров/WASM и сборочных/синхронизирующих
-скриптов вынесены во вложенные файлы. В корневом `AGENTS.md` хранятся только общие правила
-репозитория и ссылки на доменные документы:
-
-| Директория / контур | Маршруты и зона ответственности | Доменный SSoT-документ |
-|---|---|---|
-| `site/` | Браузерный рантайм маршрутов `/`, `/sector/`, `/minimal/`, `/planet-globe/`, `/planet-test/`, `/spiral-test/`, `/cursor-test/`, модули `site/shared/*`, WebGL2, WebWorker, CSP и запрет правки `site/assets/vendor/*` | [`site/AGENTS.md`](site/AGENTS.md) |
-| `src/` | Канонические TS-модули (`src/atlas/*`, `src/planet/*`, `src/local-map/*`, `src/contracts/*`, `src/spiral/*`, `src/cursor/*`), AssemblyScript/Wasm, побитовая идентичность `c100-soft-v2` (И-1…И-6) и `src/planet/planet-globe-fx.ts` | [`src/AGENTS.md`](src/AGENTS.md) |
-| `tools/` | Скрипты синхронизации и валидации (`tools/sync.py --strict`, `tools/planet_generation.py`), верификаторы (`verify_planet_contract_cross.mjs`, `verify_feature_parity.mjs`), генераторы золотых фикстур и модули `tools/vite/*` | [`tools/AGENTS.md`](tools/AGENTS.md) |
-| `docs/agents_task_orchestration/` | Регламент мультиагентной сплит-разработки (`Split-Work` / `Tri-Agent Wave`), матрица `Zero File Overlap`, инструкция для воркеров 1–3, аудит внешнего набора агентов и восемь карточек ролей (сектор, планеты, картография, QA, производительность, документация, оркестрация, критик плана) | [`docs/agents_task_orchestration/README.md`](docs/agents_task_orchestration/README.md)<br>[`docs/agents_task_orchestration/agents_task_orchestration.md`](docs/agents_task_orchestration/agents_task_orchestration.md)<br>[`docs/agents_task_orchestration/worker_instruction_on_splitwork.md`](docs/agents_task_orchestration/worker_instruction_on_splitwork.md)<br>[`docs/agents_task_orchestration/external_agency_agents_audit.md`](docs/agents_task_orchestration/external_agency_agents_audit.md) |
-| `templates/` | Единый HTML-каркас `templates/atlas-shell.html` для вариантов `/sector/` и `/minimal/` | См. [`site/AGENTS.md`](site/AGENTS.md) и [`tools/AGENTS.md`](tools/AGENTS.md) |
-| `data/` и `assets/src/` | Канонические CSV-снимки (`systems.csv`, `places.csv`, `planet-generation.csv`), `sources.json`, `meta.json` и исходные растровые изображения | См. [`tools/AGENTS.md`](tools/AGENTS.md) и [`docs/ADMIN_GUIDE.md`](docs/ADMIN_GUIDE.md) |
-
-**Правило SSoT:** при изменении доменных правил рантайма, Wasm/шейдеров или тулинга редактируйте
-**только** соответствующий вложенный `AGENTS.md`, не копируя его детали в корневой файл.
-
----
-
-## 3. Среда разработки и команды запуска / проверки
-
-Версии среды разработки зафиксированы в `.nvmrc` (**Node.js 24**) и `.python-version` (**Python 3.12**)
-и проверяются в `.github/workflows/check.yml` (`actions/setup-node@v6`, `actions/setup-python@v6`).
-Стек `typescript@^7.0.2` (с алиасами `@typescript/native` и `@typescript/typescript6`), `eslint`,
-`assemblyscript` и `vite` зафиксирован в едином `package-lock.json`:
-
-```bash
-# Установка зависимостей из lock-файла
-npm ci
-
-# Локальный запуск и сборка статической публикации (.publish/)
-npm run build                                   # проверка типов (tsc --noEmit) + сборка Vite в .publish/
-npm run serve                                   # показать собранное: vite preview на .publish, порт 8080
-npm run dev                                     # сборка + serve одним шагом (без hot-reload)
-npm run assets:build                            # картинки assets/*.webp (нужен Pillow): сборка их не делает
-
-# Статический анализ типов, линтер и компиляция Wasm (для исполнителя и rc-04; О-5 не меняет)
-npm run check:fast                              # локальный гейт: стык импортов (esbuild) + типы + линт, ~3 с
-npm run check:fast -- --probe tests/x.test.mjs  # одна проба: стык + линт; типы для tests/** НЕ проверяются
-npm run check:fast -- --all                     # тест-файлы из tests/ + сам гейт
-# в отчёте гейт перечисляет только фактически проверенное: типы для tests/** и *.mjs,
-# а также линт для путей без блока eslint.config.mjs он печатает как «НЕ ПРОВЕРЯЛОСЬ»
-npm run typecheck                               # строгая проверка типов TypeScript (tsc --noEmit)
-npm run lint                                    # проверка ESLint по директориям site/ и src/
-npm run build:wasm                              # сборка Wasm-ядер planet-core (проверка: node tools/build_planet_core.mjs --check)
-
-# Модульные и интеграционные тесты (Node.js и Python)
-npm test                                        # автопоиск и параллельный прогон тестов Node
-npm run test:fast                               # изменённые тесты и tsc (база main/origin/main)
-npm run test:py                                 # прогон Python-тестов (unittest discover -s tests -p 'test_*.py')
-
-# Верификация публикации, контракта планет и синхронизации данных
-npm run verify:publish                          # проверка 7 маршрутов, build-manifest.json и паритета экспортов
-npm run verify:contract                         # кросс-проверка Python ↔ TS контракта planet_generation и PG1
-python3 tools/sync.py --strict                  # строгая проверка CSV, координат 0..mapSize, привязок places и дублей ID
-python3 tools/planet_generation.py validate     # валидация снимка профилей планет против data/places.csv
-
-> `vite dev` для проверки интерфейса не используется: плагин публикации подставляет
-> хешированные имена бандлов (`/shared/app-<hash>.js`), которых в режиме разработки нет.
-> Смотреть только собранный `.publish/` через `npm run serve`. Без `npm run assets:build`
-> картинки `assets/*.webp` отдают 404 — в Git лежат только исходники `assets/src/`.
-python3 tools/build_assets.py --check           # проверка свежести WebP и тайлов (на cache hit в CI: --sync-only)
-git diff --check                                # проверка отсутствия конфликтных маркеров и пробельных ошибок
-```
-
----
-
-## 4. Общие архитектурные инварианты репозитория
-
-1. **Строгий TypeScript и вытеснение легаси (Инвариант И-5):**
-   - Весь новый и мигрированный код в `src/` и `site/` пишется на строгом TypeScript
-     (`strict: true`, `noUncheckedIndexedAccess: true`, `exactOptionalPropertyTypes: true`).
-   - Держать параллельные `.js`-монолиты или дублирующие реализации рендереров и воркеров запрещено.
-2. **Единые контракты и шаблоны:**
-   - Контракт профилей планет (`src/contracts/planet-generation-contract.json`), каноническая
-     сетка `c100-soft-v2` (И-1, И-2), сшивка локальной карты 7 ячеек (И-3) и FX-сокет глобуса (И-5, И-6)
-     подробно регламентированы в [`src/AGENTS.md`](src/AGENTS.md) и [`docs/CHANGE_REQUEST_PLAN.md`](docs/CHANGE_REQUEST_PLAN.md).
-   - Общая разметка `/sector/` и `/minimal/` правится только в `templates/atlas-shell.html`,
-     а сборочный конвейер `.publish/` — в модулях `tools/vite/*` с контекстом `PublishPipelineState`
-     (см. [`tools/AGENTS.md`](tools/AGENTS.md)).
-3. **Запрет на коммит производных артефактов:**
-   - Папка `.publish/`, нарезанные тайлы `assets/tiles/`, `assets/tiles.json`, `assets/map-preview.webp`
-     и производные `assets/*.webp` исключены через `.gitignore`.
-   - В Git хранятся только исходные изображения в `assets/src/`. Кэш изображений в `pages.yml`
-     обязан зависеть от всех исходников `assets/src/`, `tools/build_assets.py` и `tools/requirements.txt`.
-
----
-
-## 5. Правила языка, оформления и рабочего процесса
-
-- **Русский язык:** все тексты пользовательского интерфейса, комментарии в коде, документация,
-  заголовки/описания PR и сообщения коммитов пишутся **по-русски**.
-- **Понятные объяснения:** в общении с владельцем и при добавлении или изменении документации
-  при первом упоминании сокращения, технического термина, номера задачи или измерения
-  кратко объясняйте его смысл и отношение к обсуждению. Не рассчитывайте на знание кода;
-  ссылка на [словарик](docs/README.md#как-читать-рабочие-обозначения) не заменяет объяснение
-  в самом сообщении. Если нужен выбор владельца, излагайте варианты и последствия простыми
-  словами и давайте рекомендацию. Технические решения в рамках уже согласованных ограничений
-  агент принимает сам; важные решения и разрешения владельца самовольно не подменяет.
-- **Работа через ветку и PR:** прямые коммиты и пуши в `main` запрещены. На ветке `main`
-  действует ruleset с требованием линейной истории (слияние выполняется через
-  `gh pr merge <N> --squash --admin` или `--rebase --admin` по правилам текущего режима).
-- **Визуальная проверка:** агент обязан проверять изменения тестами, сборкой и при необходимости
-  headless-браузером, но финальная визуальная приёмка интерфейса и эффектов остаётся за владельцем.
-
----
-
-## 6. Протокол сохранности работы (ветка, коммиты и изоляция)
-
-- **Шаг 0 (проверка контура сохранения):** в начале задачи проверьте текущую рабочую ветку
-  и выполните первый содержательный коммит с немедленным `git push -u origin HEAD`. Убедитесь,
-  что `git rev-parse HEAD` совпадает с `origin/<ветка>`, а `git status --short` чист.
-- **Локальный цикл — от дешёвого к дорогому (адресат: исполнитель и QA-роль `rc-04`):**
-  проба пишется файлом `tests/<имя>.test.mjs` (не inline-heredoc), затем
-  `npm run check:fast -- --probe <файл>` (секунды: стык импортов и линт; для `tests/**`
-  типы не проверяются и гейт об этом печатает), затем `node --test <файл>`, и только в конце
-  полный `npm test` (страж, ~135 с) и `npm run build`. Коды возврата гейта: `0` — проверено
-  и чисто либо явный `ПРОПУСК`, `1` — проблемы, `2` — проверить невозможно (нет Git, базы,
-  `node_modules`). Почему такой порядок и какая проверка чего не видит —
-  [`docs/verification-pattern.md`](docs/verification-pattern.md).
-  **Правило О-5 для Гайдлайнера (`rc-07`) этим пунктом не отменяется:** он не запускает
-  `check:fast`, `tsc`, линт и тесты; `check:fast` его исключением не становится.
-- **Коммит и пуш после каждого завершённого шага:** песочница и `/tmp` эфемерны и не сохраняются
-  между сессиями (см. казус CR-01 PR 4 в [`docs/handoff/infra-pitfalls.md`](docs/handoff/infra-pitfalls.md)). Коммитьте и пушьте после каждого
-  логического шага, не откладывая сохранение на конец задачи.
-- **Запрет параллельной записи и чтения одного файла:** не отправляйте в одном блоке вызовов
-  запись файла (`write_file`/`edit_file`) и зависящую от него команду `bash` — инструменты одного
-  блока выполняются параллельно, и команда прочитает пустой или частичный файл.
-- **Источник правды — только Git:** проверяйте сохранность работы только через `git status --short`,
-  `git log` и `git diff --name-only origin/main...HEAD`, не ориентируясь на индикаторы UI.
-
----
-
-## 7. Порядок ведения документации (`Single-Agent` vs `Split-Work`)
-
-- **`docs/HANDOFF.md` (и `docs/handoff/`) и `CHANGELOG.md`:** фиксируют итоги этапов, архитектурные решения,
-  замеры производительности и инфраструктурные особенности репозитория.
-- **Стандартный одиночный режим (`Single-Agent`):** агент обновляет `docs/HANDOFF.md` (и `docs/handoff/`) и `CHANGELOG.md`
-  в том же PR и после прохождения всех проверок `check.yml` доводит PR до слияния по указанию владельца.
-- **Параллельный сплит-режим (`Split-Work` / `Tri-Agent Wave`):**
-  1. При наличии карточки `Role & Boundary Card` строго следуйте
-     [`docs/agents_task_orchestration/worker_instruction_on_splitwork.md`](docs/agents_task_orchestration/worker_instruction_on_splitwork.md)
-     и матрице волны DX-1 §7 [`docs/agents_task_orchestration/waves/stage-6-dx.md`](docs/agents_task_orchestration/waves/stage-6-dx.md).
-  2. Разрешено создавать и изменять **только** файлы из своего списка `OWNED_FILES`
-     (обязательна самопроверка `git status --short` и `git diff --name-only origin/main...HEAD`).
-  3. Воркерам 1 и 2 категорически запрещено трогать `docs/HANDOFF.md` (и `docs/handoff/`) и `CHANGELOG.md` —
-     сводку всей волны централизованно оформляет **Worker-3**.
-  4. Каждый воркер открывает PR в `main` и останавливается перед слиянием (`Стоп перед merge`).
-  5. Гайдлайнер (`rc-07`) не читает и не запускает код напрямую: факты о реализации он получает
-     спецификацией поиска через воркера, статус — через CI и отдельную задачу `rc-04` (правило
-     О-5 [`waves/protocol.md`](docs/agents_task_orchestration/waves/protocol.md)).
+- Node 24, Python 3.12; установка: `npm ci`. `npm run build` — типы и сборка, `npm run dev` — сборка и просмотр.
+- `npm run test:fast` — изменённые тесты и tsc; `npm test` — параллельный автопоиск Node-тестов.
+- `npm run check:fast` — стык импортов, линт и применимые типы; `--all` проверяет тест-файлы из `tests/`.
+- `npm run verify:docs`, `npm run lint`, `npm run test:py` и другие проверки выбираются по области задачи.
+- В CI Node-тесты идут последовательно; восемь пропусков отслеживаются в [issue #374](https://github.com/Timeline-Project-SC2/Timeline-Project-SC2.github.io/issues/374).
+- Работа ведётся в назначенной ветке через PR; не пушить в `main`, не обходить защиту без разрешения.
+- Проза, комментарии и сообщения пользователю — по-русски. Не приписывать непроверенным результатам статус проверенных.
