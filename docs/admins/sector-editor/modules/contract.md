@@ -10,9 +10,16 @@
 
 ## Что отдаёт
 
-- версию схемы `v1`, размер карты `10 000`, глубины `MIN_LEVEL`…`MAX_LEVEL`;
+- версию схемы `v2` (с явной миграцией прежних документов `v1 → v2` при разборе), размер карты `10 000`, глубины `MIN_LEVEL`…`MAX_LEVEL`;
 - типы `SectorAreasDoc`, `Area`, `Ring`, `AreaState`, `AreaOverride`, `AreaEvent`,
   `GradientSpec`, `AreaLocation`;
+- иерархию (ТЗ `SEC-AREAS-HIERARCHY`): `AreaGroup` (именованные группы,
+  устойчивый ID), `AreaPair` (слой сочетания пары: режим, порядок наложения,
+  запрет пересечения, ширина перехода, `line` и `extraLines` для многосвязной
+  зоны, `needsReview`), `PairLine`/`CurveAnchor` (якоря на видимой кривой:
+  доля дуги + точная точка), `ContourAnchors` (якоря единицы контура области);
+  при экспорте документ получает `version: 2`, чтобы старый парсер `v1`
+  отклонял несовместимую схему, а не терял поля иерархии молча;
 - фабрики `emptySectorAreasDoc`, `createArea`;
 - проверку `validateSectorAreas` → `ValidationReport` и поиск петель `findParentCycles`.
 
