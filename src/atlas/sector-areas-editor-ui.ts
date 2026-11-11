@@ -374,7 +374,7 @@ function escapeHtml(value: string): string {
 export type RelationFilter = 'all' | ModuleRelationKind;
 
 /** Активный рабочий экран правой панели: в каждый момент открыт ровно один. */
-export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes' | 'lines';
+export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes' | 'lines' | 'hierarchy';
 
 export function isEditorScreen(value: string): value is EditorScreen {
   return value === 'module'
@@ -382,7 +382,8 @@ export function isEditorScreen(value: string): value is EditorScreen {
     || value === 'draw'
     || value === 'properties'
     || value === 'changes'
-    || value === 'lines';
+    || value === 'lines'
+    || value === 'hierarchy';
 }
 
 interface GraphNodeBox {
@@ -986,7 +987,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function systemsNavHtml(): string {
     const isolated = new Set(isolatedModuleIds());
-    const navTabs: readonly { readonly id: Exclude<EditorScreen, 'module'>; readonly label: string }[] = [
+    const navTabs: readonly { readonly id: EditorScreen; readonly label: string }[] = [
+      { id: 'module', label: 'Модуль' },
+      { id: 'hierarchy', label: 'Иерархия изменений' },
       { id: 'draw', label: 'Инструменты карты' },
       { id: 'lines', label: 'Линии' },
       { id: 'properties', label: 'Свойства области' },
@@ -1026,6 +1029,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
     return [
       '<nav class="admin-editor-nav" data-editor-nav aria-label="Системы и разделы редактора">',
+      '  <button type="button" data-action="navigation-toggle" class="admin-editor-navigation-toggle" aria-expanded="true">Модули и разделы ↕</button>',
       '  <div class="admin-editor-toggles">',
       '    <label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
       '    <label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Было → стало</label>',
@@ -1059,7 +1063,6 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '    <label class="admin-editor-field">Кисть, px <input type="number" min="1" max="40" step="1" value="' + session.brushWidthPx + '" data-action="width"></label>',
       snapDetailsHtml(),
       '  </div>',
-      toolsHtml(),
       activeAreaBarHtml(),
       '  <p class="admin-editor-hint">ЛКМ — штрих в активную область. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
       previewOn
@@ -1086,8 +1089,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function modulesHtml(): string {
-    const nav = systemsNavHtml();
-    if (activeScreen === 'properties' || activeScreen === 'changes' || activeScreen === 'lines') {
+    const nav = systemsNavHtml() + '<div class="admin-editor-toolbox" aria-label="Toolbox">' + toolsHtml() + '</div>';
+    if (activeScreen === 'properties' || activeScreen === 'changes' || activeScreen === 'lines' || activeScreen === 'hierarchy') {
       return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
     }
     const stageHtml = activeScreen === 'draw'
@@ -1101,12 +1104,16 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
    * интерфейса: оно не коммитит документ и не оставляет записи в истории.
    */
   function toolsHtml(): string {
-    const buttons = TOOL_IDS.map((tool) => {
+    const labels = ['Кисть', 'Линия', 'Прямоуг.', 'Эллипс', 'Полигон'];
+    const paths = ['M4 20l4-1L20 7l-3-3L4 17z M14 7l3 3', 'M4 20L20 4 M4 17v3h3 M17 4h3v3', 'M4 5h16v14H4z', 'M20 12a8 6 0 1 1-16 0 8 6 0 1 1 16 0', 'M12 3l9 7-4 11H7L3 10z'];
+    const buttons = TOOL_IDS.map((tool, index) => {
       const current = tool === toolState.tool;
       return '<button type="button" class="admin-editor-tool' + (current ? ' is-current' : '') + '"'
         + ' data-action="tool" data-tool="' + escapeHtml(tool) + '"'
         + ' aria-pressed="' + (current ? 'true' : 'false') + '"'
-        + ' title="' + escapeHtml(TOOL_TITLES[tool]) + '">' + escapeHtml(TOOL_LABELS[tool]) + '</button>';
+        + ' title="' + escapeHtml(TOOL_TITLES[tool] + ': ' + TOOL_HINTS[tool]) + '">'
+        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + paths[index] + '"/></svg>'
+        + '<span>' + escapeHtml(labels[index] ?? TOOL_LABELS[tool]) + '</span></button>';
     }).join('');
     return '<p class="admin-editor-meta"><strong>Инструмент</strong> · ' + escapeHtml(TOOL_TITLES[toolState.tool]) + '</p>'
       + '<div class="admin-editor-tools" role="group" aria-label="Инструменты рисования">' + buttons + '</div>'
@@ -1373,6 +1380,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const changes = panel.querySelector('[data-editor-block="changes"]');
     if (summary !== null) summary.textContent = summaryText();
     if (modules !== null) modules.innerHTML = modulesHtml();
+    const navigationToggle = panel.querySelector('[data-action="navigation-toggle"]');
+    if (navigationToggle !== null) navigationToggle.setAttribute('aria-expanded', panel.classList.contains('is-navigation-collapsed') ? 'false' : 'true');
     if (properties !== null) properties.innerHTML = propertiesHtml();
     if (changes !== null) changes.innerHTML = changesHtml();
     if (editing !== null) {
@@ -1689,6 +1698,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
 
   function setScreen(next: EditorScreen): void {
     activeScreen = next;
+    setCollapsed(false);
     refresh();
   }
 
@@ -1787,6 +1797,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const input = control as HTMLInputElement;
 
     switch (action) {
+      case 'navigation-toggle': {
+        if (panel !== null) {
+          const compact = panel.classList.toggle('is-navigation-collapsed');
+          control.setAttribute('aria-expanded', compact ? 'false' : 'true');
+        }
+        break;
+      }
       case 'help': openHelp(); break;
       case 'help-close': closeHelp(); break;
       case 'collapse': setCollapsed(true); break;
@@ -1813,8 +1830,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       case 'screen': {
         const next = control.getAttribute('data-screen') ?? '';
         if (!isEditorScreen(next)) break;
-        activeScreen = next;
-        refresh();
+        setScreen(next);
         break;
       }
       case 'relation-filter': {
@@ -1829,6 +1845,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         if (nextModule.length > 0 && moduleById(nextModule) !== null) {
           moduleId = nextModule;
           activeScreen = 'module';
+          setCollapsed(false);
         }
         refresh();
         break;

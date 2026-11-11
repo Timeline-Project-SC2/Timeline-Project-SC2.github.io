@@ -21,6 +21,7 @@ import {
 } from '../src/atlas/sector-areas-editor.ts';
 import {
   addAreaToGroupCmd,
+  reorderAreaCmd,
   closeContourEdit,
   commitContourDrag,
   createGroupCmd,
@@ -534,4 +535,19 @@ test('§7+S5: Ctrl+Z откатывает ручную линию раздела
   const again = redo(undone);
   assert.equal(again.doc.pairs[0].line.manual, true, 'повтор возвращает ручную линию');
   assert.deepEqual(again.doc.pairs[0].line.points, manualLine.points);
+});
+
+
+test('перестановка областей сохраняется в JSON и отменяется одним шагом без изменения геометрии', () => {
+  const original = sessionWithAreas();
+  const next = reorderAreaCmd(original, 'area-1', 'area-3');
+  assert.deepEqual(next.doc.areas.map(a => a.id), ['area-2', 'area-3', 'area-1']);
+  assert.equal(next.doc.areas[2], original.doc.areas[0]);
+  assert.equal(next.past.length, original.past.length + 1);
+  assert.equal(next.doc.events.at(-1).kind, 'reorder');
+  assert.deepEqual(undo(next).doc, original.doc);
+  assert.deepEqual(redo(undo(next)).doc, next.doc);
+  assert.deepEqual(importDoc(exportDoc(next)).doc, next.doc);
+  assert.equal(reorderAreaCmd(next, 'area-1', 'area-1'), next);
+  assert.equal(reorderAreaCmd(next, 'missing', 'area-1'), next);
 });

@@ -63,6 +63,7 @@ import {
   removeAreaFromGroupCmd,
   removePairCmd,
   renameGroupCmd,
+  reorderAreaCmd,
   resetPairLineCmd,
   resolveVisibleContourClick,
   setPairForbidCrossingCmd,
@@ -488,6 +489,40 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     ].join('');
   }
 
+  /** Перетаскивание и кнопки дают одну и ту же команду, в том числе на телефоне. */
+  function areaOrderHtml(): string {
+    const areas = doc().areas;
+    return '<details open><summary>Порядок областей (' + areas.length + ')</summary>'
+      + '<p class="admin-editor-hint">Перетащите строку на нужное место или используйте стрелки. Перестановка сохраняется в документе и отменяется вместе с другими правками.</p>'
+      + '<ol class="admin-editor-area-order">' + areas.map((area, index) =>
+        '<li draggable="true" data-order-area="' + escapeHtml(area.id) + '"><span>' + escapeHtml(area.name) + '</span>'
+        + '<button type="button" data-action="area-order" data-area="' + escapeHtml(area.id) + '" data-target="'
+        + escapeHtml(areas[index - 1]?.id ?? '') + '" aria-label="Поднять область"' + (index === 0 ? ' disabled' : '') + '>↑</button>'
+        + '<button type="button" data-action="area-order" data-area="' + escapeHtml(area.id) + '" data-target="'
+        + escapeHtml(areas[index + 1]?.id ?? '') + '" aria-label="Опустить область"' + (index === areas.length - 1 ? ' disabled' : '') + '>↓</button></li>'
+      ).join('') + '</ol></details>';
+  }
+
+  let draggedArea: string | null = null;
+  function onOrderDrag(event: Event): void {
+    if (!(event.target instanceof Element)) return;
+    const row = event.target.closest('[data-order-area]');
+    if (row === null) return;
+    const drag = event as DragEvent;
+    const id = row.getAttribute('data-order-area');
+    if (event.type === 'dragstart') {
+      draggedArea = id;
+      drag.dataTransfer?.setData('text/plain', id ?? '');
+    } else if (event.type === 'dragover' && draggedArea !== null) {
+      event.preventDefault();
+    } else if (event.type === 'drop' && draggedArea !== null && id !== null) {
+      event.preventDefault();
+      apply(reorderAreaCmd(session(), draggedArea, id));
+      draggedArea = null;
+      refresh();
+    }
+  }
+
   function blockHtml(): string {
     const groups = doc().groups ?? [];
     const pairs = doc().pairs ?? [];
@@ -519,6 +554,7 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
         ? '<p class="admin-editor-hint">Двойной клик по линии — 6 якорей (концы удерживаются в зоне взаимодействия), повторный по сегменту — уточнение.'
           + ' Тяните якорь; отпускание применяет к линии раздела, контуры областей не меняются. <kbd>Esc</kbd> — завершить.</p>'
         : '',
+      areaOrderHtml(),
       '<details open><summary>Группы (' + groups.length + ')</summary>',
       '<div class="admin-editor-field-inline">',
       '  <input type="text" data-hierarchy-group-name placeholder="Имя группы" aria-label="Имя новой группы" />',
@@ -672,6 +708,11 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     const control = target.closest('[data-action],[data-group-delete],[data-group-remove],[data-group-rename],[data-pair-delete],[data-pair-edit],[data-pair-reset],[data-pair-review]');
     if (control === null) return;
     const action = control.getAttribute('data-action');
+    if (action === 'area-order') {
+      apply(reorderAreaCmd(session(), control.getAttribute('data-area') ?? '', control.getAttribute('data-target') ?? ''));
+      refresh();
+      return;
+    }
     if (action === 'hierarchy-tool') {
       setEnabled(!on);
       return;
@@ -1301,6 +1342,10 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
   const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
   bind(panel, 'change', onPanelChange);
+  bind(panel, 'dragstart', onOrderDrag);
+  bind(panel, 'dragover', onOrderDrag);
+  bind(panel, 'drop', onOrderDrag);
+  bind(panel, 'dragend', () => { draggedArea = null; });
   bind(inputTarget, 'pointerdown', onPointerDown as unknown as (event: Event) => void, true);
   bind(inputTarget, 'pointermove', onPointerMove as unknown as (event: Event) => void, true);
   bind(inputTarget, 'pointerup', onPointerUp as unknown as (event: Event) => void, true);
