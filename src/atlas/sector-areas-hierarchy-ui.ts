@@ -97,6 +97,11 @@ export interface SectorAreasHierarchyUiApi {
   setEnabled(on: boolean): void;
   enabled(): boolean;
   refresh(): void;
+  /**
+   * Строка состояния блока. Нужна редактору областей: журнал правок общий, и
+   * итог `Ctrl+Z` (в том числе откат ручной линии пары) показывается здесь.
+   */
+  notify(message: string | null): void;
   /** Текущая правка контура: ID области или `null` (для тестов и статуса). */
   contourEditAreaId(): string | null;
   /** Правка линии пары: ID пары или `null` (для тестов и статуса). */
@@ -1310,6 +1315,9 @@ export function createSectorAreasHierarchyUi(options: SectorAreasHierarchyUiOpti
     setEnabled,
     enabled(): boolean { return on; },
     refresh,
+    notify(message: string | null): void {
+      setNotice(message);
+    },
     contourEditAreaId(): string | null {
       const ref = session().contourEdit ?? null;
       return ref === null ? null : ref.areaId;

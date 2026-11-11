@@ -130,6 +130,14 @@ export interface SectorAreasEditorUiOptions {
   readonly onEnableChange?: (on: boolean) => void;
   /** Уведомление об изменении сессии (импорт, черновик, выбор, правки) для смежных панелей. */
   readonly onSessionChange?: () => void;
+  /**
+   * Итог `Ctrl+Z`/`Ctrl+Shift+Z` строкой для панели.
+   *
+   * История общая у редактора областей и иерархии, а показывать результат
+   * некому: блок редактора виден только на экране журнала, тогда как правка
+   * линии пары идёт из блока иерархии. Сообщение уходит туда.
+   */
+  readonly onHistory?: (kind: 'undo' | 'redo', message: string) => void;
 }
 
 export interface SectorAreasEditorDraft {
@@ -240,6 +248,37 @@ export function eventLine(event: AreaEvent): string {
   const area = event.areaId === null ? '' : ' · ' + event.areaId;
   const note = event.note === null ? 'без комментария' : event.note;
   return `${event.kind}${area} · ${note}`;
+}
+
+/** Подпись последней записи журнала или `null`, если журнал пуст. */
+export function lastEventNote(doc: { readonly events: readonly AreaEvent[] }): string | null {
+  const last = doc.events.at(-1);
+  if (last === undefined) return null;
+  const note = last.note === null ? null : last.note.trim();
+  return note === null || note.length === 0 ? null : note;
+}
+
+/**
+ * Текст уведомления об отмене/повторе.
+ *
+ * Клавиша и результат меняют документ одинаково у всех правок — и контуров, и
+ * линии раздела пары. Без подписи `Ctrl+Z` выглядел как «ничего не произошло»:
+ * откат ручной линии возвращает автолинию, а она может проходить в считанных
+ * пикселях от прежней, и отличить одно от другого на карте нечем.
+ */
+export function historyNotice(
+  kind: 'undo' | 'redo',
+  note: string | null,
+  applied = true,
+): string {
+  if (!applied) {
+    return kind === 'undo'
+      ? 'Отменять нечего: история правок пуста.'
+      : 'Повторять нечего: история повтора пуста.';
+  }
+  const combo = kind === 'undo' ? 'Ctrl+Z' : 'Ctrl+Shift+Z';
+  const title = kind === 'undo' ? 'Отменено' : 'Повторено';
+  return note === null ? `${title} (${combo}).` : `${title} (${combo}): ${note}.`;
 }
 
 /** Заголовок области в списке: имя, вершины и (при наличии) число штрихов. */
@@ -1984,12 +2023,20 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (hotkeyOwnedByLineMode(hotkey, lineMode)) return;
     if (hotkey === 'undo') {
       event.preventDefault();
-      commit(canUndo(session) ? undo(session) : session);
+      // Что именно откатывается, берём из журнала до отката: после `undo`
+      // последняя запись уже снята и назвать её нечем.
+      const note = lastEventNote(session.doc);
+      const applied = canUndo(session);
+      commit(applied ? undo(session) : session);
+      options.onHistory?.('undo', historyNotice('undo', note, applied));
       return;
     }
     if (hotkey === 'redo') {
       event.preventDefault();
-      commit(canRedo(session) ? redo(session) : session);
+      const note = session.future[0] === undefined ? null : lastEventNote(session.future[0]);
+      const applied = canRedo(session);
+      commit(applied ? redo(session) : session);
+      options.onHistory?.('redo', historyNotice('redo', note, applied));
       return;
     }
     // Ниже — только режим рисования: `F` и команды ввода фигуры.
