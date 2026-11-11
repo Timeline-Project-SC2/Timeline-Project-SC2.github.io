@@ -43,5 +43,14 @@
     "status": "active",
     "supersedes": "o5-zero-contact",
     "sha": "37737808a3a39e653ef2e49bb41c23a57dba3d9f"
+  },
+  {
+    "id": "acceptance-combo",
+    "date": "2026-11-11",
+    "scope": "приёмка редактора",
+    "decision": "Приёмка редактора = браузерный прогон с доказательствами (скриншоты и числа из документа) + финальное решение владельца; CI и автотесты визуальную проверку не заменяют.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "756cba0604e7dc6789edf80bcf435a017c58fc67"
   }
 ]
