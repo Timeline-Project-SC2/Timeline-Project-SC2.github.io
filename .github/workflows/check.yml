@@ -1,13 +1,23 @@
 name: Проверка сборки
 
-# Каждый PR собирается так же, как при деплое (pages.yml), но ничего не публикуется.
-# Матрица образов: Ubuntu 24.04 (сейчас это ubuntu-latest) и Ubuntu 26.04 — на неё GitHub
-# переводит ubuntu-latest с 19.10 по 19.11.2026 (actions/runner-images#14748), поэтому
-# переезд деплоя проверяется заранее. Шаги сборки повторяют pages.yml: меняя одно,
-# поправьте и другое.
+# Одна сборка обязательна всегда. Вторая ОС — по изменениям окружения,
+# еженедельно и при ручном full; завершение миграции: issue #382.
+# Имена проверок сохранены: ненужные тяжёлые шаги отмечаются skipped.
 on:
   pull_request:
+  schedule:
+    - cron: '23 5 * * 1'
   workflow_dispatch:
+    inputs:
+      full:
+        description: 'Полный прогон: вторая ОС и планетарные проверки'
+        type: boolean
+        default: true
+
+# Новый push отменяет только устаревшие проверки того же PR, не Pages и не sync.
+concurrency:
+  group: check-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -22,22 +32,33 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Выбрать тяжёлые проверки
+        id: scope
+        run: node tools/ci_scope.mjs
       - uses: actions/setup-python@v7
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         with:
           python-version: '3.12'
       - uses: actions/setup-node@v7
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         with:
           node-version: 24
           cache: npm
       - name: Синтаксис скриптов Python
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         run: python -m py_compile tools/build_assets.py tools/sync.py tools/planet_generation.py
       - name: Профили генерации планет
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         run: |
           python tools/planet_generation.py validate
           python -m unittest discover -s tests -p 'test_*.py'
       - name: Документация — лимит 200 строк и битые ссылки
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         run: python tools/check_docs.py
       - name: Собрать картинки
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         run: |
           python -m pip install --quiet --disable-pip-version-check -r tools/requirements.txt
           python tools/build_assets.py
@@ -45,6 +66,7 @@ jobs:
           python tools/build_assets.py --sync-only
           python tools/build_assets.py --check
       - name: Собрать публикацию
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         run: |
           npm ci
           npm run build
@@ -62,6 +84,7 @@ jobs:
             test -s ".publish/$f" || { echo "нет файла: $f"; exit 1; }
           done
       - name: Побитовая эквивалентность FULL EQ (verify:hashes)
+        if: matrix.os == 'ubuntu-24.04' || steps.scope.outputs.compatibility == 'true'
         run: npm run verify:hashes
 
   scripts:
@@ -111,10 +134,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Выбрать тяжёлые проверки
+        id: scope
+        run: node tools/ci_scope.mjs
       - uses: actions/setup-node@v7
+        if: steps.scope.outputs.planet == 'true'
         with:
           node-version: 24
       - uses: actions/setup-python@v7
+        if: steps.scope.outputs.planet == 'true'
         with:
           python-version: '3.12'
       # CPU-only regression gate. Frame time is intentionally not measured
@@ -122,12 +152,17 @@ jobs:
       # pacing would create false failures. The bench covers mesh build,
       # deterministic typed-array memory and pick on Node.js.
       - name: Mesh build / memory / pick regression bench
+        if: steps.scope.outputs.planet == 'true'
         run: node tools/bench_planet_ci.mjs --baseline=baseline-2026-10-20.json
       - name: Stage 3 v128 topology / chunk / binary-cache bench
+        if: steps.scope.outputs.planet == 'true'
         run: node tools/bench_planet_stage3.mjs --v=128 --reps=1 --picks=200
       - name: Stage 4 v128 fields / C100-soft G2 bench
+        if: steps.scope.outputs.planet == 'true'
         run: node tools/bench_planet_stage4.mjs --seeds=5
       - name: Stage 5 v128 hydrology / biomes G3 bench
+        if: steps.scope.outputs.planet == 'true'
         run: node tools/bench_planet_stage5.mjs --seeds=5
       - name: Stage 6 v128 globe geometry / color layers / pick bench
+        if: steps.scope.outputs.planet == 'true'
         run: node tools/bench_planet_stage6.mjs --seeds=3
