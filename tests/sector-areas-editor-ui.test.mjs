@@ -1134,3 +1134,13 @@ test('Ctrl+Z: уведомление называет отменённую пр�
   const emptyDoc = emptySectorAreasDoc();
   assert.equal(lastEventNote(emptyDoc), null);
 });
+
+
+test('прозрачный контейнер оболочки не размывает карту через наследуемый .panel', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  const shell = /#adminEditorPanel \{([^}]+)\}/.exec(css)?.[1];
+  assert.ok(shell);
+  assert.match(shell, /backdrop-filter: none;/);
+  assert.match(shell, /-webkit-backdrop-filter: none;/);
+  assert.match(shell, /text-shadow: none;/);
+});

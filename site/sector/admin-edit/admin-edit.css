@@ -977,6 +977,10 @@
   border: 0;
   box-shadow: none;
   pointer-events: none;
+  /* Контейнер покрывает карту: наследуемый от .panel blur мылит всё полотно. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  text-shadow: none;
   font-size: 16px;
   --shell-surface: #0c2222;
   --shell-line: #47746f;
