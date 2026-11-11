@@ -507,3 +507,31 @@ test('S2: двойной клик по сглаженной Шайкиным (ro
   assert.ok(opened.session.contourEdit !== null, 'openContourEdit открыл 6 якорей по видимому клику');
   assert.equal(opened.session.contourEdit.state.anchors.length, 6);
 });
+
+test('§7+S5: Ctrl+Z откатывает ручную линию раздела пары, повтор возвращает её', () => {
+  const session0 = sessionWithAreas();
+  const created = createPairCmd(session0, 'area-1', 'area-2');
+  const pairId = created.session.doc.pairs[0].id;
+  const autoLine = created.session.doc.pairs[0].line;
+  assert.equal(autoLine.manual, false, 'свежее сочетание живёт на автолинии');
+  const manualLine = {
+    manual: true,
+    points: [[3200, 2600], [3250, 3200], [3200, 3800]],
+    anchors: [
+      { s: 0, point: [3200, 2600] },
+      { s: 0.5, point: [3250, 3200] },
+      { s: 1, point: [3200, 3800] },
+    ],
+  };
+  const edited = setPairLineCmd(created.session, pairId, manualLine);
+  assert.equal(edited.session.doc.pairs[0].line.manual, true);
+  // Один шаг истории на одно перетаскивание: отмена возвращает автолинию целиком.
+  const undone = undo(edited.session);
+  const restored = undone.doc.pairs[0].line;
+  assert.equal(restored.manual, false, 'отмена снимает ручную линию');
+  assert.deepEqual(restored.points, autoLine.points, 'точки вернулись к автолинии');
+  assert.deepEqual(undone.doc.areas[0].rings, session0.doc.areas[0].rings, 'контуры не тронуты отменой');
+  const again = redo(undone);
+  assert.equal(again.doc.pairs[0].line.manual, true, 'повтор возвращает ручную линию');
+  assert.deepEqual(again.doc.pairs[0].line.points, manualLine.points);
+});

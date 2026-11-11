@@ -20,7 +20,9 @@ import {
   createSectorAreasEditorUi,
   editorHotkey,
   eventLine,
+  historyNotice,
   isDrawButton,
+  lastEventNote,
   moduleGraphHtml,
   parseExported,
   requestMaterial,
@@ -1134,4 +1136,19 @@ test('onSessionChange срабатывает при импорте и правк
   assert.equal(kernel.state.sectorAreas.areas[0].id, 'imp-1');
   assert.ok(sessionChanges > changesBefore, 'areas-import синхронизирует рендер и смежные панели');
   ui.destroy();
+});
+
+test('Ctrl+Z: уведомление называет отменённую правку и не молчит при пустой истории', () => {
+  assert.equal(historyNotice('undo', 'Линия раздела pair-1 отредактирована вручную'),
+    'Отменено (Ctrl+Z): Линия раздела pair-1 отредактирована вручную.');
+  assert.equal(historyNotice('redo', 'Линия раздела pair-1 отредактирована вручную'),
+    'Повторено (Ctrl+Shift+Z): Линия раздела pair-1 отредактирована вручную.');
+  // Без подписи клавиша всё равно отвечает: иначе откат выглядит как «не сработало».
+  assert.equal(historyNotice('undo', null), 'Отменено (Ctrl+Z).');
+  assert.equal(historyNotice('redo', null), 'Повторено (Ctrl+Shift+Z).');
+  assert.equal(historyNotice('undo', null, false), 'Отменять нечего: история правок пуста.');
+  assert.equal(historyNotice('redo', null, false), 'Повторять нечего: история повтора пуста.');
+  // Пустой журнал: подписи нет, но строка остаётся.
+  const emptyDoc = emptySectorAreasDoc();
+  assert.equal(lastEventNote(emptyDoc), null);
 });
