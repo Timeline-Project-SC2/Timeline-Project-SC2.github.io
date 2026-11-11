@@ -1,8 +1,8 @@
 <!-- AUTO-GENERATED. DO NOT EDIT. npm run context -->
 # Контекст задачи
-context_version: 2
-head_sha: 756cba0 (на момент генерации); branch: arena/218e76ae-timeline-project-sc2-github-io
-Снимок состояния (head_sha, base_sha): (756cba0604e7dc6789edf80bcf435a017c58fc67, 0b3cd9b261b783348d698baaa48461edb39fcc06)
+context_version: 3
+head_sha: c38aebf (на момент генерации); branch: arena/218e76ae-timeline-project-sc2-github-io
+Снимок состояния (head_sha, base_sha): (c38aebfd449473118fbfe667927dc7eeba6451e9, c38aebfd449473118fbfe667927dc7eeba6451e9)
 Факты и полномочия действуют для указанной пары; при изменении пары нужна повторная оценка.
 
 ## Правила
@@ -13,10 +13,10 @@ head_sha: 756cba0 (на момент генерации); branch: arena/218e76ae
 Статусы: FACT — подтверждено; INFERENCE — вывод; UNKNOWN — неизвестно; NOT_CHECKED — не проверено; CONFLICT — противоречие.
 
 ## Активная задача
-- id: EDITOR-ACCEPT
-- цель: Редактор сектора: иерархия областей (#372) на текущем main — доказанная браузерным прогоном приёмка владельца и оформление PR.
-- allowed_scope: src/atlas/sector-areas-anchors.ts, src/atlas/sector-areas-pairs.ts, src/atlas/sector-areas-groups.ts, src/atlas/sector-areas-hierarchy.ts, src/atlas/sector-areas-hierarchy-ui.ts, src/atlas/sector-bounds-edit.ts, src/atlas/sector-bounds-edit-ui.ts, src/atlas/sector-areas-contract.ts, src/atlas/sector-areas-render.ts, src/atlas/sector-areas-editor.ts, src/atlas/sector-areas-editor-ui.ts, tests/sector-areas-*, tests/sector-bounds-edit-*, data/sector-areas.json, data/state.json, data/decisions.json, CONTEXT.md, CHANGELOG.md, docs/admins/sector-areas-editor.md, docs/admins/sector-editor/, tools/audit_bounds_edit.mjs, package.json
-- out_of_scope: Восемь пропущенных тестов (issue #374), Слияние и закрытие #365/#369/#370/#371/#372 без решения владельца, Ручной Pages deploy и живой sync, Новый мета-слой: скиллы, карточки, процессные проверки
+- id: S8-Q1
+- цель: Восемь пропущенных тестов локальной карты (issue #374): объяснить дрейф после #235, решить, эталон это или регресс, и только затем перебазировать или чинить формулу и снять skip.
+- allowed_scope: tests/local-map.test.mjs, tests/local-map-stage8.test.mjs, tests/local-map-stand.test.mjs, tests/local-map-texture-812d.test.mjs, src/local-map/, src/planet/, tools/stand_local_map.mjs, docs/stages/stage-08/, data/state.json, data/decisions.json, CONTEXT.md, CHANGELOG.md
+- out_of_scope: Редактор областей сектора, Публикация, Pages deploy и живой sync, Новый мета-слой: скиллы, карточки, процессные проверки, Перебазировка эталонов без решения владельца
 - verify_cmd: npm run context && python3 tools/check_docs.py && npm run check:fast -- --all && npm test && npm run build
 
 ## Active decisions
@@ -27,18 +27,18 @@ head_sha: 756cba0 (на момент генерации); branch: arena/218e76ae
 - acceptance-combo (приёмка редактора): Приёмка редактора = браузерный прогон с доказательствами (скриншоты и числа из документа) + финальное решение владельца; CI и автотесты визуальную проверку не заменяют.
 
 ## HOLD
-- NOT_CHECKED: визуальное соответствие карты оригиналу (границы, гало, туманности) — полноразмерного оригинала нет, данные атласа в песочнице недоступны.
-- NOT_CHECKED: запрет пересечения — продуктовое решение о поведении при попытке пересечения не принято.
-- NOT_CHECKED: отрисовка групп на карте — проверены панель и документ, не рендер.
+- NOT_CHECKED: не принято решение, является ли форма поля высот после #235 эталоном; до него перебазировка golden-хэша и метрик запрещена.
+- NOT_CHECKED: визуальная приёмка планетарного рельефа и юбки в браузере не проводилась.
+- NOT_CHECKED: отрисовка групп на карте в редакторе — проверены только панель и документ.
 
 ## Parking
-- FACT: compact context ускоряет цикл (npm test 63 с, один файл вместо handoff), но не исправляет восемь пропущенных тестов #374.
-- INFERENCE: при создании пары карта меняет масштаб (кадр отъезжает); дефектом не подтверждено.
-- FACT: в CHANGELOG.md из #372 в конец файла попал блок с литеральными \n вместо переводов строк — косметика, не блокер.
+- FACT: golden-хэш и гипсометрия зафиксированы в #231 (5e1585f), формула поля высот изменена в #235 (fa18ef4); эталоны после этого не пересчитывались.
+- FACT: фактическая диагностика восьми падений опубликована комментарием в issue #374 (сообщения, история, деление на устаревшие ожидания и поведение).
+- FACT: вал юбки (25° против ожидаемых ≥ 30°) и отсутствие речных створов в A-17 — поведение, а не цифры; требуют диагностики формулы.
 
 ## Последняя передача
-- FACT: содержимое #372 слито на main 0b3cd9b в ветке arena/218e76ae (756cba0); build, lint, verify:docs и npm test (810: 802 pass / 8 skip) зелёные.
-- FACT: браузерный прогон подтвердил 6 якорей через L/6, уточнение 2+4 с неподвижной точкой клика и неизменность контура (смещение 0.000).
-- FACT: пара split убирает мутное пятно наложения; ручная линия (manual=true, 113 точек) сохраняется после изменения контура; группы держат ID при переименовании.
-- NOT_CHECKED: визуальная приёмка владельцем не проводилась; PR по интеграции не открыт.
-- FACT: восемь пропущенных тестов остаются, issue #374 открыт.
+- FACT: PR #377 слит в main (c38aebf); иерархия областей, правка линий и handoff EDITOR-ACCEPT теперь в main.
+- FACT: CI PR #377 — 4/4 pass; сборка, линт, 810 тестов (802 pass / 8 skip), verify:docs и verify:sector-core зелёные.
+- FACT: причина дрейфа восьми тестов — #235 изменил формулу поля высот после фиксации эталонов в #231.
+- NOT_CHECKED: визуальная приёмка редактора владельцем на живом сайте не проводилась; браузерный прогон в песочнице был на синтетических областях.
+- FACT: восемь тестов остаются skip; сигнал регрессий внутри них отсутствует до снятия skip.
