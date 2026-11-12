@@ -15,7 +15,7 @@ test('net_id из снимка загружается, удалённая кол
       ok: true,
       status: 200,
       text: async () => String(url).includes('systems.csv') ? text : '',
-      json: async () => [],
+      json: async () => String(url).includes('sector-property-overlay.json') ? { version: 1, changes: [] } : [],
     });
     const { createDataLoader } = require('../src/atlas/data-loader.ts');
     const dataset = await createDataLoader({ state: {}, runtime: { travelCore: null } }).loadDataset();

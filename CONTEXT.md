@@ -1,8 +1,8 @@
 <!-- AUTO-GENERATED. DO NOT EDIT. npm run context -->
 # Контекст задачи
-context_version: 3
-head_sha: c38aebf (на момент генерации); branch: arena/218e76ae-timeline-project-sc2-github-io
-Снимок состояния (head_sha, base_sha): (c38aebfd449473118fbfe667927dc7eeba6451e9, c38aebfd449473118fbfe667927dc7eeba6451e9)
+context_version: 4
+head_sha: 3615b37 (на момент генерации); branch: arena/82983d97-timeline-project-sc2-github-io
+Снимок состояния (head_sha, base_sha): (3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3, 3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3)
 Факты и полномочия действуют для указанной пары; при изменении пары нужна повторная оценка.
 
 ## Правила
@@ -13,11 +13,11 @@ head_sha: c38aebf (на момент генерации); branch: arena/218e76ae
 Статусы: FACT — подтверждено; INFERENCE — вывод; UNKNOWN — неизвестно; NOT_CHECKED — не проверено; CONFLICT — противоречие.
 
 ## Активная задача
-- id: S8-Q1
-- цель: Восемь пропущенных тестов локальной карты (issue #374): объяснить дрейф после #235, решить, эталон это или регресс, и только затем перебазировать или чинить формулу и снять skip.
-- allowed_scope: tests/local-map.test.mjs, tests/local-map-stage8.test.mjs, tests/local-map-stand.test.mjs, tests/local-map-texture-812d.test.mjs, src/local-map/, src/planet/, tools/stand_local_map.mjs, docs/stages/stage-08/, data/state.json, data/decisions.json, CONTEXT.md, CHANGELOG.md
-- out_of_scope: Редактор областей сектора, Публикация, Pages deploy и живой sync, Новый мета-слой: скиллы, карточки, процессные проверки, Перебазировка эталонов без решения владельца
-- verify_cmd: npm run context && python3 tools/check_docs.py && npm run check:fast -- --all && npm test && npm run build
+- id: SECTOR-PROPERTY-OVERLAY
+- цель: Редактирование свойств систем и мест с сохранением утверждённых поправок в репозитории и последующей подачей через GitHub Issue.
+- allowed_scope: src/atlas/, data/, tests/, docs/handoff/sector-object-properties-and-issues.md, docs/admins/, tools/, CONTEXT.md
+- out_of_scope: Живое применение заявок, изменение настроек App и запуск sync без отдельного разрешения, Создание новых процессов, скиллов и карточек, Перебазировка планетарных эталонов без решения владельца
+- verify_cmd: npm run typecheck && npm test && npm run build && npm run verify:docs
 
 ## Active decisions
 - process-freeze (процесс): Мораторий на новый мета-слой: не создавать скиллы, карточки и процессные проверки.
@@ -25,6 +25,7 @@ head_sha: c38aebf (на момент генерации); branch: arena/218e76ae
 - critic-objective (приёмка кода): Критик отклоняет код только при падении verify_cmd или нарушении active decision, не по вкусу.
 - single-agent-topology (оркестрация): О-5 отменено: 1 задача = 1 агент с прямым доступом к репозиторию = 1 PR. Несколько воркеров — только для доказанно независимых каталогов без общих файлов.; supersedes: o5-zero-contact
 - acceptance-combo (приёмка редактора): Приёмка редактора = браузерный прогон с доказательствами (скриншоты и числа из документа) + финальное решение владельца; CI и автотесты визуальную проверку не заменяют.
+- sector-property-repository-overlay (свойства систем и мест): Утверждённые правки пяти полей систем и мест хранятся в версионированном слое репозитория поверх источников Sheets; интерактивная информация и поля описания границ не подменяются этим слоем.
 
 ## HOLD
 - NOT_CHECKED: не принято решение, является ли форма поля высот после #235 эталоном; до него перебазировка golden-хэша и метрик запрещена.
@@ -37,8 +38,8 @@ head_sha: c38aebf (на момент генерации); branch: arena/218e76ae
 - FACT: вал юбки (25° против ожидаемых ≥ 30°) и отсутствие речных створов в A-17 — поведение, а не цифры; требуют диагностики формулы.
 
 ## Последняя передача
-- FACT: PR #377 слит в main (c38aebf); иерархия областей, правка линий и handoff EDITOR-ACCEPT теперь в main.
-- FACT: CI PR #377 — 4/4 pass; сборка, линт, 810 тестов (802 pass / 8 skip), verify:docs и verify:sector-core зелёные.
-- FACT: причина дрейфа восьми тестов — #235 изменил формулу поля высот после фиксации эталонов в #231.
-- NOT_CHECKED: визуальная приёмка редактора владельцем на живом сайте не проводилась; браузерный прогон в песочнице был на синтетических областях.
-- FACT: восемь тестов остаются skip; сигнал регрессий внутри них отсутствует до снятия skip.
+- FACT: PR #381 слит; рабочая ветка начинается с 3615b37.
+- FACT: владелец выбрал слой поправок репозитория и пять свойств систем и мест, включая фракцию.
+- FACT: слой подключён к обычной и inline загрузке после legacy overrides; формат и дальнейшая автоматизация требуют проверки.
+- FACT: локальный черновик, предпросмотр и отпечаток входов; отправка Issue и применение не реализованы.
+- NOT_CHECKED: браузерная проверка не выполнена из-за отсутствующих системных библиотек Chromium; визуальная приёмка владельцем не проводилась.

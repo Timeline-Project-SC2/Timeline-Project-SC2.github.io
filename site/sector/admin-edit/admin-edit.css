@@ -1184,3 +1184,9 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
     right: 64px;
   }
 }
+
+/* Локальный редактор свойств точек внутри существующего дока. */
+.admin-editor-point-properties .admin-editor-property-field { display: grid; gap: 4px; margin: 8px 0; }
+.admin-editor-point-properties :is(input, select, textarea) { box-sizing: border-box; width: 100%; }
+.admin-editor-point-properties li { overflow-wrap: anywhere; white-space: pre-wrap; }
+.admin-editor-point-preview { max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

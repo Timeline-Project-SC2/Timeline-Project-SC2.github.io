@@ -3,6 +3,7 @@ import { basename, dirname, extname, resolve } from 'node:path';
 import { build as esbuildBuild } from 'esbuild';
 import type { Plugin as EsbuildPlugin } from 'esbuild';
 import type { Plugin } from 'vite';
+import { collectPropertyBuildInputs } from './sector-property-build-inputs.ts';
 import { renderAtlasVariant } from './atlas-shell.ts';
 import {
   addImageVersion,
@@ -440,7 +441,12 @@ class TimelinePublishPipeline {
     }
 
     const dataRoot = resolve(this.options.repoRoot, 'data');
-    if (existsSync(dataRoot)) cpSync(dataRoot, resolve(this.state.resolvedPublishRoot, 'data'), { recursive: true });
+    if (existsSync(dataRoot)) {
+      const publishedDataRoot = resolve(this.state.resolvedPublishRoot, 'data');
+      cpSync(dataRoot, publishedDataRoot, { recursive: true });
+      const propertyInputs = collectPropertyBuildInputs(publishedDataRoot);
+      writeFileSync(resolve(publishedDataRoot, 'sector-property-build-inputs.json'), `${JSON.stringify(propertyInputs, null, 2)}\n`, 'utf8');
+    }
 
     const assetsRoot = resolve(this.options.repoRoot, 'assets');
     if (existsSync(assetsRoot)) {

@@ -1,3 +1,4 @@
+import type { PropertySnapshot } from './sector-property-session.ts';
 /* Map Atlas — общая конфигурация, типы записей/состояния и малые утилиты.
  *
  * Этот модуль не знает о конкретных фабриках атласа. Он задаёт только
@@ -28,6 +29,7 @@ export const CONFIG = {
     systems: 'systems.json',
     planets: 'planets.json',
     overrides: 'system-overrides.json',
+    propertyOverlay: 'sector-property-overlay.json',
     labels: 'map-labels.json',
     bounds: 'sector-bounds.json',
     // Области редактора границ: черновик и публичный просмотр читают один файл.
@@ -449,6 +451,8 @@ export interface SelectionOptions {
 
 export interface DataLoaderApi {
   loadDataset(): Promise<AtlasDataset>;
+  propertySnapshots(): PropertySnapshot[];
+  propertyContentRevision(): string | null;
   buildModel(): void;
   mapSize(): number;
   explicitMapNumber(value: unknown): number | null;

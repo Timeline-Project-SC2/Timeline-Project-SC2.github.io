@@ -95,6 +95,12 @@ import type {
 } from './sector-areas-registry.ts';
 import type { AtlasView, SystemRecord } from './config.ts';
 import { NO_FACTION_KEY } from './config.ts';
+import { PROPERTY_FIELDS, createPropertySession, editProperty, propertyChanges, redoProperty, undoProperty } from './sector-property-session.ts';
+import type { PropertySession } from './sector-property-session.ts';
+import { preparePropertyDraft, restorePropertyDraft } from './sector-property-draft.ts';
+import { preparePropertyIssuePreview } from './sector-property-issue-preview.ts';
+import type { PropertyIssuePreview } from './sector-property-issue-preview.ts';
+import type { PropertyField } from './sector-property-overlay.ts';
 import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule, isTextEntryTarget } from './pointer-rules.ts';
 import type { AtlasKernel } from './config.ts';
 
@@ -376,7 +382,7 @@ function escapeHtml(value: string): string {
 export type RelationFilter = 'all' | ModuleRelationKind;
 
 /** Активный рабочий экран правой панели: в каждый момент открыт ровно один. */
-export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes' | 'lines' | 'hierarchy';
+export type EditorScreen = 'module' | 'dependencies' | 'draw' | 'properties' | 'changes' | 'lines' | 'hierarchy' | 'point-properties';
 
 export function isEditorScreen(value: string): value is EditorScreen {
   return value === 'module'
@@ -385,7 +391,8 @@ export function isEditorScreen(value: string): value is EditorScreen {
     || value === 'properties'
     || value === 'changes'
     || value === 'lines'
-    || value === 'hierarchy';
+    || value === 'hierarchy'
+    || value === 'point-properties';
 }
 
 interface GraphNodeBox {
@@ -588,6 +595,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   let moduleId = DEFAULT_MODULE_ID;
   /* Активный экран рабочей области: как в Obsidian, одновременно открыт один экран. */
   let activeScreen: EditorScreen = 'dependencies';
+  let pointSession: PropertySession | null = null;
+  let pointIndex = 0;
+  let pointNotice: string | null = null;
+  let pointReview: { preview: PropertyIssuePreview; acknowledged: boolean; confirmed: boolean } | null = null;
   /* Фильтр отображаемых рёбер графа модулей: состояние интерфейса, не документа. */
   let relationFilter: RelationFilter = 'all';
   /* Предпросмотр «было → стало»: сравнение с документом на момент открытия. */
@@ -972,11 +983,12 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       { id: 'draw', label: 'Рисование' },
       { id: 'lines', label: 'Линии' },
       { id: 'properties', label: 'Свойства области' },
+      { id: 'point-properties', label: 'Свойства точек' },
       { id: 'changes', label: 'Журнал и выгрузка' },
       { id: 'dependencies', label: 'Граф модулей' },
     ];
     const categories = [
-      { label: 'Карта и области', ids: ['draw', 'lines', 'properties', 'hierarchy'] },
+      { label: 'Карта и области', ids: ['draw', 'lines', 'properties', 'hierarchy', 'point-properties'] },
       { label: 'Сохранение', ids: ['changes'] },
       { label: 'Устройство редактора', ids: ['dependencies', 'module'] },
     ];
@@ -1076,12 +1088,92 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '</div>';
   }
 
+  const POINT_LABELS: Record<PropertyField, string> = { name: 'Название', type: 'Тип', faction: 'Фракция', description: 'Описание', source_url: 'Ссылка на источник' };
+  function pointFactions(): Set<string> {
+    const factions = typeof kernel.data?.factionsByName === 'function' ? kernel.data.factionsByName() : new Map();
+    return new Set(factions.keys());
+  }
+  function pointDraft(current: PropertySession): ReturnType<typeof preparePropertyDraft> {
+    return preparePropertyDraft(current, pointFactions());
+  }
+  function setPointSession(next: PropertySession): void {
+    if (pointSession !== next) pointReview = null;
+    pointSession = next;
+  }
+  function pointReviewHtml(): string {
+    if (pointReview === null) return '';
+    const { preview, acknowledged, confirmed } = pointReview;
+    return '<section aria-label="Предпросмотр будущей заявки"><h3>Предпросмотр — не отправлено</h3>'
+      + '<p><strong>Заголовок:</strong> ' + escapeHtml(preview.title) + '</p>'
+      + '<ul>' + preview.warnings.map((warning) => '<li>' + escapeHtml(warning) + '</li>').join('') + '</ul>'
+      + '<label class="admin-editor-property-field"><span>Содержимое</span><pre class="admin-editor-point-preview">' + escapeHtml(preview.body) + '</pre></label>'
+      + '<label><input type="checkbox" data-action="point-review-ack"' + (acknowledged ? ' checked' : '') + '> Я проверил содержимое и понимаю, что будущая Issue будет публичной.</label>'
+      + '<div><button type="button" data-action="point-review-confirm"' + (acknowledged ? '' : ' disabled') + '>Подтвердить просмотр</button></div>'
+      + (confirmed ? '<p role="status">Просмотр подтверждён локально. Заявка не отправлена; перед настоящей отправкой потребуется новое подтверждение.</p>' : '')
+      + '</section>';
+  }
+  function pointChangeSummaryHtml(current: PropertySession): string {
+    const changes = propertyChanges(current);
+    const summary = changes.map((change) => '<li>' + escapeHtml(change.dataset + ' · ' + change.recordId + ' · ' + POINT_LABELS[change.field])
+      + ': <del>' + escapeHtml(change.before || '∅') + '</del> → <ins>' + escapeHtml(change.after || '∅') + '</ins></li>').join('');
+    const { problems } = pointDraft(current);
+    const issues = problems.map((problem) => '<li>' + escapeHtml((problem.severity === 'error' ? 'Ошибка: ' : 'Внимание: ') + problem.change.dataset + ' · ' + problem.change.recordId + ' · ' + POINT_LABELS[problem.change.field] + ': ' + problem.message) + '</li>').join('');
+    return '<p>Изменений: ' + changes.length + '</p>' + (summary ? '<ul>' + summary + '</ul>' : '')
+      + (issues ? '<ul class="admin-editor-point-issues" role="status">' + issues + '</ul>' : '')
+      + (pointNotice === null ? '' : '<p role="status">' + escapeHtml(pointNotice) + '</p>');
+  }
+  function updatePointSummary(): void {
+    if (pointSession === null || panel === null) return;
+    const summary = panel.querySelector('[data-point-summary]');
+    if (summary !== null) summary.innerHTML = pointChangeSummaryHtml(pointSession);
+    const undoButton = panel.querySelector<HTMLButtonElement>('[data-action="point-undo"]');
+    const redoButton = panel.querySelector<HTMLButtonElement>('[data-action="point-redo"]');
+    if (undoButton !== null) undoButton.disabled = pointSession.past.length === 0;
+    if (redoButton !== null) redoButton.disabled = pointSession.future.length === 0;
+    const exportButton = panel.querySelector<HTMLButtonElement>('[data-action="point-export"]');
+    if (exportButton !== null) exportButton.disabled = pointDraft(pointSession).draft === null;
+    const previewButton = panel.querySelector<HTMLButtonElement>('[data-action="point-preview"]');
+    if (previewButton !== null) previewButton.disabled = pointDraft(pointSession).draft === null;
+    const review = panel.querySelector('[data-point-review]');
+    if (review !== null) review.innerHTML = pointReviewHtml();
+  }
+
+  function pointPropertiesHtml(): string {
+    if (pointSession === null) return '<div class="admin-editor-stage"><p>Снимок свойств недоступен.</p></div>';
+    const current = pointSession.snapshots[pointIndex];
+    const values = pointSession.present[pointIndex];
+    const options = pointSession.snapshots.map((snapshot, index) =>
+      '<option value="' + index + '"' + (index === pointIndex ? ' selected' : '') + '>'
+      + escapeHtml((snapshot.dataset === 'systems' ? 'Система · ' : 'Место · ') + snapshot.fields.name.effective + ' · ID ' + snapshot.recordId) + '</option>').join('');
+    const fields = current && values ? PROPERTY_FIELDS.map((field) => {
+      const label = escapeHtml(POINT_LABELS[field]);
+      const value = escapeHtml(values[field]);
+      return '<label class="admin-editor-property-field"><span>' + label + '</span>'
+        + (field === 'description'
+          ? '<textarea data-action="point-field" data-point-field="' + field + '" rows="4">' + value + '</textarea>'
+          : '<input data-action="point-field" data-point-field="' + field + '" value="' + value + '">') + '</label>';
+    }).join('') : '<p>Нет однозначно сопоставленных объектов.</p>';
+    return '<div class="admin-editor-stage admin-editor-point-properties" data-editor-screen="point-properties">'
+      + '<p>Локальный черновик: правки не отправлены и не опубликованы; при перезагрузке они исчезнут.</p>'
+      + '<label class="admin-editor-property-field"><span>Объект</span><select data-action="point-select">' + options + '</select></label>'
+      + fields + '<div class="admin-editor-row"><button type="button" data-action="point-undo"' + (pointSession.past.length ? '' : ' disabled') + '>Отменить</button>'
+      + '<button type="button" data-action="point-redo"' + (pointSession.future.length ? '' : ' disabled') + '>Повторить</button></div>'
+      + '<div data-point-summary>' + pointChangeSummaryHtml(pointSession) + '</div>'
+      + '<button type="button" data-action="point-preview"' + (pointDraft(pointSession).draft ? '' : ' disabled') + '>Посмотреть будущую заявку</button>'
+      + '<div data-point-review>' + pointReviewHtml() + '</div>'
+      + '<button type="button" data-action="point-export"' + (pointDraft(pointSession).draft ? '' : ' disabled') + '>Скачать локальный черновик</button>'
+      + '<label class="admin-editor-property-field"><span>Загрузить локальный черновик</span><input type="file" accept="application/json,.json" data-action="point-import"></label>'
+      + '<p>' + (pointSession.contentRevision === null ? 'Отпечаток входов не подтверждён.' : 'Отпечаток входов сверён; он не подтверждает публикацию или права.') + ' Файл не является готовой заявкой: проверка базы и отправка ещё не подключены. Не включайте секреты или непубличные данные.</p></div>';
+  }
+
   function modulesHtml(): string {
     const nav = systemsNavHtml() + '<div class="admin-editor-toolbox" aria-label="Toolbox">' + toolsHtml() + '</div>';
     if (activeScreen === 'properties' || activeScreen === 'changes' || activeScreen === 'lines' || activeScreen === 'hierarchy') {
       return '<div class="admin-editor-shell admin-editor-shell-nav-only">' + nav + '</div>';
     }
-    const stageHtml = activeScreen === 'draw'
+    const stageHtml = activeScreen === 'point-properties'
+      ? pointPropertiesHtml()
+      : activeScreen === 'draw'
       ? drawScreenHtml()
       : (activeScreen === 'dependencies' ? dependenciesScreenHtml() : moduleScreenHtml());
     return '<div class="admin-editor-shell">' + nav + stageHtml + '</div>';
@@ -1402,9 +1494,14 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       && active.getAttribute('data-field') === 'name'
       ? { value: active.value, start: active.selectionStart, end: active.selectionEnd }
       : null;
+    const pointEditing = ((typeof HTMLInputElement !== 'undefined' && active instanceof HTMLInputElement)
+      || (typeof HTMLTextAreaElement !== 'undefined' && active instanceof HTMLTextAreaElement))
+      && active.getAttribute('data-action') === 'point-field'
+      ? { field: active.getAttribute('data-point-field'), value: active.value, start: active.selectionStart, end: active.selectionEnd }
+      : null;
     const dockTitle = panel.querySelector('#adminEditorTitle');
     if (dockTitle !== null) {
-      const titles: Record<EditorScreen, string> = { dependencies: 'Карта связей модулей', module: 'О модуле', draw: 'Рисование областей', properties: 'Свойства области', changes: 'Журнал и выгрузка', hierarchy: 'Объекты и связи', lines: 'Правка границ' };
+      const titles: Record<EditorScreen, string> = { dependencies: 'Карта связей модулей', module: 'О модуле', draw: 'Рисование областей', properties: 'Свойства области', changes: 'Журнал и выгрузка', hierarchy: 'Объекты и связи', lines: 'Правка границ', 'point-properties': 'Свойства точек' };
       dockTitle.textContent = titles[activeScreen];
     }
     const railLabel = panel.querySelector('.admin-editor-rail-label');
@@ -1424,6 +1521,14 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       if (input !== null) {
         input.value = editing.value;
         if (editing.start !== null && editing.end !== null) input.setSelectionRange(editing.start, editing.end);
+        input.focus();
+      }
+    }
+    if (pointEditing !== null && pointEditing.field !== null && PROPERTY_FIELDS.includes(pointEditing.field as PropertyField)) {
+      const input = panel.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-point-field="' + pointEditing.field + '"]');
+      if (input !== null) {
+        input.value = pointEditing.value;
+        if (pointEditing.start !== null && pointEditing.end !== null) input.setSelectionRange(pointEditing.start, pointEditing.end);
         input.focus();
       }
     }
@@ -1739,6 +1844,15 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   function setScreen(next: EditorScreen): void {
+    if (next === 'point-properties' && pointSession === null) {
+      const snapshots = typeof kernel.data?.propertySnapshots === 'function' ? kernel.data.propertySnapshots() : [];
+      const revision = typeof kernel.data?.propertyContentRevision === 'function' ? kernel.data.propertyContentRevision() : null;
+      pointSession = createPropertySession(snapshots, revision);
+      const activeDataset = kernel.state.activePlanetId ? 'places' : 'systems';
+      const activeId = kernel.state.activePlanetId ?? kernel.state.activeSystemId;
+      const selectedIndex = snapshots.findIndex((item) => item.dataset === activeDataset && item.recordId === activeId);
+      pointIndex = Math.max(0, selectedIndex);
+    }
     activeScreen = next;
     setCollapsed(false);
     refresh();
@@ -1796,6 +1910,49 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (control === null) return;
     const action = control.getAttribute('data-action');
     if (action === null) return;
+    if (action === 'point-import' && pointSession !== null) {
+      const input = control as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      input.value = '';
+      if (file.size > 2_000_000) { pointNotice = 'Черновик слишком велик (максимум 2 МБ).'; updatePointSummary(); return; }
+      void file.text().then((text) => {
+        try {
+          if (pointSession === null) throw new Error('Сессия закрыта.');
+          const restored = restorePropertyDraft(JSON.parse(text) as unknown, pointSession, pointFactions());
+          setPointSession(restored.session);
+          pointNotice = 'Локальный черновик загружен; он не отправлен и не опубликован.';
+          refresh();
+        } catch (error) {
+          pointNotice = 'Загрузка не выполнена: ' + (error instanceof Error ? error.message : 'некорректный файл.');
+          updatePointSummary();
+        }
+      }).catch(() => { pointNotice = 'Загрузка не выполнена: файл не прочитан.'; updatePointSummary(); });
+      return;
+    }
+    if (action === 'point-review-ack' && pointReview !== null) {
+      pointReview.acknowledged = (control as HTMLInputElement).checked;
+      pointReview.confirmed = false;
+      const confirm = panel?.querySelector<HTMLButtonElement>('[data-action="point-review-confirm"]');
+      if (confirm) confirm.disabled = !pointReview.acknowledged;
+      const review = panel?.querySelector('[data-point-review] [role="status"]');
+      if (review) review.remove();
+      return;
+    }
+    if (action === 'point-select' && pointSession !== null) {
+      const index = Number((control as HTMLSelectElement).value);
+      if (Number.isInteger(index) && index >= 0 && index < pointSession.snapshots.length) pointIndex = index;
+      refresh();
+      return;
+    }
+    if (action === 'point-field' && pointSession !== null) {
+      const field = control.getAttribute('data-point-field') as PropertyField;
+      const selected = pointSession.snapshots[pointIndex];
+      if (selected && PROPERTY_FIELDS.includes(field)) setPointSession(editProperty(pointSession, selected.dataset, selected.recordId, field, (control as HTMLInputElement).value));
+      pointNotice = null;
+      updatePointSummary();
+      return;
+    }
     // Импорт выгруженного файла областей (дефект B6 ревью): полный цикл
     // «экспорт в файл → импорт через UI → правка» без записи в репозиторий.
     if (action === 'areas-import') {
@@ -1912,6 +2069,36 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         break;
       }
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
+      case 'point-preview': {
+        if (pointSession !== null) {
+          const preview = preparePropertyIssuePreview(pointSession, pointFactions());
+          if (preview !== null) pointReview = { preview, acknowledged: false, confirmed: false };
+          updatePointSummary();
+        }
+        break;
+      }
+      case 'point-review-confirm': {
+        if (pointReview !== null && pointReview.acknowledged && pointSession !== null) {
+          const current = preparePropertyIssuePreview(pointSession, pointFactions());
+          if (current !== null && current.draftSnapshot === pointReview.preview.draftSnapshot) {
+            pointReview.confirmed = true;
+          } else {
+            pointReview = null;
+            pointNotice = 'Содержимое изменилось: проверьте предпросмотр заново.';
+          }
+          updatePointSummary();
+        }
+        break;
+      }
+      case 'point-export': {
+        if (pointSession !== null) {
+          const draft = pointDraft(pointSession).draft;
+          if (draft !== null) download('sector-properties-local-draft.json', JSON.stringify(draft, null, 2) + '\n', 'application/json');
+        }
+        break;
+      }
+      case 'point-undo': if (pointSession !== null) { setPointSession(undoProperty(pointSession)); refresh(); } break;
+      case 'point-redo': if (pointSession !== null) { setPointSession(redoProperty(pointSession)); refresh(); } break;
       case 'create-area': createNewArea(); break;
       case 'preview': {
         previewOn = input.checked;
@@ -2090,6 +2277,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (isTextEntryTarget(target)) return;
     // Разбор клавиши вынесен в чистую функцию: ею же проверяется раскладка.
     const hotkey = editorHotkey(event);
+    if (activeScreen === 'point-properties' && pointSession !== null && (hotkey === 'undo' || hotkey === 'redo')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setPointSession(hotkey === 'undo' ? undoProperty(pointSession) : redoProperty(pointSession));
+      refresh();
+      return;
+    }
     //
     // `Ctrl+Z` и `Ctrl+Shift+Z` — журнал редактора. Пока редактор открыт, они
     // работают независимо от режима рисования: выключив «Рисовать границы»,
