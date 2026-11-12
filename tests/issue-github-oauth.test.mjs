@@ -65,3 +65,32 @@ test('неизвестная личность, отказ API и сбой не �
   assert.deepEqual(await identifyGithubUser('токен', async () => new Response('', { status: 401 })), { status: 'rejected' });
   assert.deepEqual(await identifyGithubUser('токен', async () => new Response('', { status: 429 })), { status: 'unavailable' });
 });
+
+test('endpoint можно заменить mock-сервером: https любой host или http только loopback', async () => {
+  const mockToken = 'http://127.0.0.1:4177/login/oauth/access_token';
+  let request;
+  const fetcher = async (url, init) => { request = { url, init }; return Response.json({ access_token: 'токен-mock', token_type: 'bearer' }); };
+  const result = await exchangeGithubCode({ ...config, tokenUrl: mockToken }, accepted, 'код', fetcher);
+  assert.deepEqual(result, { status: 'accepted', accessToken: 'токен-mock', expiresIn: null });
+  assert.equal(request.url, mockToken);
+  // Идентификация с mock-user.
+  const userResult = await identifyGithubUser('токен-mock', async (url) => {
+    assert.equal(url, 'http://127.0.0.1:4177/user');
+    return Response.json({ id: 7, login: 'mock-user', type: 'User' });
+  }, 'http://127.0.0.1:4177/user');
+  assert.deepEqual(userResult, { status: 'identified', user: { id: 7, login: 'mock-user' } });
+});
+
+test('некорректные endpoint отклоняются до сети', async () => {
+  let calls = 0;
+  const fetcher = async () => { calls++; return Response.json({}); };
+  for (const tokenUrl of [
+    'http://github.evil.example/token',
+    'https://github.com/token?x=1',
+    'https://user:pass@example.com/token',
+    'ftp://127.0.0.1/token',
+    'http://[::1]/token',
+  ]) assert.deepEqual(await exchangeGithubCode({ ...config, tokenUrl }, accepted, 'код', fetcher), { status: 'invalid' });
+  assert.deepEqual(await identifyGithubUser('токен', fetcher, 'http://evil.example/user'), { status: 'invalid' });
+  assert.equal(calls, 0);
+});

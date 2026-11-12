@@ -37,6 +37,7 @@
     "esbuild": "^0.28.2",
     "eslint": "^10.0.0",
     "globals": "^17.0.0",
+    "miniflare": "^4.20260730.0",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite": "^8.3.5"
   }

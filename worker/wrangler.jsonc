@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "timeline-issue-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "durable_objects": {
+    "bindings": [{ "name": "OAUTH_STATE", "class_name": "OAuthState" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["OAuthState"] }
+  ],
+  "crons": [{ "cron": "0 * * * *", "bindings": ["OAUTH_STATE"] }],
+  "vars": {
+    "SITE_ORIGIN": "https://timeline-project-sc2.github.io"
+  },
+  // Остальные переменные задаются в Cloudflare, а не в этом файле:
+  //   wrangler variables put GITHUB_CLIENT_ID
+  //   wrangler variables put GITHUB_CALLBACK_URL
+  // Секреты (никогда не коммитить):
+  //   wrangler secret put GITHUB_CLIENT_SECRET
+  // Развёртывание только после отдельного подтверждения владельца.
+}
