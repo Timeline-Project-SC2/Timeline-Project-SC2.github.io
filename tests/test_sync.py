@@ -251,3 +251,108 @@ class SyncTransportProtectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PropertyOverlayProtectionTest(unittest.TestCase):
+    """Слой утверждённых поправок не должен перезаписываться синком."""
+
+    OVERLAY = "data/sector-property-overlay.json"
+
+    def overlay_document(self):
+        return {
+            "version": 1,
+            "changes": [
+                {
+                    "dataset": "systems",
+                    "recordId": "1",
+                    "field": "description",
+                    "base": "старое",
+                    "value": "утверждено",
+                }
+            ],
+        }
+
+    def test_repository_config_does_not_target_overlay(self):
+        sources = json.loads((ROOT / "data" / "sources.json").read_text(encoding="utf-8"))["sources"]
+        self.assertEqual(sync_module.property_overlay_problems(ROOT / self.OVERLAY, sources), [])
+
+    def test_source_targeting_overlay_is_refused_before_any_write(self):
+        sources = [sheet_source("systems"), {
+            "id": "hijack", "type": "url", "url": "https://example.invalid/x.csv",
+            "role": None, "target": "data/sector-property-overlay.json",
+        }]
+        problems = sync_module.property_overlay_problems(None, sources)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("hijack", problems[0])
+        self.assertIn("sector-property-overlay.json", problems[0])
+
+    def test_relative_nested_and_absolute_paths_are_compared_by_name(self):
+        cases = [
+            ("data/sector-property-overlay.json", True),
+            ("data/./sector-property-overlay.json", True),
+            ("data/snapshot/sector-property-overlay.json", True),
+            ("data/systems.csv", False),
+            ("data/sector-property-overlay.json.bak", False),
+            ("Данные/sector-property-overlay.json", False),
+        ]
+        for target, expected in cases:
+            sources = [{"id": "s", "target": target}]
+            problems = sync_module.property_overlay_problems(None, sources)
+            self.assertEqual(bool(problems), expected, target)
+        absolute = str((ROOT / self.OVERLAY).resolve())
+        self.assertTrue(sync_module.property_overlay_problems(None, [{"id": "s", "target": absolute}]))
+
+    def test_empty_or_broken_source_target_is_reported(self):
+        problems = sync_module.property_overlay_problems(None, [
+            {"id": "empty", "target": ""},
+            {"id": "blank", "target": "   "},
+            {"id": "none"},
+            "не объект",
+        ])
+        self.assertEqual(len(problems), 3)
+        self.assertTrue(any("empty" in problem for problem in problems))
+        self.assertFalse(any("none" in problem for problem in problems))
+
+    def test_overlay_file_survives_a_full_sync_run(self):
+        payload = "system_id,name,type,x,y\n1,Корхал,capital,10,20\n".encode("utf-8")
+        sources = [sheet_source("systems")]
+        document = self.overlay_document()
+        with sync_sandbox(sources, payloads={sources[0]["url"]: payload},
+                          snapshots={self.OVERLAY: json.dumps(document, ensure_ascii=False)}) as (root, data):
+            self.assertEqual(sync_module.read_property_overlay(data / "sector-property-overlay.json"), 1)
+            sync_module.main([])
+            self.assertTrue((data / "systems.csv").exists(), "синк должен записать свой файл")
+            self.assertEqual(
+                json.loads((data / "sector-property-overlay.json").read_text(encoding="utf-8")),
+                document,
+                "слой поправок не должен меняться синком",
+            )
+
+    def test_run_is_stopped_when_a_source_targets_the_overlay(self):
+        payload = "system_id,name,type,x,y\n1,Корхал,capital,10,20\n".encode("utf-8")
+        sources = [sheet_source("systems")]
+        bad = {"id": "hijack", "type": "url", "url": "https://example.invalid/hijack.csv",
+               "target": "data/sector-property-overlay.json"}
+        document = {"version": 1, "changes": []}
+        with sync_sandbox(sources + [bad], payloads={sources[0]["url"]: payload, bad["url"]: payload},
+                          snapshots={self.OVERLAY: json.dumps(document)}) as (root, data):
+            errors = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+                with self.assertRaises(SystemExit) as raised:
+                    sync_module.main([])
+            self.assertNotEqual(raised.exception.code, 0)
+            self.assertIn("защищён", errors.getvalue())
+            self.assertEqual(json.loads((data / "sector-property-overlay.json").read_text(encoding="utf-8")), document)
+            self.assertFalse((data / "systems.csv").exists(), "до записи дело доходить не должно")
+
+    def test_unreadable_overlay_is_reported_but_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sector-property-overlay.json"
+            path.write_text("{ это не json", encoding="utf-8")
+            self.assertIsNone(sync_module.read_property_overlay(path))
+            self.assertEqual(path.read_text(encoding="utf-8"), "{ это не json")
+            self.assertEqual(sync_module.read_property_overlay(Path(temporary) / "missing.json"), 0)
+            path.write_text(json.dumps({"version": 2, "changes": []}), encoding="utf-8")
+            self.assertIsNone(sync_module.read_property_overlay(path))
+            path.write_text(json.dumps({"version": 1, "changes": [{"dataset": "planets", "field": "name"}]}), encoding="utf-8")
+            self.assertIsNone(sync_module.read_property_overlay(path))
