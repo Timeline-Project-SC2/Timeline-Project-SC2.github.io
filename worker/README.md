@@ -1,15 +1,24 @@
 # Issue-шлюз (Cloudflare Worker) — стадия 2: вход
 
-Тестовый Worker для GitHub-авторизации администратора перед созданием заявки.
-Собирает **вход**: одноразовый state/PKCE, обмен кода, идентификацию
-пользователя и серверную сессию. **Не** создаёт Issue, не применяет правки
-и не публикует ничего — это следующие этапы.
+Тестовый Worker для GitHub-авторизации администратора и отправки заявки на
+свойства точек. Собирает **вход** (одноразовый state/PKCE, обмен кода,
+идентификация, серверная сессия) и **создание Issue** по канонической заявке.
+**Не** применяет правки и не публикует ничего — это следующий этап.
 
 ## Что здесь
 
 - `src/index.ts` — HTTP-слой: маршруты `/auth/start`, `/auth/callback`,
-  `/auth/status`, `/auth/logout`, `/healthz`. Code и токены не попадают в
-  ответы, редиректы и логи.
+  `/auth/status`, `/auth/logout`, `/healthz`, `POST /issues/submit`
+  (+ `OPTIONS` preflight). Code и токены не попадают в ответы, редиректы и
+  логи.
+- `src/issue-gateway/` (вне этого каталога): контракт заявки
+  (`property-issue-contract.ts`) и сообщения Issues (`github-issues.ts`).
+  Отправка требует точный `Origin` из `SITE_ORIGIN`, действующую сессию и
+  каноническое тело; перед созданием ищется уже созданная заявка с тем же
+  `requestId`, поэтому повтор не создаёт дубль. Cookie сессии —
+  `SameSite=None`, потому что сайт и Worker находятся на разных сайтах;
+  компенсация — проверка `Origin` и JSON-тело (без preflight такой запрос
+  сторонний сайт выполнить не может).
 - `src/oauth-state-do.ts` — Durable Object `OAuthState` с SQLite. Единый
   экземпляр для всех потоков: атомарное одноразовое снятие state и сессии
   хранятся в одной базе с одним писателем. События одноразовости
@@ -47,8 +56,11 @@ Object гарантирует один экземпляр на ключ, SQLite 
 - флаги cookie (Secure, HttpOnly, SameSite=Lax);
 - отсутствие кода/секретов/токенов в ответах.
 
-Запуск: `npm test` (файл подхватывается общим `node --test tests/*.test.mjs`)
-или `node --test tests/worker-runtime.test.mjs`.
+Отправка проверяется отдельно: `tests/worker-submit.test.mjs` (13 проверок на
+miniflare с фиктивным GitHub) и офлайн-`tests/issue-github-issues.test.mjs`.
+
+Запуск: `npm test` (файлы подхватываются общим `node --test tests/*.test.mjs`)
+или `node --test tests/worker-runtime.test.mjs tests/worker-submit.test.mjs`.
 
 Тестовый fetch идёт с `redirect: 'manual'`: 302 Worker'а на GitHub-авторизацию
 не уводит undici во внешний интернет (в песочнице — чужой TLS, в CI — реальные
@@ -68,7 +80,8 @@ Object гарантирует один экземпляр на ключ, SQLite 
 | `GITHUB_TOKEN_URL` | variable (опц.) | по умолчанию официальный endpoint |
 | `GITHUB_USER_URL` | variable (опц.) | по умолчанию официальный endpoint |
 | `GITHUB_SCOPES` | variable (опц.) | по умолчанию `public_repo` |
-| `SITE_ORIGIN` | variable | куда вернуть браузер после входа |
+| `SITE_ORIGIN` | variable | origin сайта: возврат после входа **и** разрешённый источник отправки (обязателен) |
+| `GITHUB_API_BASE` | variable (опц.) | заменяемый базовый адрес GitHub API для тестов; в проде не задаётся |
 
 `FAIL_STORAGE` — только для тестов, в прод не задавать.
 
@@ -80,4 +93,7 @@ Object гарантирует один экземпляр на ключ, SQLite 
 
 HOLD: реальное развёртывание, настройка Cloudflare/GitHub и пробная живая
 Issue требуют отдельного подтверждения владельца. Создание Issue не
-подтверждает применение или публикацию.
+подтверждает применение или публикацию. Применение правки в
+`data/sector-property-overlay.json` и обновление сайта — следующий этап и в
+этом Worker'е не реализованы. Адрес шлюза в сайте задаётся только сборкой
+(`ATLAS_ISSUE_GATEWAY_URL`); без него кнопка отправки недоступна.

@@ -61,5 +61,14 @@
     "status": "active",
     "supersedes": null,
     "sha": "3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3"
+  },
+  {
+    "id": "property-issue-submission-contract",
+    "date": "2026-11-12",
+    "scope": "заявки на свойства точек",
+    "decision": "Заявка на свойства точек — канонический JSON в маркерах с requestId; шлюз принимает только каноническое тело, ищет уже созданную заявку по requestId и не повторяет создание при неизвестном результате; создание Issue не считается применением правки или публикацией.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "0612994d281a167248f2c4f454a7116495ba3475"
   }
 ]

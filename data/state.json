@@ -1,17 +1,22 @@
 {
-  "context_version": 4,
+  "context_version": 5,
   "head_sha": "3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3",
   "base_sha": "3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3",
   "active_task": {
     "id": "SECTOR-PROPERTY-OVERLAY",
-    "goal_visible_to_user": "Редактирование свойств систем и мест с сохранением утверждённых поправок в репозитории и последующей подачей через GitHub Issue.",
+    "goal_visible_to_user": "Редактирование свойств систем и мест, отправка заявки через шлюз в GitHub Issue и последующее применение утверждённых правок в слое репозитория.",
     "allowed_scope": [
       "src/atlas/",
+      "src/issue-gateway/",
+      "worker/",
       "data/",
+      "templates/",
       "tests/",
-      "docs/handoff/sector-object-properties-and-issues.md",
-      "docs/admins/",
       "tools/",
+      "docs/handoff/sector-object-properties-and-issues.md",
+      "docs/handoff/sector-property-issue-submission.md",
+      "docs/handoff/sector-issue-oauth-local.md",
+      "docs/admins/",
       "CONTEXT.md"
     ],
     "out_of_scope": [
@@ -22,9 +27,11 @@
     "verify_cmd": "npm run typecheck && npm test && npm run build && npm run verify:docs"
   },
   "hold_list": [
+    "NOT_CHECKED: живая отправка Issue, применение в data/sector-property-overlay.json и публикация не выполнялись; нужно отдельное разрешение владельца.",
+    "NOT_CHECKED: проверка роли Owner (tools/issue_owner_check.mjs) не подключена к применению и остаётся отдельным свидетельством.",
+    "NOT_CHECKED: браузерная приёмка кнопки отправки не проводилась; поведение в реальной сети Cloudflare, платформенные логи и Referer не проверены.",
     "NOT_CHECKED: не принято решение, является ли форма поля высот после #235 эталоном; до него перебазировка golden-хэша и метрик запрещена.",
-    "NOT_CHECKED: визуальная приёмка планетарного рельефа и юбки в браузере не проводилась.",
-    "NOT_CHECKED: отрисовка групп на карте в редакторе — проверены только панель и документ."
+    "NOT_CHECKED: визуальная приёмка планетарного рельефа и юбки в браузере не проводилась."
   ],
   "parking": [
     "FACT: golden-хэш и гипсометрия зафиксированы в #231 (5e1585f), формула поля высот изменена в #235 (fa18ef4); эталоны после этого не пересчитывались.",
@@ -32,10 +39,10 @@
     "FACT: вал юбки (25° против ожидаемых ≥ 30°) и отсутствие речных створов в A-17 — поведение, а не цифры; требуют диагностики формулы."
   ],
   "last_handoff_summary": [
-    "FACT: PR #381 слит; рабочая ветка начинается с 3615b37.",
-    "FACT: владелец выбрал слой поправок репозитория и пять свойств систем и мест, включая фракцию.",
-    "FACT: слой подключён к обычной и inline загрузке после legacy overrides; формат и дальнейшая автоматизация требуют проверки.",
-    "FACT: локальный черновик, предпросмотр и отпечаток входов; отправка Issue и применение не реализованы.",
-    "NOT_CHECKED: браузерная проверка не выполнена из-за отсутствующих системных библиотек Chromium; визуальная приёмка владельцем не проводилась."
+    "FACT: контракт заявки (схема, канонический вид, тело Issue) и проверка тела одним модулем в src/issue-gateway/.",
+    "FACT: отправка в шлюз POST /issues/submit с Origin/CORS и сессией; повтор не создаёт дубль по requestId.",
+    "FACT: тесты 12+10+9+13 по контракту, фиктивному GitHub, клиенту и miniflare; tsc, eslint, build, verify:docs зелёные.",
+    "NOT_CHECKED: живая Issue, применение и публикация — HOLD; проверка Owner не подключена.",
+    "NOT_CHECKED: браузерная приёмка кнопки отправки; реальная сеть Cloudflare и логи платформы."
   ]
 }
