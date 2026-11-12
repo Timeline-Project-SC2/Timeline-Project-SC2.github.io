@@ -1192,3 +1192,27 @@ test('каждый модуль имеет понятное описание, в
   assert.match(blockHtml(panel, 'modules'), /admin-editor-category/);
   api.destroy();
 });
+
+
+test('отдельные флажки рисования и сравнения имеют иконки и не записывают документ', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null });
+  const before = api.doc();
+  for (const action of ['toggle-enable', 'preview']) {
+    const control = new FakeElement({ 'data-action': action });
+    control.checked = true;
+    panel.handlers.get('click')({ target: control });
+    assert.match(blockHtml(panel, 'modules'), new RegExp('data-action="' + action + '" checked'));
+    control.checked = false;
+    panel.handlers.get('click')({ target: control });
+    assert.doesNotMatch(blockHtml(panel, 'modules'), new RegExp('data-action="' + action + '" checked'));
+  }
+  const html = blockHtml(panel, 'modules');
+  assert.match(html, /Рисование<\/span>/);
+  assert.match(html, /Сравнить контуры<\/span>/);
+  assert.equal((html.match(/admin-editor-mode-check/g) ?? []).length, 2);
+  assert.match(html, /пунктир — исходный контур/);
+  assert.equal(api.doc(), before);
+  assert.equal(api.session().past.length, 0);
+  api.destroy();
+});

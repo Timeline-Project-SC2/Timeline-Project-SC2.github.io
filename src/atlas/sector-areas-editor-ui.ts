@@ -725,7 +725,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     };
   }
 
-  /* ------------------------------------------------ предпросмотр «было → стало» */
+  /* ------------------------------------------------ сравнение контуров с моментом открытия */
 
   /** Подпись состояния кадра: по ней видно, что карту сдвинули или приблизили. */
   function viewKey(): string {
@@ -1034,8 +1034,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '<nav class="admin-editor-nav" data-editor-nav aria-label="Системы и разделы редактора">',
       '  <button type="button" data-action="navigation-toggle" class="admin-editor-navigation-toggle" aria-expanded="true">Модули и разделы ↕</button>',
       '  <div class="admin-editor-toggles">',
-      '    <label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '> Рисовать границы</label>',
-      '    <label class="admin-editor-field admin-editor-field-inline"><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '> Было → стало</label>',
+      '    <label class="admin-editor-field admin-editor-field-inline admin-editor-mode-check" title="Включить рисование областей выбранным инструментом. Выключите, чтобы работать с картой без новых штрихов."><input type="checkbox" data-action="toggle-enable"' + (on ? ' checked' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L20 7l-3-3L4 17z M14 7l3 3"/></svg><span>Рисование</span></label>',
+      '    <label class="admin-editor-field admin-editor-field-inline admin-editor-mode-check" title="Сравнение с моментом открытия: пунктир — исходный контур, голубой — текущий, зелёный — новая область, красный — удалённая. Только просмотр контуров, без сохранения."><input type="checkbox" data-action="preview"' + (previewOn ? ' checked' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4v16h6" stroke-dasharray="3 2"/><path d="M14 4h6v16h-6M12 2v20"/></svg><span>Сравнить контуры</span></label>',
       '  </div>',
       '  <div class="admin-editor-nav-group">',
       '    <p class="admin-editor-nav-title">Контекст карты</p>',
@@ -1069,7 +1069,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       activeAreaBarHtml(),
       '  <p class="admin-editor-hint">ЛКМ — штрих в активную область. ПКМ и колесо — карте. <kbd>F</kbd> — закрасить выбранную, <kbd>Enter</kbd> — завершить вершины, <kbd>Esc</kbd> — прервать или закрыть справку, <kbd>Ctrl</kbd>+<kbd>Z</kbd> — отменить.</p>',
       previewOn
-        ? '  <p class="admin-editor-hint">Красная линия — область, которой в загруженном документе не станет; зелёная — новая; голубая — без изменений. Данные при предпросмотре не меняются.</p>'
+        ? '  <p class="admin-editor-hint">Сравнение с моментом открытия редактора: пунктир — исходный контур, голубой — текущий контур существующей области, зелёный — новая область, красный — удалённая. Цвета заливки и свойства отдельно не сравниваются; данные не меняются.</p>'
         : '',
       '</div>',
     ].join('');
@@ -1441,7 +1441,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       : (session.snapMode === 'sector' ? `к ячейке (${snapLetters} букв)` : 'свободная');
     const active = selected();
     const activePart = active === null ? '' : ` · область: ${active.name} (штрихов: ${active.strokes?.length ?? 0})`;
-    const preview = previewOn ? ' · предпросмотр «было → стало»' : '';
+    const preview = previewOn ? ' · сравнение контуров с моментом открытия' : '';
     const pending = drawing ? ' · ввод не завершён' : '';
     return `${state} · инструмент: ${TOOL_TITLES[toolState.tool]} · режим: ${modeLabel(session.mode)}`
       + ` · кисть: ${session.brushWidthPx} px · привязка: ${snap}${activePart}${preview}${pending}`;

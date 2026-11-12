@@ -1053,7 +1053,7 @@
 #adminEditorPanel.is-collapsed .admin-editor-heading,
 #adminEditorPanel.is-collapsed .admin-editor-stage,
 #adminEditorPanel.is-collapsed .admin-editor-body > section:not(:first-of-type) { display: none; }
-#adminEditorPanel.is-collapsed .admin-editor-rail { position: absolute; right: 0; top: var(--shell-top); width: 48px; height: 210px; pointer-events: auto; background: var(--shell-surface); border: 1px solid var(--shell-line); }
+#adminEditorPanel.is-collapsed .admin-editor-rail { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 48px; height: 210px; pointer-events: auto; background: var(--shell-surface); border: 1px solid var(--shell-line); }
 #adminEditorPanel .admin-editor-rail-arrows { display: none; }
 #adminEditorPanel .admin-editor-rail-label { font-size: 14px; }
 #adminEditorPanel[data-active-screen="hierarchy"]:not(.is-collapsed) { z-index: 21; }
@@ -1096,7 +1096,7 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 /* Категории вместо общей ленты; содержимое раскрывается поверх полотна. */
 #adminEditorPanel { --shell-top: 116px; }
 #adminEditorPanel .admin-editor-nav { display: flex; flex-wrap: wrap; align-items: center; max-height: none; overflow: visible; gap: 8px; }
-#adminEditorPanel .admin-editor-toggles { flex: 1 1 auto; }
+#adminEditorPanel .admin-editor-toggles { flex: 0 1 auto; }
 #adminEditorPanel .admin-editor-nav-group { display: contents; }
 #adminEditorPanel .admin-editor-categories { display: flex; flex-wrap: wrap; gap: 8px; }
 #adminEditorPanel .admin-editor-category { position: relative; margin: 0; min-width: 0; }
@@ -1142,3 +1142,17 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 .admin-editor-authorized .map-page-intro { display: none; }
 #adminEditorPanel .admin-editor-module-menu > .admin-editor-planes { left: auto; right: 0; }
 #adminEditorPanel .admin-editor-category > summary:focus-visible { outline: 2px solid #b2e5dc; outline-offset: 2px; }
+
+
+/* Два самостоятельных режима; категории следуют сразу за ними слева. */
+#adminEditorPanel .admin-editor-toggles { gap: 8px; }
+#adminEditorPanel .admin-editor-mode-check {
+  min-height: 44px; padding: 0 10px; box-sizing: border-box;
+  border: 1px solid var(--shell-line); border-radius: 4px;
+  color: var(--text); background: #102e2b; cursor: pointer;
+}
+#adminEditorPanel .admin-editor-mode-check:has(input:checked) { background: #244e47; border-color: #a6d9d0; }
+#adminEditorPanel .admin-editor-mode-check:focus-within { outline: 2px solid #b2e5dc; outline-offset: 2px; }
+#adminEditorPanel .admin-editor-mode-check input { width: 18px; height: 18px; min-height: 0; flex: 0 0 18px; }
+#adminEditorPanel .admin-editor-mode-check svg { width: 20px; height: 20px; flex: 0 0 20px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+#adminEditorPanel .admin-editor-mode-check span { white-space: nowrap; }
