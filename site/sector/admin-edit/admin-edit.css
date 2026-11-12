@@ -1156,3 +1156,18 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 #adminEditorPanel .admin-editor-mode-check input { width: 18px; height: 18px; min-height: 0; flex: 0 0 18px; }
 #adminEditorPanel .admin-editor-mode-check svg { width: 20px; height: 20px; flex: 0 0 20px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 #adminEditorPanel .admin-editor-mode-check span { white-space: nowrap; }
+
+/* Узловая карта вместо таблицы карточек. Прозрачная hit-зона 44 SVG-единицы
+   отделена от видимого узла, чтобы не уменьшать доступность на телефоне. */
+#adminEditorPanel .admin-editor-graph-svg { border: 0; background: #0b201f; }
+#adminEditorPanel .admin-editor-graph-hit { fill: transparent; stroke: none; pointer-events: all; }
+#adminEditorPanel .admin-editor-graph-ring { fill: #0b201f; stroke: #789c95; stroke-width: 1.2; }
+#adminEditorPanel .admin-editor-graph-node.is-current .admin-editor-graph-ring { stroke: #e5f7ee; stroke-width: 2.5; }
+#adminEditorPanel .admin-editor-graph-node:is(:hover, :focus-visible) .admin-editor-graph-ring { stroke: #fff; stroke-width: 3; }
+#adminEditorPanel .admin-editor-graph-node text { font-size: 11px; fill: #cde0d9; paint-order: stroke; stroke: #0b201f; stroke-width: 4px; stroke-linejoin: round; }
+#adminEditorPanel .admin-editor-graph-node.is-current text { fill: #fff; }
+#adminEditorPanel .admin-editor-graph-edge { opacity: .18; stroke-width: 1; }
+#adminEditorPanel .admin-editor-graph-edge[data-active="true"] { opacity: .9; stroke-width: 1.6; }
+#adminEditorPanel .admin-editor-graph-legend { gap: 4px 12px; }
+#adminEditorPanel .admin-editor-graph-caption { font-size: 10px; letter-spacing: 0; }
+#adminEditorPanel h1 { font-size: 19px; }

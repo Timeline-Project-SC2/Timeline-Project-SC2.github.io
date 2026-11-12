@@ -397,22 +397,22 @@ interface GraphNodeBox {
 }
 
 const GRAPH_NODE_BOXES: Readonly<Record<string, GraphNodeBox>> = Object.freeze({
-  'sector-areas-contract': { x: 8, y: 8, w: 148, h: 44, short: 'Документ v2' },
-  'sector-bounds': { x: 164, y: 8, w: 148, h: 44, short: 'Границы' },
-  'sector-areas-geometry': { x: 8, y: 76, w: 148, h: 44, short: 'Геометрия' },
-  'sector-areas-snap': { x: 164, y: 76, w: 148, h: 44, short: 'Привязка' },
-  'sector-areas-cascade': { x: 8, y: 144, w: 148, h: 44, short: 'Наследование' },
-  'sector-areas-scope': { x: 164, y: 144, w: 148, h: 44, short: 'Принадлежность' },
-  'sector-areas-gradient': { x: 8, y: 212, w: 148, h: 44, short: 'Переход цвета' },
-  'sector-areas-color': { x: 164, y: 212, w: 148, h: 44, short: 'Палитра' },
-  'sector-areas-lod': { x: 8, y: 280, w: 148, h: 44, short: 'Детализация' },
-  'nebula-model': { x: 164, y: 280, w: 148, h: 44, short: 'Туманности' },
-  'sector-areas-journal': { x: 8, y: 348, w: 148, h: 44, short: 'Журнал' },
-  'sector-halo-clip': { x: 164, y: 348, w: 148, h: 44, short: 'Обрезка гало' },
-  'sector-areas-force': { x: 8, y: 416, w: 148, h: 44, short: 'Закрашивание' },
-  'sector-areas-editor': { x: 164, y: 416, w: 148, h: 44, short: 'Команды' },
-  'sector-areas-render': { x: 8, y: 484, w: 148, h: 44, short: 'Отрисовка' },
-  'sector-areas-border-world': { x: 8, y: 578, w: 148, h: 44, short: 'Пограничный мир' },
+  'sector-areas-contract': { x: 40, y: 14, w: 44, h: 44, short: 'Документ' },
+  'sector-bounds': { x: 232, y: 30, w: 44, h: 44, short: 'Границы' },
+  'sector-areas-geometry': { x: 122, y: 88, w: 44, h: 44, short: 'Геометрия' },
+  'sector-areas-snap': { x: 23, y: 144, w: 44, h: 44, short: 'Привязка' },
+  'sector-areas-cascade': { x: 130, y: 186, w: 44, h: 44, short: 'Наследование' },
+  'sector-areas-scope': { x: 240, y: 128, w: 44, h: 44, short: 'Принадлежность' },
+  'sector-areas-gradient': { x: 30, y: 252, w: 44, h: 44, short: 'Переход цвета' },
+  'sector-areas-color': { x: 14, y: 333, w: 44, h: 44, short: 'Палитра' },
+  'sector-areas-lod': { x: 244, y: 236, w: 44, h: 44, short: 'Детализация' },
+  'sector-areas-journal': { x: 235, y: 340, w: 44, h: 44, short: 'Журнал' },
+  'sector-areas-force': { x: 120, y: 305, w: 44, h: 44, short: 'Закрашивание' },
+  'sector-areas-editor': { x: 120, y: 403, w: 44, h: 44, short: 'Команды' },
+  'sector-areas-render': { x: 28, y: 438, w: 44, h: 44, short: 'Отрисовка' },
+  'nebula-model': { x: 245, y: 408, w: 44, h: 44, short: 'Туманности' },
+  'sector-halo-clip': { x: 148, y: 486, w: 44, h: 44, short: 'Обрезка гало' },
+  'sector-areas-border-world': { x: 138, y: 575, w: 44, h: 44, short: 'Пограничный мир' },
 });
 
 const RELATION_FILTER_LABELS: Readonly<Record<RelationFilter, string>> = Object.freeze({
@@ -421,13 +421,6 @@ const RELATION_FILTER_LABELS: Readonly<Record<RelationFilter, string>> = Object.
   spatial: 'Геометрия',
   order: 'Порядок',
 });
-
-function portCoordinate(box: GraphNodeBox, index: number, count: number): number {
-  if (count <= 1) return box.x + box.w / 2;
-  const pad = Math.min(14, box.w * 0.22);
-  const span = Math.max(0, box.w - pad * 2);
-  return box.x + pad + (span * index) / (count - 1);
-}
 
 export function isRelationFilter(value: string): value is RelationFilter {
   return value === 'all' || value === 'data' || value === 'spatial' || value === 'order';
@@ -459,23 +452,6 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
   }
   const boxOf = (id: string): GraphNodeBox | null => GRAPH_NODE_BOXES[id] ?? fallbackBoxes.get(id) ?? null;
 
-  const outByNode = new Map<string, ModuleRelation[]>();
-  const inByNode = new Map<string, ModuleRelation[]>();
-  for (const rel of visibleRelations) {
-    const outList = outByNode.get(rel.from) ?? [];
-    outList.push(rel);
-    outByNode.set(rel.from, outList);
-    const inList = inByNode.get(rel.to) ?? [];
-    inList.push(rel);
-    inByNode.set(rel.to, inList);
-  }
-  for (const list of outByNode.values()) {
-    list.sort((a, b) => ((boxOf(a.to)?.x ?? 0) - (boxOf(b.to)?.x ?? 0)));
-  }
-  for (const list of inByNode.values()) {
-    list.sort((a, b) => ((boxOf(a.from)?.x ?? 0) - (boxOf(b.from)?.x ?? 0)));
-  }
-
   const neighborIds = new Set<string>();
   for (const rel of visibleRelations) {
     if (rel.from === selectedId) neighborIds.add(rel.to);
@@ -486,20 +462,26 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     const fromBox = boxOf(rel.from);
     const toBox = boxOf(rel.to);
     if (fromBox === null || toBox === null) return '';
-    const outList = outByNode.get(rel.from) ?? [];
-    const inList = inByNode.get(rel.to) ?? [];
-    const outIdx = Math.max(0, outList.indexOf(rel));
-    const inIdx = Math.max(0, inList.indexOf(rel));
-    const x1 = portCoordinate(fromBox, outIdx, outList.length);
-    const y1 = fromBox.y + fromBox.h;
-    const x2 = portCoordinate(toBox, inIdx, inList.length);
-    const y2 = toBox.y - 2;
-    const dy = Math.max(16, (y2 - y1) * 0.48);
+    const fromX = fromBox.x + fromBox.w / 2;
+    const fromY = fromBox.y + fromBox.h / 2;
+    const toX = toBox.x + toBox.w / 2;
+    const toY = toBox.y + toBox.h / 2;
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    // Кривая выходит из узла и заканчивается перед его окружностью.
+    const x1 = fromX + dx / length * 10;
+    const y1 = fromY + dy / length * 10;
+    const x2 = toX - dx / length * 13;
+    const y2 = toY - dy / length * 13;
+    const bend = rel.kind === 'spatial' ? -18 : 18;
+    const controlX = (x1 + x2) / 2 - dy / length * bend;
+    const controlY = (y1 + y2) / 2 + dx / length * bend;
     const active = rel.from === selectedId || rel.to === selectedId;
     return `<path class="admin-editor-graph-edge" data-kind="${rel.kind}" data-from="${escapeHtml(rel.from)}"`
       + ` data-to="${escapeHtml(rel.to)}" data-active="${active ? 'true' : 'false'}"`
       + ` marker-end="url(#adminGraphArrow-${rel.kind})"`
-      + ` d="M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${x1.toFixed(1)} ${(y1 + dy).toFixed(1)}, ${x2.toFixed(1)} ${(y2 - dy).toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}">`
+      + ` d="M ${x1.toFixed(1)} ${y1.toFixed(1)} Q ${controlX.toFixed(1)} ${controlY.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}">`
       + `<title>${escapeHtml(rel.from)} → ${escapeHtml(rel.to)} (${escapeHtml(RELATION_KIND_TITLES[rel.kind])}): ${escapeHtml(rel.note)}</title>`
       + '</path>';
   }).join('');
@@ -512,18 +494,18 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     const linked = neighborIds.has(mod.id);
     const isIsolated = isolated.has(mod.id);
     const cx = (box.x + box.w / 2).toFixed(1);
-    const cy = (box.y + box.h / 2 + 3.5).toFixed(1);
-    const dotX = (box.x + box.w - 7).toFixed(1);
-    const dotY = (box.y + 7).toFixed(1);
+    const cy = (box.y + box.h / 2).toFixed(1);
+    const labelY = (box.y + box.h / 2 + 27).toFixed(1);
     return `<g class="admin-editor-graph-node${current ? ' is-current' : ''}${linked ? ' is-linked' : ''}"`
       + ` role="button" tabindex="0"`
       + ` aria-label="${escapeHtml(mod.label + ' — открыть модуль')}"`
       + ` data-action="module" data-module="${escapeHtml(mod.id)}" data-plane="${mod.plane}"`
       + ` data-status="${mod.status}" data-isolated="${isIsolated ? 'true' : 'false'}">`
       + `<title>${escapeHtml(mod.label)} · ${escapeHtml(PLANE_TITLES[mod.plane])} · ${escapeHtml(STATUS_TITLES[mod.status])}${isIsolated ? ' (самостоятельный узел без связей)' : ''}</title>`
-      + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="5"></rect>`
-      + `<circle class="admin-editor-graph-dot" cx="${dotX}" cy="${dotY}" r="2.5"></circle>`
-      + `<text x="${cx}" y="${cy}" text-anchor="middle">${escapeHtml(box.short)}</text>`
+      + `<circle class="admin-editor-graph-hit" cx="${cx}" cy="${cy}" r="22"></circle>`
+      + `<circle class="admin-editor-graph-ring" cx="${cx}" cy="${cy}" r="12"></circle>`
+      + `<circle class="admin-editor-graph-dot" cx="${cx}" cy="${cy}" r="6"></circle>`
+      + `<text x="${cx}" y="${labelY}" text-anchor="middle">${escapeHtml(box.short)}</text>`
       + '</g>';
   }).join('');
 
@@ -537,7 +519,7 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
   return [
     '<div class="admin-editor-graph-pane" data-editor-graph>',
     '  <div class="admin-editor-graph-head">',
-    '    <p class="admin-editor-meta"><strong>Связи модулей</strong> · связей: ' + visibleRelations.length + '</p>',
+    '    <p class="admin-editor-meta">Что от чего зависит и на что влияет</p>',
     '    <div class="admin-editor-graph-filters" role="group" aria-label="Плоскость связей графа">' + filterButtons + '</div>',
     '  </div>',
     '  <p class="admin-editor-graph-legend">',
@@ -545,7 +527,7 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     '    <span data-kind="spatial">● пространственное влияние</span>',
     '    <span data-kind="order">● порядок отрисовки</span>',
     '  </p>',
-    '  <p class="admin-editor-hint">Стрелка ведёт от источника к модулю, который его использует. Нажмите узел или <kbd>Enter</kbd>, чтобы узнать, что и где он меняет. Связи этой схемы фиксированы.</p>',
+    '  <p class="admin-editor-hint">Стрелка: источник → использующий его модуль. Клик по узлу — описание. Связи схемы не редактируются.</p>',
     `  <svg class="admin-editor-graph-svg" viewBox="0 0 320 ${svgHeight}" role="group" aria-label="Граф подтверждённых связей модулей">`,
     '    <defs>',
     '      <marker id="adminGraphArrow-data" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#a6d9d0"></path></marker>',
@@ -553,8 +535,8 @@ export function moduleGraphHtml(selectedId: string, filter: RelationFilter = 'al
     '      <marker id="adminGraphArrow-order" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="#9ec5ff"></path></marker>',
     '    </defs>',
     '    <g class="admin-editor-graph-edges">' + edgesSvg + '</g>',
-    '    <line class="admin-editor-graph-divider" x1="12" y1="548" x2="308" y2="548"></line>',
-    '    <text class="admin-editor-graph-caption" x="160" y="566" text-anchor="middle">Самостоятельные узлы (без подтверждённых связей)</text>',
+    '    <line class="admin-editor-graph-divider" x1="12" y1="550" x2="308" y2="550"></line>',
+    '    <text class="admin-editor-graph-caption" x="160" y="566" text-anchor="middle">Отдельно · без подтверждённых связей</text>',
     '    <g class="admin-editor-graph-nodes">' + nodesSvg + '</g>',
     '  </svg>',
     '</div>',
@@ -1408,6 +1390,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       && active.getAttribute('data-field') === 'name'
       ? { value: active.value, start: active.selectionStart, end: active.selectionEnd }
       : null;
+    const dockTitle = panel.querySelector('#adminEditorTitle');
+    if (dockTitle !== null) {
+      const titles: Record<EditorScreen, string> = { dependencies: 'Карта связей модулей', module: 'О модуле', draw: 'Рисование областей', properties: 'Свойства области', changes: 'Журнал и выгрузка', hierarchy: 'Объекты и связи', lines: 'Правка границ' };
+      dockTitle.textContent = titles[activeScreen];
+    }
+    const railLabel = panel.querySelector('.admin-editor-rail-label');
+    if (railLabel !== null) railLabel.textContent = 'Панель редактора';
     const summary = panel.querySelector('[data-editor-summary]');
     const modules = panel.querySelector('[data-editor-block="modules"]');
     const properties = panel.querySelector('[data-editor-block="properties"]');
@@ -1817,6 +1806,18 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     applyValueAction(action, control as HTMLInputElement);
   }
 
+  /** Подсветка соседей без перерисовки DOM и без правки документа. */
+  function onGraphHighlight(event: Event): void {
+    if (panel === null || !(event.target instanceof Element)) return;
+    const node = event.target.closest('.admin-editor-graph-node');
+    if (node === null) return;
+    const leaving = event.type === 'pointerout' || event.type === 'focusout';
+    const id = leaving ? moduleId : (node.getAttribute('data-module') ?? moduleId);
+    for (const edge of panel.querySelectorAll('[data-editor-graph] .admin-editor-graph-edge')) {
+      edge.setAttribute('data-active', String(edge.getAttribute('data-from') === id || edge.getAttribute('data-to') === id));
+    }
+  }
+
   function onPanelClick(event: Event): void {
     const target = event.target;
     if (!(target instanceof Element)) return;
@@ -2201,6 +2202,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // обработчики панорамы на ней просто не получают событий рисования.
   const inputTarget: EventTarget | null = stage ?? canvas;
   bind(panel, 'click', onPanelClick);
+  for (const type of ['pointerover', 'pointerout', 'focusin', 'focusout']) bind(panel, type, onGraphHighlight);
   bind(panel, 'change', onPanelChange);
   bind(panel, 'keydown', onPanelKeyDown as unknown as Handler);
   bind(panel, 'input', onColorInput);

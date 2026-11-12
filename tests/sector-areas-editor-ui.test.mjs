@@ -1216,3 +1216,20 @@ test('отдельные флажки рисования и сравнения �
   assert.equal(api.session().past.length, 0);
   api.destroy();
 });
+
+
+test('карта связей использует круглые узлы, а заголовок соответствует экрану', () => {
+  const html = moduleGraphHtml('sector-areas-editor');
+  assert.doesNotMatch(html, /<rect| · связей:/);
+  assert.equal((html.match(/class="admin-editor-graph-hit"/g) ?? []).length, 16);
+  assert.match(html, /r="22"/);
+  assert.match(html, /Что от чего зависит и на что влияет/);
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null });
+  assert.equal(panel.querySelector('#adminEditorTitle').textContent, 'Карта связей модулей');
+  clickPanel(panel, 'module', { 'data-module': 'sector-areas-editor' });
+  assert.equal(panel.querySelector('#adminEditorTitle').textContent, 'О модуле');
+  clickPanel(panel, 'screen', { 'data-screen': 'properties' });
+  assert.equal(panel.querySelector('#adminEditorTitle').textContent, 'Свойства области');
+  api.destroy();
+});
