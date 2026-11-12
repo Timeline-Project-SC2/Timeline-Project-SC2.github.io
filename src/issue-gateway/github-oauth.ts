@@ -72,11 +72,13 @@ export async function exchangeGithubCode(
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
   try {
     const response = await transport(tokenUrl, {
-      method: 'POST', redirect: 'error', signal: abort.signal,
+      // workerd не поддерживает redirect: 'error'; 'manual' возвращает 3xx
+      // как есть — редирект эндпоинта токена неожидан и означает unavailable.
+      method: 'POST', redirect: 'manual', signal: abort.signal,
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString(),
     });
-    if (response.status >= 500 || response.status === 429) return { status: 'unavailable' };
+    if ((response.status >= 300 && response.status < 400) || response.status >= 500 || response.status === 429) return { status: 'unavailable' };
     if (!response.ok) return { status: 'rejected' };
     const payload: unknown = await response.json();
     if (!object(payload) || !validCredential(payload.access_token, 2048) ||
@@ -97,10 +99,11 @@ export async function identifyGithubUser(accessToken: string, transport: Transpo
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
   try {
     const response = await transport(userEndpoint, {
-      method: 'GET', redirect: 'error', signal: abort.signal,
+      // redirect: 'manual': workerd не знает 'error'; 3xx обрабатываем явно.
+      method: 'GET', redirect: 'manual', signal: abort.signal,
       headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${accessToken}`, 'X-GitHub-Api-Version': '2022-11-28' },
     });
-    if (response.status >= 500 || response.status === 429) return { status: 'unavailable' };
+    if ((response.status >= 300 && response.status < 400) || response.status >= 500 || response.status === 429) return { status: 'unavailable' };
     if (!response.ok) return { status: 'rejected' };
     const payload: unknown = await response.json();
     if (!object(payload) || payload.type !== 'User' || typeof payload.id !== 'number' || !Number.isSafeInteger(payload.id) || payload.id <= 0 ||

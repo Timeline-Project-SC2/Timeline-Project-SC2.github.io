@@ -191,6 +191,7 @@ async function authCallback(request: Request, env: WorkerEnv, url: URL): Promise
   } catch {
     return json({ error: 'unavailable' }, 503);
   }
+  if (consumed.status === 'unavailable') return json({ error: 'unavailable' }, 503);
   if (consumed.status !== 'accepted') return json({ error: 'invalid_state' }, 401);
 
   const config: GitHubAppConfig = {
@@ -283,6 +284,14 @@ export default {
       return json({ error: 'not_found' }, 404);
     } catch {
       return json({ error: 'unavailable' }, 503);
+    }
+  },
+  /** Cron (triggers.crons): плановая очистка — пробуждаем DO по внутренней шине. */
+  async scheduled(_event: unknown, env: WorkerEnv, _ctx: unknown): Promise<void> {
+    try {
+      await internalCall(stubOf(env), '/cleanup', { method: 'POST', body: { now: Date.now() } });
+    } catch {
+      // Сбой очистки откладывается до следующего cron; вход не зависит от неё.
     }
   },
 };

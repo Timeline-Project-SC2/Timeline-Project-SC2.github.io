@@ -96,9 +96,15 @@ function makeRuntime({ failStorage = false, persistDir } = {}) {
   return runtime;
 }
 
-// fetch с гарантированным таймаутом: мёртвый рантайм даёт ошибку, а не зависание.
+// fetch с гарантированным таймаутом и redirect: 'manual': 302 Worker'а
+// (редирект на GitHub) не должен уводить undici во внешний интернет —
+// и в песочнице (MITM TLS), и в CI.
 function workerFetch(runtime, url, init = {}) {
-  return runtime.dispatchFetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  return runtime.dispatchFetch(url, {
+    ...init,
+    redirect: 'manual',
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
 }
 
 function parseCookieValue(header, name) {

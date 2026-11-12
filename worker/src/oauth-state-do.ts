@@ -5,13 +5,14 @@
  * что одноразовый state выдан ровно одному запросу даже при параллельных
  * вызовах. Обычный KV (eventual consistency) для этого не подходит.
  *
- * В этом объекте нет криптографии: только атомарные SQL-операции.
- * Генерация state/PKCE и все SHA-256 выполняются HTTP-слоем Worker'а:
- * в актуальной связке workerd/miniflare вызов crypto.getRandomValues
- * внутри DO через worker-контекст роняет рантайм (внутренняя ошибка
- * io-контекста), а чистые SQL-пути стабильны (проверено параллельной
- * нагрузкой). Логика beginOAuthFlow/consumeOAuthState остаётся той же
- * проверенной, из src/issue-gateway/oauth-state.ts — выполняется в Worker'е.
+ * Разделение ролей: DO — чистый атомарный хранилищный слой (только SQL),
+ * вся gateway-логика (beginOAuthFlow/consumeOAuthState, генерация
+ * state/PKCE, SHA-256) выполняется HTTP-слоем Worker'а и ходит к DO по
+ * внутренней HTTP-шине (stub.fetch). Шина проверена параллельной нагрузкой;
+ * внешняя поверхность DO сводится к fetch() — в этой связке
+ * (workerd 1.20260730 / miniflare 4.20260730) внешний RPC к методу DO,
+ * названному scheduled(), даёт внутреннюю ошибку рантайма, поэтому таких
+ * методов у объекта нет (cron дёргает scheduled() самого Worker'а).
  *
  * Правило SQLite: курсор RETURNING всегда полностью потребляется
  * (rowsOf), иначе транзакция не коммитится (SQLITE_BUSY).
@@ -200,11 +201,6 @@ export class OAuthState extends DurableObject {
     } catch {
       return json({ error: 'unavailable' }, 503);
     }
-  }
-
-  /** Cron-триггер: плановая очистка. Вызывается платформой, не извне. */
-  scheduled(): Promise<{ pending: number; sessions: number }> {
-    return this.runCleanup(Date.now());
   }
 
   private async runCleanup(now: number): Promise<{ pending: number; sessions: number }> {
