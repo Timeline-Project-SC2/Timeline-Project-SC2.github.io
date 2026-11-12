@@ -218,7 +218,7 @@ function harness(sectorBounds = realBounds) {
   panel.appendChild(block);
   // Кнопки панели: клик по ним приходит как событие с `target`.
   const buttons = new Map();
-  for (const action of ['line-tool', 'line-export', 'line-undo', 'line-redo']) {
+  for (const action of ['line-tool', 'line-export', 'line-undo', 'line-redo', 'bounds-create', 'bounds-finish', 'bounds-delete', 'bounds-cancel', 'bounds-back']) {
     const button = new FakeNode('button');
     button.setAttribute('data-action', action);
     panel.appendChild(button);
@@ -615,5 +615,50 @@ test('отказ записи у края поля: панель объясня�
   assert.equal(env.ui.session().past.length, 0, 'запись не сделана');
   assert.match(env.block.innerHTML, /Запись не выполнена/u, 'причина отказа видна');
   assert.match(env.block.innerHTML, /петл/u, 'сказано, что линия сложилась бы петлёй');
+  env.ui.destroy();
+});
+
+
+test('объектный UI: создать туманность кликами, удалить, восстановить и открыть другим администратором', () => {
+  const env = harness({ ...realBounds, bounds: [] });
+  env.buttons.get('bounds-create').setAttribute('data-kind', 'nebula');
+  env.click('bounds-create');
+  env.pointer('pointerdown', 100, 100);
+  env.pointer('pointerdown', 500, 100);
+  env.click('bounds-finish');
+  assert.equal(env.ui.session().doc.bounds.length, 0, 'незавершённый контур не сохраняется');
+  env.pointer('pointerdown', 500, 400);
+  env.click('bounds-finish');
+  const created = env.ui.session().doc.bounds[0];
+  assert.equal(created.kind, 'nebula');
+  assert.deepEqual(created.points, [[100, 100], [500, 100], [500, 400], [100, 100]]);
+  assert.equal(env.kernel.state.sectorBounds, env.ui.session().doc, 'документ применён к карте');
+  env.click('bounds-delete');
+  assert.equal(env.ui.session().doc.bounds.length, 0);
+  env.click('line-undo');
+  assert.deepEqual(env.ui.session().doc.bounds[0], created);
+  const second = harness(parseBounds(env.ui.exportJson()));
+  assert.match(second.block.innerHTML, /nebula.custom-1/);
+  second.click('bounds-delete');
+  assert.equal(second.ui.session().doc.bounds.length, 0);
+  second.click('line-undo');
+  assert.deepEqual(second.ui.session().doc.bounds[0], created);
+  second.ui.destroy();
+  env.ui.destroy();
+});
+
+test('создание объекта: Escape и выключение не меняют документ', () => {
+  const env = harness();
+  env.buttons.get('bounds-create').setAttribute('data-kind', 'halo');
+  env.click('bounds-create');
+  env.pointer('pointerdown', 100, 100);
+  env.key({ key: 'Escape' });
+  env.click('bounds-finish');
+  assert.deepEqual(env.ui.session().doc, realBounds);
+  env.click('bounds-create');
+  env.pointer('pointerdown', 100, 100);
+  env.ui.setEnabled(false);
+  env.click('bounds-finish');
+  assert.deepEqual(env.ui.session().doc, realBounds);
   env.ui.destroy();
 });

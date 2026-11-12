@@ -580,3 +580,19 @@ export function markPairNeedsReviewCmd(session: EditorSession, pairId: string, v
     message: value ? 'Сочетание помечено «требует пересмотра».' : 'Пометка пересмотра снята.',
   };
 }
+
+/** Порядок областей в документе: одна перестановка — один шаг общей истории.
+ * Геометрия, идентификаторы, группы и правила сочетаний остаются прежними. */
+export function reorderAreaCmd(session: EditorSession, areaId: string, targetId: string): EditorSession {
+  const from = session.doc.areas.findIndex((area) => area.id === areaId);
+  const to = session.doc.areas.findIndex((area) => area.id === targetId);
+  if (from < 0 || to < 0 || from === to) return session;
+  const areas = [...session.doc.areas];
+  const [area] = areas.splice(from, 1);
+  if (area === undefined) return session;
+  areas.splice(to, 0, area);
+  return commitDocChange(session, { ...session.doc, areas }, {
+    kind: 'reorder', areaId, mode: null,
+    note: `Область «${area.name}»: позиция ${from + 1} → ${to + 1}`,
+  });
+}

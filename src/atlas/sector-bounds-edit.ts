@@ -116,6 +116,12 @@ export interface ContourSnapshot {
 }
 
 /** Запись журнала одного коммита: что было до и после. */
+export interface BoundsObjectEntry {
+  readonly sequence: number;
+  readonly beforeDoc: SectorBounds;
+  readonly afterDoc: SectorBounds;
+}
+
 export interface BoundsEditEntry {
   readonly sequence: number;
   readonly contourId: string;
@@ -130,8 +136,8 @@ export interface BoundsEditEntry {
 export interface BoundsEditSession {
   readonly doc: SectorBounds;
   readonly soft: Readonly<Record<string, readonly number[]>>;
-  readonly past: readonly BoundsEditEntry[];
-  readonly future: readonly BoundsEditEntry[];
+  readonly past: readonly (BoundsEditEntry | BoundsObjectEntry)[];
+  readonly future: readonly (BoundsEditEntry | BoundsObjectEntry)[];
   readonly active: BoundsEditActive | null;
   readonly selection: EdgeSelection | null;
   readonly sequence: number;
@@ -769,7 +775,9 @@ export function pickBoundsEdge(
 /** Новая пустая сессия правки. */
 export function createBoundsEditSession(
   doc: SectorBounds,
-  soft: Readonly<Record<string, readonly number[]>> = {},
+  soft: Readonly<Record<string, readonly number[]>> = Object.fromEntries(
+    doc.bounds.filter((item) => item.soft?.length).map((item) => [item.id, [...item.soft!]]),
+  ),
 ): BoundsEditSession {
   return { doc, soft, past: [], future: [], active: null, selection: null, sequence: 0 };
 }
@@ -1049,7 +1057,7 @@ export function commitBoundsEdit(session: BoundsEditSession): BoundsEditSession 
   };
   const nextDoc: SectorBounds = {
     ...session.doc,
-    bounds: session.doc.bounds.map((item) => (item.id === active.contourId ? { ...item, points: nextPoints } : item)),
+    bounds: session.doc.bounds.map((item) => (item.id === active.contourId ? withContourGeometry(item, nextPoints, nextSoft) : item)),
   };
   return {
     doc: nextDoc,
@@ -1061,6 +1069,34 @@ export function commitBoundsEdit(session: BoundsEditSession): BoundsEditSession 
     sequence: entry.sequence,
     rejected: null,
   };
+}
+
+/** Объектные команды используют ту же историю, что и правка участков. */
+function recordBoundsDocument(session: BoundsEditSession, doc: SectorBounds): BoundsEditSession {
+  const checked = parseBounds(doc);
+  if (JSON.stringify(checked) === JSON.stringify(session.doc)) return session;
+  const entry: BoundsObjectEntry = { sequence: session.sequence + 1, beforeDoc: session.doc, afterDoc: checked };
+  return { ...createBoundsEditSession(checked), past: [...session.past, entry], sequence: entry.sequence };
+}
+
+export function addBoundsObject(session: BoundsEditSession, object: BoundsPrimitive): BoundsEditSession {
+  if (!object.id.trim() || contourOf(session.doc, object.id)) throw new RangeError('Идентификатор объекта должен быть уникальным.');
+  return recordBoundsDocument(session, { ...session.doc, bounds: [...session.doc.bounds, object] });
+}
+
+export function removeBoundsObject(session: BoundsEditSession, id: string): BoundsEditSession {
+  if (!contourOf(session.doc, id)) return session;
+  return recordBoundsDocument(session, { ...session.doc, bounds: session.doc.bounds.filter((item) => item.id !== id) });
+}
+
+/** Идентификатор и тип неизменны: ссылки на объект не должны разрываться. */
+export function updateBoundsObject(
+  session: BoundsEditSession, id: string,
+  patch: Partial<Pick<BoundsPrimitive, 'label' | 'style' | 'blink'>>,
+): BoundsEditSession {
+  if (!contourOf(session.doc, id)) return session;
+  if (patch.label !== undefined && !patch.label.trim()) throw new RangeError('Укажите название объекта.');
+  return recordBoundsDocument(session, { ...session.doc, bounds: session.doc.bounds.map((item) => item.id === id ? { ...item, ...patch } : item) });
 }
 
 /** Отмена правки (Escape, правый клик): предпросмотр теряется, документ цел. */
@@ -1080,13 +1116,19 @@ export function selectBoundsEdge(session: BoundsEditSession, selection: EdgeSele
   return { ...session, selection };
 }
 
+/** Геометрия и структура редактирования — единое состояние опубликованного объекта. */
+function withContourGeometry(item: BoundsPrimitive, points: readonly Point[], soft: readonly number[]): BoundsPrimitive {
+  const { soft: _previousSoft, ...rest } = item;
+  return { ...rest, points: [...points], ...(soft.length ? { soft: [...soft] } : {}) };
+}
+
 /** Документ с восстановленным снимком контура. */
 function withSnapshot(session: BoundsEditSession, contourId: string, snapshot: ContourSnapshot): BoundsEditSession {
   return {
     ...session,
     doc: {
       ...session.doc,
-      bounds: session.doc.bounds.map((item) => (item.id === contourId ? { ...item, points: [...snapshot.points] } : item)),
+      bounds: session.doc.bounds.map((item) => (item.id === contourId ? withContourGeometry(item, snapshot.points, snapshot.soft) : item)),
     },
     soft: { ...session.soft, [contourId]: [...snapshot.soft] },
   };
@@ -1099,8 +1141,9 @@ function withSnapshot(session: BoundsEditSession, contourId: string, snapshot: C
 export function undoBoundsEdit(session: BoundsEditSession): BoundsEditSession {
   const entry = session.past.at(-1);
   if (entry === undefined) return session;
-  if (contourOf(session.doc, entry.contourId) === null) return session;
-  const restored = withSnapshot(session, entry.contourId, entry.before);
+  const restored = 'beforeDoc' in entry
+    ? { ...session, ...createBoundsEditSession(entry.beforeDoc) }
+    : withSnapshot(session, entry.contourId, entry.before);
   return {
     ...restored,
     past: session.past.slice(0, -1),
@@ -1115,8 +1158,9 @@ export function undoBoundsEdit(session: BoundsEditSession): BoundsEditSession {
 export function redoBoundsEdit(session: BoundsEditSession): BoundsEditSession {
   const entry = session.future.at(-1);
   if (entry === undefined) return session;
-  if (contourOf(session.doc, entry.contourId) === null) return session;
-  const restored = withSnapshot(session, entry.contourId, entry.after);
+  const restored = 'afterDoc' in entry
+    ? { ...session, ...createBoundsEditSession(entry.afterDoc) }
+    : withSnapshot(session, entry.contourId, entry.after);
   return {
     ...restored,
     past: [...session.past, entry],
@@ -1143,10 +1187,9 @@ export function parseBoundsEdit(json: unknown): SectorBounds {
 }
 
 /**
- * Загрузка документа в сессию после импорта: журнал очищается, пометки мягких
- * вершин и выбор сбрасываются — в файле их нет, а угадывать происхождение
- * вершин нельзя. `null` — импорт невозможен (нет контуров).
+ * Новая независимая сессия: личная история и выбор очищаются, структура
+ * участков восстанавливается из документа, как при загрузке данных сайта.
  */
 export function importBoundsEdit(doc: SectorBounds): BoundsEditSession {
-  return createBoundsEditSession(doc, {});
+  return createBoundsEditSession(doc);
 }

@@ -24,6 +24,9 @@ import { escapeHtml } from './config.ts';
 import type { AtlasKernel, MapPoint } from './config.ts';
 import { canStartStroke, canContinueStroke, isTextEntryTarget } from './pointer-rules.ts';
 import {
+  addBoundsObject,
+  removeBoundsObject,
+  updateBoundsObject,
   beginBoundsEdit,
   cancelBoundsEdit,
   commitBoundsEdit,
@@ -38,7 +41,7 @@ import {
   undoBoundsEdit,
 } from './sector-bounds-edit.ts';
 import type { BoundsEditSession } from './sector-bounds-edit.ts';
-import type { Point, SectorBounds } from './sector-bounds.ts';
+import type { BoundsPrimitive, Point, SectorBounds } from './sector-bounds.ts';
 
 /* ------------------------------------------------------------------ типы */
 
@@ -89,6 +92,9 @@ function emptyBounds(): SectorBounds {
 export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): SectorBoundsEditUiApi {
   const { kernel, panel, stage, canvas } = options;
   let session: BoundsEditSession = createBoundsEditSession(kernel.state.sectorBounds ?? emptyBounds());
+  let objectId = session.doc.bounds[0]?.id ?? '';
+  let draftKind: BoundsPrimitive['kind'] | null = null;
+  let draftPoints: Point[] = [];
   let on = false;
   let dragging = false;
   let dragStartPoint: MapPoint | null = null;
@@ -140,6 +146,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
 
   function commit(next: BoundsEditSession): void {
     session = next;
+    if (!session.doc.bounds.some((item) => item.id === objectId)) objectId = session.doc.bounds[0]?.id ?? '';
     apply();
   }
 
@@ -191,6 +198,16 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     ctx.beginPath();
     ctx.rect(0, 0, overlayW, overlayH);
     ctx.clip();
+    if (draftKind !== null) {
+      ctx.strokeStyle = '#4fc9d4';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      if (tracePolyline(ctx, draftPoints)) ctx.stroke();
+      for (const point of draftPoints) {
+        const screen = screenOf(point);
+        if (screen) { ctx.beginPath(); ctx.arc(screen.x, screen.y, 4, 0, Math.PI * 2); ctx.fillStyle = '#4fc9d4'; ctx.fill(); }
+      }
+    }
     if (session.active !== null) drawActive(ctx);
     else if (session.selection !== null) drawSelection(ctx);
     ctx.restore();
@@ -333,7 +350,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
   /* overlay-loop: перерисовка при смене кадра (панорама/зум/размер). */
   function overlayStep(): void {
     overlayFrame = 0;
-    if (session.selection === null && session.active === null) return;
+    if (draftKind === null && session.selection === null && session.active === null) return;
     const key = viewKey();
     if (key !== lastViewKey) {
       lastViewKey = key;
@@ -368,10 +385,26 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
       active !== null ? 'правка активна' : '',
       `журнал: ${session.past.length}`,
     ].filter((part) => part.length > 0).join(' · ');
+    const object = session.doc.bounds.find((item) => item.id === objectId);
     const undoDisabled = session.past.length === 0 ? ' disabled' : '';
     const redoDisabled = session.future.length === 0 ? ' disabled' : '';
     return [
-      '<p class="admin-editor-meta"><strong>Линии</strong> · правка контуров границ</p>',
+      '<p class="admin-editor-meta"><strong>Линии</strong> · объекты и контуры границ</p>',
+      '<label class="admin-editor-field">Объект <select data-action="bounds-select" aria-label="Объект границ">'
+        + session.doc.bounds.map((item) => `<option value="${escapeHtml(item.id)}"${item.id === objectId ? ' selected' : ''}>${escapeHtml(item.label)} (${({ sector: 'граница', nebula: 'туманность', halo: 'гало' })[item.kind]})</option>`).join('') + '</select></label>',
+      object ? `<label class="admin-editor-field">Название <input type="text" data-bounds-label value="${escapeHtml(object.label)}" /></label>
+        <label class="admin-editor-field">Толщина линии <input data-bounds-width type="number" min="0.1" max="30" step="0.1" value="${object.style.strokeWidth}" /></label>
+        <div class="admin-editor-tools"><button type="button" class="admin-editor-tool" data-action="bounds-save">Применить свойства</button>
+        <button type="button" class="admin-editor-tool" data-action="bounds-delete">Удалить объект</button></div>` : '',
+      '<div class="admin-editor-tools" role="group" aria-label="Создать объект границ">'
+        + '<button type="button" class="admin-editor-tool" data-action="bounds-create" data-kind="sector">Новая граница</button>'
+        + '<button type="button" class="admin-editor-tool" data-action="bounds-create" data-kind="nebula">Новая туманность</button>'
+        + '<button type="button" class="admin-editor-tool" data-action="bounds-create" data-kind="halo">Новое гало</button></div>',
+      draftKind ? `<p role="status">Создание: ${draftPoints.length} точек. Отметьте вершины кликами на карте. Гало — открытая линия, остальные контуры замыкаются.</p>
+        <div class="admin-editor-tools"><button type="button" class="admin-editor-tool" data-action="bounds-finish">Создать объект</button>
+        <button type="button" class="admin-editor-tool" data-action="bounds-back">Убрать последнюю точку</button>
+        <button type="button" class="admin-editor-tool" data-action="bounds-cancel">Отмена</button></div>` : '',
+      '<p class="admin-editor-hint">Свойства и удаление относятся к выбранному объекту. Геометрия меняется на карте инструментом «Правка линий». Удаление можно отменить; связанные области могут потерять ограничивающий контур.</p>',
       '<div class="admin-editor-tools" role="group" aria-label="Инструмент правки линий">',
       '  <button type="button" class="admin-editor-tool' + (on ? ' is-current' : '') + '"'
         + ' data-action="line-tool"'
@@ -409,7 +442,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
       const block = panel.querySelector('[data-editor-block="lines"]');
       if (block !== null) block.innerHTML = linesBlockHtml();
     }
-    if (session.selection !== null || session.active !== null) {
+    if (draftKind !== null || session.selection !== null || session.active !== null) {
       lastViewKey = '';
       paintOverlay();
       startOverlayLoop();
@@ -425,6 +458,8 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     }
     on = value;
     if (!on) {
+      draftKind = null;
+      draftPoints = [];
       if (dragging) {
         dragging = false;
         capturedId = null;
@@ -458,6 +493,71 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     const action = control.getAttribute('data-action');
     if (action === null) return;
     switch (action) {
+      case 'bounds-select':
+        break;
+      case 'bounds-create': {
+        const kind = control.getAttribute('data-kind');
+        if (kind !== 'sector' && kind !== 'nebula' && kind !== 'halo') break;
+        setEnabled(true);
+        session = selectBoundsEdge(cancelBoundsEdit(session), null);
+        draftKind = kind;
+        draftPoints = [];
+        notice = 'Отметьте вершины на карте, затем нажмите «Создать объект». Esc — отмена.';
+        refresh();
+        break;
+      }
+      case 'bounds-back':
+        draftPoints.pop();
+        refresh();
+        break;
+      case 'bounds-cancel':
+        draftKind = null;
+        draftPoints = [];
+        refresh();
+        break;
+      case 'bounds-finish': {
+        if (draftKind === null) break;
+        if (new Set(draftPoints.map((p) => p.join(','))).size < (draftKind === 'halo' ? 2 : 3)) {
+          notice = 'Недостаточно различных точек: для гало нужны две, для замкнутого контура — три.';
+          refresh();
+          break;
+        }
+        let index = 1;
+        while (session.doc.bounds.some((item) => item.id === `${draftKind}.custom-${index}`)) index++;
+        const id = `${draftKind}.custom-${index}`;
+        const points = draftKind === 'halo' ? [...draftPoints] : [...draftPoints, draftPoints[0]!];
+        const object: BoundsPrimitive = { id, kind: draftKind,
+          label: ({ sector: 'Граница', nebula: 'Туманность', halo: 'Гало' })[draftKind] + ` ${index}`,
+          points, style: { strokeWidth: 2, dash: draftKind === 'halo' ? [12, 8] : [], color: draftKind === 'nebula' ? 'nebula' : 'tactical' } };
+        try {
+          const next = addBoundsObject(session, object);
+          draftKind = null;
+          draftPoints = [];
+          objectId = id;
+          notice = 'Объект создан. Его свойства и контур доступны для дальнейшей правки.';
+          commit(next);
+        } catch (error) { notice = String(error); refresh(); }
+        break;
+      }
+      case 'bounds-delete':
+        draftKind = null;
+        draftPoints = [];
+        notice = 'Объект удалён. «Отменить» вернёт его вместе со свойствами и геометрией.';
+        commit(removeBoundsObject(session, objectId));
+        break;
+      case 'bounds-save': {
+        const object = session.doc.bounds.find((item) => item.id === objectId);
+        const label = panel?.querySelector<HTMLInputElement>('[data-bounds-label]')?.value.trim();
+        const width = Number(panel?.querySelector<HTMLInputElement>('[data-bounds-width]')?.value);
+        if (!object || !label || !Number.isFinite(width) || width < 0.1 || width > 30) {
+          notice = 'Укажите название и толщину от 0,1 до 30.';
+          refresh();
+          break;
+        }
+        notice = 'Свойства объекта применены.';
+        commit(updateBoundsObject(session, objectId, { label, style: { ...object.style, strokeWidth: width } }));
+        break;
+      }
       case 'line-tool':
         setEnabled(!on);
         break;
@@ -469,6 +569,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
         break;
       }
       case 'line-undo':
+        draftKind = null; draftPoints = [];
         if (session.past.length > 0) {
           commit(undoBoundsEdit(session));
           notice = 'Правка отменена.';
@@ -478,6 +579,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
         refresh();
         break;
       case 'line-redo':
+        draftKind = null; draftPoints = [];
         if (session.future.length > 0) {
           commit(redoBoundsEdit(session));
           notice = 'Правка повторена.';
@@ -502,7 +604,9 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
       refresh();
       return false;
     }
+    draftKind = null; draftPoints = [];
     session = importBoundsEdit(doc);
+    objectId = session.doc.bounds[0]?.id ?? '';
     notice = `Границы загружены: контуров ${session.doc.bounds.length}.`;
     apply();
     return true;
@@ -511,6 +615,12 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
   function onPanelChange(event: Event): void {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (target.getAttribute('data-action') === 'bounds-select') {
+      objectId = (target as HTMLSelectElement).value;
+      session = selectBoundsEdge(cancelBoundsEdit(session), null);
+      refresh();
+      return;
+    }
     const input = target.closest('[data-action="line-import"]');
     if (input === null) return;
     const files = (input as HTMLInputElement).files;
@@ -532,6 +642,17 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     const point = pointAt(event);
     if (point === null) return;
     event.stopPropagation();
+    if (draftKind !== null) {
+      event.preventDefault();
+      const world = kernel.renderer.toWorld(point.x, point.y);
+      if (world.x >= 0 && world.x <= 10000 && world.y >= 0 && world.y <= 10000) {
+        const p: Point = [world.x, world.y];
+        if (!draftPoints.length || Math.hypot(p[0] - draftPoints.at(-1)![0], p[1] - draftPoints.at(-1)![1]) > 0.5) draftPoints.push(p);
+        notice = null;
+      } else notice = 'Точка должна находиться внутри поля карты.';
+      refresh();
+      return;
+    }
     // Клик рядом с ядром — начало перетаскивания.
     if (session.active !== null) {
       const coreScreen = screenOf(session.active.core);
@@ -561,7 +682,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     const picked = pickBoundsEdge(session, world.x, world.y, pickTolerance());
     session = selectBoundsEdge(session, picked);
     if (picked === null) notice = 'Кликнул вне линии: участок не выбран.';
-    else notice = null;
+    else { notice = null; objectId = picked.contourId; }
     paintOverlay();
     refresh();
   }
@@ -641,6 +762,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
 
   function onDoubleClick(event: Event): void {
     if (!on) return;
+    if (draftKind !== null) { event.preventDefault(); event.stopPropagation(); return; }
     if (!(event instanceof MouseEvent)) return;
     if (event.button !== 0) return;
     if (!canContinueStroke(event)) return;
@@ -669,6 +791,9 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
 
   function onContextMenu(event: Event): void {
     if (!on) return;
+    if (draftKind !== null) {
+      event.preventDefault(); event.stopPropagation(); draftKind = null; draftPoints = []; refresh(); return;
+    }
     if (session.active === null) return;
     event.preventDefault();
     event.stopPropagation();
@@ -681,6 +806,9 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
   function onKeyDown(event: KeyboardEvent): void {
     if (!on) return;
     if (isTextEntryTarget(event.target)) return;
+    if (event.key === 'Escape' && draftKind !== null) {
+      event.preventDefault(); event.stopPropagation(); draftKind = null; draftPoints = []; refresh(); return;
+    }
     if (event.key === 'Escape') {
       if (session.active === null) return;
       event.preventDefault();
@@ -694,6 +822,7 @@ export function createSectorBoundsEditUi(options: SectorBoundsEditUiOptions): Se
     const withModifier = event.ctrlKey === true || event.metaKey === true;
     if (!withModifier) return;
     if (event.code !== 'KeyZ') return;
+    draftKind = null; draftPoints = [];
     event.preventDefault();
     event.stopPropagation();
     if (event.shiftKey) {

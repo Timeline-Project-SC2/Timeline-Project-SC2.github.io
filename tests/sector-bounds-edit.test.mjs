@@ -23,6 +23,9 @@ import {
   BOUNDS_EDIT_PULL_LIMIT,
   anchorsForSpan,
   anchorSpacingDeviation,
+  addBoundsObject,
+  removeBoundsObject,
+  updateBoundsObject,
   beginBoundsEdit,
   cancelBoundsEdit,
   commitBoundsEdit,
@@ -724,12 +727,12 @@ test('round-trip после правки: выгруженный JSON читае
   const exported = serializeBoundsEdit(committed.doc);
   const reimported = parseBoundsEdit(exported);
   assert.deepEqual(reimported, committed.doc, 'после импорта документ тот же');
-  // Импорт в новую сессию: журнал пуст, вершины считаются структурными.
+  // Новая сессия: личная история пуста, структура объекта сохранена.
   const session = importBoundsEdit(reimported);
   assert.equal(session.past.length, 0);
   assert.equal(session.future.length, 0);
   assert.deepEqual(session.doc, committed.doc);
-  assert.deepEqual(softIndicesOf(session, 'sector.outline'), [], 'происхождение вершин не угадывается');
+  assert.deepEqual(softIndicesOf(session, 'sector.outline'), softIndicesOf(committed, 'sector.outline'), 'структура участков сохранена в объекте');
   // И документ остаётся редактируемым.
   const again = beginBoundsEdit(session, 'sector.outline', 12, [committed.doc.bounds[0].points[12][0], committed.doc.bounds[0].points[12][1]]);
   assert.ok(again.active, 'после импорта правка открывается');
@@ -887,4 +890,68 @@ test('parseBoundsEdit: некорректные данные — RangeError на
   assert.throws(() => parseBoundsEdit('{"version":2}'),
     (error) => error instanceof RangeError && /Некорректные/.test(error.message));
   assert.throws(() => parseBoundsEdit('не json'), (error) => error instanceof RangeError);
+});
+
+
+test('два администратора: опубликованный объект редактируется тем же участком без передачи сессии', () => {
+  for (const id of ['sector.outline', 'halo.dashed', 'nebula.lost-signals', 'nebula.fog-echos']) {
+    const first = beginOn(createBoundsEditSession(bounds), id, 3);
+    assert.ok(first.active);
+    const core = first.active.core;
+    const saved = commitBoundsEdit(moveBoundsEditCore(first, [core[0] + 20, core[1] + 15]));
+    assert.equal(saved.past.length, 1, id);
+    // Только опубликованный JSON и общий парсер карты; не import UI и не session первого.
+    const loaded = parseBounds(JSON.parse(JSON.stringify(saved.doc)));
+    const second = createBoundsEditSession(loaded);
+    assert.equal(second.past.length, 0);
+    assert.deepEqual(second.soft, saved.soft);
+    const edge = softIndicesOf(saved, id)[0];
+    assert.ok(Number.isInteger(edge), id);
+    const click = midpointOfEdge(contourOf(loaded, id), edge);
+    const continued = beginBoundsEdit(saved, id, edge, click);
+    const reopened = beginBoundsEdit(second, id, edge, click);
+    assert.deepEqual(reopened.active, continued.active, id + ': тот же участок, ядро и якоря');
+    const destination = [reopened.active.core[0] + 10, reopened.active.core[1] + 10];
+    const next = commitBoundsEdit(moveBoundsEditCore(reopened, destination));
+    assert.deepEqual(next.doc, commitBoundsEdit(moveBoundsEditCore(continued, destination)).doc);
+    assert.deepEqual(undoBoundsEdit(next).doc, loaded, 'undo второго не отменяет работу первого');
+    assert.deepEqual(parseBounds(JSON.stringify(redoBoundsEdit(undoBoundsEdit(next)).doc)), next.doc);
+  }
+});
+
+test('контракт структуры: старые данные допустимы, повреждённые пометки отклоняются', () => {
+  assert.deepEqual(createBoundsEditSession(bounds).soft, {});
+  for (const soft of [null, '1', [0], [-1], [1.5], [1, 1], [99999], [1, '2']]) {
+    const doc = { ...bounds, bounds: [{ ...bounds.bounds[0], soft }] };
+    assert.throws(() => parseBounds(doc), RangeError);
+  }
+});
+
+
+test('объекты: создание → свойства → публикация → второй администратор → удаление и undo', () => {
+  for (const kind of ['sector', 'halo', 'nebula']) {
+    const empty = { ...bounds, bounds: [] };
+    const object = { id: `${kind}.new`, kind, label: 'Новый объект',
+      style: { strokeWidth: 2, dash: [], color: 'tactical' },
+      points: kind === 'halo' ? [[100, 100], [600, 100], [900, 400]] : [[100, 100], [600, 100], [900, 400], [100, 100]] };
+    const added = addBoundsObject(createBoundsEditSession(empty), object);
+    const renamed = updateBoundsObject(added, object.id, { label: 'Объект первого администратора' });
+    const edited = beginOn(renamed, object.id, 0);
+    const saved = commitBoundsEdit(moveBoundsEditCore(edited, [edited.active.core[0], edited.active.core[1] + 15]));
+    assert.equal(saved.past.length, 3);
+    const second = createBoundsEditSession(parseBounds(JSON.stringify(saved.doc)));
+    const changed = updateBoundsObject(second, object.id, { style: { ...object.style, strokeWidth: 4 } });
+    assert.deepEqual(changed.doc.bounds[0].soft, saved.doc.bounds[0].soft);
+    const removed = removeBoundsObject(changed, object.id);
+    assert.equal(removed.doc.bounds.length, 0);
+    assert.deepEqual(undoBoundsEdit(removed).doc, changed.doc);
+    assert.deepEqual(undoBoundsEdit(undoBoundsEdit(removed)).doc, saved.doc);
+    assert.deepEqual(redoBoundsEdit(undoBoundsEdit(removed)).doc, removed.doc);
+    assert.deepEqual(undoBoundsEdit(undoBoundsEdit(undoBoundsEdit(saved))).doc, empty);
+    assert.throws(() => addBoundsObject(added, object), /уникальным/);
+    assert.throws(() => updateBoundsObject(added, object.id, { label: '  ' }), /название/);
+    assert.equal(removeBoundsObject(added, 'absent'), added);
+    assert.equal(updateBoundsObject(added, object.id, { label: object.label }), added);
+    assert.equal(removeBoundsObject(undoBoundsEdit(removed), object.id).future.length, 0);
+  }
 });
