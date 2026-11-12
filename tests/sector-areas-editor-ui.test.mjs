@@ -1233,3 +1233,23 @@ test('карта связей использует круглые узлы, а �
   assert.equal(panel.querySelector('#adminEditorTitle').textContent, 'Свойства области');
   api.destroy();
 });
+
+test('отступ оболочки следует фактической высоте навигации, а не фиксированным 116px', () => {
+  const panel = fakePanel();
+  const query = panel.querySelector.bind(panel);
+  let height = 62;
+  const values = new Map();
+  panel.style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
+  panel.querySelector = (selector) => selector === '.admin-editor-nav'
+    ? { getBoundingClientRect: () => ({ height }) } : query(selector);
+  const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null });
+  assert.equal(values.get('--shell-top'), '70px');
+  height = 114;
+  api.refresh();
+  assert.equal(values.get('--shell-top'), '122px', 'перенос категорий увеличивает отступ');
+  height = 62;
+  clickPanel(panel, 'navigation-toggle');
+  assert.equal(values.get('--shell-top'), '70px', 'сворачивание сразу пересчитывает отступ');
+  api.destroy();
+  assert.equal(values.has('--shell-top'), false);
+});

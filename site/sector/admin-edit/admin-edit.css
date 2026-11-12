@@ -1171,3 +1171,16 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 #adminEditorPanel .admin-editor-graph-legend { gap: 4px 12px; }
 #adminEditorPanel .admin-editor-graph-caption { font-size: 10px; letter-spacing: 0; }
 #adminEditorPanel h1 { font-size: 19px; }
+
+
+/* Карточка выбранной системы не должна уходить под навигацию редактора.
+   Только admin-edit: каталог «Системы» и публичный сектор не меняются. */
+.map-stage:has(#adminEditorPanel) .detail-panel {
+  top: var(--admin-content-top, 88px);
+  max-height: calc(100% - var(--admin-content-top, 88px) - 8px);
+}
+@media (min-width: 701px) {
+  .map-stage:has(#adminEditorPanel.is-collapsed) .detail-panel {
+    right: 64px;
+  }
+}

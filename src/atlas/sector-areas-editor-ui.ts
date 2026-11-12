@@ -1379,6 +1379,18 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   }
 
   /** Перерисовка блоков панели без потери недопечатанного названия области. */
+  // Высота строки меняется при переносе категорий, масштабе и сворачивании.
+  // Один измеренный отступ используется Toolbox, доком и карточкой системы.
+  let navigationObserver: ResizeObserver | null = null;
+  function syncNavigationHeight(): void {
+    const nav = panel?.querySelector<HTMLElement>('.admin-editor-nav');
+    if (!nav || typeof nav.getBoundingClientRect !== 'function') return;
+    const height = Math.ceil(nav.getBoundingClientRect().height);
+    if (height <= 0) return;
+    panel?.style.setProperty('--shell-top', `${height + 8}px`);
+    stage?.style.setProperty('--admin-content-top', `${height + 16}px`);
+  }
+
   function refresh(): void {
     if (panel === null) return;
     if (typeof panel.setAttribute === 'function') {
@@ -1414,6 +1426,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         if (editing.start !== null && editing.end !== null) input.setSelectionRange(editing.start, editing.end);
         input.focus();
       }
+    }
+    syncNavigationHeight();
+    if (typeof ResizeObserver !== 'undefined') {
+      navigationObserver ??= new ResizeObserver(syncNavigationHeight);
+      navigationObserver.disconnect();
+      const nav = panel.querySelector('.admin-editor-nav');
+      if (nav) navigationObserver.observe(nav);
     }
     if (previewOn) {
       lastViewKey = '';
@@ -1841,6 +1860,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         if (panel !== null) {
           const compact = panel.classList.toggle('is-navigation-collapsed');
           control.setAttribute('aria-expanded', compact ? 'false' : 'true');
+          syncNavigationHeight();
         }
         break;
       }
@@ -2201,6 +2221,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // Ввод слушается на стадии карты в фазе перехвата: канва — её потомок, и
   // обработчики панорамы на ней просто не получают событий рисования.
   const inputTarget: EventTarget | null = stage ?? canvas;
+  bind(typeof window === 'undefined' ? null : window, 'resize', syncNavigationHeight);
   bind(panel, 'click', onPanelClick);
   for (const type of ['pointerover', 'pointerout', 'focusin', 'focusout']) bind(panel, type, onGraphHighlight);
   bind(panel, 'change', onPanelChange);
@@ -2239,6 +2260,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     exportJson(): string { return exportDoc(session); },
     requestMaterial(): string { return requestMaterial(session.doc); },
     destroy(): void {
+      navigationObserver?.disconnect();
+      panel?.style?.removeProperty?.('--shell-top');
+      stage?.style?.removeProperty?.('--admin-content-top');
       for (const item of listeners) item.target.removeEventListener(item.type, item.handler, item.capture);
       listeners.length = 0;
       stopOverlayLoop();
