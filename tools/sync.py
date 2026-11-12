@@ -33,6 +33,11 @@ UPSTREAM = DATA / "upstream"
 SOURCES = DATA / "sources.json"
 MANIFEST = UPSTREAM / "manifest.json"
 META = DATA / "meta.json"
+# Утверждённые поправки свойств: слой репозитория поверх листов Sheets.
+# sync.py такой файл не пишет и не должен — иначе принятые правки исчезнут
+# при следующей синхронизации. Защита проверяет это до любой записи в data/.
+PROPERTY_OVERLAY = "sector-property-overlay.json"
+PROPERTY_OVERLAY_FIELDS = ("name", "type", "faction", "description", "source_url")
 
 TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
@@ -462,6 +467,84 @@ def validate_strict_table(source_id, role, rows, fieldnames, map_size):
     return errors
 
 
+def _relative_to_data(path):
+    try:
+        return Path(path).resolve().relative_to(DATA.resolve()).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def check_preserved_files(paths, sources, data_dir=None):
+    """Файлы, которые sync не пишет, не должны попасть в цели источников.
+
+    Проверяет два случая: явная цель источника указывает на защищённый файл
+    (тогда первая же запись перезапишет утверждённые правки) и защищённый
+    файл уже объявлен целью. Возвращает список проблем; пустой список —
+    записывать безопасно. Проверка не заменяет резервную копию и не
+    подтверждает содержимое слоя.
+    """
+    base = Path(data_dir) if data_dir is not None else DATA
+    protected = {name: Path(name) for name in paths}
+    problems = []
+    for name in protected:
+        if not name:
+            problems.append("пустое имя защищённого файла")
+    for src in sources:
+        if not isinstance(src, dict):
+            problems.append("источник без объекта конфигурации")
+            continue
+        target = src.get("target")
+        if target is None:
+            continue
+        if not isinstance(target, str) or not target.strip():
+            problems.append(f"источник {src.get('id', '?')}: пустая цель")
+            continue
+        resolved = Path(target)
+        if not resolved.is_absolute():
+            resolved = base.parent / target
+        relative = _relative_to_data(resolved)
+        if relative is None:
+            continue
+        for name in protected:
+            if relative == name or relative.endswith("/" + name):
+                problems.append(
+                    f"источник {src.get('id', '?')} пишет в защищённый файл data/{relative}"
+                )
+    return problems
+
+
+def property_overlay_problems(overlay_path, sources, data_dir=None):
+    """Проверка защиты слоя поправок перед запуском sync."""
+    return check_preserved_files([PROPERTY_OVERLAY], sources, data_dir=data_dir)
+
+
+def read_property_overlay(overlay_path):
+    """Читает слой только для отчёта; возвращает число поправок или None.
+
+    Ошибка чтения не скрывается: sync сообщает её, но не переписывает файл.
+    """
+    path = Path(overlay_path)
+    if not path.exists():
+        return 0
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict) or document.get("version") != 1:
+        return None
+    changes = document.get("changes")
+    if not isinstance(changes, list):
+        return None
+    for item in changes:
+        if not isinstance(item, dict):
+            return None
+        if item.get("dataset") not in ("systems", "places"):
+            return None
+        if item.get("field") not in PROPERTY_OVERLAY_FIELDS:
+            return None
+    return len(changes)
+
+
 def prepare_url_source(src, manifest, strict=False, map_size=None):
     """Скачать и нормализовать URL-источник, ничего не записывая в data/."""
 
@@ -673,6 +756,22 @@ def main(argv=None):
     sources = sources_cfg.get("sources", [])
     if not sources:
         fail("no sources configured in data/sources.json")
+
+    overlay_problems = property_overlay_problems(DATA / PROPERTY_OVERLAY, sources)
+    if overlay_problems:
+        fail(
+            "sync не запускается: утверждённый слой поправок защищён от записи.\n- "
+            + "\n- ".join(overlay_problems)
+        )
+    overlay_count = read_property_overlay(DATA / PROPERTY_OVERLAY)
+    if overlay_count is None:
+        print(
+            f"WARNING: data/{PROPERTY_OVERLAY} не читается как слой v1; "
+            "sync его не изменяет, но и не подтверждает содержимое",
+            file=sys.stderr,
+        )
+    else:
+        print(f"== слой поправок: {overlay_count} записей, sync его не изменяет")
 
     UPSTREAM.mkdir(parents=True, exist_ok=True)
     manifest = load_json(MANIFEST, {"sources": {}})
