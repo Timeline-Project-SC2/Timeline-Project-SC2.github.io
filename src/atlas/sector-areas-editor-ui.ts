@@ -100,6 +100,9 @@ import type { PropertySession } from './sector-property-session.ts';
 import { preparePropertyDraft, restorePropertyDraft } from './sector-property-draft.ts';
 import { preparePropertyIssuePreview } from './sector-property-issue-preview.ts';
 import type { PropertyIssuePreview } from './sector-property-issue-preview.ts';
+import { newRequestId, preparePropertyPacket } from './sector-property-packet.ts';
+import { SUBMIT_MESSAGES, readGatewayUrl, submitPropertyPacket } from './sector-property-submit.ts';
+import type { SubmitOutcome } from './sector-property-submit.ts';
 import type { PropertyField } from './sector-property-overlay.ts';
 import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule, isTextEntryTarget } from './pointer-rules.ts';
 import type { AtlasKernel } from './config.ts';
@@ -599,6 +602,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   let pointIndex = 0;
   let pointNotice: string | null = null;
   let pointReview: { preview: PropertyIssuePreview; acknowledged: boolean; confirmed: boolean } | null = null;
+  /** Заявка, подготовленная к отправке: ID попытки фиксируется до запроса. */
+  let pointSubmission: { requestId: string; title: string; body: string; snapshot: string; fromPreview: boolean } | null = null;
+  let pointSubmitState: 'idle' | 'sending' = 'idle';
+  let pointSubmitOutcome: SubmitOutcome | null = null;
   /* Фильтр отображаемых рёбер графа модулей: состояние интерфейса, не документа. */
   let relationFilter: RelationFilter = 'all';
   /* Предпросмотр «было → стало»: сравнение с документом на момент открытия. */
@@ -1097,9 +1104,62 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     return preparePropertyDraft(current, pointFactions());
   }
   function setPointSession(next: PropertySession): void {
-    if (pointSession !== next) pointReview = null;
+    if (pointSession !== next) {
+      pointReview = null;
+      // Любая правка делает подготовленную заявку недействительной.
+      if (pointSubmitState !== 'sending') {
+        pointSubmission = null;
+        pointSubmitOutcome = null;
+      }
+    }
     pointSession = next;
   }
+  /**
+   * Отправка заявки в шлюз. Заявка собирается заново из текущей сессии; если
+   * содержимое отличается от подтверждённого предпросмотра, отправка
+   * отменяется. ID попытки сохраняется до запроса, поэтому повтор после
+   * неизвестного результата идёт с тем же ID и не создаёт дубль.
+   */
+  async function submitPointRequest(): Promise<void> {
+    if (pointSession === null || pointSubmitState === 'sending') return;
+    pointSubmitState = 'sending';
+    pointSubmitOutcome = null;
+    pointNotice = null;
+    updatePointSummary();
+    try {
+      const requestId = pointSubmission?.requestId ?? newRequestId(Date.now(), (count = 32) => crypto.getRandomValues(new Uint8Array(count)));
+      const review = await preparePropertyPacket(pointSession, pointFactions(), requestId);
+      if (review === null || review.status !== 'ready') {
+        pointNotice = review?.errors[0] ?? 'Заявка не готова: проверьте правки.';
+        pointSubmission = null;
+        return;
+      }
+      // Неизменность содержимого между подготовкой и отправкой: подпись та же.
+      if (pointSubmission !== null && pointSubmission.snapshot !== review.draftSnapshot) {
+        pointNotice = 'Содержимое изменилось во время подготовки: проверьте предпросмотр заново.';
+        pointSubmission = null;
+        return;
+      }
+      pointSubmission = { requestId, title: review.title, body: review.body, snapshot: review.draftSnapshot, fromPreview: true };
+      const gatewayUrl = readGatewayUrl(document.querySelector('meta[name="issue-gateway"]'));
+      const outcome = await submitPropertyPacket({ title: review.title, body: review.body, requestId }, {
+        gatewayUrl,
+        origin: location.origin,
+      });
+      pointSubmitOutcome = outcome;
+      pointNotice = SUBMIT_MESSAGES[outcome.status];
+      // Успех создания не применяет правку: сессия остаётся как есть. ID
+      // сохраняется намеренно — повторный клик вернёт ту же Issue, а не создаст новую.
+      void outcome;
+    } catch {
+      pointSubmitOutcome = { status: 'unavailable' };
+      pointNotice = SUBMIT_MESSAGES.unavailable;
+    } finally {
+      pointSubmitState = 'idle';
+      updatePointSummary();
+    }
+  }
+
   function pointReviewHtml(): string {
     if (pointReview === null) return '';
     const { preview, acknowledged, confirmed } = pointReview;
@@ -1109,7 +1169,19 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '<label class="admin-editor-property-field"><span>Содержимое</span><pre class="admin-editor-point-preview">' + escapeHtml(preview.body) + '</pre></label>'
       + '<label><input type="checkbox" data-action="point-review-ack"' + (acknowledged ? ' checked' : '') + '> Я проверил содержимое и понимаю, что будущая Issue будет публичной.</label>'
       + '<div><button type="button" data-action="point-review-confirm"' + (acknowledged ? '' : ' disabled') + '>Подтвердить просмотр</button></div>'
-      + (confirmed ? '<p role="status">Просмотр подтверждён локально. Заявка не отправлена; перед настоящей отправкой потребуется новое подтверждение.</p>' : '')
+      + (confirmed ? '<p role="status">Просмотр подтверждён локально. Отправка — отдельное действие ниже.</p>' : '')
+      + '<h3>Отправка</h3>'
+      + '<p>Отправка создаёт публичную заявку в GitHub от вашего имени. Она <strong>не</strong> применяет правку и не обновляет сайт: это отдельные шаги, и их результат проверяется отдельно.</p>'
+      + (pointSubmission === null
+        ? ''
+        : '<p>Идентификатор заявки: <code>' + escapeHtml(pointSubmission.requestId) + '</code> — повтор с ним же не создаёт вторую Issue; новая правка создаёт новый идентификатор.</p>')
+      + '<div><button type="button" data-action="point-submit"'
+      + (confirmed && pointSubmitState !== 'sending' ? '' : ' disabled') + '>'
+      + (pointSubmitState === 'sending' ? 'Отправка…' : 'Отправить заявку в GitHub') + '</button></div>'
+      + (pointSubmitOutcome === null ? '' : '<p role="status">' + escapeHtml(SUBMIT_MESSAGES[pointSubmitOutcome.status])
+        + (pointSubmitOutcome.status === 'created' || pointSubmitOutcome.status === 'existing'
+          ? ' <a href="' + escapeHtml(pointSubmitOutcome.url) + '" rel="noopener noreferrer" target="_blank">Issue #' + pointSubmitOutcome.number + '</a>'
+          : '') + '</p>')
       + '</section>';
   }
   function pointChangeSummaryHtml(current: PropertySession): string {
@@ -1136,6 +1208,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (previewButton !== null) previewButton.disabled = pointDraft(pointSession).draft === null;
     const review = panel.querySelector('[data-point-review]');
     if (review !== null) review.innerHTML = pointReviewHtml();
+    const submitButton = panel.querySelector<HTMLButtonElement>('[data-action="point-submit"]');
+    if (submitButton !== null) {
+      submitButton.disabled = pointReview === null || !pointReview.confirmed || pointSubmitState === 'sending';
+      submitButton.textContent = pointSubmitState === 'sending' ? 'Отправка…' : 'Отправить заявку в GitHub';
+    }
   }
 
   function pointPropertiesHtml(): string {
@@ -1163,7 +1240,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '<div data-point-review>' + pointReviewHtml() + '</div>'
       + '<button type="button" data-action="point-export"' + (pointDraft(pointSession).draft ? '' : ' disabled') + '>Скачать локальный черновик</button>'
       + '<label class="admin-editor-property-field"><span>Загрузить локальный черновик</span><input type="file" accept="application/json,.json" data-action="point-import"></label>'
-      + '<p>' + (pointSession.contentRevision === null ? 'Отпечаток входов не подтверждён.' : 'Отпечаток входов сверён; он не подтверждает публикацию или права.') + ' Файл не является готовой заявкой: проверка базы и отправка ещё не подключены. Не включайте секреты или непубличные данные.</p></div>';
+      + '<p>' + (pointSession.contentRevision === null ? 'Отпечаток входов не подтверждён.' : 'Отпечаток входов сверён; он не подтверждает публикацию или права.') + ' Отправка идёт через шлюз после проверки содержимого; создание Issue не применяет правку и не публикует её. Не включайте секреты или непубличные данные.</p></div>';
   }
 
   function modulesHtml(): string {
@@ -2069,10 +2146,16 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         break;
       }
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
+      case 'point-submit': { void submitPointRequest(); break; }
       case 'point-preview': {
         if (pointSession !== null) {
           const preview = preparePropertyIssuePreview(pointSession, pointFactions());
-          if (preview !== null) pointReview = { preview, acknowledged: false, confirmed: false };
+          if (preview !== null) {
+            pointReview = { preview, acknowledged: false, confirmed: false };
+            pointSubmitOutcome = null;
+            // Тот же ID сохраняется: повтор после неизвестного результата не создаст дубль.
+            if (pointSubmission !== null && pointSubmission.snapshot !== preview.draftSnapshot) pointSubmission = null;
+          }
           updatePointSummary();
         }
         break;

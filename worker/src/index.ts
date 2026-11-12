@@ -1,8 +1,20 @@
-/* HTTP-слой issue-шлюза: вход в GitHub для будущих заявок.
+/* HTTP-слой issue-шлюза: вход в GitHub и отправка заявки на свойства точек.
  *
- * Здесь НЕТ создания Issue, применения правок и публикации — это следующие
- * этапы. GitHub code и access token не попадают в ответы, редиректы и логи:
+ * Здесь НЕТ применения правок и публикации — это следующий этап. GitHub code
+ * и access token не попадают ни в ответы, ни в редиректы, ни в логи:
  * callback возвращает чистый 302, ошибки — общие JSON-сообщения.
+ *
+ * Отправка (`POST /issues/submit`) принимает ровно каноническую заявку
+ * (`src/issue-gateway/property-issue-contract.ts`) и передаёт её в
+ * `createRequestIssue`: тот сверяет репозиторий по ID и не создаёт дубль.
+ * Успешный ответ означает только «Issue создана» — не применение правки,
+ * не проверку роли Owner и не обновление сайта.
+ *
+ * Cookie сессии `SameSite=None; Secure`: сайт (github.io) и Worker — разные
+ * сайты, иначе браузер не отправит cookie при cross-site запросе. Поэтому
+ * каждая изменяющая операция дополнительно требует точный `Origin` сайта
+ * (`SITE_ORIGIN`) и JSON-тело: такой запрос браузер выполняет только после
+ * preflight, а сторонний сайт preflight не получит.
  *
  * Обмен с Durable Object идёт по внутренней HTTP-шине (stub.fetch), а не
  * RPC-методами — см. oauth-state-do.ts, почему.
@@ -21,6 +33,8 @@ import type {
   OAuthStateStore,
   PendingOAuth,
 } from '../../src/issue-gateway/oauth-state.ts';
+import { PROPERTY_LIMITS, parsePropertyIssueBody } from '../../src/issue-gateway/property-issue-contract.ts';
+import { createRequestIssue } from '../../src/issue-gateway/github-issues.ts';
 import { OAuthState } from './oauth-state-do.ts';
 import type { OAuthStateStub, SessionRecord } from './oauth-state-do.ts';
 
@@ -34,7 +48,10 @@ interface WorkerEnv {
   readonly GITHUB_TOKEN_URL?: string;
   readonly GITHUB_USER_URL?: string;
   readonly GITHUB_SCOPES?: string;
-  readonly SITE_ORIGIN?: string;
+  /** Origin сайта: источник всплывающей навигации и разрешённый CORS-источник. */
+  readonly SITE_ORIGIN: string;
+  /** Заменяемый базовый адрес GitHub API (mock в тестах); в проде не задаётся. */
+  readonly GITHUB_API_BASE?: string;
   readonly FAIL_STORAGE?: string;
 }
 
@@ -42,6 +59,8 @@ const BINDING_COOKIE = 'issue_oauth_binding';
 const SESSION_COOKIE = 'issue_oauth_session';
 const BINDING_TTL_SECONDS = 300;
 const SESSION_TTL_SECONDS = 3600;
+const MAX_SUBMIT_BYTES = PROPERTY_LIMITS.body + 8192;
+const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
 function json(body: unknown, status: number, extraHeaders?: Record<string, string>): Response {
@@ -74,8 +93,68 @@ function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
-function cookieHeader(name: string, value: string, maxAgeSeconds: number, path: string): string {
-  return `${name}=${value}; Path=${path}; Max-Age=${maxAgeSeconds}; Secure; HttpOnly; SameSite=Lax`;
+/**
+ * `sameSite`:
+ * - `Lax` — для cookie привязки: она нужна только при переходе с github.com
+ *   на `/auth/callback` верхним уровнем;
+ * - `None` — для cookie сессии: сайт и Worker находятся на разных сайтах,
+ *   иначе браузер не приложит cookie к cross-site запросу отправки.
+ *   Компенсация — строгая проверка Origin и JSON-тело (см. `checkOrigin`).
+ */
+function cookieHeader(name: string, value: string, maxAgeSeconds: number, path: string, sameSite: 'Lax' | 'None'): string {
+  return `${name}=${value}; Path=${path}; Max-Age=${maxAgeSeconds}; Secure; HttpOnly; SameSite=${sameSite}`;
+}
+
+/** Нормализованный Origin сайта; сравнение точное, без подстановок. */
+function siteOrigin(env: WorkerEnv): string | null {
+  if (typeof env.SITE_ORIGIN !== 'string' || env.SITE_ORIGIN.length === 0) return null;
+  try {
+    const url = new URL(env.SITE_ORIGIN);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Проверка источника изменяющего запроса. Заголовок `Origin` присылает сам
+ * браузер; сторонний сайт не сможет выдать себя за наш, а без preflight
+ * JSON-запрос с `Origin` другого сайта не пройдёт. Отсутствие `Origin`
+ * отклоняется: браузерный cross-site запрос его всегда содержит.
+ */
+function checkOrigin(request: Request, env: WorkerEnv): boolean {
+  const expected = siteOrigin(env);
+  const origin = request.headers.get('origin');
+  if (expected === null || origin === null) return false;
+  return origin === expected;
+}
+
+/** Ответ на preflight: только точный Origin сайта, без wildcard. */
+function preflight(request: Request, env: WorkerEnv): Response {
+  if (!checkOrigin(request, env)) return json({ error: 'forbidden_origin' }, 403);
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': siteOrigin(env) ?? '',
+      'Access-Control-Allow-Methods': ALLOWED_METHODS,
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Max-Age': '600',
+      Vary: 'Origin',
+    },
+  });
+}
+
+/** Заголовки CORS для фактического ответа: только для разрешённого Origin. */
+function corsHeaders(request: Request, env: WorkerEnv): Record<string, string> {
+  const expected = siteOrigin(env);
+  if (expected === null || request.headers.get('origin') !== expected) return { Vary: 'Origin' };
+  return {
+    'Access-Control-Allow-Origin': expected,
+    'Access-Control-Allow-Credentials': 'true',
+    Vary: 'Origin',
+  };
 }
 
 const fetchTransport: (input: string, init: RequestInit) => Promise<Response> = (input, init) => fetch(input, init);
@@ -169,7 +248,7 @@ async function authStart(env: WorkerEnv): Promise<Response> {
     status: 302,
     headers: {
       Location: authorize.toString(),
-      'Set-Cookie': cookieHeader(BINDING_COOKIE, binding, BINDING_TTL_SECONDS, '/auth'),
+      'Set-Cookie': cookieHeader(BINDING_COOKIE, binding, BINDING_TTL_SECONDS, '/auth', 'Lax'),
     },
   });
 }
@@ -232,15 +311,17 @@ async function authCallback(request: Request, env: WorkerEnv, url: URL): Promise
   return new Response(null, {
     status: 302,
     headers: {
-      Location: env.SITE_ORIGIN ?? '/',
-      'Set-Cookie': cookieHeader(SESSION_COOKIE, sessionToken, ttlSeconds, '/'),
+      // Возврат в браузер только через настроенный Origin сайта.
+      Location: siteOrigin(env) ?? '/',
+      'Set-Cookie': cookieHeader(SESSION_COOKIE, sessionToken, ttlSeconds, '/', 'None'),
     },
   });
 }
 
-async function authStatus(request: Request, env: WorkerEnv): Promise<Response> {
+/** Действующая сессия по cookie: только хеш уходит в хранилище, токен не меняется. */
+async function readSession(request: Request, env: WorkerEnv): Promise<SessionRecord | null> {
   const token = readCookie(request, SESSION_COOKIE);
-  if (token === null) return json({ authenticated: false });
+  if (token === null) return null;
   const sessionHash = await sha256Hex(token);
   let response: Response;
   try {
@@ -249,12 +330,96 @@ async function authStatus(request: Request, env: WorkerEnv): Promise<Response> {
       query: { hash: sessionHash, now: String(Date.now()) },
     });
   } catch {
+    throw new Error('session unavailable');
+  }
+  if (!response.ok) throw new Error('session unavailable');
+  const payload = (await response.json()) as { session: SessionRecord | null };
+  return payload.session ?? null;
+}
+
+async function authStatus(request: Request, env: WorkerEnv): Promise<Response> {
+  const token = readCookie(request, SESSION_COOKIE);
+  if (token === null) return json({ authenticated: false });
+  let session: SessionRecord | null;
+  try {
+    session = await readSession(request, env);
+  } catch {
     return json({ error: 'unavailable' }, 503);
   }
-  if (!response.ok) return internalError(response);
-  const payload = (await response.json()) as { session: SessionRecord | null };
-  if (!payload.session) return json({ authenticated: false });
-  return json({ authenticated: true, login: payload.session.login, userId: payload.session.userId });
+  if (session === null) return json({ authenticated: false });
+  return json({ authenticated: true, login: session.login, userId: session.userId });
+}
+
+/**
+ * Тело запроса только как JSON-объект и только в пределах лимита: тип
+ * `application/json` обязателен, иначе это простая cross-site форма.
+ */
+async function readJsonObject(request: Request): Promise<Record<string, unknown> | null> {
+  const type = request.headers.get('content-type') ?? '';
+  if (!/^application\/json\s*(;|$)/i.test(type)) return null;
+  const length = request.headers.get('content-length');
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_SUBMIT_BYTES)) return null;
+  const text = await request.text();
+  if (text.length === 0 || text.length > MAX_SUBMIT_BYTES) return null;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Отправка заявки. Порядок важен: источник → сессия → формат → GitHub.
+ * Ответ содержит только статус и номер Issue; токен, code и тело запроса в
+ * ответ не попадают. `created` здесь — факт создания Issue, не применение.
+ */
+async function issuesSubmit(request: Request, env: WorkerEnv): Promise<Response> {
+  const cors = corsHeaders(request, env);
+  if (!checkOrigin(request, env)) return json({ error: 'forbidden_origin' }, 403, cors);
+  let session: SessionRecord | null;
+  try {
+    session = await readSession(request, env);
+  } catch {
+    return json({ error: 'unavailable' }, 503, cors);
+  }
+  if (session === null) return json({ error: 'unauthorized' }, 401, cors);
+  let body: Record<string, unknown> | null;
+  try {
+    body = await readJsonObject(request);
+  } catch {
+    return json({ error: 'invalid_request' }, 400, cors);
+  }
+  if (body === null) return json({ error: 'invalid_request' }, 400, cors);
+  const payload = body;
+  const keys = Object.keys(payload);
+  if (keys.length !== 3 || !['title', 'body', 'requestId'].every((key) => Object.hasOwn(payload, key))) {
+    return json({ error: 'invalid_request' }, 400, cors);
+  }
+  const title = payload.title;
+  const text = payload.body;
+  const requestId = payload.requestId;
+  if (typeof title !== 'string' || typeof text !== 'string' || typeof requestId !== 'string') {
+    return json({ error: 'invalid_request' }, 400, cors);
+  }
+  if (parsePropertyIssueBody(text).status !== 'accepted') return json({ error: 'invalid_request' }, 400, cors);
+
+  const result = await createRequestIssue(
+    session.accessToken,
+    env.GITHUB_API_BASE === undefined ? {} : { apiBase: env.GITHUB_API_BASE },
+    { title, body: text, requestId },
+  );
+  if (result.status === 'created') {
+    return json({ status: 'created', number: result.issue.number, url: result.issue.htmlUrl }, 201, cors);
+  }
+  if (result.status === 'exists') {
+    // Повтор после неизвестного результата: заявка уже есть, второй не создаём.
+    return json({ status: 'existing', number: result.issue.number, url: result.issue.htmlUrl }, 200, cors);
+  }
+  if (result.status === 'rejected') return json({ error: 'provider_rejected' }, 401, cors);
+  if (result.status === 'invalid') return json({ error: 'invalid_request' }, 400, cors);
+  return json({ error: 'unavailable' }, 503, cors);
 }
 
 async function authLogout(request: Request, env: WorkerEnv): Promise<Response> {
@@ -268,7 +433,7 @@ async function authLogout(request: Request, env: WorkerEnv): Promise<Response> {
     }
   }
   return json({ ok: true }, 200, {
-    'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`,
+    'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=None`,
   });
 }
 
@@ -281,6 +446,8 @@ export default {
       if (url.pathname === '/auth/callback' && request.method === 'GET') return await authCallback(request, env, url);
       if (url.pathname === '/auth/status' && request.method === 'GET') return await authStatus(request, env);
       if (url.pathname === '/auth/logout' && request.method === 'POST') return await authLogout(request, env);
+      if (url.pathname === '/issues/submit' && request.method === 'OPTIONS') return preflight(request, env);
+      if (url.pathname === '/issues/submit' && request.method === 'POST') return await issuesSubmit(request, env);
       return json({ error: 'not_found' }, 404);
     } catch {
       return json({ error: 'unavailable' }, 503);

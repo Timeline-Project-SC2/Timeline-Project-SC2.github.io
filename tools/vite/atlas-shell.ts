@@ -1,6 +1,23 @@
 import { readFileSync } from 'node:fs';
 import { atlasVariants, type AtlasVariantName } from '../../src/atlas/atlas-variants.ts';
 
+/**
+ * Origin шлюза из переменной сборки: только абсолютный https без пути,
+ * query и credentials. Всё остальное — «выключено», без warning-подстановок.
+ */
+export function gatewayOrigin(value: string | undefined): string | null {
+  const raw = value?.trim() ?? '';
+  if (raw === '') return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    if (url.pathname !== '/' && url.pathname !== '') return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
 /** Заполняет общий шаблон только для HTML с явным маркером варианта. */
 export function renderAtlasVariant(html: string, atlasTemplatePath: string): string {
   const match = /<!--\s*atlas-variant:\s*(sector|minimal|admin-edit)\s*-->/.exec(html);
@@ -77,6 +94,13 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
   };
 
   let rendered = readFileSync(atlasTemplatePath, 'utf8');
+  // Адрес шлюза задаётся только сборкой: пустое значение означает «отправка
+  // выключена». Значение не превращается в HTML-атрибут без проверки.
+  const gateway = gatewayOrigin(process.env.ATLAS_ISSUE_GATEWAY_URL);
+  rendered = rendered.replace(
+    /<meta name="issue-gateway" content="[^"]*">/,
+    `<meta name="issue-gateway" content="${gateway ?? ''}">`,
+  );
   for (const [key, value] of Object.entries(replacements)) {
     rendered = rendered.split(`@@${key}@@`).join(value);
   }
