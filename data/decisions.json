@@ -70,5 +70,14 @@
     "status": "active",
     "supersedes": null,
     "sha": "0612994d281a167248f2c4f454a7116495ba3475"
+  },
+  {
+    "id": "property-apply-idempotency",
+    "date": "2026-11-12",
+    "scope": "применение заявок на свойства",
+    "decision": "Заявка применяется только на совпадающей доверенной базе: конфликт значения в источнике или в слое не перезаписывается, повтор идемпотентен по ключу issue:<repoId>:<issueNumber>:<requestId>, слой расширяется с сохранением прежних поправок.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "d6dce6a"
   }
 ]
