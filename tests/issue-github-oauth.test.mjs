@@ -14,7 +14,7 @@ test('обмен отправляет тестовые данные только
   const result = await exchangeGithubCode(config, accepted, 'фиктивный-код', fetcher);
   assert.deepEqual(result, { status: 'accepted', accessToken: 'фиктивный-токен', expiresIn: 28800 });
   assert.equal(request.url, 'https://github.com/login/oauth/access_token');
-  assert.equal(request.init.redirect, 'error');
+  assert.equal(request.init.redirect, 'manual');
   assert.equal(request.init.method, 'POST');
   const body = new URLSearchParams(request.init.body);
   assert.equal(body.get('code_verifier'), accepted.verifier);
@@ -52,7 +52,7 @@ test('идентификация запрашивает пользователя
   const result = await identifyGithubUser('фиктивный-токен', async (url, init) => {
     assert.equal(url, 'https://api.github.com/user');
     assert.equal(init.headers.Authorization, 'Bearer фиктивный-токен');
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.redirect, 'manual');
     return Response.json({ id: 42, login: 'Example-User', type: 'User', extra: 'игнорируется' });
   });
   assert.deepEqual(result, { status: 'identified', user: { id: 42, login: 'Example-User' } });
@@ -64,4 +64,39 @@ test('неизвестная личность, отказ API и сбой не �
   assert.deepEqual(await identifyGithubUser('токен', async () => Response.json({ id: 42, login: 'Example', type: 'Bot' })), { status: 'rejected' });
   assert.deepEqual(await identifyGithubUser('токен', async () => new Response('', { status: 401 })), { status: 'rejected' });
   assert.deepEqual(await identifyGithubUser('токен', async () => new Response('', { status: 429 })), { status: 'unavailable' });
+});
+
+test('endpoint можно заменить mock-сервером: https любой host или http только loopback', async () => {
+  const mockToken = 'http://127.0.0.1:4177/login/oauth/access_token';
+  let request;
+  const fetcher = async (url, init) => { request = { url, init }; return Response.json({ access_token: 'токен-mock', token_type: 'bearer' }); };
+  const result = await exchangeGithubCode({ ...config, tokenUrl: mockToken }, accepted, 'код', fetcher);
+  assert.deepEqual(result, { status: 'accepted', accessToken: 'токен-mock', expiresIn: null });
+  assert.equal(request.url, mockToken);
+  // Идентификация с mock-user.
+  const userResult = await identifyGithubUser('токен-mock', async (url) => {
+    assert.equal(url, 'http://127.0.0.1:4177/user');
+    return Response.json({ id: 7, login: 'mock-user', type: 'User' });
+  }, 'http://127.0.0.1:4177/user');
+  assert.deepEqual(userResult, { status: 'identified', user: { id: 7, login: 'mock-user' } });
+});
+
+test('редирект эндпоинта (3xx) — unavailable, а не rejected и не парсинг', async () => {
+  const redirecting = async () => new Response(null, { status: 302, headers: { location: 'https://example.com/elsewhere' } });
+  assert.deepEqual(await exchangeGithubCode(config, accepted, 'код', redirecting), { status: 'unavailable' });
+  assert.deepEqual(await identifyGithubUser('токен', redirecting), { status: 'unavailable' });
+});
+
+test('некорректные endpoint отклоняются до сети', async () => {
+  let calls = 0;
+  const fetcher = async () => { calls++; return Response.json({}); };
+  for (const tokenUrl of [
+    'http://github.evil.example/token',
+    'https://github.com/token?x=1',
+    'https://user:pass@example.com/token',
+    'ftp://127.0.0.1/token',
+    'http://[::1]/token',
+  ]) assert.deepEqual(await exchangeGithubCode({ ...config, tokenUrl }, accepted, 'код', fetcher), { status: 'invalid' });
+  assert.deepEqual(await identifyGithubUser('токен', fetcher, 'http://evil.example/user'), { status: 'invalid' });
+  assert.equal(calls, 0);
 });

@@ -1,0 +1,22 @@
+{
+  "name": "timeline-issue-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "durable_objects": {
+    "bindings": [{ "name": "OAUTH_STATE", "class_name": "OAuthState" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["OAuthState"] }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "vars": {
+    "SITE_ORIGIN": "https://timeline-project-sc2.github.io"
+  },
+  // Остальные переменные задаются в Cloudflare, а не в этом файле:
+  //   не-секреты (GITHUB_CLIENT_ID, GITHUB_CALLBACK_URL) — в разделе vars
+  //   через dashboard/CLI; секреты никогда не коммитить:
+  //   wrangler secret put GITHUB_CLIENT_SECRET
+  // Развёртывание только после отдельного подтверждения владельца.
+}
