@@ -81,7 +81,7 @@ async function loadDataLoader() {
         ok: true,
         status: 200,
         text: async () => text,
-        json: async () => (target.includes('meta.json') ? {} : []),
+        json: async () => target.includes('sector-property-overlay.json') ? { version: 1, changes: [] } : (target.includes('meta.json') ? {} : []),
       };
     };
     const loader = require('../src/atlas/data-loader.ts');

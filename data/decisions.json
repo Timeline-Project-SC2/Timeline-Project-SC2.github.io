@@ -52,5 +52,14 @@
     "status": "active",
     "supersedes": null,
     "sha": "756cba0604e7dc6789edf80bcf435a017c58fc67"
+  },
+  {
+    "id": "sector-property-repository-overlay",
+    "date": "2026-11-12",
+    "scope": "свойства систем и мест",
+    "decision": "Утверждённые правки пяти полей систем и мест хранятся в версионированном слое репозитория поверх источников Sheets; интерактивная информация и поля описания границ не подменяются этим слоем.",
+    "status": "active",
+    "supersedes": null,
+    "sha": "3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3"
   }
 ]

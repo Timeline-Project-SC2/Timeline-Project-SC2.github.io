@@ -454,6 +454,7 @@ class FakeElement {
 
   contains() { return false; }
   focus() {}
+  remove() {}
   addEventListener() {}
   removeEventListener() {}
   querySelector() { return null; }
@@ -1252,4 +1253,79 @@ test('отступ оболочки следует фактической выс
   assert.equal(values.get('--shell-top'), '70px', 'сворачивание сразу пересчитывает отступ');
   api.destroy();
   assert.equal(values.has('--shell-top'), false);
+});
+
+test('локальные свойства точек используют снимок, показывают правку и отдельные undo/redo', () => {
+  const panel = fakePanel();
+  const kernel = fakeKernelWithFactions(emptySectorAreasDoc());
+  kernel.state.activeSystemId = '1';
+  kernel.state.activePlanetId = null;
+  const field = (raw, effective) => ({ raw, effective });
+  kernel.data.propertySnapshots = () => [{ dataset: 'systems', recordId: '1', fields: {
+    name: field('Корхал', 'Корхал'), type: field('capital', 'capital'),
+    faction: field('Доминион', 'Доминион'), description: field('старое', 'текущее'), source_url: field('', ''),
+  } }];
+  const api = createSectorAreasEditorUi({ kernel, panel, canvas: null, stage: null, storage: null });
+  api.setScreen('point-properties');
+  assert.match(blockHtml(panel, 'modules'), /Корхал/);
+  assert.match(blockHtml(panel, 'modules'), /правки не отправлены и не опубликованы/);
+  const control = new FakeElement({ 'data-action': 'point-field', 'data-point-field': 'description', value: '<новое>' });
+  panel.handlers.get('change')({ target: control });
+  assert.match(panel.blocks.get('[data-point-summary]').innerHTML, /&lt;новое&gt;/);
+  assert.equal(api.session().past.length, 0, 'история областей не изменяется');
+  clickPanel(panel, 'point-undo');
+  assert.match(blockHtml(panel, 'modules'), /текущее/);
+  assert.match(blockHtml(panel, 'modules'), /Изменений: 0/);
+  clickPanel(panel, 'point-redo');
+  assert.match(blockHtml(panel, 'modules'), /&lt;новое&gt;/);
+  assert.match(blockHtml(panel, 'modules'), /Изменений: 1/);
+  api.destroy();
+});
+
+test('проверка локальных свойств блокирует недопустимую ссылку и разрешает локальную выгрузку после исправления', () => {
+  const panel = fakePanel();
+  const kernel = fakeKernelWithFactions(emptySectorAreasDoc());
+  const f = (value) => ({ raw: value, effective: value });
+  kernel.data.propertySnapshots = () => [{ dataset: 'systems', recordId: '1', fields: {
+    name: f('Корхал'), type: f('capital'), faction: f(''), description: f(''), source_url: f(''),
+  } }];
+  const api = createSectorAreasEditorUi({ kernel, panel, canvas: null, stage: null, storage: null });
+  api.setScreen('point-properties');
+  const change = (value) => panel.handlers.get('change')({ target: new FakeElement({ 'data-action': 'point-field', 'data-point-field': 'source_url', value }) });
+  change('javascript:alert(1)');
+  assert.equal(panel.blocks.get('[data-action="point-export"]').disabled, true);
+  assert.match(panel.blocks.get('[data-point-summary]').innerHTML, /Ошибка/);
+  change('https://example.org');
+  assert.equal(panel.blocks.get('[data-action="point-export"]').disabled, false);
+  assert.doesNotMatch(panel.blocks.get('[data-point-summary]').innerHTML, /Ошибка/);
+  api.destroy();
+});
+
+
+test('подтверждение предпросмотра локально и сбрасывается при новой правке', () => {
+  const panel = fakePanel();
+  const kernel = fakeKernelWithFactions(emptySectorAreasDoc());
+  const f = (value) => ({ raw: value, effective: value });
+  kernel.data.propertySnapshots = () => [{ dataset: 'systems', recordId: '1', fields: {
+    name: f('Корхал'), type: f('capital'), faction: f(''), description: f('старое'), source_url: f(''),
+  } }];
+  const api = createSectorAreasEditorUi({ kernel, panel, canvas: null, stage: null, storage: null });
+  api.setScreen('point-properties');
+  const change = (value) => panel.handlers.get('change')({ target: new FakeElement({ 'data-action': 'point-field', 'data-point-field': 'description', value }) });
+  change('<описание>');
+  clickPanel(panel, 'point-preview');
+  const preview = panel.blocks.get('[data-point-review]');
+  assert.match(preview.innerHTML, /Предпросмотр — не отправлено/);
+  assert.match(preview.innerHTML, /&lt;описание&gt;/);
+  clickPanel(panel, 'point-review-confirm');
+  assert.doesNotMatch(preview.innerHTML, /Просмотр подтверждён локально/);
+  const checkbox = new FakeElement({ 'data-action': 'point-review-ack' });
+  checkbox.checked = true;
+  panel.handlers.get('change')({ target: checkbox });
+  clickPanel(panel, 'point-review-confirm');
+  assert.match(preview.innerHTML, /Просмотр подтверждён локально/);
+  assert.match(preview.innerHTML, /Заявка не отправлена/);
+  change('Другое');
+  assert.equal(preview.innerHTML, '', 'старое подтверждение не переносится на другую правку');
+  api.destroy();
 });

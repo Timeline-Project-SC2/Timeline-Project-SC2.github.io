@@ -30,6 +30,11 @@ import type {
   UnknownRecord,
 } from './config.ts';
 import { parseBounds } from './sector-bounds.ts';
+import { applyPropertyOverlay, parsePropertyOverlay } from './sector-property-overlay.ts';
+import type { PropertyOverlay, PropertyOverride } from './sector-property-overlay.ts';
+import type { PropertySnapshot, PropertySnapshotField } from './sector-property-session.ts';
+import { PROPERTY_INPUT_FILES, verifyPropertyBuildInputs } from './sector-property-input-contract.ts';
+import type { PropertyInputFile, PropertyInputBytes } from './sector-property-input-contract.ts';
 import { parseSectorAreas } from './sector-areas-contract.ts';
 import type { SectorAreasDoc } from './sector-areas-contract.ts';
 
@@ -84,10 +89,44 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
 
   /* ------------------------------------------------------------------ загрузка данных */
 
+  let propertyRevision: string | null = null;
+  let propertyLoadEpoch = 0;
+  let capturedInputs = new Map<PropertyInputFile, Promise<Uint8Array | null | undefined>>();
+
+  // Сохраняются байты того же HTTP-ответа, который реально читает загрузчик.
+  function capturePropertyInput(url: string, response: Response): void {
+    const file = url.split('?')[0]?.replace(/^\/data\//, '') as PropertyInputFile | undefined;
+    if (!file || !PROPERTY_INPUT_FILES.includes(file)) return;
+    const html = response.headers?.get('content-type')?.toLowerCase().includes('text/html') ?? false;
+    if (response.status === 404 || (response.ok && html && file.endsWith('.json') && file !== 'sector-property-overlay.json')) {
+      capturedInputs.set(file, Promise.resolve(null)); return;
+    }
+    if (!response.ok || typeof response.clone !== 'function') { capturedInputs.set(file, Promise.resolve(undefined)); return; }
+    capturedInputs.set(file, response.clone().arrayBuffer().then((value) => new Uint8Array(value)).catch(() => undefined));
+  }
+
+  async function checkPropertyInputs(suffix: string, epoch: number): Promise<void> {
+    try {
+      if (!globalThis.crypto?.subtle) return;
+      const result = await fetch(CONFIG.data.dir + 'sector-property-build-inputs.json' + suffix, { credentials: 'same-origin' });
+      if (!result.ok) return;
+      const manifest = await result.json() as unknown;
+      const pairs = await Promise.all(PROPERTY_INPUT_FILES.map(async (name) => [name, await capturedInputs.get(name)] as const));
+      if (pairs.some(([, value]) => value === undefined)) return;
+      const bytes = Object.fromEntries(pairs) as PropertyInputBytes;
+      const verified = await verifyPropertyBuildInputs(manifest, bytes, globalThis.crypto.subtle);
+      if (epoch === propertyLoadEpoch) propertyRevision = verified.contentRevision;
+    } catch (error) {
+      console.warn('Не удалось подтвердить отпечаток входов свойств:', error);
+    }
+  }
+
   function fetchJSON<T>(url: string, fallback: T): Promise<T> {
     return fetch(url, { credentials: 'same-origin' })
       .then(function (response) {
+        capturePropertyInput(url, response);
         if (!response.ok) throw new Error('HTTP ' + response.status);
+        if (response.headers?.get('content-type')?.toLowerCase().includes('text/html')) throw new Error('Ожидался JSON, получен HTML');
         return response.json() as Promise<T>;
       })
       .catch(function () { return fallback; });
@@ -124,49 +163,50 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
       });
   }
 
-  function splitCSVLine(line: string): string[] {
-    var result: string[] = [];
-    var cur = '';
-    var inQuotes = false;
-    for (var i = 0; i < line.length; i++) {
-      var c = line[i];
-      if (inQuotes) {
-        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-        else if (c === '"') { inQuotes = false; }
-        else { cur += c; }
-      } else {
-        if (c === '"') { inQuotes = true; }
-        else if (c === ',') { result.push(cur); cur = ''; }
-        else { cur += c; }
-      }
-    }
-    result.push(cur);
-    return result;
-  }
-
+  // RFC-подобный разбор: переносы внутри кавычек принадлежат ячейке.
+  // Значения остаются сырыми для сравнения базы поправок; нормализация — в sheetCell.
   function parseCSV(text: string): SheetRow[] {
-    var lines = String(text || '').split(/\r?\n/).filter(function (l) { return l.trim() !== ''; });
-    if (!lines.length) return [];
-    var headers = splitCSVLine(lines[0]!).map(function (h) { return h.trim(); });
-    var rows: SheetRow[] = [];
-    for (var i = 1; i < lines.length; i++) {
-      var cols = splitCSVLine(lines[i]!);
-      var obj: SheetRow = {};
-      headers.forEach(function (h, idx) { obj[h] = (cols[idx] || '').trim(); });
-      if (Object.keys(obj).every(function (k) { return obj[k] === ''; })) continue;
-      rows.push(obj);
+    const records: string[][] = [];
+    let record: string[] = [];
+    let cell = '';
+    let quoted = false;
+    const source = String(text || '').replace(/^\uFEFF/, '');
+    for (let i = 0; i < source.length; i++) {
+      const c = source[i]!;
+      if (quoted) {
+        if (c === '"' && source[i + 1] === '"') { cell += '"'; i++; }
+        else if (c === '"') quoted = false;
+        else cell += c;
+      } else if (c === '"' && cell.length === 0) quoted = true;
+      else if (c === ',') { record.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && source[i + 1] === '\n') i++;
+        record.push(cell); records.push(record); record = []; cell = '';
+      } else cell += c;
     }
-    return rows;
+    if (quoted) throw new Error('Незакрытая кавычка CSV');
+    if (cell || record.length) { record.push(cell); records.push(record); }
+    const headers = records.shift()?.map((header) => header.trim()) ?? [];
+    return records.filter((values) => values.some((value) => value.trim() !== '')).map((values) => {
+      const row: SheetRow = {};
+      headers.forEach((header, index) => { row[header] = values[index] ?? ''; });
+      return row;
+    });
   }
 
-  function fetchCSV(url: string): Promise<SheetRow[]> {
+  function fetchCSV(url: string, required = false): Promise<SheetRow[]> {
     return fetch(url, { credentials: 'same-origin' })
       .then(function (response) {
+        capturePropertyInput(url, response);
         if (!response.ok) throw new Error('HTTP ' + response.status);
+        if (response.headers?.get('content-type')?.toLowerCase().includes('text/html')) throw new Error('Ожидался CSV, получен HTML');
         return response.text();
       })
       .then(parseCSV)
-      .catch(function () { return []; });
+      .catch(function (error: unknown) {
+        if (required) throw new Error('Не удалось загрузить исходный CSV: ' + url, { cause: error });
+        return [];
+      });
   }
 
   // Google Sheets uses blank cells for omitted values. Accept legacy "none" as blank,
@@ -414,7 +454,94 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     return factionDetailsByName;
   }
 
+  let activePropertyChanges: readonly PropertyOverride[] = [];
+  let propertySources: { systems: SheetRow[]; places: SheetRow[] } = { systems: [], places: [] };
+
+  function fetchPropertyOverlay(url: string): Promise<PropertyOverlay> {
+    return fetch(url, { credentials: 'same-origin' }).then((response) => {
+      capturePropertyInput(url, response);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json() as Promise<unknown>;
+    }).then(parsePropertyOverlay).catch((error: unknown) => {
+      throw new Error('Слой свойств не загружен: ' + (error instanceof Error ? error.message : String(error)));
+    });
+  }
+
+  function preparePropertyChanges(overlay: PropertyOverlay, systems: SheetRow[], places: SheetRow[]): void {
+    propertySources = { systems, places };
+    const result = applyPropertyOverlay(overlay, { systems, places });
+    const blocked = new Set(result.problems.filter((problem) => problem.reason !== 'upstream_changed').map((problem) => problem.change));
+    // applyPropertyOverlay проверяет документ и создаёт копии записей; сопоставление по ключу.
+    const blockedKeys = new Set([...blocked].map((change) => JSON.stringify([change.dataset, change.recordId, change.field])));
+    activePropertyChanges = overlay.changes.filter((change) => !blockedKeys.has(JSON.stringify([change.dataset, change.recordId, change.field])));
+    result.problems.forEach((problem) => console.warn('Слой свойств: ' + problem.reason + ' (' + problem.change.dataset + ', ' + problem.change.recordId + ', ' + problem.change.field + ')'));
+  }
+
+  function applyPropertyChanges(systems: SystemRecord[], places: PlaceRecord[]): void {
+    const indices = {
+      systems: new Map<string, SystemRecord[]>(),
+      places: new Map<string, PlaceRecord[]>(),
+    };
+    systems.forEach((system) => indices.systems.set(String(system.id), [...(indices.systems.get(String(system.id)) ?? []), system]));
+    places.forEach((place) => indices.places.set(String(place.id), [...(indices.places.get(String(place.id)) ?? []), place]));
+    activePropertyChanges.forEach((change) => {
+      const matches = indices[change.dataset].get(change.recordId);
+      if (!matches || matches.length !== 1) {
+        console.warn('Слой свойств: объект отсутствует или неоднозначен в модели (' + change.dataset + ', ' + change.recordId + ')');
+        return;
+      }
+      const target = matches[0]!;
+      const value = sheetValue(change.value);
+      switch (change.field) {
+        case 'name': target.name = change.value; break;
+        case 'description': target.note = change.value; break;
+        case 'source_url': target.sourceUrl = value; break;
+        case 'faction': target.primaryFaction = value; target.factions = value ? [value] : []; break;
+        case 'type':
+          if (change.dataset === 'systems') (target as SystemRecord).systemType = normalizedSystemType(change.value);
+          else (target as PlaceRecord).placeTypes = [normalizedPlaceType(change.value)];
+          break;
+      }
+    });
+  }
+
+  /** Снимок доступен только для записей с однозначным ID в источнике и модели. */
+  function propertySnapshots(): PropertySnapshot[] {
+    const snapshots: PropertySnapshot[] = [];
+    for (const dataset of ['systems', 'places'] as const) {
+      const rows = propertySources[dataset];
+      const idField = dataset === 'systems' ? 'system_id' : 'ID';
+      const records = dataset === 'systems' ? state.systems : state.planets;
+      const rawCounts = new Map<string, number>();
+      const modelCounts = new Map<string, number>();
+      rows.forEach((row) => { const id = row[idField]; if (id) rawCounts.set(id, (rawCounts.get(id) ?? 0) + 1); });
+      records.forEach((record) => { const id = String(record.id); modelCounts.set(id, (modelCounts.get(id) ?? 0) + 1); });
+      const byId = new Map(records.map((record) => [String(record.id), record]));
+      for (const row of rows) {
+        const id = row[idField];
+        if (!id || rawCounts.get(id) !== 1 || modelCounts.get(id) !== 1) continue;
+        const record = byId.get(id)!;
+        const property = (field: string, effective: string | undefined): PropertySnapshotField => ({
+          raw: Object.hasOwn(row, field) ? row[field]! : null,
+          effective: effective ?? '',
+        });
+        const type = dataset === 'systems' ? (record as SystemRecord).systemType : (record as PlaceRecord).placeTypes?.[0];
+        snapshots.push({ dataset, recordId: id, fields: {
+          name: property('name', record.name),
+          type: property('type', type),
+          faction: property('faction', record.primaryFaction),
+          description: property('description', record.note),
+          source_url: property('source_url', record.sourceUrl),
+        } });
+      }
+    }
+    return snapshots;
+  }
+
   function loadDataset(): Promise<AtlasDataset> {
+    propertyRevision = null;
+    const epoch = ++propertyLoadEpoch;
+    capturedInputs = new Map();
     const inline = window.__MAP_DATA__;
     if (inline && inline.systems) {
       const inlineBoundsPromise: Promise<SectorBounds | null> = inline.sectorBounds !== undefined
@@ -424,13 +551,15 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         ? Promise.resolve(inline.sectorAreas)
         : fetchSectorAreas(CONFIG.data.dir + CONFIG.data.areas);
       return Promise.all([
-        fetchCSV('/data/systems.csv'),
-        fetchCSV('/data/places.csv'),
+        fetchCSV('/data/systems.csv', true),
+        fetchCSV('/data/places.csv', true),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation),
         fetchCSV('/data/factions.csv'),
         inlineBoundsPromise,
-        inlineAreasPromise
-      ]).then(function ([systemRows, placeRows, generationRows, factionRows, sectorBounds, sectorAreas]) {
+        inlineAreasPromise,
+        fetchPropertyOverlay(CONFIG.data.dir + CONFIG.data.propertyOverlay)
+      ]).then(function ([systemRows, placeRows, generationRows, factionRows, sectorBounds, sectorAreas, propertyOverlay]) {
+        preparePropertyChanges(propertyOverlay, systemRows, placeRows);
         setFactionRows(factionRows);
         state.sectorBounds = sectorBounds;
         state.sectorAreas = sectorAreas;
@@ -465,11 +594,13 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         fetchJSON<MapLabel[]>(dir + CONFIG.data.labels + suffix, []),
         fetchSectorBounds(dir + CONFIG.data.bounds + suffix),
         fetchSectorAreas(dir + CONFIG.data.areas + suffix),
-        fetchCSV('/data/systems.csv' + suffix),
-        fetchCSV('/data/places.csv' + suffix),
+        fetchCSV('/data/systems.csv' + suffix, true),
+        fetchCSV('/data/places.csv' + suffix, true),
         fetchCSV(CONFIG.data.dir + CONFIG.data.generation + suffix),
-        fetchCSV('/data/factions.csv' + suffix)
-      ]).then(function ([systemsJson, planetsJson, overrides, labels, sectorBounds, sectorAreas, systemRows, placeRows, generationRows, factionRows]) {
+        fetchCSV('/data/factions.csv' + suffix),
+        fetchPropertyOverlay(dir + CONFIG.data.propertyOverlay + suffix)
+      ]).then(function ([systemsJson, planetsJson, overrides, labels, sectorBounds, sectorAreas, systemRows, placeRows, generationRows, factionRows, propertyOverlay]) {
+        preparePropertyChanges(propertyOverlay, systemRows, placeRows);
         setFactionRows(factionRows);
         state.sectorBounds = sectorBounds;
         state.sectorAreas = sectorAreas;
@@ -485,7 +616,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
         }
         systems = mergeSystemTypes(systems, systemRows);
         planets = mergePlanetGenerationRows(planets, generationRows);
-        return {
+        return checkPropertyInputs(suffix, epoch).then(() => ({
           meta: meta,
           systems: systems,
           planets: planets,
@@ -493,7 +624,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
           labels: labels,
           sectorBounds: sectorBounds,
           sectorAreas: sectorAreas,
-        };
+        }));
       });
     });
   }
@@ -618,6 +749,7 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     state.systems = (state.systemsRaw || []).map(function (system) {
       return attachWorlds(applyOverrides(system));
     });
+    applyPropertyChanges(state.systems, state.planets);
     state.systemsById = {};
     state.planetsById = {};
     state.planetByName = {};
@@ -798,6 +930,8 @@ export function createDataLoader(kernel: AtlasKernel): DataLoaderApi {
     return results.slice(0, CONFIG.maxSuggestions).map(function (item) { return item.entry; });
   }
   return {
+    propertySnapshots,
+    propertyContentRevision: () => propertyRevision,
     loadDataset,
     buildModel,
     mapSize,

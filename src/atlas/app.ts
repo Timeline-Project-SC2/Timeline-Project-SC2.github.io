@@ -788,6 +788,10 @@ function boot(): void {
         '<div class="data-error">Не удалось прочитать <code>/data/systems.json</code>. ' +
         'Откройте сайт через HTTP-сервер (не <code>file://</code>): например <code>python3 -m http.server 8080</code>.</div>');
     }
+  }).catch(function (error: unknown): void {
+    console.error('Не удалось загрузить данные карты:', error);
+    dismissTimelineLoader();
+    doc.body.insertAdjacentHTML('beforeend', '<div class="data-error" role="alert">Не удалось загрузить данные карты. Обновите страницу или обратитесь к администратору.</div>');
   });
 }
 
