@@ -510,7 +510,7 @@ export const SECTOR_MODULES: readonly SectorModule[] = Object.freeze([
     plane: 'spatial',
     status: 'view',
     source: 'src/atlas/sector-bounds.ts',
-    note: 'Исходные контуры из data/sector-bounds.json: сектор, гало, туманности. Редактор читает их и не перезаписывает: правка существующих границ не подключена.',
+    note: 'Исходные контуры из data/sector-bounds.json: сектор, гало, туманности. Карточка читает исходные данные; правка контуров доступна в разделе «Линии» с отдельной историей и выгрузкой JSON.',
     rows: (context) => {
       const bounds = context.bounds;
       if (bounds === null) return [row('Границы', 'данные не загружены')];
@@ -619,25 +619,25 @@ export const MODULE_RELATIONS: readonly ModuleRelation[] = Object.freeze([
     from: 'sector-areas-contract',
     to: 'sector-areas-geometry',
     kind: 'data',
-    note: 'Передаёт типы областей, колец и штрихов схемы v1 для геометрических расчётов.',
+    note: 'Даёт сведения о сохранённых контурах и штрихах для расчёта формы и площади.',
   }),
   Object.freeze({
     from: 'sector-areas-contract',
     to: 'sector-areas-editor',
     kind: 'data',
-    note: 'Задаёт схему документа v1, фабрики областей и разбор JSON в командах редактора.',
+    note: 'Определяет, какие данные области сохраняются и как редактор читает их из JSON.',
   }),
   Object.freeze({
     from: 'sector-areas-geometry',
     to: 'sector-areas-editor',
     kind: 'data',
-    note: 'Вычисляет центроиды для справочного адреса и проверяет геометрию контуров.',
+    note: 'Находит геометрический центр для справочного адреса и проверяет форму контуров.',
   }),
   Object.freeze({
     from: 'sector-areas-contract',
     to: 'sector-areas-cascade',
     kind: 'data',
-    note: 'Предоставляет иерархию parentId и состояния областей для каскада наследования.',
+    note: 'Хранит родительские связи и состояния, из которых рассчитывается наследование областей.',
   }),
   Object.freeze({
     from: 'sector-areas-geometry',
@@ -649,7 +649,7 @@ export const MODULE_RELATIONS: readonly ModuleRelation[] = Object.freeze([
     from: 'sector-areas-contract',
     to: 'sector-areas-gradient',
     kind: 'data',
-    note: 'Передаёт спецификацию градиента состояния и настройки по умолчанию.',
+    note: 'Хранит настройки перехода цвета и их начальные значения.',
   }),
   Object.freeze({
     from: 'sector-areas-cascade',
@@ -669,13 +669,13 @@ export const MODULE_RELATIONS: readonly ModuleRelation[] = Object.freeze([
     from: 'sector-bounds',
     to: 'sector-areas-scope',
     kind: 'spatial',
-    note: 'Строит области действия (scope) из контуров границ сектора и туманностей.',
+    note: 'Использует контуры сектора и туманностей как зоны для определения принадлежности областей.',
   }),
   Object.freeze({
     from: 'sector-areas-geometry',
     to: 'sector-areas-scope',
     kind: 'spatial',
-    note: 'Определяет центроид области для классификации положения относительно scope.',
+    note: 'Находит геометрический центр области, чтобы определить её положение относительно зоны.',
   }),
   Object.freeze({
     from: 'sector-areas-scope',
@@ -725,13 +725,13 @@ export const MODULE_RELATIONS: readonly ModuleRelation[] = Object.freeze([
     from: 'sector-areas-geometry',
     to: 'sector-areas-force',
     kind: 'order',
-    note: 'Проверяет попадание точки в контур мазка форс-закрашивания.',
+    note: 'Проверяет, попадает ли выбранная точка внутрь закрашиваемого контура.',
   }),
   Object.freeze({
     from: 'sector-areas-force',
     to: 'sector-areas-editor',
     kind: 'order',
-    note: 'Создаёт мазок перекрытия поверх состояний в команде форс-закрашивания.',
+    note: 'При действии «Закрасить» добавляет цвет поверх обычного оформления, не удаляя состояния области.',
   }),
   Object.freeze({
     from: 'sector-areas-cascade',
@@ -761,7 +761,7 @@ export const MODULE_RELATIONS: readonly ModuleRelation[] = Object.freeze([
     from: 'sector-areas-force',
     to: 'sector-areas-render',
     kind: 'order',
-    note: 'Перебивает цвет области мазками override и выносит их поверх обычных слоёв.',
+    note: 'Показывает ручную закраску поверх обычных цветов области.',
   }),
   Object.freeze({
     from: 'sector-areas-geometry',

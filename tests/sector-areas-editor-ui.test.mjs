@@ -797,7 +797,7 @@ test('навигация модулей предшествует доку и п�
   const api = createSectorAreasEditorUi({
     kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
   });
-  assert.equal(panel.getAttribute('data-active-screen'), 'module');
+  assert.equal(panel.getAttribute('data-active-screen'), 'dependencies');
   const modules = blockHtml(panel, 'modules');
   const properties = blockHtml(panel, 'properties');
   const changes = blockHtml(panel, 'changes');
@@ -806,8 +806,8 @@ test('навигация модулей предшествует доку и п�
   const stageAt = modules.indexOf('data-editor-stage');
   assert.ok(navAt > 0 && stageAt > navAt, 'постоянная навигация расположена слева от рабочей области');
   assert.match(modules, /class="admin-editor-shell"/);
-  assert.match(modules, /data-editor-screen="module"/);
-  assert.doesNotMatch(modules, /data-editor-graph/, 'граф не открыт одновременно с карточкой модуля');
+  assert.match(modules, /data-editor-screen="dependencies"/);
+  assert.match(modules, /data-editor-graph/, 'граф — начальный экран дока');
   assert.match(modules, /admin-editor-toolbox/, 'Toolbox доступен независимо от выбранного модуля');
   assert.match(properties, /data-action="select"/, 'свойства области формируются в опорном блоке properties');
   assert.match(changes, /data-action="download"/, 'журнал и выгрузка формируются в опорном блоке changes');
@@ -1143,4 +1143,52 @@ test('прозрачный контейнер оболочки не размыв
   assert.match(shell, /backdrop-filter: none;/);
   assert.match(shell, /-webkit-backdrop-filter: none;/);
   assert.match(shell, /text-shadow: none;/);
+});
+
+
+test('родитель области меняется командой, отменяется и не допускает цикл', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null });
+  clickPanel(panel, 'create-area');
+  clickPanel(panel, 'create-area');
+  const [a, b] = api.doc().areas;
+  clickPanel(panel, 'parent', { value: a.id });
+  assert.equal(api.doc().areas[1].parentId, a.id);
+  clickPanel(panel, 'undo');
+  assert.equal(api.doc().areas[1].parentId, null);
+  clickPanel(panel, 'redo');
+  assert.equal(api.doc().areas[1].parentId, a.id);
+  clickPanel(panel, 'select', { value: a.id });
+  const before = api.doc();
+  clickPanel(panel, 'parent', { value: b.id });
+  assert.equal(api.doc(), before, 'обратная связь создала бы цикл');
+  clickPanel(panel, 'parent', { value: 'missing' });
+  assert.equal(api.doc(), before);
+  clickPanel(panel, 'select', { value: b.id });
+  clickPanel(panel, 'parent', { value: '' });
+  assert.equal(api.doc().areas[1].parentId, null);
+  api.destroy();
+});
+
+test('каждый модуль имеет понятное описание, возврат к графу и технические подробности отдельно', async () => {
+  const { MODULE_HELP } = await import('../src/atlas/sector-areas-module-help.ts');
+  const { SECTOR_MODULES } = await import('../src/atlas/sector-areas-registry.ts');
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null });
+  const before = api.doc();
+  for (const mod of SECTOR_MODULES) {
+    assert.ok(MODULE_HELP[mod.id], mod.id);
+    for (const key of ['what', 'where', 'how', 'limits']) assert.ok(MODULE_HELP[mod.id][key].length > 20);
+    clickPanel(panel, 'module', { 'data-module': mod.id });
+    const html = blockHtml(panel, 'modules');
+    assert.match(html, /К графу модулей/);
+    assert.match(html, /Где и на что влияет/);
+    assert.match(html, /<details><summary>Технические подробности/);
+    assert.doesNotMatch(html, /data-editor-graph/);
+  }
+  clickPanel(panel, 'screen', { 'data-screen': 'dependencies' });
+  assert.equal(api.doc(), before);
+  assert.match(blockHtml(panel, 'modules'), /data-editor-graph/);
+  assert.match(blockHtml(panel, 'modules'), /admin-editor-category/);
+  api.destroy();
 });
