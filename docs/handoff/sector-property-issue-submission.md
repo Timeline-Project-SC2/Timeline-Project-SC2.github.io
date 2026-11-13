@@ -17,7 +17,7 @@ Issue, применение правки и публикация — `HOLD` до
 | Шлюз | `worker/src/index.ts` | `prepare` → просмотр → `submit`; `mine` только для автора |
 | Хранилище | `worker/src/oauth-state-do.ts` | сессии личности, резервы, квота открытых нитей, история версий |
 | Клиент | `src/atlas/sector-property-submit.ts` | черновик, точный серверный текст, список своих заявок |
-| Путь игрока | `src/atlas/sector-property-request-ui.ts` | «Предложить правку» в досье; «Мои заявки» — в панели редактора |
+| Путь игрока | `src/atlas/sector-property-request-ui.ts` | «Предложить правку» в досье; «Мои заявки» — в панели редактора и в окне формы |
 | Адрес шлюза | `templates/atlas-shell.html`, `tools/vite/atlas-shell.ts` | пусто = выключено; только https из `ATLAS_ISSUE_GATEWAY_URL` |
 
 ## Формат пакета v2

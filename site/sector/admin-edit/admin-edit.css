@@ -825,7 +825,15 @@
 
 /* ------------------------------------------------------------- окно справки */
 
-.admin-editor-heading-tools { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.admin-editor-heading-tools { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+/* Список заявок наследует токены рабочей оболочки; на узком доке текст переносится. */
+#adminEditorPanel .admin-editor-requests-open {
+  box-sizing: border-box; min-height: 44px; padding: 4px 10px;
+  border: 1px solid var(--shell-line); border-radius: 4px;
+  background: #183d38; color: var(--text); font: inherit; font-size: 15px;
+  line-height: 1.2; white-space: normal; cursor: pointer;
+}
+#adminEditorPanel .admin-editor-requests-open:hover { background: #244e47; color: var(--white); }
 
 .admin-editor-help-backdrop {
   position: fixed;

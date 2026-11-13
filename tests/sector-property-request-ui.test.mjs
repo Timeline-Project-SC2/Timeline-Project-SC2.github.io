@@ -4,6 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { renderAtlasVariant } from '../tools/vite/atlas-shell.ts';
 
 const require = createRequire(import.meta.url);
 const { requestStatusLabel, changeLine } = require('../src/atlas/sector-property-request-ui.ts');
@@ -41,13 +43,24 @@ test('«Мои заявки» стоят в панели редактора, а 
   assert.ok(panel.indexOf('admin-editor-heading-tools') < panel.indexOf('id="propertyRequestsOpen"'));
   assert.ok(panel.indexOf('id="propertyRequestsOpen"') < panel.indexOf('id="adminEditorHelp"'));
   assert.doesNotMatch(template, /id="propertyRequestsOpen"/);
+  const templatePath = fileURLToPath(new URL('../templates/atlas-shell.html', import.meta.url));
+  for (const route of ['site/sector/index.html', 'site/minimal/minimal.html']) {
+    assert.doesNotMatch(renderAtlasVariant(read(route), templatePath), /id="propertyRequestsOpen"/);
+  }
+  const admin = renderAtlasVariant(read('site/sector/admin-edit/index.html'), templatePath);
+  assert.equal(admin.match(/id="propertyRequestsOpen"/g)?.length, 1);
+  const renderedPanel = /<aside[^>]*id="adminEditorPanel"[^>]*>[\s\S]*?<\/aside>/.exec(admin)?.[0] ?? '';
+  assert.match(renderedPanel, /admin-editor-heading-tools[\s\S]*?id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>[\s\S]*?id="adminEditorHelp"/);
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(css, /#adminEditorPanel \.admin-editor-requests-open\s*\{[^}]*min-height: 44px/);
 });
 
 test('возврат OAuth ?requests=1 открывает список, а форма отправляет только подтверждённый серверный текст', () => {
   const ui = read('src/atlas/sector-property-request-ui.ts');
   const app = read('src/atlas/app.ts');
   assert.match(app, /createSectorPropertyRequestUi\(kernel\)/);
-  assert.match(ui, /get\('requests'\) === '1'/);
+  assert.match(ui, /getElementById\('propertyRequestsOpen'\)\?\.addEventListener\('click', openRequests\)/);
+  assert.match(ui, /if \(new URLSearchParams\(location\.search\)\.get\('requests'\) === '1'\) openRequests\(\)/);
   assert.match(ui, /preparePropertySubmission/);
   assert.match(ui, /submitPropertyPacket/);
   assert.match(ui, /edit\.confirmed && !busy/);
