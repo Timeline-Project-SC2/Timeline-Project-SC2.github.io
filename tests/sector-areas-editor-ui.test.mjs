@@ -1387,6 +1387,30 @@ test('панели из меню открываются слева рядом с
   assert.match(css, /--toolbox-width: 67px/);
 });
 
+test('шапка админки уплотняется ровно настолько, чтобы навигация шла одной строкой', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  const block = /@media \(min-width: 701px\) \{\s*#adminEditorPanel \.admin-editor-nav \{ gap: 6px; padding: 6px; \}[\s\S]*?\n\}/.exec(css)?.[0] ?? '';
+  assert.ok(block, 'плотные правила шапки объявлены отдельным блоком для десктопа');
+  assert.match(block, /#adminEditorPanel \.admin-editor-nav \{ gap: 6px; padding: 6px; \}/);
+  assert.match(block, /#adminEditorPanel \.admin-editor-categories \{ gap: 5px; \}/);
+  assert.match(block, /#adminEditorPanel \.admin-editor-category > summary \{ padding: 0 9px; gap: 5px; \}/);
+  // Кегль и минимальная высота органов не уменьшаются: читаемость и цели нажатия.
+  assert.doesNotMatch(block, /font-size|min-height|height:/);
+  // Телефонные правила не затрагиваются: уплотнение объявлено только для >=701px,
+  // внутри телефонного блока навигация не переопределяется.
+  const phoneStart = css.indexOf('@media (max-width: 700px)');
+  assert.ok(phoneStart >= 0, 'телефонный блок на месте');
+  const phoneBlock = css.slice(phoneStart, css.indexOf('\n@media ', phoneStart + 10));
+  assert.doesNotMatch(phoneBlock, /admin-editor-nav \{ gap: 6px/);
+  // Само плотное правило объявлено в блоке >=701px, который идёт после телефонного:
+  // значит на узком экране оно не применяется и каскад не перебивает мобильные правила.
+  const compactAt = css.indexOf('#adminEditorPanel .admin-editor-nav { gap: 6px; padding: 6px; }');
+  assert.ok(compactAt > phoneStart, 'плотное правило объявлено после телефонного блока');
+  // Ближайший media-заголовок над правилом — десктопный, а не телефонный.
+  const enclosing = css.lastIndexOf('@media ', compactAt);
+  assert.match(css.slice(enclosing, enclosing + 30), /@media \(min-width: 701px\)/);
+});
+
 test('декоративная надпись в админ-сеансе лежит ниже панелей, а публичный топбар не меняется', () => {
   const css = read('site/sector/admin-edit/admin-edit.css');
   assert.match(css, /\.admin-editor-authorized \.topbar::before\s*\{\s*visibility: hidden/);
@@ -1398,15 +1422,14 @@ test('декоративная надпись в админ-сеансе леж�
   assert.match(css, /#adminEditorPanel\s*\{[^}]*inset: var\(--shell-inset-top, 8px\) var\(--shell-right, 8px\) 8px var\(--shell-left, 8px\)/);
 });
 
-test('рёбра оболочки измеряются по внешним границам .topbar, а не по вложенным кнопке каталога и лого', () => {
+test('рёбра оболочки идут по внешним кромкам боковых блоков шапки, как на разметке владельца', () => {
   const panel = fakePanel();
   const values = new Map();
   panel.style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
-  // Реальная геометрия сектора: сцена шире и начинается выше шапки
-  // (.map-stage inset 68px 0 0 0), шапка врезана в viewport (topbar top/left/right 14px,
-  // высота 80px). Оболочка должна повторять внешние рёбра шапки, а не сцену.
+  // Реальная геометрия при 1533x737: шапка на всю ширину с полями 22px,
+  // блоки внутри начинаются и кончаются на 22/1511, сцена стартует с y=80.
   const stage = {
-    getBoundingClientRect: () => ({ left: 0, top: 68, right: 1000, bottom: 800 }),
+    getBoundingClientRect: () => ({ left: 0, top: 80, right: 1533, bottom: 737 }),
     style: { setProperty() {}, removeProperty() {} },
     addEventListener() {},
     removeEventListener() {},
@@ -1414,28 +1437,35 @@ test('рёбра оболочки измеряются по внешним гр�
     releasePointerCapture() {},
   };
   const previousDocument = globalThis.document;
-  let asked = [];
+  const previousGetComputedStyle = globalThis.getComputedStyle;
+  const asked = [];
+  globalThis.getComputedStyle = () => ({ paddingLeft: '22px', paddingRight: '22px', paddingBottom: '0px', borderBottomWidth: '0px' });
   globalThis.document = {
     activeElement: null,
     querySelector: (selector) => {
       asked.push(selector);
-      // Вложенные ориентиры прежнего замера нарочно отдают другие числа:
-      // если код снова возьмёт их, равенства ниже развалятся.
-      if (selector === '#toggleSidePanel') return { getBoundingClientRect: () => ({ left: 90, right: 190 }) };
-      if (selector === '.topbar-right .brand-emblem') return { getBoundingClientRect: () => ({ left: 700, right: 900 }) };
       if (selector === '.topbar') {
-        return { getBoundingClientRect: () => ({ left: 14, top: 14, right: 986, bottom: 94 }) };
+        return { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1533, bottom: 80 }) };
       }
+      if (selector === '.topbar-left') {
+        return { getBoundingClientRect: () => ({ left: 22, right: 567, width: 545 }) };
+      }
+      if (selector === '.topbar-right') {
+        return { getBoundingClientRect: () => ({ left: 1034.8, right: 1511, width: 476.2 }) };
+      }
+      // Вложенные ориентиры прежних замеров нарочно дают другие числа.
+      if (selector === '#toggleSidePanel') return { getBoundingClientRect: () => ({ left: 29, right: 73 }) };
+      if (selector === '.topbar-right .brand-emblem') return { getBoundingClientRect: () => ({ left: 1460, right: 1504 }) };
       return null;
     },
   };
   try {
     const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage, storage: null });
-    assert.ok(asked.includes('.topbar'), 'замер спрашивает внешнюю шапку');
-    assert.equal(values.get('--shell-left'), '14px', 'левый отступ шапки от сцены');
-    assert.equal(values.get('--shell-right'), '14px', 'правый отступ шапки от сцены');
-    // 94 - 68 + 8 = 34: зазор от низа шапки до верха сцены плюс общий зазор 8px.
-    assert.equal(values.get('--shell-inset-top'), '34px', 'верхний inset считается от внешнего низа шапки');
+    assert.ok(asked.includes('.topbar-left') && asked.includes('.topbar-right'), 'замер спрашивает крайние блоки шапки');
+    assert.equal(values.get('--shell-left'), '22px', 'левая вертикаль — внешняя кромка левого блока');
+    assert.equal(values.get('--shell-right'), '22px', 'правая вертикаль — внешняя кромка правого блока');
+    // 80 - 0 - 0 - 80 + 8 = 8: низ шапки ровно по верху сцены плюс общий зазор.
+    assert.equal(values.get('--shell-inset-top'), '8px', 'верхний inset считается от внутреннего низа шапки');
     api.destroy();
     assert.equal(values.has('--shell-left'), false);
     assert.equal(values.has('--shell-right'), false);
@@ -1443,6 +1473,8 @@ test('рёбра оболочки измеряются по внешним гр�
   } finally {
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
+    if (previousGetComputedStyle === undefined) delete globalThis.getComputedStyle;
+    else globalThis.getComputedStyle = previousGetComputedStyle;
   }
 });
 

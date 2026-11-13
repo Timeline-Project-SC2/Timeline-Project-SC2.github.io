@@ -1334,3 +1334,19 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
   #adminEditorPanel.is-collapsed .admin-editor-nav,
   #adminEditorPanel.is-collapsed .admin-editor-toolbox { display: none; }
 }
+
+/* ------------------------------------------------- плотная шапка под линии владельца
+   Владелец разметил вертикали выравнивания по внешним кромкам боковых блоков
+   `.topbar` (22px поля шапки), а не по её собственной кромке. Панели встают по
+   этим вертикалям, но навигации нужно на 23px больше, чем между ними, и она
+   переносилась на вторую строку. Здесь шапка уплотняется ровно на этот запас:
+   поля навигации, зазоры категорий и вертикальные отступы их кнопок. Кегль и
+   высота органов не меняются — читаемость и цели нажатия 44px сохраняются.
+   Телефонные правила ниже `640px` не затрагиваются. */
+@media (min-width: 701px) {
+  #adminEditorPanel .admin-editor-nav { gap: 6px; padding: 6px; }
+  #adminEditorPanel .admin-editor-categories { gap: 5px; }
+  #adminEditorPanel .admin-editor-category > summary { padding: 0 9px; gap: 5px; }
+  #adminEditorPanel .admin-editor-toggles { gap: 5px; }
+  #adminEditorPanel .admin-editor-navigation-toggle { padding: 6px 9px; }
+}

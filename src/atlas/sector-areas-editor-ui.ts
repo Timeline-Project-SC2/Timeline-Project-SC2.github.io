@@ -1569,7 +1569,17 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // Высота строки меняется при переносе категорий, масштабе и сворачивании.
   // Один измеренный отступ используется Toolbox, доком и карточкой системы.
   let navigationObserver: ResizeObserver | null = null;
-  /** Общие рёбра: внешние границы шапки, а не вложенные кнопка каталога и лого. */
+  /**
+   * Общие вертикали оболочки — внешние кромки крайних блоков шапки.
+   *
+   * Владелец разметил на скриншоте линии выравнивания: они проходят по внешним
+   * краям блока с кнопкой каталога слева и блока с эмблемой справа, а не по
+   * кромке самой `.topbar` (у той сверху ещё 22px собственного поля). Панели,
+   * полоса инструментов, док и рейл встают ровно по этим вертикалям.
+   *
+   * Если блок шапки спрятан или пуст (узкий экран), отступ считается от кромки
+   * `.topbar` плюс его собственные поля — цифра получается та же.
+   */
   function syncShellEdges(): void {
     if (panel === null || stage === null || stage === undefined || typeof stage.getBoundingClientRect !== 'function') return;
     if (typeof document === 'undefined') return;
@@ -1577,13 +1587,39 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (!topbar || typeof topbar.getBoundingClientRect !== 'function') return;
     const stageRect = stage.getBoundingClientRect();
     const headerRect = topbar.getBoundingClientRect();
-    const left = Math.max(8, Math.round(headerRect.left - stageRect.left));
-    const right = Math.max(8, Math.round(stageRect.right - headerRect.right));
-    // Верхний inset считается от верха сцены, как и боковые рёбра: панель
-    // позиционируется внутри `.map-stage`, поэтому зазор задаётся в её
-    // координатах. Шапка выступает над сценой на внешний отступ, и на телефоне
-    // (полоса 68px, сцена тоже с 68px) формула даёт те же 8px.
-    const top = Math.max(8, Math.round(headerRect.bottom - stageRect.top + 8));
+    const headerStyle = typeof getComputedStyle === 'function' ? getComputedStyle(topbar) : null;
+    const pad = (value: string | undefined): number => {
+      const parsed = Number.parseFloat(value ?? '');
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const padLeft = pad(headerStyle?.paddingLeft);
+    const padRight = pad(headerStyle?.paddingRight);
+    const padBottom = pad(headerStyle?.paddingBottom);
+    const borderBottom = pad(headerStyle?.borderBottomWidth);
+    const leftBlock = document.querySelector<HTMLElement>('.topbar-left');
+    const rightBlock = document.querySelector<HTMLElement>('.topbar-right');
+    const leftBlockRect = leftBlock !== null && typeof leftBlock.getBoundingClientRect === 'function'
+      ? leftBlock.getBoundingClientRect()
+      : null;
+    const rightBlockRect = rightBlock !== null && typeof rightBlock.getBoundingClientRect === 'function'
+      ? rightBlock.getBoundingClientRect()
+      : null;
+    const leftAnchor = leftBlockRect !== null && leftBlockRect.width > 0
+      ? leftBlockRect.left
+      : headerRect.left + padLeft;
+    const rightAnchor = rightBlockRect !== null && rightBlockRect.width > 0
+      ? rightBlockRect.right
+      : headerRect.right - padRight;
+    const left = Math.max(8, Math.round(leftAnchor - stageRect.left));
+    const right = Math.max(8, Math.round(stageRect.right - rightAnchor));
+    // Панель позиционируется внутри `.map-stage`, поэтому зазор считается в её
+    // координатах: от внутреннего низа шапки (без нижнего поля и рамки) плюс
+    // общий зазор 8px. На телефоне полоса шапки и сцена начинаются с одного
+    // 68px, и формула даёт те же 8px.
+    const top = Math.max(
+      8,
+      Math.round(headerRect.bottom - padBottom - borderBottom - stageRect.top + 8),
+    );
     panel.style?.setProperty?.('--shell-left', `${left}px`);
     panel.style?.setProperty?.('--shell-right', `${right}px`);
     panel.style?.setProperty?.('--shell-inset-top', `${top}px`);
