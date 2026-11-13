@@ -30,27 +30,27 @@ test('кнопка «Предложить правку» есть в досье 
   assert.match(dossier, /kernel\.propertyRequest\?\.open\('systems', state\.activeSystemId\)/);
 });
 
-test('«Мои заявки» стоят в панели редактора, а не в публичной шапке сектора и минимального скина', () => {
+test('«Мои заявки» стоят в верхнем тулбаре редактора после «Модулей по категориям», а не в шапке сектора или заголовке дока', () => {
   const variants = read('src/atlas/atlas-variants.ts');
   const template = read('templates/atlas-shell.html');
   const shell = read('tools/vite/atlas-shell.ts');
+  const editor = read('src/atlas/sector-areas-editor-ui.ts');
   assert.match(template, /@@PROPERTY_REQUESTS@@/);
   assert.match(shell, /PROPERTY_REQUESTS: variant\.propertyRequests/);
   assert.match(variants, /sector:\s*\{[\s\S]*?propertyRequests: ''/);
   assert.match(variants, /minimal:\s*\{[\s\S]*?propertyRequests: ''/);
   const panel = /adminEditorPanel: \[([\s\S]*?)\]\.join\('\\n'\)/.exec(shell)?.[1] ?? '';
-  assert.match(panel, /id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>/);
-  assert.ok(panel.indexOf('admin-editor-heading-tools') < panel.indexOf('id="propertyRequestsOpen"'));
-  assert.ok(panel.indexOf('id="propertyRequestsOpen"') < panel.indexOf('id="adminEditorHelp"'));
+  assert.doesNotMatch(panel, /id="propertyRequestsOpen"/);
   assert.doesNotMatch(template, /id="propertyRequestsOpen"/);
+  const nav = /return \[\s*'<nav class="admin-editor-nav"[\s\S]*?'<\/nav>',/.exec(editor)?.[0] ?? '';
+  assert.match(nav, /id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>/);
+  assert.ok(nav.indexOf('admin-editor-module-menu') < nav.indexOf('id="propertyRequestsOpen"'));
   const templatePath = fileURLToPath(new URL('../templates/atlas-shell.html', import.meta.url));
   for (const route of ['site/sector/index.html', 'site/minimal/minimal.html']) {
     assert.doesNotMatch(renderAtlasVariant(read(route), templatePath), /id="propertyRequestsOpen"/);
   }
   const admin = renderAtlasVariant(read('site/sector/admin-edit/index.html'), templatePath);
-  assert.equal(admin.match(/id="propertyRequestsOpen"/g)?.length, 1);
-  const renderedPanel = /<aside[^>]*id="adminEditorPanel"[^>]*>[\s\S]*?<\/aside>/.exec(admin)?.[0] ?? '';
-  assert.match(renderedPanel, /admin-editor-heading-tools[\s\S]*?id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>[\s\S]*?id="adminEditorHelp"/);
+  assert.doesNotMatch(admin, /id="propertyRequestsOpen"/); // кнопка появляется в runtime-тулбаре
   const css = read('site/sector/admin-edit/admin-edit.css');
   assert.match(css, /#adminEditorPanel \.admin-editor-requests-open\s*\{[^}]*min-height: 44px/);
 });
@@ -59,7 +59,8 @@ test('возврат OAuth ?requests=1 открывает список, а фо�
   const ui = read('src/atlas/sector-property-request-ui.ts');
   const app = read('src/atlas/app.ts');
   assert.match(app, /createSectorPropertyRequestUi\(kernel\)/);
-  assert.match(ui, /getElementById\('propertyRequestsOpen'\)\?\.addEventListener\('click', openRequests\)/);
+  assert.match(ui, /target\.closest\('#propertyRequestsOpen'\) !== null\) openRequests\(\)/);
+  assert.match(ui, /doc\.addEventListener\('click', onRequestsOpen\)/);
   assert.match(ui, /if \(new URLSearchParams\(location\.search\)\.get\('requests'\) === '1'\) openRequests\(\)/);
   assert.match(ui, /preparePropertySubmission/);
   assert.match(ui, /submitPropertyPacket/);

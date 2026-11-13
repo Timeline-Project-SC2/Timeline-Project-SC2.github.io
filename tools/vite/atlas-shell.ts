@@ -49,7 +49,6 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
         '            <h1 id="adminEditorTitle">Редактор сектора</h1>',
         '          </div>',
         '          <div class="admin-editor-heading-tools">',
-        '            <button class="property-requests-open admin-editor-requests-open" id="propertyRequestsOpen" type="button" aria-haspopup="dialog" title="Мои заявки на свойства точек">Мои заявки</button>',
         '            <button class="admin-editor-help icon-button" id="adminEditorHelp" type="button" data-action="help" title="Справка по редактору" aria-label="Справка по редактору"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"></circle><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .9-1 1.6v.4"></path><path d="M12 17.2h.01"></path></svg></button>',
         '            <button class="admin-editor-collapse icon-button" id="adminEditorCollapse" type="button" data-action="collapse" aria-expanded="true" aria-controls="adminEditorBody" title="Свернуть редактор" aria-label="Свернуть редактор"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></button>',
         '          </div>',

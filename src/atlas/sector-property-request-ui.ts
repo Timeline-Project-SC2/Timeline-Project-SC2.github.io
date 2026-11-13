@@ -231,10 +231,16 @@ export function createSectorPropertyRequestUi(kernel: AtlasKernel): SectorProper
     renderEdit(); show();
   }
   function openRequests(): void { edit = null; renderRequests(); show(); void loadRequests(); }
+  // Кнопка живёт в перерисовываемом тулбаре редактора, поэтому слушаем документ:
+  // прямой обработчик на узле терялся бы при каждом refresh панели.
+  const onRequestsOpen = (event: Event): void => {
+    const target = event.target;
+    if (target instanceof Element && target.closest('#propertyRequestsOpen') !== null) openRequests();
+  };
   function bind(): void {
-    doc.getElementById('propertyRequestsOpen')?.addEventListener('click', openRequests);
+    doc.addEventListener('click', onRequestsOpen);
     if (new URLSearchParams(location.search).get('requests') === '1') openRequests();
   }
-  function destroy(): void { modal?.remove(); modal = null; }
+  function destroy(): void { doc.removeEventListener('click', onRequestsOpen); modal?.remove(); modal = null; }
   return { bind, open, openRequests, destroy };
 }

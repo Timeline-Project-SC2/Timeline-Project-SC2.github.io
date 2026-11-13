@@ -1047,6 +1047,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '  <div class="admin-editor-nav-group">',
       '    <p class="admin-editor-nav-title">Системы</p>',
       '    <details class="admin-editor-category admin-editor-module-menu"><summary>Модули по категориям</summary><div class="admin-editor-planes">' + planes + '</div></details>',
+      // Слот верхнего тулбара сразу после «Модулей по категориям»; не в заголовке дока.
+      '    <button type="button" class="property-requests-open admin-editor-requests-open" id="propertyRequestsOpen" aria-haspopup="dialog" title="Мои заявки на свойства точек">Мои заявки</button>',
       '  </div>',
       '</nav>',
     ].join('');
@@ -1567,7 +1569,24 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // Высота строки меняется при переносе категорий, масштабе и сворачивании.
   // Один измеренный отступ используется Toolbox, доком и карточкой системы.
   let navigationObserver: ResizeObserver | null = null;
+  /** Боковые рёбра оболочки совпадают с кнопкой каталога слева и лого справа. */
+  function syncShellEdges(): void {
+    if (panel === null || stage === null || stage === undefined || typeof stage.getBoundingClientRect !== 'function') return;
+    if (typeof document === 'undefined') return;
+    const stageRect = stage.getBoundingClientRect();
+    const toggle = document.querySelector<HTMLElement>('#toggleSidePanel');
+    const logo = document.querySelector<HTMLElement>('.topbar-right .brand-emblem');
+    if (toggle && typeof toggle.getBoundingClientRect === 'function') {
+      const left = Math.max(8, Math.round(toggle.getBoundingClientRect().left - stageRect.left));
+      panel.style?.setProperty?.('--shell-left', `${left}px`);
+    }
+    if (logo && typeof logo.getBoundingClientRect === 'function') {
+      const right = Math.max(8, Math.round(stageRect.right - logo.getBoundingClientRect().right));
+      panel.style?.setProperty?.('--shell-right', `${right}px`);
+    }
+  }
   function syncNavigationHeight(): void {
+    syncShellEdges();
     const nav = panel?.querySelector<HTMLElement>('.admin-editor-nav');
     if (!nav || typeof nav.getBoundingClientRect !== 'function') return;
     const height = Math.ceil(nav.getBoundingClientRect().height);
@@ -1631,6 +1650,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       navigationObserver.disconnect();
       const nav = panel.querySelector('.admin-editor-nav');
       if (nav) navigationObserver.observe(nav);
+      if (stage !== null && stage !== undefined) navigationObserver.observe(stage);
     }
     if (previewOn) {
       lastViewKey = '';
@@ -2552,6 +2572,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     destroy(): void {
       navigationObserver?.disconnect();
       panel?.style?.removeProperty?.('--shell-top');
+      panel?.style?.removeProperty?.('--shell-left');
+      panel?.style?.removeProperty?.('--shell-right');
       stage?.style?.removeProperty?.('--admin-content-top');
       for (const item of listeners) item.target.removeEventListener(item.type, item.handler, item.capture);
       listeners.length = 0;
