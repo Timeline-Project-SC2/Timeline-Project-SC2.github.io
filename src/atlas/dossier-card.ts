@@ -247,6 +247,7 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
 
     el.detailFooter.innerHTML =
       '<span>' + escapeHtml(system.id) + '</span>' +
+      '<button type="button" data-action="propose">Предложить правку</button>' +
       '<button type="button" data-action="link">Ссылка</button>';
   }
 
@@ -348,6 +349,7 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
     el.detailFooter.innerHTML =
       '<span>' + escapeHtml(planet.id) + '</span>' +
       (system ? '<button type="button" data-action="system">← к системе</button>' : '') +
+      '<button type="button" data-action="propose">Предложить правку</button>' +
       (!placePosition ? '<button type="button" data-action="center">Центрировать</button>' : '');
   }
 
@@ -478,6 +480,9 @@ export function createDossierCard(kernel: AtlasKernel): DossierCardApi {
         state.activePlanetId = null;
         renderDetail();
         updateHash();
+      } else if (action === 'propose') {
+        if (state.activePlanetId) kernel.propertyRequest?.open('places', state.activePlanetId);
+        else if (state.activeSystemId) kernel.propertyRequest?.open('systems', state.activeSystemId);
       }
     });
   }

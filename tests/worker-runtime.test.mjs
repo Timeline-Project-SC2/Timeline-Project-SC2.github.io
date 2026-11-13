@@ -199,7 +199,7 @@ test('start: редирект на GitHub, PKCE и cookie привязки с б
   assert.equal(params.get('client_id'), 'test-client-id');
   assert.equal(params.get('redirect_uri'), 'https://gateway.test/auth/callback');
   assert.equal(params.get('code_challenge_method'), 'S256');
-  assert.equal(params.get('scope'), 'public_repo');
+  assert.equal(params.get('scope'), '', 'приватная цепочка не просит права на репозитории у пользователя');
   assert.match(state, TOKEN_RE);
   assert.match(challenge, TOKEN_RE);
   assert.match(cookie, TOKEN_RE);
@@ -357,7 +357,7 @@ test('logout отзывает сессию', async () => {
   const { sessionCookie } = await fullFlow(runtime);
   const logout = await workerFetch(runtime, 'http://localhost/auth/logout', {
     method: 'POST',
-    headers: { cookie: `issue_oauth_session=${sessionCookie}` },
+    headers: { cookie: `issue_oauth_session=${sessionCookie}`, origin: 'https://site.test' },
   });
   assert.deepEqual(await logout.json(), { ok: true });
   const status = await (await workerFetch(runtime, 'http://localhost/auth/status', {

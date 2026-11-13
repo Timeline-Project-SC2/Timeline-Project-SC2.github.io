@@ -7,6 +7,7 @@ export type AtlasVariantName = 'admin-edit' | 'minimal' | 'sector';
 export interface AtlasVariant {
   readonly adminEditorPanel: string;
   readonly adminGate: string;
+  readonly propertyRequests: string;
   readonly adminGatePanel: string;
   readonly bodyAttrs: string;
   readonly coordinateControls: string;
@@ -28,6 +29,8 @@ export interface AtlasVariant {
 export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
   sector: {
     adminEditorPanel: '',
+    // «Мои заявки» живут в панели редактора, не в публичной шапке сектора.
+    propertyRequests: '',
     adminGate: '        <button class="admin-gate-link" id="adminGateOpen" type="button" aria-haspopup="dialog" aria-controls="adminEditorGate">Доступ Администратора</button>',
     adminGatePanel: [
       '    <div class="admin-gate-modal" id="adminEditorGate" role="dialog" aria-modal="true" aria-labelledby="adminGateTitle" data-admin-gate-modal hidden>',
@@ -95,6 +98,7 @@ export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
   minimal: {
     adminEditorPanel: '',
     adminGate: '',
+    propertyRequests: '',
     adminGatePanel: '',
     bodyAttrs: ' class="minimal-mode"',
     coordinateControls: '',

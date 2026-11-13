@@ -1330,3 +1330,68 @@ test('подтверждение предпросмотра локально и 
   assert.equal(preview.innerHTML, '', 'старое подтверждение не переносится на другую правку');
   api.destroy();
 });
+
+test('«Мои заявки» стоят в runtime-тулбаре сразу после «Модулей по категориям», не в заголовке дока', () => {
+  const panel = fakePanel();
+  const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage: null, storage: null });
+  const html = blockHtml(panel, 'modules');
+  const menuAt = html.indexOf('admin-editor-module-menu');
+  const requestsAt = html.indexOf('id="propertyRequestsOpen"');
+  assert.ok(menuAt >= 0 && requestsAt > menuAt);
+  assert.match(html, /id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>/);
+  const variant = read('tools/vite/atlas-shell.ts');
+  const heading = /admin-editor-heading-tools[\s\S]*?admin-editor-collapse/.exec(variant)?.[0] ?? '';
+  assert.doesNotMatch(heading, /propertyRequestsOpen/);
+  api.destroy();
+});
+
+test('панели из меню открываются слева рядом с Toolbox, граф остаётся справа и помещается без прокрутки', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(css, /#adminEditorPanel:not\(\[data-active-screen="dependencies"\]\) \.admin-editor-heading\s*\{[^}]*left: calc\(var\(--toolbox-width\) \+ var\(--shell-gap\)\)/);
+  assert.match(css, /#adminEditorPanel:not\(\[data-active-screen="dependencies"\]\) \.admin-editor-stage/);
+  assert.match(css, /#adminEditorPanel\[data-active-screen="dependencies"\] \.admin-editor-stage\s*\{[^}]*overflow: hidden/);
+  assert.match(css, /#adminEditorPanel\[data-active-screen="dependencies"\] \.admin-editor-graph-svg\s*\{[^}]*height: 100%[^}]*min-height: 0/);
+  assert.match(css, /--toolbox-width: 67px/);
+});
+
+test('декоративная надпись в админ-сеансе лежит ниже панелей, а публичный топбар не меняется', () => {
+  const css = read('site/sector/admin-edit/admin-edit.css');
+  assert.match(css, /\.admin-editor-authorized \.topbar::before\s*\{\s*visibility: hidden/);
+  assert.match(css, /\.admin-editor-authorized \.map-stage::before\s*\{[^}]*content: "TIMELINE \/\/ SECURE ARCHIVE"[^}]*z-index: 3/);
+  const skin = read('site/shared/timeline-skin.css');
+  assert.match(skin, /\.topbar::before\s*\{[^}]*content: "TIMELINE \/\/ SECURE ARCHIVE"/);
+});
+
+test('боковые рёбра оболочки измеряются от кнопки каталога и лого, а не фиксируются числом', () => {
+  const panel = fakePanel();
+  const values = new Map();
+  panel.style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
+  const stage = {
+    getBoundingClientRect: () => ({ left: 0, right: 1000 }),
+    style: { setProperty() {}, removeProperty() {} },
+    addEventListener() {},
+    removeEventListener() {},
+    hasPointerCapture() { return false; },
+    releasePointerCapture() {},
+  };
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    activeElement: null,
+    querySelector: (selector) => selector === '#toggleSidePanel'
+      ? { getBoundingClientRect: () => ({ left: 40 }) }
+      : selector === '.topbar-right .brand-emblem'
+        ? { getBoundingClientRect: () => ({ right: 960 }) }
+        : null,
+  };
+  try {
+    const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage, storage: null });
+    assert.equal(values.get('--shell-left'), '40px');
+    assert.equal(values.get('--shell-right'), '40px');
+    api.destroy();
+    assert.equal(values.has('--shell-left'), false);
+    assert.equal(values.has('--shell-right'), false);
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});

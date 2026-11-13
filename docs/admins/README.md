@@ -15,7 +15,9 @@
 | [`workflow-faq-checklist.md`](workflow-faq-checklist.md) | Шесть шагов от `places` до заморозки, чек-лист, частые вопросы, открытые решения |
 | [`load-and-timing.md`](load-and-timing.md) | Бюджеты загрузки и времени генерации |
 | [`sector-areas-editor.md`](sector-areas-editor.md) | Редактор границ сектора: панель, кисть, свойства, черновик и заявка; как должно работать и как не должно |
+| [`sector-areas-editor-handoff.md`](sector-areas-editor-handoff.md) | Промежуточная передача по правкам рейла и рёбер оболочки: что сохранено, что не проверено, план завершения |
 | [`sector-editor/`](sector-editor/README.md) | Карта модулей редактора: что каждый модуль берёт и отдаёт, сквозные цепочки связей |
+| [`property-request-player-path.md`](property-request-player-path.md) | Путь игрока в приватной цепочке заявок: шаги, статусы, ошибки и что игрок не видит |
 
 ## Связи
 

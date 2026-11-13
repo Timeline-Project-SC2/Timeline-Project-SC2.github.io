@@ -14,13 +14,17 @@ const { applyPropertyOverlay } = require('../src/atlas/sector-property-overlay.t
 
 const BASE = 'b'.repeat(64);
 const REQUEST_ID = 'pr-abc12345-00112233445566778899aabbccddeeff';
+const REPOSITORY_ID = 1421259694;
 
 function packet(changes, overrides = {}) {
   return {
     type: 'sector-property-request',
-    version: 1,
+    version: 2,
     requestId: REQUEST_ID,
-    repositoryId: 1421259694,
+    threadId: REQUEST_ID,
+    repositoryId: REPOSITORY_ID,
+    author: { id: 42, login: 'author-a' },
+    createdAt: '2026-11-13T10:00:00.000Z',
     baseRevision: BASE,
     changes,
     ...overrides,
@@ -202,23 +206,23 @@ test('невалидная заявка, слой и номер Issue не пр�
 });
 
 test('ключ идемпотентности: формат, отказ на некорректных данных, «правка текста = тот же ключ»', () => {
-  assert.equal(propertyIdempotencyKey(501, REQUEST_ID), `issue:1421259694:501:${REQUEST_ID}`);
-  assert.equal(propertyIdempotencyKey(501, REQUEST_ID), propertyIdempotencyKey(501, REQUEST_ID));
-  assert.throws(() => propertyIdempotencyKey(0, REQUEST_ID), TypeError);
-  assert.throws(() => propertyIdempotencyKey(501, 'short'), TypeError);
+  assert.equal(propertyIdempotencyKey(501, REQUEST_ID, REPOSITORY_ID), `issue:1421259694:501:${REQUEST_ID}`);
+  assert.equal(propertyIdempotencyKey(501, REQUEST_ID, REPOSITORY_ID), propertyIdempotencyKey(501, REQUEST_ID, REPOSITORY_ID));
+  assert.throws(() => propertyIdempotencyKey(0, REQUEST_ID, REPOSITORY_ID), TypeError);
+  assert.throws(() => propertyIdempotencyKey(501, 'short', REPOSITORY_ID), TypeError);
   // Разные Issue и разные заявки — разные ключи: второй автор не перезапишет первый.
-  assert.notEqual(propertyIdempotencyKey(501, REQUEST_ID), propertyIdempotencyKey(502, REQUEST_ID));
-  assert.notEqual(propertyIdempotencyKey(501, REQUEST_ID), propertyIdempotencyKey(501, 'pr-abc12345-ffffffffffffffffffffffffffff'));
+  assert.notEqual(propertyIdempotencyKey(501, REQUEST_ID, REPOSITORY_ID), propertyIdempotencyKey(502, REQUEST_ID, REPOSITORY_ID));
+  assert.notEqual(propertyIdempotencyKey(501, REQUEST_ID, REPOSITORY_ID), propertyIdempotencyKey(501, 'pr-abc12345-ffffffffffffffffffffffffffff', REPOSITORY_ID));
 });
 
 test('журнал обработанных заявок: без повторов, порядок сохраняется', () => {
-  const key = propertyIdempotencyKey(501, REQUEST_ID);
+  const key = propertyIdempotencyKey(501, REQUEST_ID, REPOSITORY_ID);
   assert.deepEqual(recordProcessed([], key), [key]);
   assert.deepEqual(recordProcessed([key], key), [key]);
-  assert.deepEqual(recordProcessed([key], propertyIdempotencyKey(502, REQUEST_ID)),
-    [key, propertyIdempotencyKey(502, REQUEST_ID)]);
+  assert.deepEqual(recordProcessed([key], propertyIdempotencyKey(502, REQUEST_ID, REPOSITORY_ID)),
+    [key, propertyIdempotencyKey(502, REQUEST_ID, REPOSITORY_ID)]);
   assert.equal(isAlreadyProcessed([key], key), true);
-  assert.equal(isAlreadyProcessed([key], propertyIdempotencyKey(502, REQUEST_ID)), false);
+  assert.equal(isAlreadyProcessed([key], propertyIdempotencyKey(502, REQUEST_ID, REPOSITORY_ID)), false);
   assert.throws(() => recordProcessed([], ''), TypeError);
 });
 
@@ -234,7 +238,7 @@ test('два автора на одном поле: первая применё�
   const second = planPropertyApply(authorB, current, upstream(rows), first.plan.overlay, 602);
   assert.equal(second.status, 'refused');
   assert.equal(second.reason, 'conflict');
-  assert.notEqual(first.plan.idempotencyKey, propertyIdempotencyKey(602, 'pr-bbbb2222-00112233445566778899aabbccddeeff'));
+  assert.notEqual(first.plan.idempotencyKey, propertyIdempotencyKey(602, 'pr-bbbb2222-00112233445566778899aabbccddeeff', REPOSITORY_ID));
 });
 
 test('слой не мутирует входные данные и не зависит от порядка вызова', () => {
