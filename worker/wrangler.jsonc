@@ -13,10 +13,13 @@
   },
   "vars": {
     "SITE_ORIGIN": "https://timeline-project-sc2.github.io"
-  },
-  // Остальные переменные задаются в Cloudflare, а не в этом файле:
-  //   не-секреты (GITHUB_CLIENT_ID, GITHUB_CALLBACK_URL) — в разделе vars
-  //   через dashboard/CLI; секреты никогда не коммитить:
-  //   wrangler secret put GITHUB_CLIENT_SECRET
-  // Развёртывание только после отдельного подтверждения владельца.
+    // Приватная цель и App задаются в Cloudflare после подтверждения владельца:
+    //   PROPERTY_REPOSITORY_ID, PROPERTY_REPOSITORY (не публичный сайт),
+    //   GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID,
+    //   PROPERTY_OPEN_LIMIT (1–20; без значения приём выключен),
+    //   GITHUB_CLIENT_ID, GITHUB_CALLBACK_URL.
+    // Секреты только через wrangler secret put, не в этом файле:
+    //   GITHUB_CLIENT_SECRET, GITHUB_APP_PRIVATE_KEY.
+  }
+  // Развёртывание, живая Issue, применение и публикация — HOLD.
 }

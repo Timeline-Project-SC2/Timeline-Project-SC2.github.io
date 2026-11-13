@@ -75,6 +75,7 @@ export function renderAtlasVariant(html: string, atlasTemplatePath: string): str
   const replacements: Record<string, string> = {
     ADMIN_EDITOR_PANEL: variant.adminEditorPanel,
     ADMIN_GATE: variant.adminGate,
+    PROPERTY_REQUESTS: variant.propertyRequests,
     ADMIN_GATE_PANEL: variant.adminGatePanel,
     BODY_ATTRS: variant.bodyAttrs,
     COORDINATE_CONTROLS: variant.coordinateControls,

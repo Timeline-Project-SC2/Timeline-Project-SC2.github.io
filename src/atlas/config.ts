@@ -566,6 +566,12 @@ export interface AtlasKernel {
   dossier: DossierCardApi;
   coords: CoordsReadoutApi;
   app: AtlasShellApi;
+  propertyRequest?: {
+    bind(): void;
+    open(dataset: 'systems' | 'places', recordId: string): void;
+    openRequests(): void;
+    destroy(): void;
+  };
 }
 
 declare global {

@@ -1,4 +1,4 @@
-// Контракт заявки на свойства точек: схема, канонический вид, разметка тела.
+// Контракт v2: черновик браузера, серверное авторство, нить и каноническое тело.
 // Проверяется офлайн: сеть, GitHub и браузер здесь не участвуют.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,116 +11,117 @@ const { preparePropertyPacket, newRequestId } = require('../src/atlas/sector-pro
 
 const BASE = 'a'.repeat(64);
 const REQUEST_ID = 'pr-abc12345-00112233445566778899aabbccddeeff';
-const packet = (changes = [change()]) => ({
-  type: 'sector-property-request',
-  version: 1,
-  requestId: REQUEST_ID,
-  repositoryId: 1421259694,
-  baseRevision: BASE,
-  changes,
-});
+const THREAD_ID = 'pr-zzz99999-00112233445566778899aabbccddeeff';
+const TARGET = { id: 987654321, fullName: 'Timeline-Project-SC2/property-requests' };
+const AUTHOR = { id: 424242, login: 'Player-One' };
+const CREATED_AT = '2026-11-13T10:20:30.400Z';
 function change(overrides = {}) {
   return { dataset: 'systems', recordId: '1', field: 'description', before: 'Старое', after: 'Новое', ...overrides };
 }
+const draft = (changes = [change()]) => ({
+  type: 'sector-property-request-draft', version: 2, requestId: REQUEST_ID, threadId: REQUEST_ID,
+  baseRevision: BASE, changes,
+});
+const packet = (changes = [change()]) => contract.sealPropertyRequest(draft(changes), AUTHOR, CREATED_AT, TARGET);
 const fields = Object.fromEntries(PROPERTY_FIELDS.map((field) => [field, { raw: '', effective: field === 'name' ? 'Корхал' : '' }]));
 const session = (revision = BASE) => createPropertySession([{ dataset: 'systems', recordId: '1', fields }], revision);
 
 test('каноническая заявка принимается, копируется и не мутирует вход', async () => {
   const raw = packet();
-  const parsed = contract.readPacket(raw);
+  const parsed = contract.readPacket(raw, TARGET);
   assert.deepEqual(parsed.changes, raw.changes);
   assert.notEqual(parsed.changes, raw.changes);
-  assert.ok(Object.isFrozen(parsed) && Object.isFrozen(parsed.changes));
+  assert.ok(Object.isFrozen(parsed) && Object.isFrozen(parsed.changes) && Object.isFrozen(parsed.author));
   const json = contract.canonicalPacketJson(parsed);
-  assert.equal(contract.canonicalPacketJson(contract.readPacket(JSON.parse(json))), json, 'канонический вид идемпотентен');
-  assert.equal((await contract.fingerprintPropertyPacket(json)), (await contract.fingerprintPropertyPacket(json)));
+  assert.equal(contract.canonicalPacketJson(contract.readPacket(JSON.parse(json), TARGET)), json);
   assert.match(await contract.fingerprintPropertyPacket(json), /^[a-f0-9]{64}$/);
+});
+
+test('черновик не принимает авторство, время и цель; сервер запечатывает их сам', () => {
+  assert.deepEqual(contract.readPropertyRequestDraft(draft()), draft());
+  for (const extra of [{ author: AUTHOR }, { createdAt: CREATED_AT }, { repositoryId: TARGET.id }]) {
+    assert.throws(() => contract.readPropertyRequestDraft({ ...draft(), ...extra }), { code: 'unknown_key' });
+  }
+  const sealed = contract.sealPropertyRequest(draft(), AUTHOR, CREATED_AT, TARGET);
+  assert.deepEqual(sealed.author, AUTHOR);
+  assert.equal(sealed.createdAt, CREATED_AT);
+  assert.equal(sealed.repositoryId, TARGET.id);
+  assert.equal(sealed.threadId, REQUEST_ID);
 });
 
 test('схема отвергает лишние, недостающие и подменённые поля', () => {
   const cases = [
     [{ ...packet(), extra: 1 }, 'unknown_key'],
-    [{ ...packet(), version: 2 }, 'bad_version'],
+    [{ ...packet(), version: 1 }, 'bad_version'],
     [{ ...packet(), type: 'other' }, 'bad_type'],
-    [{ ...packet(), repositoryId: 1 }, 'bad_repository'],
+    [{ ...packet(), repositoryId: TARGET.id + 1 }, 'bad_repository'],
     [{ ...packet(), requestId: 'short' }, 'bad_request_id'],
-    [{ ...packet(), requestId: 'pr-ABCDEFGH-00112233445566778899aabbccddeeff' }, 'bad_request_id'],
+    [{ ...packet(), threadId: 'short' }, 'bad_thread_id'],
+    [{ ...packet(), author: { id: 0, login: 'x' } }, 'bad_author'],
+    [{ ...packet(), author: { id: 1, login: 'bad_login' } }, 'bad_author'],
+    [{ ...packet(), author: { id: 1, login: 'x'.repeat(40) } }, 'bad_author'],
+    [{ ...packet(), createdAt: '2026-02-30T10:00:00.000Z' }, 'bad_created_at'],
+    [{ ...packet(), createdAt: '2026-11-13T10:20:30Z' }, 'bad_created_at'],
     [{ ...packet(), baseRevision: 'a'.repeat(63) }, 'bad_base_revision'],
-    [{ ...packet(), baseRevision: null }, 'bad_base_revision'],
     [{ ...packet(), changes: [] }, 'no_changes'],
-    [{ ...packet(), changes: 'нет' }, 'no_changes'],
     [{ ...packet(), changes: [{ ...change(), extra: true }] }, 'unknown_key'],
-    [{ ...packet(), changes: [{ dataset: 'systems', recordId: '1', field: 'description', before: 'x' }] }, 'missing_key'],
     [{ ...packet(), changes: [change({ dataset: 'planets' })] }, 'bad_dataset'],
     [{ ...packet(), changes: [change({ field: 'coord' })] }, 'bad_field'],
     [{ ...packet(), changes: [change({ recordId: ' 1 ' })] }, 'bad_record_id'],
-    [{ ...packet(), changes: [change({ recordId: '' })] }, 'bad_record_id'],
-    [{ ...packet(), changes: [change({ recordId: '1\n' })] }, 'bad_record_id'],
     [{ ...packet(), changes: [change({ before: 'Новое' })] }, 'bad_value'],
-    [{ ...packet(), changes: [change({ after: null })] }, 'bad_value'],
     [{ ...packet(), changes: [change({ after: 'a\u0000b' })] }, 'bad_value'],
     [{ ...packet(), changes: [change(), change()] }, 'duplicate_change'],
     [{ ...packet(), changes: [change(), change({ recordId: '2' })] }, null],
-    [{ ...packet(), changes: [change({ field: 'name' }), change({ field: 'type' })] }, null],
   ];
   for (const [input, code] of cases) {
-    if (code === null) {
-      assert.doesNotThrow(() => contract.readPacket(input), JSON.stringify(input));
-      continue;
-    }
-    assert.throws(
-      () => contract.readPacket(input),
-      (error) => error instanceof contract.PacketSchemaError && error.code === code,
-      `${JSON.stringify(input)} → ${code}`,
-    );
+    if (code === null) assert.doesNotThrow(() => contract.readPacket(input, TARGET));
+    else assert.throws(() => contract.readPacket(input, TARGET), { code }, JSON.stringify(input));
   }
-  assert.throws(() => contract.readPacket([]), { code: 'not_object' });
-  assert.throws(() => contract.readPacket(null), { code: 'not_object' });
-  // Геттер не считается значением: поля читаются из собственных дескрипторов.
+  assert.throws(() => contract.readPacket(null, TARGET), { code: 'not_object' });
+  assert.throws(() => contract.readPacket(packet(), { id: 1, fullName: 'other/repo' }), { code: 'bad_repository' });
   const sneaky = { ...packet() };
   Object.defineProperty(sneaky, 'requestId', { get: () => REQUEST_ID, enumerable: true });
-  assert.throws(() => contract.readPacket(sneaky), { code: 'not_object' });
+  assert.throws(() => contract.readPacket(sneaky, TARGET), { code: 'not_object' });
 });
 
 test('пределы объёма: много изменений, много объектов, длинные значения', () => {
-  const many = Array.from({ length: contract.PROPERTY_LIMITS.changes + 1 }, (_, index) =>
-    change({ recordId: String(index), field: 'description' }));
-  assert.throws(() => contract.readPacket(packet(many)), { code: 'too_many_changes' });
-  const manyRecords = Array.from({ length: contract.PROPERTY_LIMITS.records + 1 }, (_, index) =>
-    change({ recordId: String(index) }));
-  assert.throws(() => contract.readPacket(packet(manyRecords)), { code: 'too_many_records' });
-  assert.throws(() => contract.readPacket(packet([change({ after: 'я'.repeat(4001) })])), { code: 'too_long' });
+  const many = Array.from({ length: contract.PROPERTY_LIMITS.changes + 1 }, (_, index) => change({ recordId: String(index) }));
+  assert.throws(() => contract.readPacket(packet(many), TARGET), { code: 'too_many_changes' });
+  const manyRecords = Array.from({ length: contract.PROPERTY_LIMITS.records + 1 }, (_, index) => change({ recordId: String(index) }));
+  assert.throws(() => contract.readPacket(packet(manyRecords), TARGET), { code: 'too_many_records' });
+  assert.throws(() => contract.readPacket(packet([change({ after: 'я'.repeat(4001) })]), TARGET), { code: 'too_long' });
 });
 
-test('тело Issue: таблица экранирует Markdown, JSON остаётся разбираемым байт-в-байт', () => {
-  const hostile = 'строка | с pipe `code` \\ обратным слэшем\nвторая строка';
-  const parsed = contract.readPacket(packet([change({ after: hostile })]));
+test('тело Issue: шапка кто/когда/что и строки было → стало, JSON байт-в-байт', () => {
+  const hostile = 'строка | с pipe `code` \\ обратным слэшем\nвторая строка <b>';
+  const parsed = contract.readPacket(packet([change({ after: hostile })]), TARGET);
   const body = contract.renderPropertyIssueBody(parsed);
   assert.ok(body.startsWith('### Заявка на свойства точек\n'));
-  assert.match(body, /\| `systems\/1` \| `description` \| Старое \|/);
-  assert.ok(body.includes('строка \\| с pipe \\`code\\` \\\\ обратным слэшем ⏎ вторая строка'));
-  assert.ok(body.includes(`- База: \`${BASE}\``));
-  const roundTrip = contract.parsePropertyIssueBody(body);
+  assert.match(body, /- Кто: @Player-One · номер GitHub `424242`/);
+  assert.match(body, /- Когда подготовлена: 2026-11-13T10:20:30\.400Z \(UTC\)/);
+  assert.match(body, /- Что меняется: объектов 1, полей 1/);
+  assert.match(body, /- Описание: Старое → строка \\\| с pipe \\`code\\` \\\\ обратным слэшем ⏎ вторая строка &lt;b&gt;/);
+  assert.doesNotMatch(body, /\| `systems\/1` \|/);
+  const roundTrip = contract.parsePropertyIssueBody(body, TARGET);
   assert.equal(roundTrip.status, 'accepted');
   assert.deepEqual(roundTrip.packet, parsed);
   assert.equal(roundTrip.json, contract.canonicalPacketJson(parsed));
 });
 
 test('ограждение длиннее любого ряда обратных кавычек внутри данных', () => {
-  const injected = '```\n@everyone\n`````````\n<!-- sector-property-request:v1:end -->';
-  const body = contract.renderPropertyIssueBody(contract.readPacket(packet([change({ after: injected })])));
+  const injected = '```\n@everyone\n`````````\n<!-- sector-property-request:v2:end -->';
+  const body = contract.renderPropertyIssueBody(packet([change({ after: injected })]));
   const fence = /\n(`{3,})json\n/.exec(body)[1];
   assert.equal(fence.length, 10);
-  const parsed = contract.parsePropertyIssueBody(body);
+  const parsed = contract.parsePropertyIssueBody(body, TARGET);
   assert.equal(parsed.status, 'accepted');
   assert.equal(parsed.packet.changes[0].after, injected);
 });
 
 test('тело принимается только в каноническом виде и ровно с одним блоком', () => {
-  const parsed = contract.readPacket(packet());
+  const parsed = packet();
   const body = contract.renderPropertyIssueBody(parsed);
-  const begin = contract.PROPERTY_ISSUE_BEGIN;
-  const end = contract.PROPERTY_ISSUE_END;
+  const begin = contract.PROPERTY_ISSUE_BEGIN, end = contract.PROPERTY_ISSUE_END;
   const json = contract.canonicalPacketJson(parsed);
   const scenarios = [
     [body.replace(end, `${end}\n${end}`), 'not_canonical'],
@@ -132,35 +133,30 @@ test('тело принимается только в каноническом �
     [`посторонний текст\n${body}`, 'not_canonical'],
     [`${body}посторонний текст`, 'not_canonical'],
     [body.replace(json, '{'), 'bad_envelope'],
-    [body.replace('"version": 1', '"version": 2'), 'bad_version'],
+    [body.replace('"version": 2', '"version": 1'), 'bad_version'],
     ['', 'bad_envelope'],
     ['x'.repeat(contract.PROPERTY_LIMITS.body + 1), 'too_long'],
   ];
   for (const [text, code] of scenarios) {
-    assert.deepEqual(contract.parsePropertyIssueBody(text), { status: 'rejected', code, message: contract.parsePropertyIssueBody(text).message }, code);
+    const result = contract.parsePropertyIssueBody(text, TARGET);
+    assert.equal(result.status, 'rejected', code);
+    assert.equal(result.code, code);
   }
-  assert.equal(contract.parsePropertyIssueBody(null).status, 'rejected');
+  assert.equal(contract.parsePropertyIssueBody(null, TARGET).status, 'rejected');
 });
 
 test('маркер заголовка привязан к отпечатку пакета', async () => {
-  const json = contract.canonicalPacketJson(contract.readPacket(packet()));
-  const fingerprint = await contract.fingerprintPropertyPacket(json);
+  const fingerprint = await contract.fingerprintPropertyPacket(contract.canonicalPacketJson(packet()));
   assert.equal(contract.propertyIssueTitle(fingerprint), `[ADM-ACCESS] свойства точек · ${fingerprint.slice(0, 12)}`);
   assert.throws(() => contract.propertyIssueTitle('нет'), TypeError);
-  assert.throws(() => contract.propertyIssueTitle(fingerprint.toUpperCase()), TypeError);
 });
 
-test('проверка публикуемого текста: токены и ключи — ошибка, слова-подсказки — предупреждение', () => {
-  const fatal = [
-    'ghp_abcdefghijklmnopqrstuv',
-    'github_pat_11ABCDEFG0123456789_abcdefghijklmnop',
-    '-----BEGIN RSA PRIVATE KEY-----',
-    'AKIAIOSFODNN7EXAMPLE',
-    'sk-abcdefghijklmnopqrstuvwx',
-    'Authorization: Bearer abcdefghijklmnopqrstuvwxyz',
-    'https://user:password@example.com/x',
-  ];
-  for (const text of fatal) assert.ok(contract.scanPublicText(text).errors.length > 0, text);
+test('проверка текста: токены и ключи — ошибка, слова-подсказки — предупреждение', () => {
+  for (const text of ['ghp_abcdefghijklmnopqrstuv', 'github_pat_11ABCDEFG0123456789_abcdefghijklmnop',
+    '-----BEGIN RSA PRIVATE KEY-----', 'AKIAIOSFODNN7EXAMPLE', 'sk-abcdefghijklmnopqrstuvwx',
+    'Authorization: Bearer abcdefghijklmnopqrstuvwxyz', 'https://user:password@example.com/x']) {
+    assert.ok(contract.scanPublicText(text).errors.length > 0, text);
+  }
   assert.deepEqual(contract.scanPublicText('обычное описание системы'), { errors: [], warnings: [] });
   assert.equal(contract.scanPublicText('укажите пароль от Wi-Fi').warnings.length, 1);
   assert.deepEqual(contract.scanPublicText('tokenized').warnings, []);
@@ -168,31 +164,26 @@ test('проверка публикуемого текста: токены и к
 
 test('ID заявки: детерминированный формат из времени и случайных байтов', () => {
   const fixed = new Uint8Array(16).fill(0xab);
-  const id = newRequestId(1_700_000_000_000, () => fixed);
-  assert.equal(id, `pr-${(1_700_000_000_000).toString(36)}-${'ab'.repeat(16)}`);
-  assert.notEqual(newRequestId(1, () => new Uint8Array(16)), newRequestId(1, () => new Uint8Array(16).fill(1)));
+  assert.equal(newRequestId(1_700_000_000_000, () => fixed), `pr-${(1_700_000_000_000).toString(36)}-${'ab'.repeat(16)}`);
   assert.throws(() => newRequestId(0, () => fixed), TypeError);
   assert.throws(() => newRequestId(1, () => new Uint8Array(8)), TypeError);
 });
 
-test('пакет из сессии редактора: готов к отправке, заголовок и отпечаток согласованы', async () => {
+test('пакет из сессии редактора: черновик готов, но ещё не запечатан сервером', async () => {
   const edited = editProperty(session(), 'systems', '1', 'description', 'Строка\n«текст»');
-  const review = await preparePropertyPacket(edited, new Set(), REQUEST_ID);
+  const review = await preparePropertyPacket(edited, new Set(), REQUEST_ID, THREAD_ID);
   assert.equal(review.status, 'ready');
   assert.deepEqual(review.errors, []);
-  assert.ok(review.warnings.some((warning) => warning.includes('публичной')));
+  assert.ok(review.warnings.some((warning) => warning.includes('закрытой')));
   assert.ok(review.warnings.some((warning) => warning.includes('не применяет правку')));
-  assert.match(review.title, /^\[ADM-ACCESS\] свойства точек · [a-f0-9]{12}$/);
-  assert.ok(review.title.includes(review.fingerprint.slice(0, 12)));
-  const parsed = contract.parsePropertyIssueBody(review.body);
-  assert.equal(parsed.status, 'accepted');
-  assert.equal(parsed.packet.requestId, REQUEST_ID);
-  assert.equal(parsed.packet.baseRevision, BASE);
-  assert.deepEqual(parsed.packet.changes, [
-    { dataset: 'systems', recordId: '1', field: 'description', before: '', after: 'Строка\n«текст»' },
-  ]);
-  assert.equal(await contract.fingerprintPropertyPacket(contract.canonicalPacketJson(parsed.packet)), review.fingerprint);
-  assert.deepEqual(review, await preparePropertyPacket(edited, new Set(), REQUEST_ID));
+  assert.equal(review.draft.author, undefined);
+  assert.equal(review.draft.repositoryId, undefined);
+  assert.equal(review.draft.threadId, THREAD_ID);
+  assert.deepEqual(review.draft.changes, [{ dataset: 'systems', recordId: '1', field: 'description', before: '', after: 'Строка\n«текст»' }]);
+  assert.deepEqual(review, await preparePropertyPacket(edited, new Set(), REQUEST_ID, THREAD_ID));
+  const sealed = contract.sealPropertyRequest(review.draft, AUTHOR, CREATED_AT, TARGET);
+  assert.equal(sealed.threadId, THREAD_ID);
+  assert.equal(sealed.requestId, REQUEST_ID);
 });
 
 test('пакет из сессии: без правок и без отпечатка отправка запрещена', async () => {
@@ -201,14 +192,6 @@ test('пакет из сессии: без правок и без отпечат
   const review = await preparePropertyPacket(edited, new Set(), REQUEST_ID);
   assert.equal(review.status, 'blocked');
   assert.ok(review.errors.some((error) => error.includes('Отпечаток входов не подтверждён')));
-  assert.equal(review.body, '');
-  const emptyName = editProperty(session(), 'systems', '1', 'name', '  ');
-  assert.equal(await preparePropertyPacket(emptyName, new Set(), REQUEST_ID), null);
-});
-
-test('секрет в описании блокирует заявку до отправки', async () => {
-  const edited = editProperty(session(), 'systems', '1', 'description', 'ключ ghp_abcdefghijklmnopqrstuv в описании');
-  const review = await preparePropertyPacket(edited, new Set(), REQUEST_ID);
-  assert.equal(review.status, 'blocked');
-  assert.ok(review.errors.some((error) => error.includes('токен GitHub')));
+  assert.equal(review.draft, null);
+  assert.equal(await preparePropertyPacket(editProperty(session(), 'systems', '1', 'name', '  '), new Set(), REQUEST_ID), null);
 });

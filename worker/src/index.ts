@@ -33,10 +33,15 @@ import type {
   OAuthStateStore,
   PendingOAuth,
 } from '../../src/issue-gateway/oauth-state.ts';
-import { PROPERTY_LIMITS, parsePropertyIssueBody } from '../../src/issue-gateway/property-issue-contract.ts';
-import { createRequestIssue } from '../../src/issue-gateway/github-issues.ts';
+import { PROPERTY_LIMITS, PROPERTY_ISSUE_VERSION, canonicalPacketJson, fingerprintPropertyPacket,
+  propertyIssueTitle, readPacket, readPropertyRequestDraft, renderPropertyIssueBody, sealPropertyRequest, scanPublicText,
+  isPropertyRequestId, isPropertyRepositoryId } from '../../src/issue-gateway/property-issue-contract.ts';
+import type { PropertyIssuePacket, PropertyRepositoryTarget } from '../../src/issue-gateway/property-issue-contract.ts';
+import { createInstallationToken } from '../../src/issue-gateway/github-app.ts';
+import { createRequestIssue, readRequestIssue, confirmRepository } from '../../src/issue-gateway/github-issues.ts';
+import type { IssuesApiConfig } from '../../src/issue-gateway/github-issues.ts';
 import { OAuthState } from './oauth-state-do.ts';
-import type { OAuthStateStub, SessionRecord } from './oauth-state-do.ts';
+import type { OAuthStateStub, SessionRecord, StoredPropertyRequest } from './oauth-state-do.ts';
 
 export { OAuthState };
 
@@ -47,18 +52,25 @@ interface WorkerEnv {
   readonly GITHUB_CALLBACK_URL: string;
   readonly GITHUB_TOKEN_URL?: string;
   readonly GITHUB_USER_URL?: string;
-  readonly GITHUB_SCOPES?: string;
   /** Origin сайта: источник всплывающей навигации и разрешённый CORS-источник. */
   readonly SITE_ORIGIN: string;
   /** Заменяемый базовый адрес GitHub API (mock в тестах); в проде не задаётся. */
   readonly GITHUB_API_BASE?: string;
   readonly FAIL_STORAGE?: string;
+  readonly PROPERTY_REPOSITORY_ID?: string;
+  readonly PROPERTY_REPOSITORY?: string;
+  readonly GITHUB_APP_CLIENT_ID?: string;
+  readonly GITHUB_APP_INSTALLATION_ID?: string;
+  readonly GITHUB_APP_PRIVATE_KEY?: string;
+  /** Решение владельца о числе открытых нитей; безопасного значения по умолчанию нет. */
+  readonly PROPERTY_OPEN_LIMIT?: string;
 }
 
 const BINDING_COOKIE = 'issue_oauth_binding';
+const RETURN_COOKIE = 'issue_oauth_return';
 const SESSION_COOKIE = 'issue_oauth_session';
 const BINDING_TTL_SECONDS = 300;
-const SESSION_TTL_SECONDS = 3600;
+const SESSION_TTL_SECONDS = 7 * 24 * 3600;
 const MAX_SUBMIT_BYTES = PROPERTY_LIMITS.body + 8192;
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -81,6 +93,11 @@ async function sha256Hex(value: string): Promise<string> {
 }
 
 function readCookie(request: Request, name: string): string | null {
+  if (name === RETURN_COOKIE) {
+    const part = (request.headers.get('cookie') ?? '').split(';').map((s) => s.trim()).find((s) => s.startsWith(`${name}=`));
+    const value = part?.slice(name.length + 1);
+    return value === 'admin' || value === 'requests' ? value : null;
+  }
   const header = request.headers.get('cookie');
   if (!header) return null;
   for (const part of header.split(';')) {
@@ -110,7 +127,8 @@ function siteOrigin(env: WorkerEnv): string | null {
   if (typeof env.SITE_ORIGIN !== 'string' || env.SITE_ORIGIN.length === 0) return null;
   try {
     const url = new URL(env.SITE_ORIGIN);
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      (url.pathname !== '/' && url.pathname !== '')) return null;
     return url.origin;
   } catch {
     return null;
@@ -223,8 +241,9 @@ function stateStore(stub: OAuthStateStub): OAuthStateStore {
 
 const workerCrypto: OAuthCrypto = globalThis.crypto as OAuthCrypto;
 
-async function authStart(env: WorkerEnv): Promise<Response> {
+async function authStart(env: WorkerEnv, url: URL): Promise<Response> {
   const stub = stubOf(env);
+  const returnTo = url.searchParams.get('return') === 'admin' ? 'admin' : 'requests';
   const binding = randomToken();
   let start: OAuthStartResult;
   try {
@@ -240,17 +259,14 @@ async function authStart(env: WorkerEnv): Promise<Response> {
     client_id: env.GITHUB_CLIENT_ID,
     redirect_uri: env.GITHUB_CALLBACK_URL,
     state: start.state,
-    scope: env.GITHUB_SCOPES ?? 'public_repo',
+    scope: '', // только личность; права на репозитории пользователю не нужны
     code_challenge: start.codeChallenge,
     code_challenge_method: 'S256',
   }).toString();
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: authorize.toString(),
-      'Set-Cookie': cookieHeader(BINDING_COOKIE, binding, BINDING_TTL_SECONDS, '/auth', 'Lax'),
-    },
-  });
+  const headers = new Headers({ Location: authorize.toString() });
+  headers.append('Set-Cookie', cookieHeader(BINDING_COOKIE, binding, BINDING_TTL_SECONDS, '/auth', 'Lax'));
+  headers.append('Set-Cookie', cookieHeader(RETURN_COOKIE, returnTo, BINDING_TTL_SECONDS, '/auth', 'Lax'));
+  return new Response(null, { status: 302, headers });
 }
 
 async function authCallback(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -290,14 +306,14 @@ async function authCallback(request: Request, env: WorkerEnv, url: URL): Promise
 
   const sessionToken = randomToken();
   const sessionHash = await sha256Hex(sessionToken);
-  const ttlSeconds = Math.min(exchanged.expiresIn ?? SESSION_TTL_SECONDS, SESSION_TTL_SECONDS);
+  // Токен пользователя использован только для /user и дальше не хранится.
+  const ttlSeconds = SESSION_TTL_SECONDS;
   let create: Response;
   try {
     create = await internalCall(stub, '/session-create', {
       method: 'POST',
       body: {
         sessionHash,
-        accessToken: exchanged.accessToken,
         userId: identified.user.id,
         login: identified.user.login,
         expiresAt: Date.now() + ttlSeconds * 1000,
@@ -308,14 +324,12 @@ async function authCallback(request: Request, env: WorkerEnv, url: URL): Promise
   }
   if (!create.ok) return internalError(create);
   // Чистый редирект: code и токен нигде не повторяются.
-  return new Response(null, {
-    status: 302,
-    headers: {
-      // Возврат в браузер только через настроенный Origin сайта.
-      Location: siteOrigin(env) ?? '/',
-      'Set-Cookie': cookieHeader(SESSION_COOKIE, sessionToken, ttlSeconds, '/', 'None'),
-    },
-  });
+  // Возврат в браузер только через настроенный Origin сайта.
+  const headers = new Headers({ Location: `${siteOrigin(env) ?? 'https://timeline-project-sc2.github.io'}${readCookie(request, RETURN_COOKIE) === 'admin' ? '/sector/admin-edit/' : '/sector/?requests=1'}` });
+  headers.append('Set-Cookie', cookieHeader(SESSION_COOKIE, sessionToken, ttlSeconds, '/', 'None'));
+  headers.append('Set-Cookie', cookieHeader(BINDING_COOKIE, '', 0, '/auth', 'Lax'));
+  headers.append('Set-Cookie', cookieHeader(RETURN_COOKIE, '', 0, '/auth', 'Lax'));
+  return new Response(null, { status: 302, headers });
 }
 
 /** Действующая сессия по cookie: только хеш уходит в хранилище, токен не меняется. */
@@ -339,15 +353,15 @@ async function readSession(request: Request, env: WorkerEnv): Promise<SessionRec
 
 async function authStatus(request: Request, env: WorkerEnv): Promise<Response> {
   const token = readCookie(request, SESSION_COOKIE);
-  if (token === null) return json({ authenticated: false });
+  if (token === null) return json({ authenticated: false }, 200, { ...corsHeaders(request, env), 'Cache-Control': 'no-store' });
   let session: SessionRecord | null;
   try {
     session = await readSession(request, env);
   } catch {
-    return json({ error: 'unavailable' }, 503);
+    return json({ error: 'unavailable' }, 503, { ...corsHeaders(request, env), 'Cache-Control': 'no-store' });
   }
-  if (session === null) return json({ authenticated: false });
-  return json({ authenticated: true, login: session.login, userId: session.userId });
+  if (session === null) return json({ authenticated: false }, 200, { ...corsHeaders(request, env), 'Cache-Control': 'no-store' });
+  return json({ authenticated: true, login: session.login, userId: session.userId }, 200, { ...corsHeaders(request, env), 'Cache-Control': 'no-store' });
 }
 
 /**
@@ -370,6 +384,123 @@ async function readJsonObject(request: Request): Promise<Record<string, unknown>
   }
 }
 
+/** Приватная цель обязательна: без настройки нет ни чтения, ни записи. */
+function propertyTarget(env: WorkerEnv): PropertyRepositoryTarget | null {
+  const id = Number(env.PROPERTY_REPOSITORY_ID);
+  const fullName = env.PROPERTY_REPOSITORY ?? '';
+  if (!isPropertyRepositoryId(id) || !/^Timeline-Project-SC2\/[a-z\d_.-]+$/i.test(fullName) ||
+    fullName.toLowerCase() === 'timeline-project-sc2/timeline-project-sc2.github.io') return null;
+  return { id, fullName };
+}
+function openLimit(env: WorkerEnv): number | null {
+  const value = Number(env.PROPERTY_OPEN_LIMIT);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 20 ? value : null;
+}
+async function requestCall<T>(env: WorkerEnv, path: string, body: Record<string, unknown>): Promise<T> {
+  const response = await internalCall(stubOf(env), path, { method: 'POST', body });
+  if (!response.ok) {
+    if (response.status === 409) {
+      const payload = await response.json().catch(() => null) as { error?: unknown } | null;
+      throw new Error(payload?.error === 'busy' ? 'request_busy' : 'request_conflict');
+    }
+    throw new Error(response.status === 429 ? 'request_limit' : 'unavailable');
+  }
+  return await response.json() as T;
+}
+async function appConfig(env: WorkerEnv): Promise<PrivateConfig | null> {
+  const target = propertyTarget(env);
+  if (target === null || openLimit(env) === null || !env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_INSTALLATION_ID || !env.GITHUB_APP_PRIVATE_KEY) return null;
+  const issued = await createInstallationToken({ clientId: env.GITHUB_APP_CLIENT_ID, installationId: env.GITHUB_APP_INSTALLATION_ID,
+    privateKey: env.GITHUB_APP_PRIVATE_KEY, target, ...(env.GITHUB_API_BASE === undefined ? {} : { apiBase: env.GITHUB_API_BASE }) }, fetchTransport);
+  if (issued.status !== 'ready') throw new Error(issued.status === 'rejected' ? 'provider_rejected' : 'unavailable');
+  const config = { target, botLogin: issued.botLogin, ...(env.GITHUB_API_BASE === undefined ? {} : { apiBase: env.GITHUB_API_BASE }) };
+  if (await confirmRepository(fetchTransport, issued.token, config) !== 'ok') throw new Error('provider_rejected');
+  return { ...config, token: issued.token };
+}
+interface PrivateConfig extends IssuesApiConfig { readonly token: string }
+async function storedPacket(record: StoredPropertyRequest, env: WorkerEnv): Promise<PropertyIssuePacket> {
+  const target = propertyTarget(env);
+  if (target === null || record.repositoryId !== target.id) throw new Error('unavailable');
+  const packet = readPacket(JSON.parse(record.packetJson), target);
+  if (packet.requestId !== record.requestId || packet.threadId !== record.threadId || packet.author.id !== record.userId ||
+    canonicalPacketJson(packet) !== record.packetJson || await fingerprintPropertyPacket(record.packetJson) !== record.fingerprint) throw new Error('unavailable');
+  return packet;
+}
+/** Серверная подготовка: автор и время неизменяемы для данного requestId. */
+async function issuesPrepare(request: Request, env: WorkerEnv): Promise<Response> {
+  const cors = corsHeaders(request, env);
+  if (!checkOrigin(request, env)) return json({ error: 'forbidden_origin' }, 403, cors);
+  const session = await readSession(request, env);
+  if (session === null) return json({ error: 'unauthorized' }, 401, cors);
+  const target = propertyTarget(env);
+  if (target === null || openLimit(env) === null) return json({ error: 'disabled' }, 503, cors);
+  const body = await readJsonObject(request);
+  if (body === null || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'draft')) return json({ error: 'invalid_request' }, 400, cors);
+  let draft;
+  try { draft = readPropertyRequestDraft(body.draft); } catch { return json({ error: 'invalid_request' }, 400, cors); }
+  const draftJson = JSON.stringify(draft);
+  if (new TextEncoder().encode(draftJson).length > PROPERTY_LIMITS.body) return json({ error: 'invalid_request' }, 400, cors);
+  if (draft.threadId !== draft.requestId) {
+    const { request: root } = await requestCall<{ request: StoredPropertyRequest | null }>(env, '/request-root',
+      { repositoryId: target.id, userId: session.userId, threadId: draft.threadId });
+    if (root === null || root.issueNumber === null || root.issueState === 'closed') return json({ error: 'invalid_thread' }, 409, cors);
+    await storedPacket(root, env);
+  }
+  const key = { repositoryId: target.id, userId: session.userId, requestId: draft.requestId };
+  const existing = await requestCall<{ request: StoredPropertyRequest | null }>(env, '/request-get', key);
+  const createdAt = existing.request?.createdAt ?? new Date().toISOString();
+  const packet = sealPropertyRequest(draft, { id: session.userId, login: session.login }, createdAt, target);
+  const packetJson = canonicalPacketJson(packet), text = renderPropertyIssueBody(packet);
+  if (new TextEncoder().encode(text).length > PROPERTY_LIMITS.body || scanPublicText(text).errors.length) return json({ error: 'invalid_request' }, 400, cors);
+  const fingerprint = await fingerprintPropertyPacket(packetJson);
+  let stored: { request: StoredPropertyRequest };
+  try {
+    stored = await requestCall<{ request: StoredPropertyRequest }>(env, '/request-prepare', {
+      ...key, threadId: draft.threadId, login: session.login, createdAt, draftJson, packetJson, fingerprint, now: Date.now() });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'request_conflict') return json({ error: 'invalid_request' }, 400, cors);
+    if (error instanceof Error && error.message === 'request_limit') return json({ error: 'request_limit' }, 429, cors);
+    throw error;
+  }
+  const result = await storedPacket(stored.request, env);
+  const bodyText = renderPropertyIssueBody(result);
+  return json({ status: 'prepared', requestId: result.requestId, threadId: result.threadId,
+    title: propertyIssueTitle(stored.request.fingerprint), body: bodyText, fingerprint: stored.request.fingerprint }, 200, cors);
+}
+/** Обновляем только свои нити; закрытие Issue не доказывает применение. */
+async function refreshOwnIssues(env: WorkerEnv, session: SessionRecord, config: PrivateConfig): Promise<void> {
+  const { requests } = await requestCall<{ requests: StoredPropertyRequest[] }>(env, '/request-active', { repositoryId: config.target.id, userId: session.userId });
+  const numbers = new Set(requests.map((r) => r.issueNumber).filter((n): n is number => n !== null));
+  for (const number of numbers) {
+    const root = requests.find((r) => r.issueNumber === number && r.requestId === r.threadId);
+    if (!root) throw new Error('unavailable');
+    const result = await readRequestIssue(config.token, config, number, await storedPacket(root, env), fetchTransport);
+    if (result.status !== 'found') throw new Error('unavailable');
+    await requestCall(env, '/request-state', { repositoryId: config.target.id, userId: session.userId,
+      threadId: root.threadId, issueState: result.issue.state, now: Date.now() });
+  }
+}
+async function issuesMine(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  const cors = corsHeaders(request, env);
+  if (!checkOrigin(request, env)) return json({ error: 'forbidden_origin' }, 403, cors);
+  const session = await readSession(request, env);
+  if (session === null) return json({ error: 'unauthorized' }, 401, cors);
+  const before = url.searchParams.has('before') ? Number(url.searchParams.get('before')) : Date.now() + 1;
+  if (!Number.isSafeInteger(before) || before < 0 || url.searchParams.size > 1) return json({ error: 'invalid_request' }, 400, cors);
+  const config = await appConfig(env);
+  if (config === null) return json({ error: 'disabled' }, 503, cors);
+  await refreshOwnIssues(env, session, config);
+  const listed = await requestCall<{ requests: StoredPropertyRequest[]; hasMore: boolean }>(env, '/request-list',
+    { repositoryId: config.target.id, userId: session.userId, before, limit: 20 });
+  const requests = [];
+  for (const record of listed.requests) {
+    const packet = await storedPacket(record, env);
+    requests.push({ requestId: packet.requestId, threadId: packet.threadId, number: record.issueNumber,
+      createdAt: packet.createdAt, updatedAt: record.updatedAt, status: record.status, issueState: record.issueState,
+      changes: packet.changes });
+  }
+  return json({ requests, hasMore: listed.hasMore, openLimit: openLimit(env) }, 200, { ...cors, 'Cache-Control': 'no-store' });
+}
 /**
  * Отправка заявки. Порядок важен: источник → сессия → формат → GitHub.
  * Ответ содержит только статус и номер Issue; токен, code и тело запроса в
@@ -378,51 +509,71 @@ async function readJsonObject(request: Request): Promise<Record<string, unknown>
 async function issuesSubmit(request: Request, env: WorkerEnv): Promise<Response> {
   const cors = corsHeaders(request, env);
   if (!checkOrigin(request, env)) return json({ error: 'forbidden_origin' }, 403, cors);
-  let session: SessionRecord | null;
-  try {
-    session = await readSession(request, env);
-  } catch {
-    return json({ error: 'unavailable' }, 503, cors);
-  }
+  const session = await readSession(request, env);
   if (session === null) return json({ error: 'unauthorized' }, 401, cors);
-  let body: Record<string, unknown> | null;
+  const body = await readJsonObject(request);
+  if (body === null || Object.keys(body).length !== 2 || !Object.hasOwn(body, 'requestId') || !Object.hasOwn(body, 'fingerprint') ||
+    !isPropertyRequestId(body.requestId) || typeof body.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(body.fingerprint)) return json({ error: 'invalid_request' }, 400, cors);
+  const config = await appConfig(env);
+  if (config === null) return json({ error: 'disabled' }, 503, cors);
+  const key = { repositoryId: config.target.id, userId: session.userId, requestId: body.requestId };
+  const { request: initial } = await requestCall<{ request: StoredPropertyRequest | null }>(env, '/request-get', key);
+  if (initial === null || initial.fingerprint !== body.fingerprint) return json({ error: 'invalid_request' }, 400, cors);
+  const packet = await storedPacket(initial, env);
+  if (initial.status === 'created' && initial.issueNumber !== null) {
+    return json({ status: 'existing', number: initial.issueNumber, requestId: packet.requestId, threadId: packet.threadId }, 200, cors);
+  }
+  await refreshOwnIssues(env, session, config);
+  let reserved: StoredPropertyRequest;
+  let firstAttempt: boolean;
   try {
-    body = await readJsonObject(request);
-  } catch {
-    return json({ error: 'invalid_request' }, 400, cors);
+    const reservation = await requestCall<{ request: StoredPropertyRequest; firstAttempt: boolean }>(env, '/request-reserve', { ...key, limit: openLimit(env), now: Date.now() });
+    reserved = reservation.request; firstAttempt = reservation.firstAttempt;
+  } catch (error) {
+    if (error instanceof Error && error.message === 'request_limit') return json({ error: 'request_limit', openLimit: openLimit(env) }, 429, cors);
+    if (error instanceof Error && error.message === 'request_busy') return json({ error: 'unavailable' }, 503, cors);
+    throw error;
   }
-  if (body === null) return json({ error: 'invalid_request' }, 400, cors);
-  const payload = body;
-  const keys = Object.keys(payload);
-  if (keys.length !== 3 || !['title', 'body', 'requestId'].every((key) => Object.hasOwn(payload, key))) {
-    return json({ error: 'invalid_request' }, 400, cors);
+  if (reserved.status === 'created' && reserved.issueNumber !== null) return json({ status: 'existing', number: reserved.issueNumber,
+    requestId: packet.requestId, threadId: packet.threadId }, 200, cors);
+  let root: StoredPropertyRequest | null = null;
+  if (packet.threadId !== packet.requestId) {
+    root = (await requestCall<{ request: StoredPropertyRequest | null }>(env, '/request-root', { ...key, threadId: packet.threadId })).request;
+    if (root === null || root.issueNumber === null || root.userId !== session.userId) {
+      await requestCall(env, '/request-release', { ...key, now: Date.now() });
+      return json({ error: 'invalid_thread' }, 409, cors);
+    }
+    if (root.issueState === 'closed') {
+      await requestCall(env, '/request-release', { ...key, now: Date.now() });
+      return json({ error: 'thread_closed' }, 409, cors);
+    }
+    await storedPacket(root, env);
   }
-  const title = payload.title;
-  const text = payload.body;
-  const requestId = payload.requestId;
-  if (typeof title !== 'string' || typeof text !== 'string' || typeof requestId !== 'string') {
-    return json({ error: 'invalid_request' }, 400, cors);
+  const result = await createRequestIssue(config.token, config, { packet,
+    title: propertyIssueTitle(reserved.fingerprint), body: renderPropertyIssueBody(packet),
+    ...(root?.issueNumber !== undefined && root?.issueNumber !== null ? { threadIssueNumber: root.issueNumber } : {}),
+    recover: !firstAttempt }, fetchTransport);
+  if (result.status === 'created' || result.status === 'exists') {
+    await requestCall(env, '/request-created', { ...key, issueNumber: result.issue.number, commentId: result.commentId ?? null,
+      issueState: result.issue.state, now: Date.now() });
+    return json({ status: result.status === 'created' ? 'created' : 'existing', number: result.issue.number,
+      requestId: packet.requestId, threadId: packet.threadId }, result.status === 'created' ? 201 : 200, cors);
   }
-  if (parsePropertyIssueBody(text).status !== 'accepted') return json({ error: 'invalid_request' }, 400, cors);
-
-  const result = await createRequestIssue(
-    session.accessToken,
-    env.GITHUB_API_BASE === undefined ? {} : { apiBase: env.GITHUB_API_BASE },
-    { title, body: text, requestId },
-  );
-  if (result.status === 'created') {
-    return json({ status: 'created', number: result.issue.number, url: result.issue.htmlUrl }, 201, cors);
+  if (result.status === 'rejected') {
+    await requestCall(env, '/request-release', { ...key, now: Date.now() });
+    return json({ error: 'provider_rejected' }, 502, cors);
   }
-  if (result.status === 'exists') {
-    // Повтор после неизвестного результата: заявка уже есть, второй не создаём.
-    return json({ status: 'existing', number: result.issue.number, url: result.issue.htmlUrl }, 200, cors);
+  if (result.status === 'closed') {
+    await requestCall(env, '/request-release', { ...key, now: Date.now() });
+    return json({ error: 'thread_closed' }, 409, cors);
   }
-  if (result.status === 'rejected') return json({ error: 'provider_rejected' }, 401, cors);
   if (result.status === 'invalid') return json({ error: 'invalid_request' }, 400, cors);
+  // Резерв остаётся: неизвестный результат занимает место до достоверного разрешения.
   return json({ error: 'unavailable' }, 503, cors);
 }
 
 async function authLogout(request: Request, env: WorkerEnv): Promise<Response> {
+  if (!checkOrigin(request, env)) return json({ error: 'forbidden_origin' }, 403, corsHeaders(request, env));
   const token = readCookie(request, SESSION_COOKIE);
   if (token !== null) {
     const sessionHash = await sha256Hex(token);
@@ -432,7 +583,7 @@ async function authLogout(request: Request, env: WorkerEnv): Promise<Response> {
       // Сессия уже истекла или удалена: выход остаётся успешным.
     }
   }
-  return json({ ok: true }, 200, {
+  return json({ ok: true }, 200, { ...corsHeaders(request, env),
     'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=None`,
   });
 }
@@ -442,15 +593,18 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/healthz' && request.method === 'GET') return json({ ok: true });
-      if (url.pathname === '/auth/start' && request.method === 'GET') return await authStart(env);
+      if (url.pathname === '/auth/start' && request.method === 'GET') return await authStart(env, url);
       if (url.pathname === '/auth/callback' && request.method === 'GET') return await authCallback(request, env, url);
       if (url.pathname === '/auth/status' && request.method === 'GET') return await authStatus(request, env);
       if (url.pathname === '/auth/logout' && request.method === 'POST') return await authLogout(request, env);
-      if (url.pathname === '/issues/submit' && request.method === 'OPTIONS') return preflight(request, env);
+      if (['/issues/submit', '/issues/prepare', '/issues/mine', '/auth/logout'].includes(url.pathname) && request.method === 'OPTIONS') return preflight(request, env);
+      if (url.pathname === '/issues/prepare' && request.method === 'POST') return await issuesPrepare(request, env);
+      if (url.pathname === '/issues/mine' && request.method === 'GET') return await issuesMine(request, env, url);
       if (url.pathname === '/issues/submit' && request.method === 'POST') return await issuesSubmit(request, env);
       return json({ error: 'not_found' }, 404);
-    } catch {
-      return json({ error: 'unavailable' }, 503);
+    } catch (error) {
+      const code = error instanceof Error && error.message === 'provider_rejected' ? 'provider_rejected' : 'unavailable';
+      return json({ error: code }, 503, { ...corsHeaders(request, env), 'Cache-Control': 'no-store' });
     }
   },
   /** Cron (triggers.crons): плановая очистка — пробуждаем DO по внутренней шине. */

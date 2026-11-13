@@ -23,7 +23,6 @@
 import {
   PROPERTY_DATASETS,
   PROPERTY_FIELDS,
-  PROPERTY_REPOSITORY_ID,
   readPacket,
 } from './property-issue-contract.ts';
 import type { PropertyDatasetName, PropertyFieldName, PropertyRequestChange } from './property-issue-contract.ts';
@@ -113,14 +112,15 @@ function overlayValue(overlay: PropertyOverlay, change: PropertyRequestChange): 
  * как новая работа, а номер Issue назначает GitHub и подделать его в тексте
  * нельзя. Формат стабилен, чтобы его можно было хранить в журнале.
  */
-export function propertyIdempotencyKey(issuesNumber: number, requestId: string): string {
+export function propertyIdempotencyKey(issuesNumber: number, requestId: string, repositoryId: number): string {
   if (!Number.isSafeInteger(issuesNumber) || issuesNumber <= 0) {
     throw new TypeError('Некорректный номер Issue.');
   }
+  if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) throw new TypeError('Некорректный репозиторий.');
   if (typeof requestId !== 'string' || !/^[a-z0-9][a-z0-9-]{7,63}$/.test(requestId)) {
     throw new TypeError('Некорректный идентификатор заявки.');
   }
-  return `issue:${PROPERTY_REPOSITORY_ID}:${issuesNumber}:${requestId}`;
+  return `issue:${repositoryId}:${issuesNumber}:${requestId}`;
 }
 
 /**
@@ -136,13 +136,14 @@ export function planPropertyApply(
 ): ApplyResult {
   let packet;
   try {
-    packet = readPacket(request);
+    const repositoryId = request !== null && typeof request === 'object' ? (request as { repositoryId?: unknown }).repositoryId : 0;
+    packet = readPacket(request, { id: typeof repositoryId === 'number' ? repositoryId : 0, fullName: 'private/requests' });
   } catch {
     return { status: 'refused', reason: 'invalid_request', details: ['Заявка не соответствует схеме.'] };
   }
   let key: string;
   try {
-    key = propertyIdempotencyKey(issuesNumber, packet.requestId);
+    key = propertyIdempotencyKey(issuesNumber, packet.requestId, packet.repositoryId);
   } catch {
     return { status: 'refused', reason: 'invalid_request', details: ['Некорректный номер Issue или идентификатор заявки.'] };
   }

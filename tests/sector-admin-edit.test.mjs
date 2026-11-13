@@ -75,7 +75,7 @@ test('админ-кнопка стоит между «О карте» и воз�
   const galaxyAt = template.indexOf('@@GALAXY_RETURN@@');
   assert.ok(helpAt >= 0 && helpAt < adminAt && adminAt < galaxyAt);
   assert.match(variants, /sector:\s*\{[\s\S]*?adminGate: ['\"]\s*<button class="admin-gate-link" id="adminGateOpen" type="button"/);
-  assert.match(variants, /minimal:\s*\{\s*adminEditorPanel: '',\s*adminGate: '',\s*adminGatePanel: ''/);
+  assert.match(variants, /minimal:\s*\{\s*adminEditorPanel: '',\s*adminGate: '',\s*propertyRequests: '',\s*adminGatePanel: ''/);
   assert.match(variants, /adminGate: ''/);
   assert.match(variants, /data-admin-gate-destination="\/sector\/admin-edit\/"/);
   assert.match(variants, /id="adminEditorGate" role="dialog"[\s\S]*?data-admin-gate-modal hidden/);

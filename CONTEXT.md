@@ -1,7 +1,7 @@
 <!-- AUTO-GENERATED. DO NOT EDIT. npm run context -->
 # Контекст задачи
 context_version: 6
-head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a-timeline-project-sc2-github-io
+head_sha: 9cc6783 (на момент генерации); branch: arena/88b9c2a2-timeline-project-sc2-github-io
 Снимок состояния (head_sha, base_sha): (3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3, 3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3)
 Факты и полномочия действуют для указанной пары; при изменении пары нужна повторная оценка.
 
@@ -15,7 +15,7 @@ head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a
 ## Активная задача
 - id: SECTOR-PROPERTY-OVERLAY
 - цель: Редактирование свойств систем и мест, отправка заявки через шлюз в GitHub Issue и последующее применение утверждённых правок в слое репозитория.
-- allowed_scope: src/atlas/, src/issue-gateway/, worker/, data/, templates/, tests/, tools/, docs/handoff/sector-object-properties-and-issues.md, docs/handoff/sector-property-issue-submission.md, docs/handoff/sector-issue-oauth-local.md, docs/admins/, CONTEXT.md
+- allowed_scope: src/atlas/, src/issue-gateway/, worker/, data/, templates/, tests/, tools/, docs/handoff/sector-object-properties-and-issues.md, docs/handoff/sector-property-issue-submission.md, docs/handoff/sector-issue-oauth-local.md, docs/admins/, CONTEXT.md, site/shared/styles.css, docs/handoff/sector-property-apply.md
 - out_of_scope: Живое применение заявок, изменение настроек App и запуск sync без отдельного разрешения, Создание новых процессов, скиллов и карточек, Перебазировка планетарных эталонов без решения владельца
 - verify_cmd: npm run typecheck && npm test && npm run build && npm run verify:docs
 
@@ -26,11 +26,11 @@ head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a
 - single-agent-topology (оркестрация): О-5 отменено: 1 задача = 1 агент с прямым доступом к репозиторию = 1 PR. Несколько воркеров — только для доказанно независимых каталогов без общих файлов.; supersedes: o5-zero-contact
 - acceptance-combo (приёмка редактора): Приёмка редактора = браузерный прогон с доказательствами (скриншоты и числа из документа) + финальное решение владельца; CI и автотесты визуальную проверку не заменяют.
 - sector-property-repository-overlay (свойства систем и мест): Утверждённые правки пяти полей систем и мест хранятся в версионированном слое репозитория поверх источников Sheets; интерактивная информация и поля описания границ не подменяются этим слоем.
-- property-issue-submission-contract (заявки на свойства точек): Заявка на свойства точек — канонический JSON в маркерах с requestId; шлюз принимает только каноническое тело, ищет уже созданную заявку по requestId и не повторяет создание при неизвестном результате; создание Issue не считается применением правки или публикацией.
 - property-apply-idempotency (применение заявок на свойства): Заявка применяется только на совпадающей доверенной базе: конфликт значения в источнике или в слое не перезаписывается, повтор идемпотентен по ключу issue:<repoId>:<issueNumber>:<requestId>, слой расширяется с сохранением прежних поправок.
+- property-private-request-chain (заявки на свойства точек): Заявки живут только в приватном репозитории; создаёт бот GitHub App, автор (номер+логин) и threadId внутри канонического пакета v2; новая версия — комментарий в той же нити, не перезапись; игрок видит только свои заявки на сайте; лимит открытых нитей задаётся владельцем, без значения приём выключен; создание Issue не считается применением или публикацией.; supersedes: property-issue-submission-contract
 
 ## HOLD
-- NOT_CHECKED: живая отправка Issue, запись в data/sector-property-overlay.json, коммит и публикация не выполнялись; нужно отдельное разрешение владельца.
+- NOT_CHECKED: живая отправка Issue, запись в data/sector-property-overlay.json, коммит и публикация не выполнялись; нужны отдельное разрешение владельца, приватный репозиторий, App и PROPERTY_OPEN_LIMIT.
 - NOT_CHECKED: проверка роли Owner (tools/issue_owner_check.mjs) не подключена к применению и остаётся отдельным свидетельством.
 - NOT_CHECKED: браузерная приёмка редактора и кнопки отправки; реальная сеть Cloudflare и платформенные логи.
 - NOT_CHECKED: не принято решение, является ли форма поля высот после #235 эталоном; до него перебазировка golden-хэша и метрик запрещена.
@@ -42,8 +42,8 @@ head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a
 - FACT: вал юбки (25° против ожидаемых ≥ 30°) и отсутствие речных створов в A-17 — поведение, а не цифры; требуют диагностики формулы.
 
 ## Последняя передача
-- FACT: стек #383 → #384 → #385 слит в main (f5275e7); дерево main совпадает с рабочей веткой, редактор опубликован, отправка выключена.
-- FACT: sync.py не пишет слой поправок: отказ до записи + шаг проверки в sync.yml; 7 новых python-тестов.
-- FACT: ядро применения planPropertyApply решает «применить/уже применено/конфликт» с ключом идемпотентности; 16 тестов.
+- FACT: приватная цепочка v2 реализована локально: автор/нить в контракте, GitHub App, prepare→submit, комментарии-версии, квота нитей, «Мои заявки» и кнопка игрока.
+- FACT: финальный verify_cmd зелёный: typecheck; npm test 970 pass / 0 fail / 8 skip; build; verify:docs. lint и 45 python-тестов также зелёные.
+- FACT: решение property-private-request-chain замещает property-issue-submission-contract; CONTEXT.md пересобран; конфигурация и хэндоффы переведены на v2.
 - NOT_CHECKED: живая отправка, запись слоя, коммит App и публикация — HOLD; проверка Owner не подключена.
-- NOT_CHECKED: браузерная приёмка редактора и кнопки отправки владельцем не проводилась.
+- NOT_CHECKED: браузерная приёмка владельцем, реальный Cloudflare и данные приватного репозитория/App/лимита не подтверждены; локальный предпросмотр собран без адреса шлюза.
