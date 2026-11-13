@@ -320,7 +320,10 @@ export function createDefaultState(id: string, mode: Mode): AreaState {
     z: 10,
     priority: 0,
     lodBias: 0,
-    rounding: 1,
+    // Углы нарисованной фигуры остаются острыми: Chaikin превращал
+    // прямоугольник в восьмиугольник, и сохранённая форма не совпадала с
+    // предпросмотром. Сглаживание остаётся доступным параметром состояния.
+    rounding: 0,
     gradient: DEFAULT_GRADIENT,
     override: false,
     label: null,
@@ -821,7 +824,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const gridSnapActive = session.snapMode === 'grid' && draft.points.length >= 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.lineWidth = Math.max(1.2, session.brushWidthPx / 2);
+    // Предпросмотр рисуется ровно той толщиной, которая попадёт в документ:
+    // раньше он был вдвое тоньше, и «нарисованное» не совпадало с записанным.
+    ctx.lineWidth = Math.max(1.2, session.brushWidthPx);
     ctx.setLineDash([7, 5]);
     ctx.strokeStyle = gridSnapActive ? 'rgba(255, 226, 231, .42)' : 'rgba(255, 226, 231, .92)';
     ctx.beginPath();
@@ -843,7 +848,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         if (screen !== null) snappedScreen.push(screen);
       }
       if (snappedScreen.length >= 2) {
-        ctx.lineWidth = Math.max(1.8, session.brushWidthPx / 2 + 0.6);
+        ctx.lineWidth = Math.max(1.8, session.brushWidthPx);
         ctx.strokeStyle = 'rgba(138, 215, 194, .96)';
         ctx.beginPath();
         ctx.moveTo(snappedScreen[0]!.x, snappedScreen[0]!.y);
@@ -1876,6 +1881,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
             id: strokeId,
             points: draft.points,
             closed: draft.closed,
+            // Толщина уходит вместе со штрихом: без неё поле «Кисть, px»
+            // действовало бы только на предпросмотр.
+            width: session.brushWidthPx,
           },
           areaIdIfNew: areaId,
           areaNameIfNew: TOOL_TITLES[draft.tool] + ' ' + String(session.doc.areas.length + 1),

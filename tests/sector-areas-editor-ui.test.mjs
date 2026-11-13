@@ -30,6 +30,7 @@ import {
 } from '../src/atlas/sector-areas-editor-ui.ts';
 import { addAreaFromSectorCell, addAreaFromStroke, canFillArea, createEditorSession, exportDoc } from '../src/atlas/sector-areas-editor.ts';
 import { TOOL_IDS } from '../src/atlas/sector-areas-tools.ts';
+import { computeLod } from '../src/atlas/sector-areas-lod.ts';
 import {
   MODULE_RELATIONS,
   PLANE_TITLES,
@@ -1608,4 +1609,31 @@ test('правый рейл expand возвращает граф зависим�
   assert.equal(api.doc().events.length, 0);
   assert.equal(api.session().past.length, 0);
   api.destroy();
+});
+
+test('нарисованная фигура не сглаживается: прямой угол остаётся прямым, как в предпросмотре', () => {
+  // Прежнее значение 1 прогоняло контур через Chaikin: прямоугольник из четырёх
+  // вершин превращался в восьмиугольник уже после завершения штриха.
+  const state = createDefaultState('state-sharp', 'political');
+  assert.equal(state.rounding, 0, 'новая фигура начинается без сглаживания');
+
+  const session = createEditorSession(emptySectorAreasDoc());
+  const next = addAreaFromStroke(session, {
+    id: 'area-sharp',
+    name: 'Прямоугольник 1',
+    points: [[900, 200], [1250, 200], [1250, 500], [900, 500]],
+    closed: true,
+    state,
+  });
+  const ring = next.doc.areas[0].rings[0];
+  const geometry = computeLod({
+    ...next.doc.areas[0],
+    rings: [ring],
+    strokes: [],
+  }, 5, state.rounding, state.lodBias);
+  assert.equal(geometry.rings[0].points.length, 4, 'четыре угла прямоугольника дошли до кадра без сглаживания');
+  const xs = geometry.rings[0].points.map((point) => point[0]);
+  const ys = geometry.rings[0].points.map((point) => point[1]);
+  assert.deepEqual([Math.min(...xs), Math.max(...xs)], [900, 1250], 'границы по X совпадают с нарисованными');
+  assert.deepEqual([Math.min(...ys), Math.max(...ys)], [200, 500], 'границы по Y совпадают с нарисованными');
 });

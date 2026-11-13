@@ -1146,6 +1146,10 @@ export function createCanvasRenderer(kernel: AtlasKernel): CanvasRendererApi {
     }
 
     const strokeOneRing = (t: CanvasRenderingContext2D, ring: SceneAreaRing): void => {
+      // У отдельного штриха своя толщина — та самая «Кисть, px», которой его
+      // нарисовали. Иначе поле влияло бы только на предпросмотр, а записанная
+      // фигура рисовалась бы постоянной толщиной слоя.
+      t.lineWidth = Math.max(1, ring.strokeWidth ?? area.strokeWidth);
       if (ring.colors.length === ring.points.length && ring.colors.length > 1) {
         for (let i = 1; i < ring.points.length; i += 1) {
           const a = ring.points[i - 1]!;

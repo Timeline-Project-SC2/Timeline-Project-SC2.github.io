@@ -69,6 +69,12 @@ export interface PaintedRing {
   readonly colors: readonly Rgb[];
   readonly alphas: readonly number[];
   readonly closed: boolean;
+  /**
+   * Толщина обводки этого кольца в пикселях экрана. `undefined` — толщина
+   * слоя целиком (`AreaPaint.stroke.width`). Отдельные штрихи несут свою
+   * толщину из поля «Кисть, px», поэтому толщина живёт на кольце.
+   */
+  readonly width?: number;
 }
 
 export interface AreaPaint {
@@ -173,6 +179,7 @@ function strokesFor(
       colors: [],
       alphas: [],
       closed: stroke.closed,
+      ...(typeof stroke.width === 'number' && stroke.width > 0 ? { width: stroke.width } : {}),
     };
   });
 }
