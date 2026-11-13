@@ -57,6 +57,7 @@ export default [
         CanvasImageSource: 'readonly',
         CanvasRenderingContext2DSettings: 'readonly',
         ParentNode: 'readonly',
+        RequestInit: 'readonly',
         Transferable: 'readonly'
       }
     },

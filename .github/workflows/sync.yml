@@ -47,6 +47,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue create --title "Sync failed" --body "Автосинк упал. См. логи: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+      # Вторая линия защиты: sync.py не пишет слой утверждённых поправок, а
+      # если это когда-нибудь изменится — падение лучше тихой перезаписи
+      # принятых правок. Первая линия — property_overlay_problems() в sync.py.
+      - name: Проверить, что слой поправок не изменён
+        if: success()
+        run: |
+          if ! git diff --quiet -- data/sector-property-overlay.json; then
+            echo "::error::sync изменил data/sector-property-overlay.json: утверждённые поправки нельзя перезаписывать автоматически."
+            git --no-pager diff --stat -- data/sector-property-overlay.json
+            exit 1
+          fi
+          echo "слой поправок не изменён"
       - name: Commit and push if changed
         if: success()
         env:

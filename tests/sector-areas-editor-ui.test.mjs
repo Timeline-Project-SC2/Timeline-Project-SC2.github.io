@@ -1324,7 +1324,8 @@ test('подтверждение предпросмотра локально и 
   panel.handlers.get('change')({ target: checkbox });
   clickPanel(panel, 'point-review-confirm');
   assert.match(preview.innerHTML, /Просмотр подтверждён локально/);
-  assert.match(preview.innerHTML, /Заявка не отправлена/);
+  assert.match(preview.innerHTML, /применяет правку и не обновляет сайт/);
+  assert.match(preview.innerHTML, /data-action="point-submit"/);
   change('Другое');
   assert.equal(preview.innerHTML, '', 'старое подтверждение не переносится на другую правку');
   api.destroy();
