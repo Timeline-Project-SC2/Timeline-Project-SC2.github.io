@@ -371,8 +371,18 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
   .sector-arrow, .sector-flight-frame { transition: none; }
 }
 
-/* Приватные заявки на свойства: форма игрока и список «Мои заявки». */
+/* Приватные заявки на свойства: форма игрока и список «Мои заявки» в панели редактора. */
 .property-requests-open { white-space: nowrap; }
+.admin-editor-requests-open {
+  min-height: 30px; padding: 0 10px; border: 1px solid rgba(119, 190, 180, .38);
+  border-radius: 6px; background: rgba(45, 112, 104, .12); color: var(--admin-topbar-ink, #cfe7e2);
+  font: 11px var(--mono); cursor: pointer;
+}
+.admin-editor-requests-open:hover,
+.admin-editor-requests-open:focus-visible {
+  border-color: rgba(119, 190, 180, .68); background: rgba(45, 112, 104, .18);
+  outline: 1px solid rgba(119, 190, 180, .7); outline-offset: 1px;
+}
 .property-request-modal { width: min(720px, 100%); }
 .property-request-object { color: var(--white); font-weight: 600; }
 .property-request-field { display: grid; gap: 6px; margin: 12px 0; color: #c6d3e4; font-size: 12px; }

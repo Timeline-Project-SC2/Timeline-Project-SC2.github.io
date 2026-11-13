@@ -28,14 +28,19 @@ test('кнопка «Предложить правку» есть в досье 
   assert.match(dossier, /kernel\.propertyRequest\?\.open\('systems', state\.activeSystemId\)/);
 });
 
-test('«Мои заявки» доступны на секторе и в админской копии, но не в минимальном скине', () => {
+test('«Мои заявки» стоят в панели редактора, а не в публичной шапке сектора и минимального скина', () => {
   const variants = read('src/atlas/atlas-variants.ts');
   const template = read('templates/atlas-shell.html');
   const shell = read('tools/vite/atlas-shell.ts');
   assert.match(template, /@@PROPERTY_REQUESTS@@/);
   assert.match(shell, /PROPERTY_REQUESTS: variant\.propertyRequests/);
-  assert.match(variants, /id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>/);
+  assert.match(variants, /sector:\s*\{[\s\S]*?propertyRequests: ''/);
   assert.match(variants, /minimal:\s*\{[\s\S]*?propertyRequests: ''/);
+  const panel = /adminEditorPanel: \[([\s\S]*?)\]\.join\('\\n'\)/.exec(shell)?.[1] ?? '';
+  assert.match(panel, /id="propertyRequestsOpen"[^>]*>Мои заявки<\/button>/);
+  assert.ok(panel.indexOf('admin-editor-heading-tools') < panel.indexOf('id="propertyRequestsOpen"'));
+  assert.ok(panel.indexOf('id="propertyRequestsOpen"') < panel.indexOf('id="adminEditorHelp"'));
+  assert.doesNotMatch(template, /id="propertyRequestsOpen"/);
 });
 
 test('возврат OAuth ?requests=1 открывает список, а форма отправляет только подтверждённый серверный текст', () => {

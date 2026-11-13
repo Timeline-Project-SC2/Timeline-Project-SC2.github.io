@@ -29,7 +29,8 @@ export interface AtlasVariant {
 export const atlasVariants: Record<'minimal' | 'sector', AtlasVariant> = {
   sector: {
     adminEditorPanel: '',
-    propertyRequests: '        <button class="top-action property-requests-open" id="propertyRequestsOpen" type="button" aria-haspopup="dialog">Мои заявки</button>',
+    // «Мои заявки» живут в панели редактора, не в публичной шапке сектора.
+    propertyRequests: '',
     adminGate: '        <button class="admin-gate-link" id="adminGateOpen" type="button" aria-haspopup="dialog" aria-controls="adminEditorGate">Доступ Администратора</button>',
     adminGatePanel: [
       '    <div class="admin-gate-modal" id="adminEditorGate" role="dialog" aria-modal="true" aria-labelledby="adminGateTitle" data-admin-gate-modal hidden>',
