@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { createArea, emptySectorAreasDoc, parseSectorAreas } from '../src/atlas/sector-areas-contract.ts';
+import { createArea, emptySectorAreasDoc, parseSectorAreas, validateSectorAreas } from '../src/atlas/sector-areas-contract.ts';
 import { createFactionPalette, parseFactionCsv } from '../src/atlas/sector-areas-color.ts';
 import { buildAreaPaints, areaSize } from '../src/atlas/sector-areas-render.ts';
 import { areasFor, buildSectorScene } from '../src/atlas/sector-scene.ts';
@@ -306,4 +306,52 @@ test('форс-закрашивание учитывает фокус, rounding/
     focus: { behavior: 'hide', dimAlpha: 0.25 },
   });
   assert.equal(hiddenFocus.some((item) => item.override), false, 'hide скрывает override чужого режима');
+});
+
+test('толщина кисти из штриха доходит до обводки и не подменяется толщиной слоя', () => {
+  // `createArea` состояний не принимает: область с состояниями собирается явно.
+  const area = {
+    ...createArea({
+      id: 'a-width',
+      name: 'Кисть 40',
+      rings: [],
+      strokes: [
+        { id: 's-thick', points: [[1000, 1000], [2000, 1000], [2000, 2000]], closed: true, width: 40 },
+        { id: 's-thin', points: [[3000, 3000], [3500, 3000]], closed: false },
+      ],
+    }),
+    states: [state()],
+  };
+  const paints = buildAreaPaints(docWith([area]), base());
+  const withWidth = paints.find((paint) => (paint.strokeIds ?? []).includes('s-thick'));
+  const withoutWidth = paints.find((paint) => (paint.strokeIds ?? []).includes('s-thin'));
+  assert.ok(withWidth !== undefined && withoutWidth !== undefined, 'оба штриха попали в краски');
+  assert.equal(withWidth.rings[0].width, 40, 'ширина штриха хранится на кольце');
+  assert.equal(withoutWidth.rings[0].width, undefined, 'без поля толщина берётся из слоя');
+
+  // Сцена переносит ширину кольца в экранный примитив как есть.
+  const scene = buildSectorScene({
+    viewport: { w: 800, h: 600 },
+    camera: { centerX: 2000, centerY: 2000, visibleWidth: 4000 },
+    areas: paints,
+    labels: false,
+  });
+  const brush = scene.primitives.find((primitive) => primitive.kind === 'brush');
+  assert.ok(brush !== undefined && brush.kind === 'brush');
+  const thickRing = brush.rings.find((ring) => ring.strokeWidth === 40);
+  assert.ok(thickRing !== undefined, 'кольцо штриха сохранило ширину 40 px');
+});
+
+test('документ без поля width у штриха читается как раньше', () => {
+  const parsed = parseSectorAreas(JSON.stringify({
+    ...emptySectorAreasDoc(),
+    areas: [{
+      id: 'legacy-w', name: 'Старая', parentId: null, address: null, source: 'brush', closed: true,
+      rings: [SQUARE], states: [state()],
+      strokes: [{ id: 'old', points: [[1000, 1000], [2000, 1000]], closed: false }],
+      scopeId: null, location: null, detail: null, distance: null, band: null, events: [],
+    }],
+  }));
+  assert.equal(parsed.areas[0].strokes[0].width, undefined, 'нет поля — нет толщины, ошибки нет');
+  assert.deepEqual(validateSectorAreas(parsed).errors, []);
 });

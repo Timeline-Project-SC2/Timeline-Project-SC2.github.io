@@ -3,7 +3,6 @@ import type { OAuthConsumeResult } from './oauth-state.ts';
 
 const TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const USER_URL = 'https://api.github.com/user';
-const REPOSITORY_ID = '1421259694';
 const TIMEOUT_MS = 10_000;
 const verifierPattern = /^[A-Za-z0-9_-]{43}$/;
 
@@ -66,7 +65,7 @@ export async function exchangeGithubCode(
   const tokenUrl = config.tokenUrl ?? TOKEN_URL;
   const params = new URLSearchParams({
     client_id: config.clientId, client_secret: config.clientSecret, code,
-    redirect_uri: config.callbackUrl, code_verifier: accepted.verifier, repository_id: REPOSITORY_ID,
+    redirect_uri: config.callbackUrl, code_verifier: accepted.verifier,
   });
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);

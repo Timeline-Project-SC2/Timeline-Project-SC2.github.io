@@ -98,10 +98,10 @@ import { NO_FACTION_KEY } from './config.ts';
 import { PROPERTY_FIELDS, createPropertySession, editProperty, propertyChanges, redoProperty, undoProperty } from './sector-property-session.ts';
 import type { PropertySession } from './sector-property-session.ts';
 import { preparePropertyDraft, restorePropertyDraft } from './sector-property-draft.ts';
-import { preparePropertyIssuePreview } from './sector-property-issue-preview.ts';
-import type { PropertyIssuePreview } from './sector-property-issue-preview.ts';
+import { preparePropertyLocalPreview } from './sector-property-issue-preview.ts';
+import type { PropertyLocalPreview } from './sector-property-issue-preview.ts';
 import { newRequestId, preparePropertyPacket } from './sector-property-packet.ts';
-import { SUBMIT_MESSAGES, readGatewayUrl, submitPropertyPacket } from './sector-property-submit.ts';
+import { SUBMIT_MESSAGES, readGatewayUrl, submitPropertyPacket, preparePropertySubmission } from './sector-property-submit.ts';
 import type { SubmitOutcome } from './sector-property-submit.ts';
 import type { PropertyField } from './sector-property-overlay.ts';
 import { canContinueStroke, canStartStroke, isDrawButton as isDrawButtonRule, isTextEntryTarget } from './pointer-rules.ts';
@@ -320,7 +320,10 @@ export function createDefaultState(id: string, mode: Mode): AreaState {
     z: 10,
     priority: 0,
     lodBias: 0,
-    rounding: 1,
+    // Углы нарисованной фигуры остаются острыми: Chaikin превращал
+    // прямоугольник в восьмиугольник, и сохранённая форма не совпадала с
+    // предпросмотром. Сглаживание остаётся доступным параметром состояния.
+    rounding: 0,
     gradient: DEFAULT_GRADIENT,
     override: false,
     label: null,
@@ -601,11 +604,13 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   let pointSession: PropertySession | null = null;
   let pointIndex = 0;
   let pointNotice: string | null = null;
-  let pointReview: { preview: PropertyIssuePreview; acknowledged: boolean; confirmed: boolean } | null = null;
+  let pointReview: { preview: PropertyLocalPreview; acknowledged: boolean; confirmed: boolean } | null = null;
   /** Заявка, подготовленная к отправке: ID попытки фиксируется до запроса. */
-  let pointSubmission: { requestId: string; title: string; body: string; snapshot: string; fromPreview: boolean } | null = null;
+  let pointSubmission: { requestId: string; threadId: string; fingerprint: string; snapshot: string } | null = null;
   let pointSubmitState: 'idle' | 'sending' = 'idle';
   let pointSubmitOutcome: SubmitOutcome | null = null;
+  /** Нить последней созданной заявки: следующая правка становится её версией. */
+  let pointThread: { threadId: string; number?: number } | null = null;
   /* Фильтр отображаемых рёбер графа модулей: состояние интерфейса, не документа. */
   let relationFilter: RelationFilter = 'all';
   /* Предпросмотр «было → стало»: сравнение с документом на момент открытия. */
@@ -819,7 +824,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const gridSnapActive = session.snapMode === 'grid' && draft.points.length >= 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.lineWidth = Math.max(1.2, session.brushWidthPx / 2);
+    // Предпросмотр рисуется ровно той толщиной, которая попадёт в документ:
+    // раньше он был вдвое тоньше, и «нарисованное» не совпадало с записанным.
+    ctx.lineWidth = Math.max(1.2, session.brushWidthPx);
     ctx.setLineDash([7, 5]);
     ctx.strokeStyle = gridSnapActive ? 'rgba(255, 226, 231, .42)' : 'rgba(255, 226, 231, .92)';
     ctx.beginPath();
@@ -841,7 +848,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
         if (screen !== null) snappedScreen.push(screen);
       }
       if (snappedScreen.length >= 2) {
-        ctx.lineWidth = Math.max(1.8, session.brushWidthPx / 2 + 0.6);
+        ctx.lineWidth = Math.max(1.8, session.brushWidthPx);
         ctx.strokeStyle = 'rgba(138, 215, 194, .96)';
         ctx.beginPath();
         ctx.moveTo(snappedScreen[0]!.x, snappedScreen[0]!.y);
@@ -1045,6 +1052,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       '  <div class="admin-editor-nav-group">',
       '    <p class="admin-editor-nav-title">Системы</p>',
       '    <details class="admin-editor-category admin-editor-module-menu"><summary>Модули по категориям</summary><div class="admin-editor-planes">' + planes + '</div></details>',
+      // Слот верхнего тулбара сразу после «Модулей по категориям»; не в заголовке дока.
+      '    <button type="button" class="property-requests-open admin-editor-requests-open" id="propertyRequestsOpen" aria-haspopup="dialog" title="Мои заявки на свойства точек">Мои заявки</button>',
       '  </div>',
       '</nav>',
     ].join('');
@@ -1121,43 +1130,56 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
    * неизвестного результата идёт с тем же ID и не создаёт дубль.
    */
   async function submitPointRequest(): Promise<void> {
-    if (pointSession === null || pointSubmitState === 'sending') return;
-    pointSubmitState = 'sending';
-    pointSubmitOutcome = null;
-    pointNotice = null;
-    updatePointSummary();
+    if (pointSession === null || pointSubmitState === 'sending' || !pointReview?.confirmed) return;
+    pointSubmitState = 'sending'; pointSubmitOutcome = null; pointNotice = null; updatePointSummary();
     try {
-      const requestId = pointSubmission?.requestId ?? newRequestId(Date.now(), (count = 32) => crypto.getRandomValues(new Uint8Array(count)));
-      const review = await preparePropertyPacket(pointSession, pointFactions(), requestId);
-      if (review === null || review.status !== 'ready') {
-        pointNotice = review?.errors[0] ?? 'Заявка не готова: проверьте правки.';
-        pointSubmission = null;
-        return;
+      const sessionAtStart = pointSession;
+      const requestId = pointSubmission?.requestId ?? newRequestId(Date.now(), () => crypto.getRandomValues(new Uint8Array(32)));
+      const threadId = pointSubmission?.threadId ?? pointThread?.threadId ?? requestId;
+      const review = await preparePropertyPacket(sessionAtStart, pointFactions(), requestId, threadId);
+      if (review === null || review.status !== 'ready' || review.draft === null) {
+        pointNotice = review?.errors[0] ?? 'Заявка не готова: проверьте правки.'; pointSubmission = null; return;
       }
-      // Неизменность содержимого между подготовкой и отправкой: подпись та же.
       if (pointSubmission !== null && pointSubmission.snapshot !== review.draftSnapshot) {
-        pointNotice = 'Содержимое изменилось во время подготовки: проверьте предпросмотр заново.';
-        pointSubmission = null;
+        pointNotice = 'Содержимое изменилось: проверьте заявку заново.'; pointSubmission = null; pointReview.confirmed = false; return;
+      }
+      const env = { gatewayUrl: readGatewayUrl(document.querySelector('meta[name="issue-gateway"]')), origin: location.origin };
+      const prepared = await preparePropertySubmission(review.draft, env);
+      if (pointSession !== sessionAtStart || pointReview === null || pointReview.preview.draftSnapshot !== review.draftSnapshot) {
+        pointNotice = 'Содержимое изменилось во время подготовки: проверьте заявку заново.'; pointSubmission = null; return;
+      }
+      if (prepared.status !== 'prepared') {
+        pointNotice = prepared.status === 'unauthorized' ? SUBMIT_MESSAGES.unauthorized :
+          prepared.status === 'disabled' ? SUBMIT_MESSAGES.disabled : prepared.status === 'closed' ? SUBMIT_MESSAGES.closed :
+          prepared.status === 'limit' ? SUBMIT_MESSAGES.limit : SUBMIT_MESSAGES.invalid;
+        pointSubmitOutcome = { status: prepared.status };
         return;
       }
-      pointSubmission = { requestId, title: review.title, body: review.body, snapshot: review.draftSnapshot, fromPreview: true };
-      const gatewayUrl = readGatewayUrl(document.querySelector('meta[name="issue-gateway"]'));
-      const outcome = await submitPropertyPacket({ title: review.title, body: review.body, requestId }, {
-        gatewayUrl,
-        origin: location.origin,
-      });
-      pointSubmitOutcome = outcome;
-      pointNotice = SUBMIT_MESSAGES[outcome.status];
-      // Успех создания не применяет правку: сессия остаётся как есть. ID
-      // сохраняется намеренно — повторный клик вернёт ту же Issue, а не создаст новую.
-      void outcome;
+      // Сервер добавил автора и время. Повторно показываем именно этот текст,
+      // подтверждение локального предпросмотра не переносится автоматически.
+      pointReview = { preview: { status: 'preview_only', title: prepared.title, body: prepared.body,
+        warnings: ['Проверьте автора, время и приватность. Это точный текст будущей заявки.'], draftSnapshot: review.draftSnapshot },
+        acknowledged: false, confirmed: false };
+      pointSubmission = { requestId: prepared.requestId, threadId: prepared.threadId, fingerprint: prepared.fingerprint, snapshot: review.draftSnapshot };
+      pointNotice = 'Текст заявки подготовлен сервером. Проверьте его и подтвердите просмотр ещё раз.';
     } catch {
-      pointSubmitOutcome = { status: 'unavailable' };
-      pointNotice = SUBMIT_MESSAGES.unavailable;
-    } finally {
-      pointSubmitState = 'idle';
-      updatePointSummary();
+      pointSubmitOutcome = { status: 'unavailable' }; pointNotice = SUBMIT_MESSAGES.unavailable;
+    } finally { pointSubmitState = 'idle'; updatePointSummary(); }
+  }
+
+  async function sendConfirmedPointRequest(): Promise<void> {
+    if (pointSubmission === null || !pointReview?.confirmed || pointSubmitState === 'sending' || pointSession === null) return;
+    const currentDraft = pointDraft(pointSession).draft;
+    if (currentDraft === null || JSON.stringify(currentDraft) !== pointSubmission.snapshot) {
+      pointNotice = 'Содержимое изменилось: проверьте заявку заново.'; pointSubmission = null; pointReview = null; updatePointSummary(); return;
     }
+    pointSubmitState = 'sending'; updatePointSummary();
+    try {
+      const outcome = await submitPropertyPacket(pointSubmission, { gatewayUrl: readGatewayUrl(document.querySelector('meta[name="issue-gateway"]')), origin: location.origin });
+      pointSubmitOutcome = outcome; pointNotice = SUBMIT_MESSAGES[outcome.status];
+      if (outcome.status === 'created' || outcome.status === 'existing') pointThread = { threadId: pointSubmission.threadId, ...(outcome.number === undefined ? {} : { number: outcome.number }) };
+    } catch { pointSubmitOutcome = { status: 'unavailable' }; pointNotice = SUBMIT_MESSAGES.unavailable; }
+    finally { pointSubmitState = 'idle'; updatePointSummary(); }
   }
 
   function pointReviewHtml(): string {
@@ -1167,21 +1189,22 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       + '<p><strong>Заголовок:</strong> ' + escapeHtml(preview.title) + '</p>'
       + '<ul>' + preview.warnings.map((warning) => '<li>' + escapeHtml(warning) + '</li>').join('') + '</ul>'
       + '<label class="admin-editor-property-field"><span>Содержимое</span><pre class="admin-editor-point-preview">' + escapeHtml(preview.body) + '</pre></label>'
-      + '<label><input type="checkbox" data-action="point-review-ack"' + (acknowledged ? ' checked' : '') + '> Я проверил содержимое и понимаю, что будущая Issue будет публичной.</label>'
+      + '<label><input type="checkbox" data-action="point-review-ack"' + (acknowledged ? ' checked' : '') + '> Я проверил содержимое; заявка доступна только мне на сайте и владельцу организации.</label>'
       + '<div><button type="button" data-action="point-review-confirm"' + (acknowledged ? '' : ' disabled') + '>Подтвердить просмотр</button></div>'
       + (confirmed ? '<p role="status">Просмотр подтверждён локально. Отправка — отдельное действие ниже.</p>' : '')
       + '<h3>Отправка</h3>'
-      + '<p>Отправка создаёт публичную заявку в GitHub от вашего имени. Она <strong>не</strong> применяет правку и не обновляет сайт: это отдельные шаги, и их результат проверяется отдельно.</p>'
+      + '<p>Заявку создаёт бот в закрытом репозитории; ваш номер и логин GitHub будут указаны внутри. Она <strong>не</strong> применяет правку и не обновляет сайт: это отдельные шаги, и их результат проверяется отдельно.</p>'
       + (pointSubmission === null
         ? ''
         : '<p>Идентификатор заявки: <code>' + escapeHtml(pointSubmission.requestId) + '</code> — повтор с ним же не создаёт вторую Issue; новая правка создаёт новый идентификатор.</p>')
-      + '<div><button type="button" data-action="point-submit"'
+      + (pointThread === null ? '' : '<p>Следующая правка будет новой версией нити ' + (pointThread.number === undefined ? '<code>' + escapeHtml(pointThread.threadId) + '</code>' : '#' + pointThread.number) + '. <button type="button" data-action="point-new-thread">Начать новую нить</button></p>')
+      + '<div><button type="button" data-action="' + (pointSubmission === null ? 'point-submit' : 'point-send-confirmed') + '"'
       + (confirmed && pointSubmitState !== 'sending' ? '' : ' disabled') + '>'
-      + (pointSubmitState === 'sending' ? 'Отправка…' : 'Отправить заявку в GitHub') + '</button></div>'
+      + (pointSubmitState === 'sending' ? 'Отправка…' : pointSubmission === null ? 'Подготовить текст на сервере' : 'Отправить заявку в GitHub') + '</button></div>'
       + (pointSubmitOutcome === null ? '' : '<p role="status">' + escapeHtml(SUBMIT_MESSAGES[pointSubmitOutcome.status])
-        + (pointSubmitOutcome.status === 'created' || pointSubmitOutcome.status === 'existing'
-          ? ' <a href="' + escapeHtml(pointSubmitOutcome.url) + '" rel="noopener noreferrer" target="_blank">Issue #' + pointSubmitOutcome.number + '</a>'
-          : '') + '</p>')
+        + (pointSubmitOutcome.number === undefined ? '' : ' Номер нити: #' + pointSubmitOutcome.number + ' (ссылка только для владельца).') + '</p>'
+        + (pointSubmitOutcome.status === 'unauthorized' && readGatewayUrl(document.querySelector('meta[name="issue-gateway"]')) !== null
+          ? '<p><a href="' + escapeHtml(readGatewayUrl(document.querySelector('meta[name="issue-gateway"]')) + '/auth/start?return=admin') + '" data-action="point-login">Войти через GitHub</a></p>' : ''))
       + '</section>';
   }
   function pointChangeSummaryHtml(current: PropertySession): string {
@@ -1208,10 +1231,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     if (previewButton !== null) previewButton.disabled = pointDraft(pointSession).draft === null;
     const review = panel.querySelector('[data-point-review]');
     if (review !== null) review.innerHTML = pointReviewHtml();
-    const submitButton = panel.querySelector<HTMLButtonElement>('[data-action="point-submit"]');
+    const submitButton = panel.querySelector<HTMLButtonElement>('[data-action="point-submit"], [data-action="point-send-confirmed"]');
     if (submitButton !== null) {
       submitButton.disabled = pointReview === null || !pointReview.confirmed || pointSubmitState === 'sending';
-      submitButton.textContent = pointSubmitState === 'sending' ? 'Отправка…' : 'Отправить заявку в GitHub';
+      submitButton.textContent = pointSubmitState === 'sending' ? 'Отправка…' : pointSubmission === null ? 'Подготовить текст на сервере' : 'Отправить заявку в GitHub';
     }
   }
 
@@ -1551,7 +1574,63 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // Высота строки меняется при переносе категорий, масштабе и сворачивании.
   // Один измеренный отступ используется Toolbox, доком и карточкой системы.
   let navigationObserver: ResizeObserver | null = null;
+  /**
+   * Общие вертикали оболочки — внешние кромки крайних блоков шапки.
+   *
+   * Владелец разметил на скриншоте линии выравнивания: они проходят по внешним
+   * краям блока с кнопкой каталога слева и блока с эмблемой справа, а не по
+   * кромке самой `.topbar` (у той сверху ещё 22px собственного поля). Панели,
+   * полоса инструментов, док и рейл встают ровно по этим вертикалям.
+   *
+   * Если блок шапки спрятан или пуст (узкий экран), отступ считается от кромки
+   * `.topbar` плюс его собственные поля — цифра получается та же.
+   */
+  function syncShellEdges(): void {
+    if (panel === null || stage === null || stage === undefined || typeof stage.getBoundingClientRect !== 'function') return;
+    if (typeof document === 'undefined') return;
+    const topbar = document.querySelector<HTMLElement>('.topbar');
+    if (!topbar || typeof topbar.getBoundingClientRect !== 'function') return;
+    const stageRect = stage.getBoundingClientRect();
+    const headerRect = topbar.getBoundingClientRect();
+    const headerStyle = typeof getComputedStyle === 'function' ? getComputedStyle(topbar) : null;
+    const pad = (value: string | undefined): number => {
+      const parsed = Number.parseFloat(value ?? '');
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const padLeft = pad(headerStyle?.paddingLeft);
+    const padRight = pad(headerStyle?.paddingRight);
+    const padBottom = pad(headerStyle?.paddingBottom);
+    const borderBottom = pad(headerStyle?.borderBottomWidth);
+    const leftBlock = document.querySelector<HTMLElement>('.topbar-left');
+    const rightBlock = document.querySelector<HTMLElement>('.topbar-right');
+    const leftBlockRect = leftBlock !== null && typeof leftBlock.getBoundingClientRect === 'function'
+      ? leftBlock.getBoundingClientRect()
+      : null;
+    const rightBlockRect = rightBlock !== null && typeof rightBlock.getBoundingClientRect === 'function'
+      ? rightBlock.getBoundingClientRect()
+      : null;
+    const leftAnchor = leftBlockRect !== null && leftBlockRect.width > 0
+      ? leftBlockRect.left
+      : headerRect.left + padLeft;
+    const rightAnchor = rightBlockRect !== null && rightBlockRect.width > 0
+      ? rightBlockRect.right
+      : headerRect.right - padRight;
+    const left = Math.max(8, Math.round(leftAnchor - stageRect.left));
+    const right = Math.max(8, Math.round(stageRect.right - rightAnchor));
+    // Панель позиционируется внутри `.map-stage`, поэтому зазор считается в её
+    // координатах: от внутреннего низа шапки (без нижнего поля и рамки) плюс
+    // общий зазор 8px. На телефоне полоса шапки и сцена начинаются с одного
+    // 68px, и формула даёт те же 8px.
+    const top = Math.max(
+      8,
+      Math.round(headerRect.bottom - padBottom - borderBottom - stageRect.top + 8),
+    );
+    panel.style?.setProperty?.('--shell-left', `${left}px`);
+    panel.style?.setProperty?.('--shell-right', `${right}px`);
+    panel.style?.setProperty?.('--shell-inset-top', `${top}px`);
+  }
   function syncNavigationHeight(): void {
+    syncShellEdges();
     const nav = panel?.querySelector<HTMLElement>('.admin-editor-nav');
     if (!nav || typeof nav.getBoundingClientRect !== 'function') return;
     const height = Math.ceil(nav.getBoundingClientRect().height);
@@ -1615,6 +1694,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       navigationObserver.disconnect();
       const nav = panel.querySelector('.admin-editor-nav');
       if (nav) navigationObserver.observe(nav);
+      if (stage !== null && stage !== undefined) navigationObserver.observe(stage);
     }
     if (previewOn) {
       lastViewKey = '';
@@ -1801,6 +1881,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
             id: strokeId,
             points: draft.points,
             closed: draft.closed,
+            // Толщина уходит вместе со штрихом: без неё поле «Кисть, px»
+            // действовало бы только на предпросмотр.
+            width: session.brushWidthPx,
           },
           areaIdIfNew: areaId,
           areaNameIfNew: TOOL_TITLES[draft.tool] + ' ' + String(session.doc.areas.length + 1),
@@ -2101,7 +2184,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       case 'help': openHelp(); break;
       case 'help-close': closeHelp(); break;
       case 'collapse': setCollapsed(true); break;
-      case 'expand': setCollapsed(false); break;
+      // Правый рейл — самостоятельный вход в граф. Он не должен возвращать
+      // последнюю левую панель свойств: иначе после переноса панелей док
+      // «не открывается» и модули со связями не показываются.
+      case 'expand': setScreen('dependencies'); break;
       case 'toggle-enable': setEnabled(input.checked); break;
       case 'mode':
       case 'snap':
@@ -2147,9 +2233,11 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       }
       case 'module-run': runModuleAction(control.getAttribute('data-run') ?? ''); break;
       case 'point-submit': { void submitPointRequest(); break; }
+      case 'point-send-confirmed': { void sendConfirmedPointRequest(); break; }
+      case 'point-new-thread': { pointThread = null; pointSubmission = null; pointReview = null; pointSubmitOutcome = null; pointNotice = 'Следующая заявка начнёт новую нить.'; updatePointSummary(); break; }
       case 'point-preview': {
         if (pointSession !== null) {
-          const preview = preparePropertyIssuePreview(pointSession, pointFactions());
+          const preview = preparePropertyLocalPreview(pointSession, pointFactions());
           if (preview !== null) {
             pointReview = { preview, acknowledged: false, confirmed: false };
             pointSubmitOutcome = null;
@@ -2162,13 +2250,8 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       }
       case 'point-review-confirm': {
         if (pointReview !== null && pointReview.acknowledged && pointSession !== null) {
-          const current = preparePropertyIssuePreview(pointSession, pointFactions());
-          if (current !== null && current.draftSnapshot === pointReview.preview.draftSnapshot) {
-            pointReview.confirmed = true;
-          } else {
-            pointReview = null;
-            pointNotice = 'Содержимое изменилось: проверьте предпросмотр заново.';
-          }
+          const current = preparePropertyLocalPreview(pointSession, pointFactions());
+          if (current !== null && current.draftSnapshot === pointReview.preview.draftSnapshot) pointReview.confirmed = true;
           updatePointSummary();
         }
         break;
@@ -2539,6 +2622,9 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     destroy(): void {
       navigationObserver?.disconnect();
       panel?.style?.removeProperty?.('--shell-top');
+      panel?.style?.removeProperty?.('--shell-inset-top');
+      panel?.style?.removeProperty?.('--shell-left');
+      panel?.style?.removeProperty?.('--shell-right');
       stage?.style?.removeProperty?.('--admin-content-top');
       for (const item of listeners) item.target.removeEventListener(item.type, item.handler, item.capture);
       listeners.length = 0;

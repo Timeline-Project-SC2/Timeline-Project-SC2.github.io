@@ -1,8 +1,8 @@
 <!-- AUTO-GENERATED. DO NOT EDIT. npm run context -->
 # Контекст задачи
 context_version: 6
-head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a-timeline-project-sc2-github-io
-Снимок состояния (head_sha, base_sha): (3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3, 3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3)
+head_sha: 5eaac2d (на момент генерации); branch: arena/c52518e6-timeline-project-sc2-github-io
+Снимок состояния (head_sha, base_sha): (b0ca6bb, 3615b37c30b7ec5b32b5eb30f2fab2bed221b7c3)
 Факты и полномочия действуют для указанной пары; при изменении пары нужна повторная оценка.
 
 ## Правила
@@ -15,7 +15,7 @@ head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a
 ## Активная задача
 - id: SECTOR-PROPERTY-OVERLAY
 - цель: Редактирование свойств систем и мест, отправка заявки через шлюз в GitHub Issue и последующее применение утверждённых правок в слое репозитория.
-- allowed_scope: src/atlas/, src/issue-gateway/, worker/, data/, templates/, tests/, tools/, docs/handoff/sector-object-properties-and-issues.md, docs/handoff/sector-property-issue-submission.md, docs/handoff/sector-issue-oauth-local.md, docs/admins/, CONTEXT.md
+- allowed_scope: src/atlas/, src/issue-gateway/, worker/, data/, templates/, tests/, tools/, docs/handoff/sector-object-properties-and-issues.md, docs/handoff/sector-property-issue-submission.md, docs/handoff/sector-issue-oauth-local.md, docs/admins/, CONTEXT.md, site/shared/styles.css, docs/handoff/sector-property-apply.md
 - out_of_scope: Живое применение заявок, изменение настроек App и запуск sync без отдельного разрешения, Создание новых процессов, скиллов и карточек, Перебазировка планетарных эталонов без решения владельца
 - verify_cmd: npm run typecheck && npm test && npm run build && npm run verify:docs
 
@@ -26,11 +26,11 @@ head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a
 - single-agent-topology (оркестрация): О-5 отменено: 1 задача = 1 агент с прямым доступом к репозиторию = 1 PR. Несколько воркеров — только для доказанно независимых каталогов без общих файлов.; supersedes: o5-zero-contact
 - acceptance-combo (приёмка редактора): Приёмка редактора = браузерный прогон с доказательствами (скриншоты и числа из документа) + финальное решение владельца; CI и автотесты визуальную проверку не заменяют.
 - sector-property-repository-overlay (свойства систем и мест): Утверждённые правки пяти полей систем и мест хранятся в версионированном слое репозитория поверх источников Sheets; интерактивная информация и поля описания границ не подменяются этим слоем.
-- property-issue-submission-contract (заявки на свойства точек): Заявка на свойства точек — канонический JSON в маркерах с requestId; шлюз принимает только каноническое тело, ищет уже созданную заявку по requestId и не повторяет создание при неизвестном результате; создание Issue не считается применением правки или публикацией.
 - property-apply-idempotency (применение заявок на свойства): Заявка применяется только на совпадающей доверенной базе: конфликт значения в источнике или в слое не перезаписывается, повтор идемпотентен по ключу issue:<repoId>:<issueNumber>:<requestId>, слой расширяется с сохранением прежних поправок.
+- property-private-request-chain (заявки на свойства точек): Заявки живут только в приватном репозитории; создаёт бот GitHub App, автор (номер+логин) и threadId внутри канонического пакета v2; новая версия — комментарий в той же нити, не перезапись; игрок видит только свои заявки на сайте; лимит открытых нитей задаётся владельцем, без значения приём выключен; создание Issue не считается применением или публикацией.; supersedes: property-issue-submission-contract
 
 ## HOLD
-- NOT_CHECKED: живая отправка Issue, запись в data/sector-property-overlay.json, коммит и публикация не выполнялись; нужно отдельное разрешение владельца.
+- NOT_CHECKED: живая отправка Issue, запись в data/sector-property-overlay.json, коммит и публикация не выполнялись; нужны отдельное разрешение владельца, приватный репозиторий, App и PROPERTY_OPEN_LIMIT.
 - NOT_CHECKED: проверка роли Owner (tools/issue_owner_check.mjs) не подключена к применению и остаётся отдельным свидетельством.
 - NOT_CHECKED: браузерная приёмка редактора и кнопки отправки; реальная сеть Cloudflare и платформенные логи.
 - NOT_CHECKED: не принято решение, является ли форма поля высот после #235 эталоном; до него перебазировка golden-хэша и метрик запрещена.
@@ -40,10 +40,11 @@ head_sha: d6dce6a (на момент генерации); branch: arena/2ee7535a
 - FACT: golden-хэш и гипсометрия зафиксированы в #231 (5e1585f), формула поля высот изменена в #235 (fa18ef4); эталоны после этого не пересчитывались.
 - FACT: фактическая диагностика восьми падений опубликована комментарием в issue #374 (сообщения, история, деление на устаревшие ожидания и поведение).
 - FACT: вал юбки (25° против ожидаемых ≥ 30°) и отсутствие речных створов в A-17 — поведение, а не цифры; требуют диагностики формулы.
+- FACT: на телефоне (≤700px) раскрытая панель редактора прокручивает навигацию: --shell-top=330px по замеру высоты перенесённой навигации, а .admin-editor-nav стоит top:0 своей полосы (76px). Перекрытие 244px есть и на базе 5573d86; правка требует решения владельца о том, как на телефоне делить экран между навигацией и доком.
 
 ## Последняя передача
-- FACT: стек #383 → #384 → #385 слит в main (f5275e7); дерево main совпадает с рабочей веткой, редактор опубликован, отправка выключена.
-- FACT: sync.py не пишет слой поправок: отказ до записи + шаг проверки в sync.yml; 7 новых python-тестов.
-- FACT: ядро применения planPropertyApply решает «применить/уже применено/конфликт» с ключом идемпотентности; 16 тестов.
-- NOT_CHECKED: живая отправка, запись слоя, коммит App и публикация — HOLD; проверка Owner не подключена.
-- NOT_CHECKED: браузерная приёмка редактора и кнопки отправки владельцем не проводилась.
+- FACT: починены два дефекта рисования, воспроизведённые в браузере. Форма не совпадала с предпросмотром: createDefaultState давал rounding 1, Chaikin превращал прямоугольник из 4 вершин в 8. Теперь новая фигура начинается с rounding 0, сглаживание осталось параметром состояния.
+- FACT: «Кисть, px» была фиктивной. Добавлено необязательное AreaStroke.width (старые документы валидны), толщина проходит через normalizeStrokeForArea, snapAndRecordStroke, strokesFor, PaintedRing.width, SceneAreaRing.strokeWidth до strokeOneRing; createArea больше не теряет поле; предпросмотр рисуется той же толщиной, что попадёт в документ.
+- FACT: npm test 989 тестов: 981 pass / 0 fail / 8 известных skip. sector-areas-editor-ui 64/64, sector-areas-render 18/18, sector-areas-editor 26/26. typecheck, build, lint, verify:docs, verify:publish, verify:no-raster, verify:address, verify:sector-core, verify:contract, check:planet-core зелёные.
+- FACT: браузерный прогон 1533x737 DPR1.25 реальными событиями мыши: пунктир предпросмотра совпадает с итоговой обводкой, прямоугольник остаётся прямоугольником, кисть 40 даёт толстую обводку, 0 ошибок страницы.
+- NOT_CHECKED: check:fast в песочнице не проверить — клон обрезан, main и origin/main по одному коммиту без общей истории (git diff main...HEAD падает). Ранее гейт был красным на трёх предсуществующих пунктах, не связанных с правкой. Визуальная приёмка рисования — за владельцем. HOLD не снят.

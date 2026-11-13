@@ -96,6 +96,14 @@ export interface AreaStroke {
   readonly id: string;
   readonly points: readonly AreaPoint[];
   readonly closed: boolean;
+  /**
+   * Толщина обводки штриха в пикселях экрана: та самая «Кисть, px» из панели.
+   * Хранится вместе со штрихом, иначе поле влияло бы только на предпросмотр,
+   * а сохранённая фигура рисовалась бы постоянной толщиной. Необязательное:
+   * старые документы без поля читаются как раньше, `undefined` — толщина
+   * берётся из состояния области.
+   */
+  readonly width?: number;
 }
 
 /* ------------------------------------------------------------------ градиент */
@@ -442,7 +450,12 @@ function parseStroke(value: unknown, message: string): AreaStroke {
     return invalid(`${message}: штрих ${id} должен иметь минимум 2 точки`);
   }
   const points = raw.points.map((point: unknown) => parsePoint(point, `${message}: точка штриха ${id}`));
-  return { id, points, closed };
+  // Толщина необязательна: документы без неё валидны, а мусорное значение
+  // отбрасывается, чтобы не ломать чтение старого черновика.
+  const width = raw.width === undefined || raw.width === null
+    ? undefined
+    : (typeof raw.width === 'number' && Number.isFinite(raw.width) && raw.width > 0 ? raw.width : undefined);
+  return width === undefined ? { id, points, closed } : { id, points, closed, width };
 }
 
 function parseStrokes(value: unknown, message: string): readonly AreaStroke[] {
@@ -1071,6 +1084,9 @@ export function createArea(input: {
         id: stroke.id,
         points: stroke.points.map((point): AreaPoint => [point[0], point[1]]),
         closed: stroke.closed,
+        // Толщина — часть штриха: без неё она терялась бы при создании области,
+        // и поле «Кисть, px» снова не доходило бы до сохранённой фигуры.
+        ...(stroke.width === undefined ? {} : { width: stroke.width }),
       })),
     states: [],
     scopeId: null,

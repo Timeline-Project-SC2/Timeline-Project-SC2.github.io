@@ -465,11 +465,12 @@ function normalizeStrokeForArea(stroke: AreaStroke): AreaStroke {
   if (points.length < minimum) {
     throw new RangeError(`Штрих должен содержать минимум ${minimum} вершин`);
   }
-  return {
-    id: stroke.id,
-    points,
-    closed: stroke.closed,
-  };
+  const width = typeof stroke.width === 'number' && Number.isFinite(stroke.width) && stroke.width > 0
+    ? stroke.width
+    : undefined;
+  return width === undefined
+    ? { id: stroke.id, points, closed: stroke.closed }
+    : { id: stroke.id, points, closed: stroke.closed, width };
 }
 
 function strokeIdExists(doc: SectorAreasDoc, strokeId: string): boolean {
@@ -616,11 +617,10 @@ export function snapAndRecordStroke(
 ): EditorSession {
   const stroke = session.snapMode === 'grid'
     ? {
-      id: input.stroke.id,
+      ...input.stroke,
       points: snapStrokeToDisplayedGrid(input.stroke.points, viewport, camera, {
         closed: input.stroke.closed,
       }).points,
-      closed: input.stroke.closed,
     }
     : input.stroke;
   return recordCompletedStroke(session, { ...input, stroke });

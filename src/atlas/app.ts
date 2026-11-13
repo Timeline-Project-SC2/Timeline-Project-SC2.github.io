@@ -45,6 +45,7 @@ import { bindSectorAdminGate, isAdminUiTarget } from './sector-admin-gate.ts';
 import { createSectorAreasEditorUi } from './sector-areas-editor-ui.ts';
 import { createSectorBoundsEditUi } from './sector-bounds-edit-ui.ts';
 import { createSectorAreasHierarchyUi } from './sector-areas-hierarchy-ui.ts';
+import { createSectorPropertyRequestUi } from './sector-property-request-ui.ts';
 import type { SectorBoundsEditUiApi } from './sector-bounds-edit-ui.ts';
 // Единственный источник текста справки: файл руководства администратора.
 import sectorAreasHelp from '../../docs/admins/sector-areas-editor.md?raw';
@@ -749,6 +750,8 @@ function boot(): void {
 
   kernel.catalog.detectSkin();
   bindEvents();
+  kernel.propertyRequest = createSectorPropertyRequestUi(kernel);
+  kernel.propertyRequest.bind();
 
   kernel.data.loadDataset().then(function (data): void {
     state.meta = data.meta || {};

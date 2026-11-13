@@ -370,3 +370,37 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 @media (prefers-reduced-motion: reduce) {
   .sector-arrow, .sector-flight-frame { transition: none; }
 }
+
+/* Приватные заявки на свойства: форма игрока и список «Мои заявки». */
+.property-requests-open { white-space: nowrap; }
+.property-request-modal { width: min(720px, 100%); }
+.property-request-object { color: var(--white); font-weight: 600; }
+.property-request-field { display: grid; gap: 6px; margin: 12px 0; color: #c6d3e4; font-size: 12px; }
+.property-request-field input,
+.property-request-field textarea {
+  width: 100%; padding: 9px 10px; border: 1px solid rgba(173,197,226,.24);
+  background: rgba(5,10,17,.72); color: #e4ebf4; font: 13px/1.5 var(--sans);
+}
+.property-request-field textarea { resize: vertical; min-height: 96px; }
+.property-request-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.property-request-actions button,
+.property-request-card button,
+.property-request-login {
+  padding: 8px 12px; border: 1px solid rgba(173,197,226,.28); background: rgba(149,185,230,.08);
+  color: #d5e3f5; font: 11px var(--mono); cursor: pointer; text-decoration: none;
+}
+.property-request-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.property-request-preview {
+  max-height: 320px; overflow: auto; padding: 12px; border: 1px solid rgba(173,197,226,.18);
+  background: rgba(1,4,8,.6); color: #c8d7e9; font: 11px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.property-request-issues { color: #f0c36a; }
+.property-request-card { margin: 14px 0; padding: 12px; border: 1px solid rgba(173,197,226,.16); background: rgba(149,185,230,.04); }
+.property-request-card h3 { margin: 0 0 8px; color: #e5edf7; font-size: 14px; }
+.property-request-card p { margin: 6px 0; color: #94a1b3; font-size: 12px; }
+.property-request-card ul { margin: 8px 0 0; padding-left: 18px; color: #c6d3e4; font-size: 12px; line-height: 1.6; }
+.property-request-foot { flex-wrap: wrap; }
+@media (max-width: 700px) {
+  .property-requests-open { font-size: 10px; padding: 0 6px; }
+  .property-request-modal { max-height: 92vh; }
+}

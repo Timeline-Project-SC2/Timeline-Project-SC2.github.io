@@ -825,7 +825,15 @@
 
 /* ------------------------------------------------------------- окно справки */
 
-.admin-editor-heading-tools { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.admin-editor-heading-tools { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+/* Список заявок наследует токены рабочей оболочки; на узком доке текст переносится. */
+#adminEditorPanel .admin-editor-requests-open {
+  box-sizing: border-box; min-height: 44px; padding: 4px 10px;
+  border: 1px solid var(--shell-line); border-radius: 4px;
+  background: #183d38; color: var(--text); font: inherit; font-size: 15px;
+  line-height: 1.2; white-space: normal; cursor: pointer;
+}
+#adminEditorPanel .admin-editor-requests-open:hover { background: #244e47; color: var(--white); }
 
 .admin-editor-help-backdrop {
   position: fixed;
@@ -950,7 +958,11 @@
   .admin-editor-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .admin-editor-panel.is-collapsed {
+  /* Свёрнутый рейл стоит у правой кромки по центру. Селектор с идентификатором
+   * обязателен: ниже рабочая оболочка задаёт inset через `#adminEditorPanel`,
+   * и правило на классах (0,2,0) проигрывало бы ей по специфичности — рейл
+   * оставался посреди экрана с вертикальной подписью. */
+  #adminEditorPanel.is-collapsed {
     top: 50%;
     right: 8px;
     left: auto;
@@ -965,7 +977,9 @@
 /* Рабочая оболочка: области интерфейса независимы, карта получает события
    сквозь пустое пространство. Каталог «Системы» остаётся прежним верхним слоем. */
 #adminEditorPanel {
-  inset: 8px;
+  /* Рёбра уточняются по внешним границам шапки; 8px — стартовое значение
+     до первого замера. Верхний отступ учитывает выступ шапки над сценой. */
+  inset: var(--shell-inset-top, 8px) var(--shell-right, 8px) 8px var(--shell-left, 8px);
   width: auto;
   max-width: none;
   height: auto;
@@ -982,10 +996,12 @@
   -webkit-backdrop-filter: none;
   text-shadow: none;
   font-size: 16px;
-  --shell-surface: #0c2222;
-  --shell-line: #47746f;
+  --shell-surface: rgba(1, 8, 7, .94);
+  --shell-line: rgba(46, 245, 230, .38);
   --shell-top: 174px;
   --shell-dock: min(410px, 38vw);
+  --toolbox-width: 67px;
+  --shell-gap: 8px;
 }
 #adminEditorPanel :is(button, input, select, summary) { min-height: 44px; font-size: 15px; }
 #adminEditorPanel :is(button, input, select):focus-visible { outline: 2px solid #b2e5dc; outline-offset: 2px; }
@@ -995,7 +1011,9 @@
   background: var(--shell-surface);
   border: 1px solid var(--shell-line);
   border-radius: 4px;
-  box-shadow: none;
+  box-shadow: 0 8px 35px rgba(0, 0, 0, .54), 0 1px 18px rgba(23, 219, 205, .07);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
 }
 #adminEditorPanel .admin-editor-body,
 #adminEditorPanel .admin-editor-shell,
@@ -1103,7 +1121,7 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 #adminEditorPanel .admin-editor-category > summary { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 12px; box-sizing: border-box; border: 1px solid var(--shell-line); border-radius: 4px; color: var(--text); background: #102e2b; font-size: 15px; }
 #adminEditorPanel .admin-editor-category > summary::after { content: '▾'; margin-left: auto; }
 #adminEditorPanel .admin-editor-category[open] > summary { background: #244e47; }
-#adminEditorPanel .admin-editor-category > :is(ul, .admin-editor-planes) { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; display: grid; width: 290px; max-width: calc(100vw - 48px); max-height: 55dvh; overflow: auto; padding: 8px; box-sizing: border-box; border: 1px solid var(--shell-line); background: #0c2222; list-style: none; gap: 6px; }
+#adminEditorPanel .admin-editor-category > :is(ul, .admin-editor-planes) { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; display: grid; width: 290px; max-width: calc(100vw - 48px); max-height: 55dvh; overflow: auto; padding: 8px; box-sizing: border-box; border: 1px solid var(--shell-line); border-radius: 4px; background: var(--shell-surface); box-shadow: 0 8px 35px rgba(0, 0, 0, .54); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); list-style: none; gap: 6px; }
 #adminEditorPanel .admin-editor-category:not([open]) > :not(summary) { display: none; }
 #adminEditorPanel .admin-editor-plane { display: block; }
 #adminEditorPanel .admin-editor-plane > .admin-editor-modules { position: static; width: auto; max-width: none; max-height: none; border: 0; }
@@ -1118,7 +1136,7 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 #adminEditorPanel .admin-editor-guide dd { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.55; }
 #adminEditorPanel .admin-editor-values { border-block: 1px solid var(--shell-line); padding: 6px 0; }
 #adminEditorPanel .admin-editor-graph-legend { font-size: 13px; }
-#adminEditorPanel .admin-editor-graph-svg { min-height: 420px; }
+#adminEditorPanel .admin-editor-graph-svg { min-height: 0; }
 #adminEditorPanel .admin-editor-graph-node rect { fill: #13332f; stroke: #85b9ae; }
 #adminEditorPanel .admin-editor-graph-node.is-current rect { fill: #315d52; stroke: #e1f5eb; }
 #adminEditorPanel .admin-editor-graph-node text { font-size: 10px; }
@@ -1190,3 +1208,145 @@ html.admin-editor-authorized body .toast.admin-access-notice { color: #d5f1ec; b
 .admin-editor-point-properties :is(input, select, textarea) { box-sizing: border-box; width: 100%; }
 .admin-editor-point-properties li { overflow-wrap: anywhere; white-space: pre-wrap; }
 .admin-editor-point-preview { max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------- приёмка UI: общие рёбра и слои */
+
+/* Декоративная надпись шапки остаётся, но в редакторе лежит ниже рабочих панелей.
+   Топбар — отдельный стекинг-контекст выше сцены, поэтому надпись переносится
+   в слой карты только на время админ-сеанса; публичный сектор не меняется. */
+.admin-editor-authorized .topbar::before { visibility: hidden; }
+.admin-editor-authorized .map-stage::before {
+  content: "TIMELINE // SECURE ARCHIVE";
+  position: absolute;
+  top: 20px;
+  right: 31px;
+  z-index: 3;
+  color: rgba(150, 255, 246, .62);
+  font: 14px var(--mono);
+  letter-spacing: .18em;
+  pointer-events: none;
+}
+@media (max-width: 700px) {
+  .admin-editor-authorized .map-stage::before { display: none; }
+}
+
+/* Панели из меню открываются слева рядом с полосой инструментов; граф остаётся
+   справа. Полоса с пятью иконками сохраняется как быстрые команды. */
+@media (min-width: 701px) {
+  #adminEditorPanel:not([data-active-screen="dependencies"]) .admin-editor-heading {
+    left: calc(var(--toolbox-width) + var(--shell-gap));
+    right: auto;
+    width: var(--shell-dock);
+  }
+  #adminEditorPanel:not([data-active-screen="dependencies"]) .admin-editor-stage,
+  #adminEditorPanel:not([data-active-screen="dependencies"]) .admin-editor-body > section:not(:first-of-type) {
+    left: calc(var(--toolbox-width) + var(--shell-gap));
+    right: auto;
+    width: var(--shell-dock);
+  }
+  #adminEditorPanel[data-active-screen="hierarchy"] {
+    --shell-dock: min(720px, calc(100% - var(--toolbox-width) - var(--shell-gap)));
+  }
+}
+
+/* Граф целиком помещается в док: SVG масштабируется в оставшуюся высоту,
+   а не раздувает страницу; min-height и прокрутка колеса здесь не нужны. */
+#adminEditorPanel[data-active-screen="dependencies"] .admin-editor-stage {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  overflow: hidden;
+}
+#adminEditorPanel[data-active-screen="dependencies"] .admin-editor-graph-pane {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+#adminEditorPanel[data-active-screen="dependencies"] .admin-editor-graph-svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Шторки наследуют ребро своей кнопки: левые меню — левое, модульное — правое. */
+#adminEditorPanel .admin-editor-category > :is(ul, .admin-editor-planes) { left: 0; }
+#adminEditorPanel .admin-editor-module-menu > .admin-editor-planes { left: auto; right: 0; }
+
+/* ------------------------------------------ мобильный рейл: свои рёбра целиком
+   Общая оболочка (`#adminEditorPanel { inset: … }`) идёт ниже телефонных
+   правил и при равной специфичности перебивала их: свёрнутая панель
+   растягивалась на весь экран, а подпись рейла ломалась по буквам. Здесь
+   свёрнутое состояние собрано одним блоком с идентификатором — он последний
+   в файле, поэтому выигрывает и по специфичности, и по порядку. */
+@media (max-width: 700px) {
+  #adminEditorPanel.is-collapsed {
+    inset: auto 8px auto auto;
+    top: 50%;
+    right: 8px;
+    bottom: auto;
+    left: auto;
+    width: 42px;
+    height: 180px;
+    max-width: none;
+    max-height: none;
+    padding: 0;
+    transform: translateY(-50%);
+  }
+  /* Рейл — вся свёрнутая панель, а не отдельная плашка внутри неё. */
+  #adminEditorPanel.is-collapsed .admin-editor-rail {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    height: auto;
+    transform: none;
+    border-radius: 4px;
+  }
+  /* Подпись не переносится по буквам: одна строка вдоль рейла, кегль подобран
+     так, чтобы она целиком помещалась в 180px и не обрезалась. */
+  #adminEditorPanel.is-collapsed .admin-editor-rail-label {
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    max-height: 100%;
+    overflow: hidden;
+    font: 10px/1 var(--mono);
+    letter-spacing: .14em;
+  }
+}
+
+/* Свёрнутое состояние старше любого экрана. Правила вида
+   `#adminEditorPanel[data-active-screen="dependencies"] .admin-editor-stage`
+   имеют более высокую специфичность, чем общий список скрытия свёрнутой
+   панели, и оставляли док поверх рейла: после перезагрузки со свёрнутой
+   панелью клик по рейлу попадал в текст дока, а не в кнопку. Здесь док и
+   заголовок уступают свёртке на всех ширинах, а навигация и полоса с пятью
+   быстрыми иконками на десктопе остаются — это требование владельца. */
+#adminEditorPanel.is-collapsed .admin-editor-heading,
+#adminEditorPanel.is-collapsed .admin-editor-stage,
+#adminEditorPanel.is-collapsed .admin-editor-body > section:not(:first-of-type) {
+  display: none;
+}
+#adminEditorPanel.is-collapsed .admin-editor-rail { display: flex; }
+
+/* На телефоне свёрнутая панель — только узкий рейл у правой кромки: навигация
+   и полоса инструментов в 42px не помещаются и раньше торчали поверх рейла,
+   перехватывая клик. */
+@media (max-width: 700px) {
+  #adminEditorPanel.is-collapsed .admin-editor-nav,
+  #adminEditorPanel.is-collapsed .admin-editor-toolbox { display: none; }
+}
+
+/* ------------------------------------------------- плотная шапка под линии владельца
+   Владелец разметил вертикали выравнивания по внешним кромкам боковых блоков
+   `.topbar` (22px поля шапки), а не по её собственной кромке. Панели встают по
+   этим вертикалям, но навигации нужно на 23px больше, чем между ними, и она
+   переносилась на вторую строку. Здесь шапка уплотняется ровно на этот запас:
+   поля навигации, зазоры категорий и вертикальные отступы их кнопок. Кегль и
+   высота органов не меняются — читаемость и цели нажатия 44px сохраняются.
+   Телефонные правила ниже `640px` не затрагиваются. */
+@media (min-width: 701px) {
+  #adminEditorPanel .admin-editor-nav { gap: 6px; padding: 6px; }
+  #adminEditorPanel .admin-editor-categories { gap: 5px; }
+  #adminEditorPanel .admin-editor-category > summary { padding: 0 9px; gap: 5px; }
+  #adminEditorPanel .admin-editor-toggles { gap: 5px; }
+  #adminEditorPanel .admin-editor-navigation-toggle { padding: 6px 9px; }
+}

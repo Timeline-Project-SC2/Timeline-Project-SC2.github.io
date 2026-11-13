@@ -20,7 +20,7 @@ test('обмен отправляет тестовые данные только
   assert.equal(body.get('code_verifier'), accepted.verifier);
   assert.equal(body.get('client_secret'), config.clientSecret);
   assert.equal(body.get('redirect_uri'), config.callbackUrl);
-  assert.equal(body.get('repository_id'), '1421259694');
+  assert.equal(body.get('repository_id'), null, 'вход не запрашивает права на публичный репозиторий');
   assert.equal(request.url.includes(config.clientSecret), false);
   assert.equal(JSON.stringify(result).includes('не возвращать'), false);
 });

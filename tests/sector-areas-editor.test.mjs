@@ -614,3 +614,37 @@ test('snapAndRecordStroke привязывает штрих к рёбрам от
   // Ярус T3 (cellSize = 80): линия около y = 78 притягивается к горизонтальному ребру y = 80.
   assert.deepEqual(session.doc.areas[0].strokes[0].points, [[40, 80], [220, 80]]);
 });
+
+test('толщина кисти записывается вместе со штрихом и переживает привязку к сетке', () => {
+  let session = setBrushWidth(createEditorSession(), 40);
+  assert.equal(session.brushWidthPx, 40);
+
+  // Свободный режим: толщина доходит до документа как есть.
+  session = snapAndRecordStroke(
+    session,
+    {
+      stroke: { id: 'stroke-w-free', points: [[100, 100], [300, 100], [300, 300]], closed: true, width: session.brushWidthPx },
+      areaIdIfNew: 'area-w-free',
+      state: state(),
+    },
+    { w: 1000, h: 800 },
+    { centerX: 500, centerY: 500, visibleWidth: 2000 },
+  );
+  assert.equal(session.doc.areas[0].strokes[0].width, 40, 'ширина штриха сохранена');
+
+  // Привязка к сетке меняет точки, но не теряет толщину.
+  let snapped = setSnapMode(createEditorSession(), 'grid');
+  snapped = snapAndRecordStroke(
+    snapped,
+    {
+      stroke: { id: 'stroke-w-grid', points: [[40, 78], [220, 77]], closed: false, width: 24 },
+      areaIdIfNew: 'area-w-grid',
+      state: state(),
+    },
+    { w: 1000, h: 800 },
+    { centerX: 500, centerY: 500, visibleWidth: 2000 },
+  );
+  const gridStroke = snapped.doc.areas[0].strokes[0];
+  assert.deepEqual(gridStroke.points, [[40, 80], [220, 80]], 'точки привязаны к ребру');
+  assert.equal(gridStroke.width, 24, 'привязка не обнуляет толщину');
+});

@@ -97,6 +97,8 @@ export interface SceneAreaRing {
   readonly colors: readonly string[];
   readonly alphas: readonly number[];
   readonly closed: boolean;
+  /** Своя толщина обводки кольца в пикселях; `undefined` — толщина области. */
+  readonly strokeWidth?: number;
 }
 
 /** Область редактора границ: фракция, задача, градиент и LOD уже применены. */
@@ -597,6 +599,7 @@ export function areasFor(
       colors: ring.colors.map((rgb, index) => cssColor(rgb, ring.alphas[index] ?? 1)),
       alphas: [...ring.alphas],
       closed: ring.closed,
+      ...(ring.width === undefined ? {} : { strokeWidth: ring.width }),
     }));
 
     const splits = (paint.splits ?? []).map((mask) => ({

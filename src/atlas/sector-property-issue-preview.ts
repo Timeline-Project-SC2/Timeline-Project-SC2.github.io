@@ -2,7 +2,7 @@
 import { preparePropertyDraft } from './sector-property-draft.ts';
 import type { PropertySession } from './sector-property-session.ts';
 
-export interface PropertyIssuePreview {
+export interface PropertyLocalPreview {
   readonly status: 'preview_only';
   readonly title: string;
   readonly body: string;
@@ -22,14 +22,14 @@ function codeFence(text: string): string {
   return '`'.repeat(Math.max(3, longest + 1));
 }
 
-export function preparePropertyIssuePreview(session: PropertySession, factionNames: ReadonlySet<string>): PropertyIssuePreview | null {
+export function preparePropertyLocalPreview(session: PropertySession, factionNames: ReadonlySet<string>): PropertyLocalPreview | null {
   const { draft, problems } = preparePropertyDraft(session, factionNames);
   if (draft === null) return null;
   const draftSnapshot = JSON.stringify(draft);
   const json = JSON.stringify(draft, null, 2);
   const fence = codeFence(json);
   const warnings = [
-    'Issue будет публичной: не включайте секреты или непубличные данные.',
+    'Будущая заявка будет закрытой. Авторство и время добавит сервер.',
     'Этот просмотр не является отправкой, авторизацией или разрешением на запись.',
     draft.baseRevision === null
       ? 'Отпечаток входов не подтверждён.'
@@ -42,7 +42,7 @@ export function preparePropertyIssuePreview(session: PropertySession, factionNam
     body: [
       '### Локальный предварительный просмотр',
       '',
-      'Формат не утверждён. Это не отправленная и не готовая к применению заявка.',
+      'Это локальный просмотр. Сервер добавит автора и время перед отправкой.',
       '',
       `${fence}json`, json, fence,
     ].join('\n'),
