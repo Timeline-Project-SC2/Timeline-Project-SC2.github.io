@@ -50,6 +50,7 @@
 | Паттерн проверок: цена гейтов, быстрый гейт `check:fast`, правило локального цикла | [`verification-pattern.md`](verification-pattern.md) |
 | Консолидация документации после аудита PR #302 (вердикт, промпт, не запущена) | [`consolidation-plan.md`](consolidation-plan.md), [шаг 0 — инвентарная карта](consolidation/README.md) |
 | История агентских сессий (бывший `HANDOFF.md`) | [`handoff/status-and-state.md`](handoff/status-and-state.md) |
+| Приватная цепочка заявок: решения, факты и шероховатости | [`handoff/property-request-private-chain.md`](handoff/property-request-private-chain.md) |
 | Планетные промпты и Зерус | [`prompts/`](prompts/planet-seeds-from-reference.md), [`zerus/README.md`](zerus/README.md) |
 | Предварительная концепция правил взаимодействия модулей и редактора | [`concepts/module-interaction-rules.md`](concepts/module-interaction-rules.md) |
 | Ориентиры UI/UX веб-атласа (справочник ревью и вёрстки + предложения владельцу, не гейт слияния) | [`concepts/atlas-ui-ux-guidelines.md`](concepts/atlas-ui-ux-guidelines.md), [предложения и расхождения](concepts/atlas-ui-ux-proposals.md) |
