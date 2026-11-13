@@ -1579,8 +1579,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     const headerRect = topbar.getBoundingClientRect();
     const left = Math.max(8, Math.round(headerRect.left - stageRect.left));
     const right = Math.max(8, Math.round(stageRect.right - headerRect.right));
-    // Шапка выступает над сценой на свой внешний отступ; ниже неё держим тот же
-    // зазор 8px, что между тулбаром, полосой инструментов и доком.
+    // Верхний inset считается от верха сцены, как и боковые рёбра: панель
+    // позиционируется внутри `.map-stage`, поэтому зазор задаётся в её
+    // координатах. Шапка выступает над сценой на внешний отступ, и на телефоне
+    // (полоса 68px, сцена тоже с 68px) формула даёт те же 8px.
     const top = Math.max(8, Math.round(headerRect.bottom - stageRect.top + 8));
     panel.style?.setProperty?.('--shell-left', `${left}px`);
     panel.style?.setProperty?.('--shell-right', `${right}px`);

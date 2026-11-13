@@ -1077,6 +1077,39 @@ test('оболочка сохраняет каталог, отдельные с�
   assert.match(css, /@media \(max-width: 700px\)[\s\S]*?--shell-dock: 100%/);
   assert.match(css, /#adminEditorPanel \.admin-editor-toolbox \{ top: auto; right: 0; bottom: 0;/);
   assert.match(css, /prefers-reduced-motion: reduce/);
+  // Телефонный рейл: последнее правило свёртки обязано быть с идентификатором и
+  // задавать все четыре ребра через inset. Рабочая оболочка
+  // `#adminEditorPanel { inset: … }` идёт ниже и при равной специфичности
+  // перебивала прежнее правило на классах: свёрнутая панель растягивалась на
+  // весь экран, а подпись рейла ломалась по буквам.
+  const mobileRail = /@media \(max-width: 700px\) \{\s*#adminEditorPanel\.is-collapsed \{([^}]*)\}/.exec(css);
+  assert.ok(mobileRail !== null, 'есть телефонное правило свёрнутой панели с идентификатором');
+  assert.match(mobileRail[1], /inset: auto 8px auto auto;/, 'ребра задаются целиком, inset оболочки не тянет панель');
+  assert.match(mobileRail[1], /width: 42px;/);
+  assert.match(mobileRail[1], /height: 180px;/);
+  assert.match(mobileRail[1], /transform: translateY\(-50%\)/);
+  assert.match(css, /#adminEditorPanel\.is-collapsed \.admin-editor-rail \{[\s\S]*?inset: 0;/);
+  assert.match(css, /#adminEditorPanel\.is-collapsed \.admin-editor-rail-label \{[\s\S]*?white-space: nowrap/);
+  // Правило стоит в конце файла: после общей оболочки и её телефоных правок.
+  assert.ok(
+    css.lastIndexOf('#adminEditorPanel.is-collapsed {') > css.lastIndexOf('#adminEditorPanel { --shell-top: 116px; }'),
+    'правило рейла стоит после общей оболочки и побеждает её по порядку',
+  );
+  // Свёртка старше экранных правил: `[data-active-screen="dependencies"] …`
+  // специфичнее общего списка и оставлял док поверх рейла.
+  assert.match(
+    css,
+    /#adminEditorPanel\.is-collapsed \.admin-editor-stage,[\s\S]*?\n\s*#adminEditorPanel\.is-collapsed \.admin-editor-body > section:not\(:first-of-type\) \{\s*display: none;/,
+  );
+  // На десктопе полоса с пятью быстрыми иконками в свёртке остаётся:
+  // владелец просил сохранить её как быстрые команды.
+  const collapsedTail = css.slice(css.lastIndexOf('#adminEditorPanel.is-collapsed .admin-editor-rail { display: flex; }'));
+  assert.doesNotMatch(collapsedTail.split('@media')[0], /admin-editor-toolbox\s*\{\s*display: none/);
+  // На телефоне свёрнутая панель — только рейл, иначе навигация перехватывает клик.
+  assert.match(
+    css,
+    /@media \(max-width: 700px\) \{\s*#adminEditorPanel\.is-collapsed \.admin-editor-nav,\s*#adminEditorPanel\.is-collapsed \.admin-editor-toolbox \{ display: none; \}/,
+  );
   const guide = read('docs/admins/sector-areas-editor.md');
   assert.match(guide, /прежний каталог карты/);
   assert.match(guide, /Перестановка|перетаскивать/);
@@ -1360,14 +1393,20 @@ test('декоративная надпись в админ-сеансе леж�
   assert.match(css, /\.admin-editor-authorized \.map-stage::before\s*\{[^}]*content: "TIMELINE \/\/ SECURE ARCHIVE"[^}]*z-index: 3/);
   const skin = read('site/shared/timeline-skin.css');
   assert.match(skin, /\.topbar::before\s*\{[^}]*content: "TIMELINE \/\/ SECURE ARCHIVE"/);
+  // Оболочка тянет все четыре ребра из переменных замера: верх — отдельная
+  // переменная, без неё док на телефоне уезжает под шапку.
+  assert.match(css, /#adminEditorPanel\s*\{[^}]*inset: var\(--shell-inset-top, 8px\) var\(--shell-right, 8px\) 8px var\(--shell-left, 8px\)/);
 });
 
-test('боковые рёбра оболочки измеряются от кнопки каталога и лого, а не фиксируются числом', () => {
+test('рёбра оболочки измеряются по внешним границам .topbar, а не по вложенным кнопке каталога и лого', () => {
   const panel = fakePanel();
   const values = new Map();
   panel.style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
+  // Реальная геометрия сектора: сцена шире и начинается выше шапки
+  // (.map-stage inset 68px 0 0 0), шапка врезана в viewport (topbar top/left/right 14px,
+  // высота 80px). Оболочка должна повторять внешние рёбра шапки, а не сцену.
   const stage = {
-    getBoundingClientRect: () => ({ left: 0, right: 1000 }),
+    getBoundingClientRect: () => ({ left: 0, top: 68, right: 1000, bottom: 800 }),
     style: { setProperty() {}, removeProperty() {} },
     addEventListener() {},
     removeEventListener() {},
@@ -1375,23 +1414,166 @@ test('боковые рёбра оболочки измеряются от кн�
     releasePointerCapture() {},
   };
   const previousDocument = globalThis.document;
+  let asked = [];
   globalThis.document = {
     activeElement: null,
-    querySelector: (selector) => selector === '#toggleSidePanel'
-      ? { getBoundingClientRect: () => ({ left: 40 }) }
-      : selector === '.topbar-right .brand-emblem'
-        ? { getBoundingClientRect: () => ({ right: 960 }) }
-        : null,
+    querySelector: (selector) => {
+      asked.push(selector);
+      // Вложенные ориентиры прежнего замера нарочно отдают другие числа:
+      // если код снова возьмёт их, равенства ниже развалятся.
+      if (selector === '#toggleSidePanel') return { getBoundingClientRect: () => ({ left: 90, right: 190 }) };
+      if (selector === '.topbar-right .brand-emblem') return { getBoundingClientRect: () => ({ left: 700, right: 900 }) };
+      if (selector === '.topbar') {
+        return { getBoundingClientRect: () => ({ left: 14, top: 14, right: 986, bottom: 94 }) };
+      }
+      return null;
+    },
   };
   try {
     const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage, storage: null });
-    assert.equal(values.get('--shell-left'), '40px');
-    assert.equal(values.get('--shell-right'), '40px');
+    assert.ok(asked.includes('.topbar'), 'замер спрашивает внешнюю шапку');
+    assert.equal(values.get('--shell-left'), '14px', 'левый отступ шапки от сцены');
+    assert.equal(values.get('--shell-right'), '14px', 'правый отступ шапки от сцены');
+    // 94 - 68 + 8 = 34: зазор от низа шапки до верха сцены плюс общий зазор 8px.
+    assert.equal(values.get('--shell-inset-top'), '34px', 'верхний inset считается от внешнего низа шапки');
     api.destroy();
     assert.equal(values.has('--shell-left'), false);
     assert.equal(values.has('--shell-right'), false);
+    assert.equal(values.has('--shell-inset-top'), false, 'destroy снимает и новую переменную');
   } finally {
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
   }
+});
+
+test('рёбра оболочки держат минимум 8px и не уходят под шапку на телефоне', () => {
+  const panel = fakePanel();
+  const values = new Map();
+  panel.style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
+  const stage = {
+    getBoundingClientRect: () => ({ left: 0, top: 68, right: 1000, bottom: 800 }),
+    style: { setProperty() {}, removeProperty() {} },
+    addEventListener() {},
+    removeEventListener() {},
+    hasPointerCapture() { return false; },
+    releasePointerCapture() {},
+  };
+  const previousDocument = globalThis.document;
+  try {
+    // Шапка шире сцены и прижата к её верху: замер не должен дать отрицательный отступ.
+    globalThis.document = {
+      activeElement: null,
+      querySelector: (selector) => selector === '.topbar'
+        ? { getBoundingClientRect: () => ({ left: -5, top: -5, right: 1005, bottom: 3 }) }
+        : null,
+    };
+    const api = createSectorAreasEditorUi({ kernel: fakeKernel(emptySectorAreasDoc()), panel, canvas: null, stage, storage: null });
+    assert.equal(values.get('--shell-left'), '8px');
+    assert.equal(values.get('--shell-right'), '8px');
+    // 3 - 68 + 8 = -57: отрицательный зазор прижат к минимуму 8px.
+    assert.equal(values.get('--shell-inset-top'), '8px', 'отрицательный зазор не допускается');
+    api.destroy();
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+
+  // Телефон: шапка перенесена в поток внутри полосы 68px, её низ (60) выше верха
+  // сцены (68). Док обязан встать ниже шапки, а не под ней.
+  const valuesPhone = new Map();
+  const panelPhone = fakePanel();
+  panelPhone.style = {
+    setProperty: (key, value) => valuesPhone.set(key, value),
+    removeProperty: (key) => valuesPhone.delete(key),
+  };
+  const stagePhone = {
+    getBoundingClientRect: () => ({ left: 0, top: 68, right: 390, bottom: 844 }),
+    style: { setProperty() {}, removeProperty() {} },
+    addEventListener() {},
+    removeEventListener() {},
+    hasPointerCapture() { return false; },
+    releasePointerCapture() {},
+  };
+  const previousDocumentPhone = globalThis.document;
+  globalThis.document = {
+    activeElement: null,
+    querySelector: (selector) => selector === '.topbar'
+      ? { getBoundingClientRect: () => ({ left: 9, top: 4, right: 381, bottom: 64 }) }
+      : null,
+  };
+  try {
+    const api = createSectorAreasEditorUi({
+      kernel: fakeKernel(emptySectorAreasDoc()), panel: panelPhone, canvas: null, stage: stagePhone, storage: null,
+    });
+    // 64 - 68 + 8 = 4 → минимум 8px: на телефоне док стоит у самой кромки сцены
+    // и не залезает под шапку (она кончается на 64, сцена начинается на 68).
+    assert.equal(valuesPhone.get('--shell-inset-top'), '8px', 'на телефоне зазор не уходит в минус');
+    api.destroy();
+  } finally {
+    if (previousDocumentPhone === undefined) delete globalThis.document;
+    else globalThis.document = previousDocumentPhone;
+  }
+
+  // Шапки в DOM нет (другой вариант оболочки) — переменные не пишутся вовсе.
+  const valuesWithoutTopbar = new Map();
+  const panelWithoutTopbar = fakePanel();
+  panelWithoutTopbar.style = {
+    setProperty: (key, value) => valuesWithoutTopbar.set(key, value),
+    removeProperty: (key) => valuesWithoutTopbar.delete(key),
+  };
+  const previousDocument2 = globalThis.document;
+  globalThis.document = { activeElement: null, querySelector: () => null };
+  try {
+    const api = createSectorAreasEditorUi({
+      kernel: fakeKernel(emptySectorAreasDoc()), panel: panelWithoutTopbar, canvas: null, stage, storage: null,
+    });
+    assert.equal(valuesWithoutTopbar.has('--shell-left'), false, 'без .topbar левый inset остаётся значением CSS');
+    assert.equal(valuesWithoutTopbar.has('--shell-inset-top'), false);
+    api.destroy();
+  } finally {
+    if (previousDocument2 === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument2;
+  }
+});
+
+test('правый рейл expand возвращает граф зависимостей, а не последнюю левую панель', () => {
+  const panel = fakePanel();
+  // Классы панели живые: свёртка проверяется по тому же classList, что и в браузере.
+  const classes = new Set();
+  panel.classList = {
+    add(name) { classes.add(name); },
+    remove(name) { classes.delete(name); },
+    contains(name) { return classes.has(name); },
+    toggle(name, force) {
+      const next = force === undefined ? !classes.has(name) : force;
+      if (next) classes.add(name); else classes.delete(name);
+      return next;
+    },
+  };
+  panel.querySelector = (selector) => {
+    if (!panel.blocks.has(selector)) panel.blocks.set(selector, new FakeElement());
+    return panel.blocks.get(selector);
+  };
+  const api = createSectorAreasEditorUi({
+    kernel: fakeKernelWithFactions(docWithArea()), panel, canvas: null, stage: null, storage: null,
+  });
+
+  // Исходная жалоба: свойства области, затем сворачивание — рейл вместо дока.
+  clickPanel(panel, 'screen', { 'data-screen': 'properties' });
+  assert.equal(api.screen(), 'properties');
+  clickPanel(panel, 'collapse');
+  assert.equal(api.collapsed(), true, 'кнопка сворачивания скрывает тело панели');
+  assert.equal(panel.querySelector('[data-action="expand"]').getAttribute('aria-expanded'), 'false');
+
+  clickPanel(panel, 'expand');
+  assert.equal(api.screen(), 'dependencies', 'рейл ведёт в граф связей модулей');
+  assert.equal(api.collapsed(), false, 'свёртка снята');
+  assert.equal(panel.querySelector('[data-action="expand"]').getAttribute('aria-expanded'), 'true');
+  const html = blockHtml(panel, 'modules');
+  assert.match(html, /data-editor-graph/, 'граф модулей отрисован');
+  assert.match(html, /data-editor-screen="dependencies"/);
+  // Документ и история при этом не трогаются: это навигация, а не правка.
+  assert.equal(api.doc().events.length, 0);
+  assert.equal(api.session().past.length, 0);
+  api.destroy();
 });
