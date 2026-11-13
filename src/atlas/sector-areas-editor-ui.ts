@@ -1569,21 +1569,22 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
   // Высота строки меняется при переносе категорий, масштабе и сворачивании.
   // Один измеренный отступ используется Toolbox, доком и карточкой системы.
   let navigationObserver: ResizeObserver | null = null;
-  /** Боковые рёбра оболочки совпадают с кнопкой каталога слева и лого справа. */
+  /** Общие рёбра: внешние границы шапки, а не вложенные кнопка каталога и лого. */
   function syncShellEdges(): void {
     if (panel === null || stage === null || stage === undefined || typeof stage.getBoundingClientRect !== 'function') return;
     if (typeof document === 'undefined') return;
+    const topbar = document.querySelector<HTMLElement>('.topbar');
+    if (!topbar || typeof topbar.getBoundingClientRect !== 'function') return;
     const stageRect = stage.getBoundingClientRect();
-    const toggle = document.querySelector<HTMLElement>('#toggleSidePanel');
-    const logo = document.querySelector<HTMLElement>('.topbar-right .brand-emblem');
-    if (toggle && typeof toggle.getBoundingClientRect === 'function') {
-      const left = Math.max(8, Math.round(toggle.getBoundingClientRect().left - stageRect.left));
-      panel.style?.setProperty?.('--shell-left', `${left}px`);
-    }
-    if (logo && typeof logo.getBoundingClientRect === 'function') {
-      const right = Math.max(8, Math.round(stageRect.right - logo.getBoundingClientRect().right));
-      panel.style?.setProperty?.('--shell-right', `${right}px`);
-    }
+    const headerRect = topbar.getBoundingClientRect();
+    const left = Math.max(8, Math.round(headerRect.left - stageRect.left));
+    const right = Math.max(8, Math.round(stageRect.right - headerRect.right));
+    // Шапка выступает над сценой на свой внешний отступ; ниже неё держим тот же
+    // зазор 8px, что между тулбаром, полосой инструментов и доком.
+    const top = Math.max(8, Math.round(headerRect.bottom - stageRect.top + 8));
+    panel.style?.setProperty?.('--shell-left', `${left}px`);
+    panel.style?.setProperty?.('--shell-right', `${right}px`);
+    panel.style?.setProperty?.('--shell-inset-top', `${top}px`);
   }
   function syncNavigationHeight(): void {
     syncShellEdges();
@@ -2137,7 +2138,10 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
       case 'help': openHelp(); break;
       case 'help-close': closeHelp(); break;
       case 'collapse': setCollapsed(true); break;
-      case 'expand': setCollapsed(false); break;
+      // Правый рейл — самостоятельный вход в граф. Он не должен возвращать
+      // последнюю левую панель свойств: иначе после переноса панелей док
+      // «не открывается» и модули со связями не показываются.
+      case 'expand': setScreen('dependencies'); break;
       case 'toggle-enable': setEnabled(input.checked); break;
       case 'mode':
       case 'snap':
@@ -2572,6 +2576,7 @@ export function createSectorAreasEditorUi(options: SectorAreasEditorUiOptions): 
     destroy(): void {
       navigationObserver?.disconnect();
       panel?.style?.removeProperty?.('--shell-top');
+      panel?.style?.removeProperty?.('--shell-inset-top');
       panel?.style?.removeProperty?.('--shell-left');
       panel?.style?.removeProperty?.('--shell-right');
       stage?.style?.removeProperty?.('--admin-content-top');
